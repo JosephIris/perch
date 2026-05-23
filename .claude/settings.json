@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(& 'C:\\Users\\irisy\\dev-projects\\sandbox\\cmux-win\\scripts\\capture-window.ps1' *)",
+      "PowerShell(*\\scripts\\capture-window.ps1*)",
+      "PowerShell(Add-Type *)",
+      "PowerShell(Write-Output *)",
+      "PowerShell(Get-AppxPackage *)",
+      "PowerShell(Get-WinEvent *)",
+      "PowerShell(dotnet --list-sdks*)",
+      "PowerShell(dotnet --list-runtimes*)",
+      "PowerShell(Start-Process wt.exe*)"
+    ]
+  }
+}
