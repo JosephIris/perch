@@ -47,6 +47,18 @@ Requires .NET 8 SDK on Windows 10+.
 Pushes to `main` build on `windows-latest` and publish a self-contained artifact you can download
 from the Actions tab. See `.github/workflows/build.yml`.
 
+## Releases
+
+Push a `vX.Y.Z` tag to cut a release. The build picks the tag as the version, produces both the
+installer and the portable exe, and uploads them as assets on a new GitHub Release.
+
+```pwsh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Releases land at https://github.com/JosephIris/cmux-win/releases.
+
 ## Design constitution
 
 `CLAUDE.md` at the repo root is the UI design contract — typography, spacing, color tokens, and
