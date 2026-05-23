@@ -5,10 +5,14 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: windows-latest
+
+    env:
+      APP_VERSION: 0.1.${{ github.run_number }}
 
     steps:
       - uses: actions/checkout@v4
@@ -21,20 +25,36 @@ jobs:
       - name: Restore
         run: dotnet restore src/CmuxWin/CmuxWin.csproj
 
-      - name: Build (Release, x64)
-        run: dotnet build src/CmuxWin/CmuxWin.csproj -c Release --no-restore
-
-      - name: Publish (framework-dependent, single folder)
+      - name: Publish self-contained single-file
         run: |
           dotnet publish src/CmuxWin/CmuxWin.csproj `
             -c Release `
             -r win-x64 `
-            --no-self-contained `
+            --self-contained `
+            -p:PublishSingleFile=true `
+            -p:IncludeNativeLibrariesForSelfExtract=true `
+            -p:EnableCompressionInSingleFile=true `
             -o publish/cmux-win
 
-      - name: Upload artifact
+      - name: Build installer (Inno Setup)
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { throw "Inno Setup not found at $iscc" }
+          & $iscc installer/cmux.iss /DAppVersion=$env:APP_VERSION
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed: $LASTEXITCODE" }
+          Get-ChildItem publish/installer
+
+      - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: cmux-win-${{ github.sha }}
-          path: publish/cmux-win
+          name: cmux-Setup-${{ env.APP_VERSION }}
+          path: publish/installer/cmux-Setup-*.exe
+          if-no-files-found: error
+
+      - name: Upload raw single-file exe (no installer)
+        uses: actions/upload-artifact@v4
+        with:
+          name: cmux-portable-${{ env.APP_VERSION }}
+          path: publish/cmux-win/CmuxWin.exe
           if-no-files-found: error
