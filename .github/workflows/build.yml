@@ -3,19 +3,34 @@ name: Build
 on:
   push:
     branches: [main]
+    tags: ['v*.*.*']
   pull_request:
     branches: [main]
   workflow_dispatch:
+
+# Allow the workflow to create releases when a tag is pushed.
+permissions:
+  contents: write
 
 jobs:
   build:
     runs-on: windows-latest
 
-    env:
-      APP_VERSION: 0.1.${{ github.run_number }}
-
     steps:
       - uses: actions/checkout@v4
+
+      - name: Determine version
+        id: version
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF -like 'refs/tags/v*') {
+              $v = $env:GITHUB_REF_NAME -replace '^v', ''
+          } else {
+              $v = "0.1.$env:GITHUB_RUN_NUMBER"
+          }
+          "APP_VERSION=$v" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "version=$v"     | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Output "Building version $v"
 
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
@@ -45,16 +60,44 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed: $LASTEXITCODE" }
           Get-ChildItem publish/installer
 
-      - name: Upload installer
+      - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
           name: cmux-Setup-${{ env.APP_VERSION }}
           path: publish/installer/cmux-Setup-*.exe
           if-no-files-found: error
 
-      - name: Upload raw single-file exe (no installer)
+      - name: Upload portable exe artifact
         uses: actions/upload-artifact@v4
         with:
           name: cmux-portable-${{ env.APP_VERSION }}
           path: publish/cmux-win/CmuxWin.exe
           if-no-files-found: error
+
+      # ------- Release: runs only on tag pushes -------
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Rename portable exe to include version so the release asset is descriptive.
+          $portable = "publish/cmux-win/CmuxWin-$env:APP_VERSION.exe"
+          Copy-Item "publish/cmux-win/CmuxWin.exe" $portable
+          $installer = "publish/installer/cmux-Setup-$env:APP_VERSION.exe"
+
+          $notes = @"
+          ## cmux $env:GITHUB_REF_NAME
+
+          Native Win11 Fluent terminal app. Self-contained — no .NET install needed.
+
+          **Downloads**
+          - ``cmux-Setup-$env:APP_VERSION.exe`` — installer (Start menu + uninstaller)
+          - ``CmuxWin-$env:APP_VERSION.exe`` — portable single-file
+          "@
+
+          gh release create $env:GITHUB_REF_NAME `
+            $installer `
+            $portable `
+            --title "cmux $env:GITHUB_REF_NAME" `
+            --notes $notes
