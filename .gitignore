@@ -1,0 +1,40 @@
+# Build output
+bin/
+obj/
+out/
+
+# Visual Studio / Rider
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userprefs
+
+# NuGet
+packages/
+*.nupkg
+*.snupkg
+
+# Test results
+TestResults/
+[Tt]est[Rr]esult*/
+
+# Code coverage
+coverage*/
+
+# Publish output
+publish/
+*.PublishSettings
+PublishProfiles/*.user
+
+# Resharper
+_ReSharper*/
+*.[Rr]e[Ss]harper
+
+# OS junk
+Thumbs.db
+.DS_Store
+
+# Local app state (persisted to %APPDATA%, but ignore any stray copies)
+*.local.json

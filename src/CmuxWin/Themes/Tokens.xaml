@@ -1,0 +1,116 @@
+<ResourceDictionary
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:sys="clr-namespace:System;assembly=mscorlib">
+
+    <!-- Spacing scale — 8px grid. 4px only inside dense controls. -->
+    <sys:Double x:Key="Spacing.S04">4</sys:Double>
+    <sys:Double x:Key="Spacing.S08">8</sys:Double>
+    <sys:Double x:Key="Spacing.S12">12</sys:Double>
+    <sys:Double x:Key="Spacing.S16">16</sys:Double>
+    <sys:Double x:Key="Spacing.S24">24</sys:Double>
+    <sys:Double x:Key="Spacing.S32">32</sys:Double>
+    <sys:Double x:Key="Spacing.S48">48</sys:Double>
+
+    <Thickness x:Key="Thickness.S08">8</Thickness>
+    <Thickness x:Key="Thickness.S12">12</Thickness>
+    <Thickness x:Key="Thickness.S16">16</Thickness>
+    <Thickness x:Key="Thickness.PaddingPane">12</Thickness>
+    <Thickness x:Key="Thickness.TitleBarHeader">12,0,0,0</Thickness>
+
+    <!-- Corner radius -->
+    <CornerRadius x:Key="Radius.Input">4</CornerRadius>
+    <CornerRadius x:Key="Radius.Card">8</CornerRadius>
+    <CornerRadius x:Key="Radius.Window">12</CornerRadius>
+
+    <!-- Type — Segoe UI Variable, per-role optical axis + weight per the constitution.
+         Use the role Styles below in views; never hand-roll FontFamily/FontSize/FontWeight inline. -->
+    <FontFamily x:Key="Type.Family.Small">Segoe UI Variable Small, Segoe UI, sans-serif</FontFamily>
+    <FontFamily x:Key="Type.Family">Segoe UI Variable Text, Segoe UI, sans-serif</FontFamily>
+    <FontFamily x:Key="Type.Family.Display">Segoe UI Variable Display, Segoe UI, sans-serif</FontFamily>
+    <FontFamily x:Key="Type.Family.Mono">Cascadia Mono, Cascadia Code, Consolas, monospace</FontFamily>
+    <FontFamily x:Key="Type.Family.Icons">Segoe Fluent Icons</FontFamily>
+
+    <sys:Double x:Key="Type.Size.Caption">12</sys:Double>
+    <sys:Double x:Key="Type.Size.Body">14</sys:Double>
+    <sys:Double x:Key="Type.Size.Subtitle">16</sys:Double>
+    <sys:Double x:Key="Type.Size.Title">20</sys:Double>
+    <sys:Double x:Key="Type.Size.LargeTitle">28</sys:Double>
+
+    <sys:Double x:Key="Type.Mono.Terminal">13</sys:Double>
+
+    <!-- Role styles. Caption/Body use Small/Text axes; Title+ use Display. Line heights baked in:
+         body roles 1.4x, title roles 1.2x. ClearType + Ideal formatting for crispness. -->
+    <Style x:Key="Type.Caption" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{StaticResource Type.Family.Small}" />
+        <Setter Property="FontSize" Value="{StaticResource Type.Size.Caption}" />
+        <Setter Property="FontWeight" Value="Normal" />
+        <Setter Property="LineHeight" Value="17" />
+        <Setter Property="TextOptions.TextFormattingMode" Value="Ideal" />
+        <Setter Property="TextOptions.TextRenderingMode" Value="ClearType" />
+    </Style>
+
+    <Style x:Key="Type.Body" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{StaticResource Type.Family}" />
+        <Setter Property="FontSize" Value="{StaticResource Type.Size.Body}" />
+        <Setter Property="FontWeight" Value="Normal" />
+        <Setter Property="LineHeight" Value="20" />
+        <Setter Property="TextOptions.TextFormattingMode" Value="Ideal" />
+        <Setter Property="TextOptions.TextRenderingMode" Value="ClearType" />
+    </Style>
+
+    <Style x:Key="Type.BodyStrong" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{StaticResource Type.Family}" />
+        <Setter Property="FontSize" Value="{StaticResource Type.Size.Body}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="LineHeight" Value="20" />
+        <Setter Property="TextOptions.TextFormattingMode" Value="Ideal" />
+        <Setter Property="TextOptions.TextRenderingMode" Value="ClearType" />
+    </Style>
+
+    <Style x:Key="Type.Subtitle" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{StaticResource Type.Family}" />
+        <Setter Property="FontSize" Value="{StaticResource Type.Size.Subtitle}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="LineHeight" Value="22" />
+        <Setter Property="TextOptions.TextFormattingMode" Value="Ideal" />
+        <Setter Property="TextOptions.TextRenderingMode" Value="ClearType" />
+    </Style>
+
+    <Style x:Key="Type.Title" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{StaticResource Type.Family.Display}" />
+        <Setter Property="FontSize" Value="{StaticResource Type.Size.Title}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="LineHeight" Value="24" />
+        <Setter Property="TextOptions.TextFormattingMode" Value="Ideal" />
+        <Setter Property="TextOptions.TextRenderingMode" Value="ClearType" />
+    </Style>
+
+    <Style x:Key="Type.LargeTitle" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{StaticResource Type.Family.Display}" />
+        <Setter Property="FontSize" Value="{StaticResource Type.Size.LargeTitle}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="LineHeight" Value="34" />
+        <Setter Property="TextOptions.TextFormattingMode" Value="Ideal" />
+        <Setter Property="TextOptions.TextRenderingMode" Value="ClearType" />
+    </Style>
+
+    <!-- Layout primitives -->
+    <sys:Double x:Key="Layout.TitleBarHeight">32</sys:Double>
+    <GridLength x:Key="GridLength.TitleBarHeight">32</GridLength>
+    <sys:Double x:Key="Layout.SidebarWidth">200</sys:Double>
+    <GridLength x:Key="GridLength.SidebarWidth">200</GridLength>
+
+    <!-- Motion: 150–200ms, Win11 entry easing. No springs. -->
+    <Duration x:Key="Motion.Fast">0:0:0.15</Duration>
+    <Duration x:Key="Motion.Default">0:0:0.20</Duration>
+
+    <!-- App-specific accent for selected sidebar items + active pane border.
+         WPF-UI's AccentFillColorDefaultBrush is too desaturated in dark mode to read
+         as a clear "selected" state at sidebar-card scale, so cmux uses a vivid blue.
+         Mirrors the cmux mac ref's selection. -->
+    <Color x:Key="Cmux.Selection.Color">#3B82F6</Color>
+    <SolidColorBrush x:Key="Cmux.Selection.Brush"
+                     Color="{StaticResource Cmux.Selection.Color}" />
+
+</ResourceDictionary>

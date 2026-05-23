@@ -1,0 +1,790 @@
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Linq;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Threading;
+using EasyWindowsTerminalControl;
+using Microsoft.Terminal.Wpf;
+using Wpf.Ui.Controls;
+
+namespace CmuxWin;
+
+public partial class MainWindow : FluentWindow
+{
+    private readonly Settings _settings;
+    private readonly SessionStore _store;
+
+    private readonly Dictionary<Guid, FrameworkElement> _sessionRoots = new();
+    private readonly Dictionary<Guid, EasyTerminalControl> _paneTerminals = new();
+    private readonly Dictionary<Guid, Border> _paneBorders = new();
+    private readonly Dictionary<Guid, Guid> _paneToSession = new();
+    // Tracked shell PID per pane (grandchild under conhost). When this dies (`exit`),
+    // we close the pane. Tracking the shell instead of conhost is essential because
+    // conhost lingers briefly to show "Session Terminated" after the shell exits.
+    private readonly Dictionary<Guid, int> _paneShellPid = new();
+
+    private Session? _active;
+    private Guid? _activePaneId;
+    private DispatcherTimer? _previewTimer;
+
+    // Drag-reorder state
+    private System.Windows.Point _dragStart;
+    private Session? _dragSession;
+
+    public ICommand SplitRightCommand { get; }
+    public ICommand SplitDownCommand { get; }
+    public ICommand CloseActivePaneCommand { get; }
+    public ICommand RenameActiveSessionCommand { get; }
+    public ICommand ZoomInCommand { get; }
+    public ICommand ZoomOutCommand { get; }
+    public ICommand ZoomResetCommand { get; }
+
+    private const int FontSizeMin = 8;
+    private const int FontSizeMax = 32;
+    private const int FontSizeDefault = 13;
+
+    public MainWindow()
+    {
+        _settings = Settings.Load();
+        _store = SessionStore.Load();
+
+        SplitRightCommand = new RelayCommand(_ => SplitActive(SplitOrientation.Vertical));
+        SplitDownCommand = new RelayCommand(_ => SplitActive(SplitOrientation.Horizontal));
+        CloseActivePaneCommand = new RelayCommand(_ => CloseActivePane());
+        RenameActiveSessionCommand = new RelayCommand(_ => { if (_active != null) _active.IsEditing = true; });
+        ZoomInCommand = new RelayCommand(_ => AdjustFontSize(+1));
+        ZoomOutCommand = new RelayCommand(_ => AdjustFontSize(-1));
+        ZoomResetCommand = new RelayCommand(_ => SetFontSize(FontSizeDefault));
+
+        InitializeComponent();
+        DataContext = this;
+
+        SessionList.ItemsSource = _store.Sessions;
+        BuildShellFlyout();
+
+        var restore = _store.Sessions.FirstOrDefault(s => s.Id == _store.ActiveSessionId)
+                      ?? _store.Sessions.FirstOrDefault();
+        if (restore != null) SessionList.SelectedItem = restore;
+
+        ApplySettings();
+        Closing += OnClosing;
+        Loaded += (_, _) => StartPreviewPolling();
+    }
+
+    // ----- Shell picker flyout -----
+
+    private void BuildShellFlyout()
+    {
+        NewSessionFlyout.Items.Clear();
+        foreach (var shell in Shell.DetectedShells())
+        {
+            var mi = new System.Windows.Controls.MenuItem { Header = shell.Name, Tag = shell.CommandLine };
+            mi.Click += (_, _) =>
+            {
+                var s = _store.AddNew();
+                s.Shell = shell.CommandLine;
+                SessionList.SelectedItem = s;
+                SessionList.ScrollIntoView(s);
+            };
+            NewSessionFlyout.Items.Add(mi);
+        }
+    }
+
+    // ----- Session selection / materialization -----
+
+    private void OnSessionSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (SessionList.SelectedItem is not Session s) return;
+        if (_active?.Id == s.Id) return;
+
+        if (_active != null && _sessionRoots.TryGetValue(_active.Id, out var prev))
+            prev.Visibility = Visibility.Collapsed;
+
+        if (!_sessionRoots.TryGetValue(s.Id, out var root))
+        {
+            root = BuildSessionContainer(s);
+            _sessionRoots[s.Id] = root;
+            TerminalHost.Children.Add(root);
+        }
+        root.Visibility = Visibility.Visible;
+
+        // Swap PropertyChanged hook so the status bar updates on rename.
+        if (_active != null) _active.PropertyChanged -= OnActiveSessionPropertyChanged;
+        _active = s;
+        _active.PropertyChanged += OnActiveSessionPropertyChanged;
+        _store.ActiveSessionId = s.Id;
+
+        var firstLeaf = FirstLeaf(s.Root);
+        if (firstLeaf != null) SetActivePane(firstLeaf.Id);
+
+        UpdateStatusBar();
+    }
+
+    private void OnActiveSessionPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(Session.Title) or nameof(Session.Shell))
+            UpdateStatusBar();
+    }
+
+    private void UpdateStatusBar()
+    {
+        if (_active == null) { StatusBarText.Text = ""; return; }
+        StatusBarText.Text = $"{_active.Title}  ·  {_active.DisplayShell}";
+    }
+
+    private FrameworkElement BuildSessionContainer(Session s)
+    {
+        var host = new Grid();
+        host.Children.Add(BuildPaneTree(s, s.Root));
+        return host;
+    }
+
+    private void RebuildSessionContainer(Session s)
+    {
+        if (!_sessionRoots.TryGetValue(s.Id, out var host)) return;
+        ((Grid)host).Children.Clear();
+        var tree = BuildPaneTree(s, s.Root);
+        // Belt-and-suspenders: the cached wrapper may still be parented to an orphaned Grid.
+        if (tree.Parent is System.Windows.Controls.Panel orphan) orphan.Children.Remove(tree);
+        ((Grid)host).Children.Add(tree);
+    }
+
+    private FrameworkElement BuildPaneTree(Session sess, PaneNode node)
+    {
+        if (node.IsLeaf)
+        {
+            var leaf = GetOrCreatePaneWrapper(sess, node);
+            // Cached wrappers may still be parented to a Grid from a prior render.
+            if (leaf.Parent is System.Windows.Controls.Panel oldp) oldp.Children.Remove(leaf);
+            return leaf;
+        }
+
+        var grid = new Grid();
+        var isVertical = node.Split == SplitOrientation.Vertical;
+
+        for (int i = 0; i < node.Children.Count; i++)
+        {
+            if (isVertical)
+            {
+                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                if (i < node.Children.Count - 1)
+                    grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            }
+            else
+            {
+                grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+                if (i < node.Children.Count - 1)
+                    grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            }
+        }
+
+        for (int i = 0; i < node.Children.Count; i++)
+        {
+            var childEl = BuildPaneTree(sess, node.Children[i]);
+            if (childEl.Parent is System.Windows.Controls.Panel oldp && oldp != grid)
+                oldp.Children.Remove(childEl);
+
+            if (isVertical) Grid.SetColumn(childEl, i * 2);
+            else Grid.SetRow(childEl, i * 2);
+            if (childEl.Parent == null) grid.Children.Add(childEl);
+
+            if (i < node.Children.Count - 1)
+            {
+                var splitter = new GridSplitter
+                {
+                    Background = (System.Windows.Media.Brush)FindResource("ControlStrokeColorDefaultBrush"),
+                    ShowsPreview = false,
+                };
+                if (isVertical)
+                {
+                    splitter.Width = 4;
+                    splitter.HorizontalAlignment = System.Windows.HorizontalAlignment.Stretch;
+                    splitter.VerticalAlignment = System.Windows.VerticalAlignment.Stretch;
+                    splitter.ResizeDirection = GridResizeDirection.Columns;
+                    Grid.SetColumn(splitter, i * 2 + 1);
+                }
+                else
+                {
+                    splitter.Height = 4;
+                    splitter.HorizontalAlignment = System.Windows.HorizontalAlignment.Stretch;
+                    splitter.VerticalAlignment = System.Windows.VerticalAlignment.Stretch;
+                    splitter.ResizeDirection = GridResizeDirection.Rows;
+                    Grid.SetRow(splitter, i * 2 + 1);
+                }
+                grid.Children.Add(splitter);
+            }
+        }
+        return grid;
+    }
+
+    private Border GetOrCreatePaneWrapper(Session sess, PaneNode pane)
+    {
+        if (_paneBorders.TryGetValue(pane.Id, out var existing)) return existing;
+
+        var isNewTerminal = !_paneTerminals.ContainsKey(pane.Id);
+        var term = _paneTerminals.TryGetValue(pane.Id, out var t) ? t : CreateTerminal(sess);
+        _paneTerminals[pane.Id] = term;
+        _paneToSession[pane.Id] = sess.Id;
+
+        if (isNewTerminal)
+        {
+            var capturedPane = pane;
+            // Snapshot shell PIDs under our conhosts BEFORE this pane spawns its shell.
+            var beforePids = new HashSet<int>(EnumerateOwnShellPids());
+            term.Loaded += async (_, _) =>
+            {
+                ApplyDefaultTheme(term);
+                await System.Threading.Tasks.Task.Delay(800);  // shell startup
+                var pid = await Dispatcher.InvokeAsync(() => PickNewShellPid(beforePids));
+                if (pid > 0) _paneShellPid[capturedPane.Id] = pid;
+            };
+        }
+
+        var inner = new Grid();
+        inner.RowDefinitions.Add(new RowDefinition { Height = new GridLength(22) });
+        inner.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+
+        var header = BuildPaneHeader(sess, pane);
+        Grid.SetRow(header, 0);
+        inner.Children.Add(header);
+
+        Grid.SetRow(term, 1);
+        if (term.Parent is System.Windows.Controls.Panel oldParent) oldParent.Children.Remove(term);
+        inner.Children.Add(term);
+
+        var border = new Border
+        {
+            Child = inner,
+            BorderBrush = System.Windows.Media.Brushes.Transparent,
+            BorderThickness = new Thickness(2),  // 2px when active, transparent otherwise
+            SnapsToDevicePixels = true,
+            Tag = pane.Id,
+        };
+        border.PreviewMouseDown += (_, _) => SetActivePane(pane.Id);
+        // Focus-follow: when keyboard focus enters anything inside this border, mark it active.
+        border.IsKeyboardFocusWithinChanged += (_, e) =>
+        {
+            if (e.NewValue is bool nv && nv) SetActivePane(pane.Id);
+        };
+
+        _paneBorders[pane.Id] = border;
+        return border;
+    }
+
+    private FrameworkElement BuildPaneHeader(Session sess, PaneNode pane)
+    {
+        var bar = new Grid
+        {
+            Background = (System.Windows.Media.Brush)FindResource("LayerFillColorAltBrush"),
+        };
+        bar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        bar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var label = new System.Windows.Controls.TextBlock
+        {
+            Text = sess.DisplayShell,
+            FontSize = 11,
+            VerticalAlignment = System.Windows.VerticalAlignment.Center,
+            Margin = new Thickness(10, 0, 0, 0),
+            Foreground = (System.Windows.Media.Brush)FindResource("TextFillColorSecondaryBrush"),
+        };
+        label.SetResourceReference(System.Windows.Controls.TextBlock.FontFamilyProperty, "Type.Family");
+        Grid.SetColumn(label, 0);
+        bar.Children.Add(label);
+
+        var close = new Wpf.Ui.Controls.Button
+        {
+            Content = "",
+            FontFamily = (System.Windows.Media.FontFamily)FindResource("Type.Family.Icons"),
+            FontSize = 10,
+            Appearance = Wpf.Ui.Controls.ControlAppearance.Transparent,
+            Padding = new Thickness(8, 0, 8, 0),
+            MinHeight = 22,
+            BorderThickness = new Thickness(0),
+            Foreground = (System.Windows.Media.Brush)FindResource("TextFillColorTertiaryBrush"),
+        };
+        close.Click += (_, _) => ClosePane(sess, pane.Id);
+        Grid.SetColumn(close, 1);
+        bar.Children.Add(close);
+
+        var underline = new Border
+        {
+            BorderBrush = (System.Windows.Media.Brush)FindResource("ControlStrokeColorDefaultBrush"),
+            BorderThickness = new Thickness(0, 0, 0, 1),
+            VerticalAlignment = System.Windows.VerticalAlignment.Bottom,
+            Height = 1,
+        };
+        Grid.SetColumnSpan(underline, 2);
+        bar.Children.Add(underline);
+
+        return bar;
+    }
+
+    private EasyTerminalControl CreateTerminal(Session s) => new()
+    {
+        StartupCommandLine = string.IsNullOrEmpty(s.Shell)
+            ? Shell.DefaultCommandLine(_settings.DefaultShell)
+            : s.Shell,
+        FontFamilyWhenSettingTheme = new System.Windows.Media.FontFamily(_settings.FontFamily),
+        FontSizeWhenSettingTheme = _settings.FontSize,
+        LogConPTYOutput = true,
+    };
+
+    // ----- Zoom: increase/decrease/reset font size live across all panes -----
+
+    private void AdjustFontSize(int delta) => SetFontSize(_settings.FontSize + delta);
+
+    private void SetFontSize(int newSize)
+    {
+        newSize = System.Math.Max(FontSizeMin, System.Math.Min(FontSizeMax, newSize));
+        if (newSize == _settings.FontSize) return;
+        _settings.FontSize = newSize;
+        _settings.Save();
+        ApplyFontToAllTerminals();
+    }
+
+    private void ApplyFontToAllTerminals()
+    {
+        var family = new System.Windows.Media.FontFamily(_settings.FontFamily);
+        var theme = MakeDefaultTheme();
+        foreach (var term in _paneTerminals.Values)
+        {
+            try
+            {
+                term.FontFamilyWhenSettingTheme = family;
+                term.FontSizeWhenSettingTheme = _settings.FontSize;
+                // Assigning Theme triggers Terminal.SetTheme(theme, fontFamily, fontSize) on the
+                // underlying WPF terminal control — re-applies font WITHOUT killing the shell.
+                term.Theme = theme;
+            }
+            catch { /* best-effort */ }
+        }
+    }
+
+    /// Windows Terminal "Campbell" defaults in COLORREF (0x00BBGGRR) format.
+    /// Used on every newly-created terminal and re-applied during zoom so colors stay consistent.
+    private static readonly uint[] CampbellColors =
+    {
+        0x000000, 0x1F0FC5, 0x0EA113, 0x009CC1,
+        0xDA3700, 0x981788, 0xDD963A, 0xCCCCCC,
+        0x767676, 0x5648E7, 0x0CC616, 0xA5F1F9,
+        0xFF783B, 0x9E00B4, 0xD6D661, 0xF2F2F2,
+    };
+
+    private static TerminalTheme MakeDefaultTheme() => new()
+    {
+        DefaultBackground = 0x0C0C0C,
+        DefaultForeground = 0xCCCCCC,
+        DefaultSelectionBackground = 0x383838,
+        CursorStyle = CursorStyle.BlinkingBar,
+        ColorTable = CampbellColors,
+    };
+
+    private static void ApplyDefaultTheme(EasyTerminalControl term)
+    {
+        try { term.Theme = MakeDefaultTheme(); }
+        catch { }
+    }
+
+    /// Enumerates shell PIDs. The Microsoft.Terminal.Wpf control launches the shell as
+    /// a DIRECT child of our process (with conhost as a separate sibling acting as the
+    /// pseudo-console host). So shells = direct children of CmuxWin minus conhost.exe.
+    private IEnumerable<int> EnumerateOwnShellPids()
+    {
+        var ownPid = Environment.ProcessId;
+        var result = new List<int>();
+        try
+        {
+            using var searcher = new System.Management.ManagementObjectSearcher(
+                $"SELECT ProcessId, Name FROM Win32_Process WHERE ParentProcessId = {ownPid}");
+            foreach (var mo in searcher.Get())
+            {
+                var name = mo["Name"]?.ToString() ?? "";
+                if (string.Equals(name, "conhost.exe", System.StringComparison.OrdinalIgnoreCase)) continue;
+                result.Add(System.Convert.ToInt32(mo["ProcessId"]));
+            }
+        }
+        catch { }
+        return result;
+    }
+
+    private int PickNewShellPid(HashSet<int> beforePids)
+    {
+        var current = EnumerateOwnShellPids().ToList();
+        var alreadyAssigned = new HashSet<int>(_paneShellPid.Values);
+        foreach (var pid in current)
+        {
+            if (beforePids.Contains(pid)) continue;
+            if (alreadyAssigned.Contains(pid)) continue;
+            return pid;
+        }
+        return 0;
+    }
+
+    // ----- Active pane indicator -----
+
+    private void SetActivePane(Guid paneId)
+    {
+        if (_activePaneId == paneId) return;
+        _activePaneId = paneId;
+        var accent = (System.Windows.Media.Brush)FindResource("Cmux.Selection.Brush");
+        foreach (var (id, border) in _paneBorders)
+            border.BorderBrush = (id == paneId) ? accent : System.Windows.Media.Brushes.Transparent;
+    }
+
+    // ----- Tree helpers -----
+
+    private static PaneNode? FirstLeaf(PaneNode node)
+    {
+        if (node.IsLeaf) return node;
+        foreach (var c in node.Children) { var leaf = FirstLeaf(c); if (leaf != null) return leaf; }
+        return null;
+    }
+    private static PaneNode? FindLeaf(PaneNode root, Guid id)
+    {
+        if (root.IsLeaf) return root.Id == id ? root : null;
+        foreach (var c in root.Children) { var f = FindLeaf(c, id); if (f != null) return f; }
+        return null;
+    }
+    private static PaneNode? FindParent(PaneNode root, Guid childId)
+    {
+        if (root.IsLeaf) return null;
+        foreach (var c in root.Children)
+        {
+            if (c.Id == childId) return root;
+            var f = FindParent(c, childId);
+            if (f != null) return f;
+        }
+        return null;
+    }
+    private static IEnumerable<Guid> AllLeafIds(PaneNode node)
+    {
+        if (node.IsLeaf) { yield return node.Id; yield break; }
+        foreach (var c in node.Children) foreach (var id in AllLeafIds(c)) yield return id;
+    }
+
+    // ----- Split / close panes -----
+
+    private void SplitActive(SplitOrientation orientation)
+    {
+        if (_active == null || _activePaneId == null) return;
+        var leaf = FindLeaf(_active.Root, _activePaneId.Value);
+        if (leaf == null) return;
+
+        var newLeaf = new PaneNode();
+        var parent = FindParent(_active.Root, leaf.Id);
+
+        if (parent != null && parent.Split == orientation)
+        {
+            var idx = parent.Children.IndexOf(leaf);
+            parent.Children.Insert(idx + 1, newLeaf);
+        }
+        else
+        {
+            var split = new PaneNode { Split = orientation, Children = { leaf, newLeaf } };
+            if (parent == null) _active.Root = split;
+            else
+            {
+                var idx = parent.Children.IndexOf(leaf);
+                parent.Children[idx] = split;
+            }
+        }
+
+        RebuildSessionContainer(_active);
+        SetActivePane(newLeaf.Id);
+    }
+
+    private void CloseActivePane()
+    {
+        if (_active == null || _activePaneId == null) return;
+        ClosePane(_active, _activePaneId.Value);
+    }
+
+    private void ClosePane(Session sess, Guid paneId)
+    {
+        var leaf = FindLeaf(sess.Root, paneId);
+        if (leaf == null) return;
+
+        var parent = FindParent(sess.Root, paneId);
+        if (parent == null) { CloseSession(sess); return; }
+
+        parent.Children.Remove(leaf);
+
+        if (_paneBorders.Remove(paneId, out var border))
+            if (border.Parent is System.Windows.Controls.Panel bp) bp.Children.Remove(border);
+        if (_paneTerminals.Remove(paneId, out var term))
+            if (term.Parent is System.Windows.Controls.Panel tp) tp.Children.Remove(term);
+        _paneToSession.Remove(paneId);
+        _paneShellPid.Remove(paneId);
+
+        if (parent.Children.Count == 1)
+        {
+            var only = parent.Children[0];
+            var grand = FindParent(sess.Root, parent.Id);
+            if (grand == null) sess.Root = only;
+            else
+            {
+                var idx = grand.Children.IndexOf(parent);
+                grand.Children[idx] = only;
+            }
+        }
+
+        RebuildSessionContainer(sess);
+        var newActive = FirstLeaf(sess.Root);
+        if (newActive != null) SetActivePane(newActive.Id);
+    }
+
+    // ----- Session add / close / rename -----
+
+    private void OnSettingsClick(object sender, RoutedEventArgs e)
+    {
+        var dlg = new SettingsWindow(_settings) { Owner = this };
+        var fontBefore = (_settings.FontFamily, _settings.FontSize, _settings.DefaultShell);
+        dlg.ShowDialog();
+        if (!dlg.Saved) return;
+
+        // If the default shell changed, future sessions pick it up via Shell.DefaultCommandLine.
+        // Font changes only apply to terminals created after this point — existing ones keep theirs.
+        // Nothing to actively refresh here yet.
+        _ = fontBefore;
+    }
+
+    private void OnCloseSessionMenuClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not System.Windows.Controls.MenuItem mi) return;
+        var session = FindSessionFromMenuItem(mi);
+        if (session != null) CloseSession(session);
+    }
+
+    private void OnRenameMenuClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not System.Windows.Controls.MenuItem mi) return;
+        var session = FindSessionFromMenuItem(mi);
+        if (session != null) session.IsEditing = true;
+    }
+
+    private static Session? FindSessionFromMenuItem(System.Windows.Controls.MenuItem mi)
+    {
+        var ctx = mi;
+        while (ctx?.Parent != null && ctx.Parent is not System.Windows.Controls.ContextMenu)
+            ctx = ctx.Parent as System.Windows.Controls.MenuItem;
+        if (ctx?.Parent is System.Windows.Controls.ContextMenu cm && cm.PlacementTarget is FrameworkElement fe)
+            return fe.DataContext as Session;
+        return null;
+    }
+
+    private void CloseSession(Session s)
+    {
+        if (_sessionRoots.TryGetValue(s.Id, out var host))
+        {
+            TerminalHost.Children.Remove(host);
+            _sessionRoots.Remove(s.Id);
+        }
+        foreach (var leafId in AllLeafIds(s.Root).ToList())
+        {
+            _paneBorders.Remove(leafId);
+            if (_paneTerminals.Remove(leafId, out var term))
+                if (term.Parent is System.Windows.Controls.Panel pp) pp.Children.Remove(term);
+            _paneToSession.Remove(leafId);
+            _paneShellPid.Remove(leafId);
+        }
+
+        var wasActive = _active?.Id == s.Id;
+        var next = _store.Remove(s);
+        if (wasActive)
+        {
+            _active = null;
+            _activePaneId = null;
+            SessionList.SelectedItem = next;
+        }
+    }
+
+    // ----- Rename via double-click + inline TextBox -----
+
+    private void OnRenameTextBoxLoaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is System.Windows.Controls.TextBox tb)
+        {
+            tb.Focus();
+            tb.SelectAll();
+        }
+    }
+
+    private void OnRenameTextBoxKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (sender is not System.Windows.Controls.TextBox tb) return;
+        if (tb.DataContext is not Session s) return;
+        if (e.Key == Key.Enter || e.Key == Key.Escape)
+        {
+            s.IsEditing = false;
+            // Focus back to the SessionList so subsequent keystrokes don't go into the now-hidden box.
+            SessionList.Focus();
+            e.Handled = true;
+        }
+    }
+
+    private void OnRenameTextBoxLostFocus(object sender, RoutedEventArgs e)
+    {
+        if (sender is System.Windows.Controls.TextBox tb && tb.DataContext is Session s)
+            s.IsEditing = false;
+    }
+
+    // ----- Drag reorder -----
+
+    private void OnSessionItemMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is System.Windows.Controls.ListViewItem lvi && lvi.DataContext is Session s)
+        {
+            _dragStart = e.GetPosition(null);
+            _dragSession = s;
+        }
+    }
+
+    private void OnSessionItemMouseMove(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        if (_dragSession == null || e.LeftButton != MouseButtonState.Pressed) return;
+
+        var pos = e.GetPosition(null);
+        if (Math.Abs(pos.X - _dragStart.X) < SystemParameters.MinimumHorizontalDragDistance
+         && Math.Abs(pos.Y - _dragStart.Y) < SystemParameters.MinimumVerticalDragDistance)
+            return;
+
+        var data = new System.Windows.DataObject("cmux-session", _dragSession);
+        try { DragDrop.DoDragDrop(SessionList, data, System.Windows.DragDropEffects.Move); }
+        finally { _dragSession = null; }
+    }
+
+    private void OnSessionItemDrop(object sender, System.Windows.DragEventArgs e)
+    {
+        if (sender is not System.Windows.Controls.ListViewItem lvi) return;
+        if (lvi.DataContext is not Session target) return;
+        if (e.Data.GetData("cmux-session") is not Session source) return;
+        if (source.Id == target.Id) return;
+
+        var oldIdx = _store.Sessions.IndexOf(source);
+        var newIdx = _store.Sessions.IndexOf(target);
+        if (oldIdx < 0 || newIdx < 0) return;
+        _store.Sessions.Move(oldIdx, newIdx);
+        e.Handled = true;
+    }
+
+    // ----- Preview polling -----
+
+    private void StartPreviewPolling()
+    {
+        if (_previewTimer != null) return;
+        _previewTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(750) };
+        _previewTimer.Tick += (_, _) => PumpPreviews();
+        _previewTimer.Start();
+    }
+
+    private void PumpPreviews()
+    {
+        foreach (var s in _store.Sessions)
+        {
+            var firstLeaf = FirstLeaf(s.Root);
+            if (firstLeaf == null) continue;
+            if (!_paneTerminals.TryGetValue(firstLeaf.Id, out var term)) continue;
+            try
+            {
+                var text = term.ConPTYTerm?.GetConsoleText();
+                if (string.IsNullOrEmpty(text)) continue;
+                var lines = text.Split('\n')
+                                .Select(l => l.TrimEnd('\r', ' '))
+                                .Where(l => l.Length > 0)
+                                .ToList();
+                if (lines.Count == 0) continue;
+                var lastN = lines.Skip(Math.Max(0, lines.Count - 4));
+                s.Preview = string.Join('\n', lastN);
+            }
+            catch { }
+        }
+
+        // Detect dead shells: a tracked shell PID that's no longer in our shell-set means
+        // the user ran `exit` (or the shell otherwise died). Conhost may still linger to
+        // show "Session Terminated" — that's why we track shell, not conhost.
+        var liveShells = new HashSet<int>(EnumerateOwnShellPids());
+        foreach (var (paneId, shellPid) in _paneShellPid.ToList())
+        {
+            if (liveShells.Contains(shellPid)) continue;
+            _paneShellPid.Remove(paneId);
+            if (_paneToSession.TryGetValue(paneId, out var sessId))
+            {
+                var sess = _store.Sessions.FirstOrDefault(x => x.Id == sessId);
+                if (sess != null) ClosePane(sess, paneId);
+            }
+            break;  // one closure per tick — defense in depth
+        }
+    }
+
+    // ----- Window / settings -----
+
+    private void ApplySettings()
+    {
+        Width = _settings.WindowWidth;
+        Height = _settings.WindowHeight;
+
+        if (!double.IsNaN(_settings.WindowLeft) && !double.IsNaN(_settings.WindowTop)
+            && IsOnScreen(_settings.WindowLeft, _settings.WindowTop, _settings.WindowWidth, _settings.WindowHeight))
+        {
+            WindowStartupLocation = WindowStartupLocation.Manual;
+            Left = _settings.WindowLeft;
+            Top = _settings.WindowTop;
+        }
+        else WindowStartupLocation = WindowStartupLocation.CenterScreen;
+
+        if (_settings.WindowMaximized) WindowState = WindowState.Maximized;
+    }
+
+    private static bool IsOnScreen(double left, double top, double width, double height)
+    {
+        var rect = new System.Drawing.Rectangle((int)left, (int)top, (int)width, (int)height);
+        foreach (var screen in System.Windows.Forms.Screen.AllScreens)
+            if (screen.WorkingArea.IntersectsWith(rect)) return true;
+        return false;
+    }
+
+    private void OnClosing(object? sender, CancelEventArgs e)
+    {
+        _previewTimer?.Stop();
+
+        if (WindowState == WindowState.Normal)
+        {
+            _settings.WindowLeft = Left;
+            _settings.WindowTop = Top;
+            _settings.WindowWidth = Width;
+            _settings.WindowHeight = Height;
+            _settings.WindowMaximized = false;
+        }
+        else if (WindowState == WindowState.Maximized)
+        {
+            var rb = RestoreBounds;
+            if (!rb.IsEmpty)
+            {
+                _settings.WindowLeft = rb.Left;
+                _settings.WindowTop = rb.Top;
+                _settings.WindowWidth = rb.Width;
+                _settings.WindowHeight = rb.Height;
+            }
+            _settings.WindowMaximized = true;
+        }
+
+        _settings.Save();
+        _store.Save();
+    }
+}
+
+internal sealed class RelayCommand : ICommand
+{
+    private readonly Action<object?> _exec;
+    public RelayCommand(Action<object?> exec) { _exec = exec; }
+    public bool CanExecute(object? parameter) => true;
+    public void Execute(object? parameter) => _exec(parameter);
+#pragma warning disable CS0067
+    public event EventHandler? CanExecuteChanged;
+#pragma warning restore CS0067
+}
