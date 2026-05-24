@@ -361,7 +361,7 @@ public partial class MainWindow : FluentWindow
                 // underlying WPF terminal control — re-applies font WITHOUT killing the shell.
                 term.Theme = theme;
             }
-            catch { /* best-effort */ }
+            catch (Exception ex) { Log.Error("ApplyFontToAllTerminals", ex); }
         }
     }
 
@@ -387,7 +387,7 @@ public partial class MainWindow : FluentWindow
     private static void ApplyDefaultTheme(EasyTerminalControl term)
     {
         try { term.Theme = MakeDefaultTheme(); }
-        catch { }
+        catch (Exception ex) { Log.Error("ApplyDefaultTheme", ex); }
     }
 
     /// Enumerates shell PIDs. The Microsoft.Terminal.Wpf control launches the shell as
@@ -408,7 +408,7 @@ public partial class MainWindow : FluentWindow
                 result.Add(System.Convert.ToInt32(mo["ProcessId"]));
             }
         }
-        catch { }
+        catch (Exception ex) { Log.Error("EnumerateOwnShellPids", ex); }
         return result;
     }
 
