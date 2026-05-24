@@ -235,13 +235,19 @@ public partial class MainWindow : FluentWindow
             var capturedPane = pane;
             // Snapshot shell PIDs under our conhosts BEFORE this pane spawns its shell.
             var beforePids = new HashSet<int>(EnumerateOwnShellPids());
-            term.Loaded += async (_, _) =>
+            // One-shot: cached terminals get reparented every time the container is
+            // rebuilt (e.g. when a sibling pane is closed). Re-applying the theme on
+            // each Loaded would visibly reset every other pane.
+            RoutedEventHandler? once = null;
+            once = async (_, _) =>
             {
+                term.Loaded -= once;
                 ApplyDefaultTheme(term);
                 await System.Threading.Tasks.Task.Delay(800);  // shell startup
                 var pid = await Dispatcher.InvokeAsync(() => PickNewShellPid(beforePids));
                 if (pid > 0) _paneShellPid[capturedPane.Id] = pid;
             };
+            term.Loaded += once;
         }
 
         var inner = new Grid();
