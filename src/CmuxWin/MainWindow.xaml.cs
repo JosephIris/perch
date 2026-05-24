@@ -26,6 +26,11 @@ public partial class MainWindow : FluentWindow
     // we close the pane. Tracking the shell instead of conhost is essential because
     // conhost lingers briefly to show "Session Terminated" after the shell exits.
     private readonly Dictionary<Guid, int> _paneShellPid = new();
+    private readonly Dictionary<Guid, TerminalClickHook> _paneClickHook = new();
+    private readonly Dictionary<Guid, Microsoft.Web.WebView2.Wpf.WebView2> _paneWebViews = new();
+
+    private ClipboardWatcher? _clipboard;
+    private DispatcherTimer? _toastTimer;
 
     private Session? _active;
     private Guid? _activePaneId;
@@ -42,6 +47,7 @@ public partial class MainWindow : FluentWindow
     public ICommand ZoomInCommand { get; }
     public ICommand ZoomOutCommand { get; }
     public ICommand ZoomResetCommand { get; }
+    public ICommand ShowUrlPaletteCommand { get; }
 
     private const int FontSizeMin = 8;
     private const int FontSizeMax = 32;
@@ -59,6 +65,7 @@ public partial class MainWindow : FluentWindow
         ZoomInCommand = new RelayCommand(_ => AdjustFontSize(+1));
         ZoomOutCommand = new RelayCommand(_ => AdjustFontSize(-1));
         ZoomResetCommand = new RelayCommand(_ => SetFontSize(FontSizeDefault));
+        ShowUrlPaletteCommand = new RelayCommand(_ => ShowUrlPalette());
 
         InitializeComponent();
         DataContext = this;
@@ -72,7 +79,13 @@ public partial class MainWindow : FluentWindow
 
         ApplySettings();
         Closing += OnClosing;
-        Loaded += (_, _) => StartPreviewPolling();
+        Loaded += (_, _) =>
+        {
+            StartPreviewPolling();
+            _clipboard = new ClipboardWatcher(this);
+            _clipboard.ClipboardChanged += OnClipboardChanged;
+            _clipboard.Attach();
+        };
     }
 
     // ----- Shell picker flyout -----
@@ -133,7 +146,13 @@ public partial class MainWindow : FluentWindow
     private void UpdateStatusBar()
     {
         if (_active == null) { StatusBarText.Text = ""; return; }
-        StatusBarText.Text = $"{_active.Title}  ·  {_active.DisplayShell}";
+        var paneLabel = _active.DisplayShell;
+        if (_activePaneId is Guid pid)
+        {
+            var node = FindLeaf(_active.Root, pid);
+            if (node?.IsWebView == true) paneLabel = WebViewLabel(node.Url!);
+        }
+        StatusBarText.Text = $"{_active.Title}  ·  {paneLabel}";
     }
 
     private FrameworkElement BuildSessionContainer(Session s)
@@ -225,30 +244,10 @@ public partial class MainWindow : FluentWindow
     {
         if (_paneBorders.TryGetValue(pane.Id, out var existing)) return existing;
 
-        var isNewTerminal = !_paneTerminals.ContainsKey(pane.Id);
-        var term = _paneTerminals.TryGetValue(pane.Id, out var t) ? t : CreateTerminal(sess);
-        _paneTerminals[pane.Id] = term;
         _paneToSession[pane.Id] = sess.Id;
-
-        if (isNewTerminal)
-        {
-            var capturedPane = pane;
-            // Snapshot shell PIDs under our conhosts BEFORE this pane spawns its shell.
-            var beforePids = new HashSet<int>(EnumerateOwnShellPids());
-            // One-shot: cached terminals get reparented every time the container is
-            // rebuilt (e.g. when a sibling pane is closed). Re-applying the theme on
-            // each Loaded would visibly reset every other pane.
-            RoutedEventHandler? once = null;
-            once = async (_, _) =>
-            {
-                term.Loaded -= once;
-                ApplyDefaultTheme(term);
-                await System.Threading.Tasks.Task.Delay(800);  // shell startup
-                var pid = await Dispatcher.InvokeAsync(() => PickNewShellPid(beforePids));
-                if (pid > 0) _paneShellPid[capturedPane.Id] = pid;
-            };
-            term.Loaded += once;
-        }
+        FrameworkElement content = pane.IsWebView
+            ? GetOrCreateWebView(pane)
+            : GetOrCreateTerminal(sess, pane);
 
         var inner = new Grid();
         inner.RowDefinitions.Add(new RowDefinition { Height = new GridLength(22) });
@@ -258,20 +257,19 @@ public partial class MainWindow : FluentWindow
         Grid.SetRow(header, 0);
         inner.Children.Add(header);
 
-        Grid.SetRow(term, 1);
-        if (term.Parent is System.Windows.Controls.Panel oldParent) oldParent.Children.Remove(term);
-        inner.Children.Add(term);
+        Grid.SetRow(content, 1);
+        if (content.Parent is System.Windows.Controls.Panel oldParent) oldParent.Children.Remove(content);
+        inner.Children.Add(content);
 
         var border = new Border
         {
             Child = inner,
             BorderBrush = System.Windows.Media.Brushes.Transparent,
-            BorderThickness = new Thickness(2),  // 2px when active, transparent otherwise
+            BorderThickness = new Thickness(2),
             SnapsToDevicePixels = true,
             Tag = pane.Id,
         };
         border.PreviewMouseDown += (_, _) => SetActivePane(pane.Id);
-        // Focus-follow: when keyboard focus enters anything inside this border, mark it active.
         border.IsKeyboardFocusWithinChanged += (_, e) =>
         {
             if (e.NewValue is bool nv && nv) SetActivePane(pane.Id);
@@ -279,6 +277,62 @@ public partial class MainWindow : FluentWindow
 
         _paneBorders[pane.Id] = border;
         return border;
+    }
+
+    private EasyTerminalControl GetOrCreateTerminal(Session sess, PaneNode pane)
+    {
+        if (_paneTerminals.TryGetValue(pane.Id, out var cached)) return cached;
+
+        var term = CreateTerminal(sess);
+        _paneTerminals[pane.Id] = term;
+
+        // WPF's default Tab handler steals Tab for focus navigation before
+        // the native HWND sees it. Forward Tab into the conhost HWND
+        // ourselves so PSReadLine suggestions / cmd path completion work.
+        var capturedId = pane.Id;
+        term.PreviewKeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Tab && _paneClickHook.TryGetValue(capturedId, out var hook))
+            {
+                if (hook.ForwardTab()) e.Handled = true;
+            }
+        };
+
+        var capturedPane = pane;
+        var beforePids = new HashSet<int>(EnumerateOwnShellPids());
+        RoutedEventHandler? once = null;
+        once = async (_, _) =>
+        {
+            term.Loaded -= once;
+            ApplyDefaultTheme(term);
+            AttachClickHook(capturedPane.Id, term);
+            await System.Threading.Tasks.Task.Delay(800);
+            var pid = await Dispatcher.InvokeAsync(() => PickNewShellPid(beforePids));
+            if (pid > 0) _paneShellPid[capturedPane.Id] = pid;
+        };
+        term.Loaded += once;
+        return term;
+    }
+
+    private Microsoft.Web.WebView2.Wpf.WebView2 GetOrCreateWebView(PaneNode pane)
+    {
+        if (_paneWebViews.TryGetValue(pane.Id, out var cached)) return cached;
+
+        var wv = new Microsoft.Web.WebView2.Wpf.WebView2();
+        try { wv.Source = new Uri(pane.Url!); }
+        catch (Exception ex) { Log.Error("WebView2.Source", ex); }
+        _paneWebViews[pane.Id] = wv;
+        return wv;
+    }
+
+    private static string WebViewLabel(string url)
+    {
+        try
+        {
+            var host = new Uri(url).Host;
+            return host.StartsWith("www.", StringComparison.OrdinalIgnoreCase) ? host[4..] : host;
+        }
+        catch { return url; }
     }
 
     private FrameworkElement BuildPaneHeader(Session sess, PaneNode pane)
@@ -292,7 +346,7 @@ public partial class MainWindow : FluentWindow
 
         var label = new System.Windows.Controls.TextBlock
         {
-            Text = sess.DisplayShell,
+            Text = pane.IsWebView ? WebViewLabel(pane.Url!) : sess.DisplayShell,
             FontSize = 11,
             VerticalAlignment = System.Windows.VerticalAlignment.Center,
             Margin = new Thickness(10, 0, 0, 0),
@@ -440,6 +494,7 @@ public partial class MainWindow : FluentWindow
         var accent = (System.Windows.Media.Brush)FindResource("Cmux.Selection.Brush");
         foreach (var (id, border) in _paneBorders)
             border.BorderBrush = (id == paneId) ? accent : System.Windows.Media.Brushes.Transparent;
+        UpdateStatusBar();
     }
 
     // ----- Tree helpers -----
@@ -475,13 +530,15 @@ public partial class MainWindow : FluentWindow
 
     // ----- Split / close panes -----
 
-    private void SplitActive(SplitOrientation orientation)
+    private void SplitActive(SplitOrientation orientation) => SplitActive(orientation, null);
+
+    private void SplitActive(SplitOrientation orientation, string? url)
     {
         if (_active == null || _activePaneId == null) return;
         var leaf = FindLeaf(_active.Root, _activePaneId.Value);
         if (leaf == null) return;
 
-        var newLeaf = new PaneNode();
+        var newLeaf = new PaneNode { Url = url };
         var parent = FindParent(_active.Root, leaf.Id);
 
         if (parent != null && parent.Split == orientation)
@@ -502,6 +559,32 @@ public partial class MainWindow : FluentWindow
 
         RebuildSessionContainer(_active);
         SetActivePane(newLeaf.Id);
+        FocusPane(newLeaf.Id);
+    }
+
+    /// Move keyboard focus to a pane. Deferred to Loaded priority because
+    /// freshly-split panes haven't been measured/arranged yet, and HwndHost-
+    /// based controls (both EasyTerminalControl and WebView2) won't accept
+    /// focus until their native HWND exists.
+    private void FocusPane(Guid paneId)
+    {
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, () =>
+        {
+            try
+            {
+                if (_paneTerminals.TryGetValue(paneId, out var term))
+                {
+                    term.Focus();
+                    System.Windows.Input.Keyboard.Focus(term);
+                }
+                else if (_paneWebViews.TryGetValue(paneId, out var wv))
+                {
+                    wv.Focus();
+                    System.Windows.Input.Keyboard.Focus(wv);
+                }
+            }
+            catch (Exception ex) { Log.Error("FocusPane", ex); }
+        });
     }
 
     private void CloseActivePane()
@@ -524,8 +607,14 @@ public partial class MainWindow : FluentWindow
             if (border.Parent is System.Windows.Controls.Panel bp) bp.Children.Remove(border);
         if (_paneTerminals.Remove(paneId, out var term))
             if (term.Parent is System.Windows.Controls.Panel tp) tp.Children.Remove(term);
+        if (_paneWebViews.Remove(paneId, out var wv))
+        {
+            if (wv.Parent is System.Windows.Controls.Panel wp) wp.Children.Remove(wv);
+            try { wv.Dispose(); } catch (Exception ex) { Log.Error("WebView2.Dispose", ex); }
+        }
         _paneToSession.Remove(paneId);
         _paneShellPid.Remove(paneId);
+        _paneClickHook.Remove(paneId);
 
         if (parent.Children.Count == 1)
         {
@@ -595,8 +684,14 @@ public partial class MainWindow : FluentWindow
             _paneBorders.Remove(leafId);
             if (_paneTerminals.Remove(leafId, out var term))
                 if (term.Parent is System.Windows.Controls.Panel pp) pp.Children.Remove(term);
+            if (_paneWebViews.Remove(leafId, out var wp))
+            {
+                if (wp.Parent is System.Windows.Controls.Panel par) par.Children.Remove(wp);
+                try { wp.Dispose(); } catch (Exception ex) { Log.Error("WebView2.Dispose", ex); }
+            }
             _paneToSession.Remove(leafId);
             _paneShellPid.Remove(leafId);
+            _paneClickHook.Remove(leafId);
         }
 
         var wasActive = _active?.Id == s.Id;
@@ -710,6 +805,7 @@ public partial class MainWindow : FluentWindow
             catch { }
         }
 
+
         // Detect dead shells: a tracked shell PID that's no longer in our shell-set means
         // the user ran `exit` (or the shell otherwise died). Conhost may still linger to
         // show "Session Terminated" — that's why we track shell, not conhost.
@@ -781,6 +877,210 @@ public partial class MainWindow : FluentWindow
 
         _settings.Save();
         _store.Save();
+        _clipboard?.Dispose();
+    }
+
+    // ----- URL actions -----
+    //
+    // Microsoft.Terminal.Wpf doesn't expose its cell grid (see
+    // docs/RENDERER_NOTES.md), so we can't hit-test arbitrary clicks against
+    // URLs. Two entry points instead:
+    //   * Double-click on a URL — conhost's existing word-selection gesture
+    //     selects the URL; the click hook reads it and pops the action menu.
+    //     Right-click is left alone so conhost's default paste still works.
+    //   * Ctrl+Shift+U — palette listing every URL in the current pane's
+    //     buffer. Covers URLs that scrolled past or live in a long log line.
+
+    private void AttachClickHook(Guid paneId, EasyTerminalControl term)
+    {
+        var hook = new TerminalClickHook(term);
+        hook.OnUrlAction = (url, screenPt) => ShowUrlMenu(paneId, url, screenPt);
+        hook.Attach();
+        _paneClickHook[paneId] = hook;
+    }
+
+    private void ShowUrlMenu(Guid paneId, string url, System.Windows.Point screenPt)
+    {
+        var menu = new System.Windows.Controls.ContextMenu
+        {
+            Placement = System.Windows.Controls.Primitives.PlacementMode.AbsolutePoint,
+            HorizontalOffset = screenPt.X,
+            VerticalOffset = screenPt.Y,
+        };
+
+        // Header row previews the URL the actions will run against. Truncated
+        // so a long URL doesn't stretch the menu off the edge of the screen.
+        var preview = url.Length > 64 ? url.Substring(0, 61) + "…" : url;
+        menu.Items.Add(new System.Windows.Controls.MenuItem
+        {
+            Header = preview,
+            IsHitTestVisible = false,
+            FontWeight = System.Windows.FontWeights.SemiBold,
+            Foreground = (System.Windows.Media.Brush)FindResource("TextFillColorSecondaryBrush"),
+        });
+        menu.Items.Add(new System.Windows.Controls.Separator());
+        menu.Items.Add(MakeMenuItem("Open in browser", () => OpenInBrowser(url)));
+        menu.Items.Add(MakeMenuItem("Open in pane to right",
+            () => OpenUrlInNewPane(paneId, url, SplitOrientation.Vertical)));
+        menu.Items.Add(MakeMenuItem("Open in pane below",
+            () => OpenUrlInNewPane(paneId, url, SplitOrientation.Horizontal)));
+        menu.Items.Add(new System.Windows.Controls.Separator());
+        menu.Items.Add(MakeMenuItem("Copy URL", () =>
+        {
+            try { System.Windows.Clipboard.SetText(url); ShowToast("URL copied"); }
+            catch (Exception ex) { Log.Error("ShowUrlMenu.CopyUrl", ex); }
+        }));
+
+        menu.IsOpen = true;
+    }
+
+    private static System.Windows.Controls.MenuItem MakeMenuItem(string label, Action onClick)
+    {
+        var mi = new System.Windows.Controls.MenuItem { Header = label };
+        mi.Click += (_, _) => onClick();
+        return mi;
+    }
+
+    private void ShowUrlPalette()
+    {
+        // Source: the active pane if it's a terminal, otherwise the first
+        // terminal leaf in the current session. Falls back to no-op for
+        // sessions that contain only webview panes.
+        if (_active == null) return;
+
+        var sourcePaneId = _activePaneId;
+        if (sourcePaneId == null || !_paneTerminals.ContainsKey(sourcePaneId.Value))
+        {
+            var firstTerm = AllLeafIds(_active.Root).FirstOrDefault(id => _paneTerminals.ContainsKey(id));
+            if (firstTerm == default) return;
+            sourcePaneId = firstTerm;
+        }
+
+        if (!_paneTerminals.TryGetValue(sourcePaneId.Value, out var term)) return;
+        string text;
+        try { text = term.ConPTYTerm?.GetConsoleText() ?? ""; }
+        catch (Exception ex) { Log.Error("ShowUrlPalette.GetConsoleText", ex); return; }
+
+        var urls = UrlScanner.AllUrls(text);
+        if (urls.Count == 0) { ShowToast("No URLs in buffer"); return; }
+
+        var menu = new System.Windows.Controls.ContextMenu
+        {
+            Placement = System.Windows.Controls.Primitives.PlacementMode.Center,
+            PlacementTarget = this,
+        };
+        menu.Items.Add(new System.Windows.Controls.MenuItem
+        {
+            Header = urls.Count == 1 ? "1 URL in buffer" : $"{urls.Count} URLs in buffer",
+            IsHitTestVisible = false,
+            FontWeight = System.Windows.FontWeights.SemiBold,
+            Foreground = (System.Windows.Media.Brush)FindResource("TextFillColorSecondaryBrush"),
+        });
+        menu.Items.Add(new System.Windows.Controls.Separator());
+
+        var paneIdForActions = sourcePaneId.Value;
+        foreach (var url in urls)
+        {
+            var preview = url.Length > 64 ? url.Substring(0, 61) + "…" : url;
+            var item = new System.Windows.Controls.MenuItem { Header = preview };
+            // Each URL is a submenu with the same 3 actions ShowUrlMenu offers.
+            item.Items.Add(MakeMenuItem("Open in browser", () => OpenInBrowser(url)));
+            item.Items.Add(MakeMenuItem("Open in pane to right",
+                () => OpenUrlInNewPane(paneIdForActions, url, SplitOrientation.Vertical)));
+            item.Items.Add(MakeMenuItem("Open in pane below",
+                () => OpenUrlInNewPane(paneIdForActions, url, SplitOrientation.Horizontal)));
+            item.Items.Add(new System.Windows.Controls.Separator());
+            item.Items.Add(MakeMenuItem("Copy URL", () =>
+            {
+                try { System.Windows.Clipboard.SetText(url); ShowToast("URL copied"); }
+                catch (Exception ex) { Log.Error("UrlPalette.CopyUrl", ex); }
+            }));
+            menu.Items.Add(item);
+        }
+        menu.IsOpen = true;
+    }
+
+
+    private void OpenInBrowser(string url)
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = url,
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception ex)
+        {
+            Log.Error("OpenInBrowser", ex);
+            ShowToast("Couldn't open URL");
+        }
+    }
+
+    private void OpenUrlInNewPane(Guid sourcePaneId, string url, SplitOrientation orientation)
+    {
+        if (_active == null) return;
+        SetActivePane(sourcePaneId);
+        SplitActive(orientation, url);
+    }
+
+    // ----- Toast -----
+
+    public void ShowToast(string text)
+    {
+        ToastText.Text = text;
+        ToastPopup.IsOpen = true;
+
+        var fadeIn = new System.Windows.Media.Animation.DoubleAnimation
+        {
+            From = ToastHost.Opacity,
+            To = 1.0,
+            Duration = new Duration(TimeSpan.FromMilliseconds(150)),
+            EasingFunction = new System.Windows.Media.Animation.CubicEase
+            {
+                EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut
+            },
+        };
+        ToastHost.BeginAnimation(UIElement.OpacityProperty, fadeIn);
+
+        _toastTimer?.Stop();
+        _toastTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1600) };
+        _toastTimer.Tick += (_, _) =>
+        {
+            _toastTimer?.Stop();
+            var fadeOut = new System.Windows.Media.Animation.DoubleAnimation
+            {
+                From = 1.0,
+                To = 0.0,
+                Duration = new Duration(TimeSpan.FromMilliseconds(200)),
+            };
+            fadeOut.Completed += (_, _) => ToastPopup.IsOpen = false;
+            ToastHost.BeginAnimation(UIElement.OpacityProperty, fadeOut);
+        };
+        _toastTimer.Start();
+    }
+
+    private string _lastClipboardText = "";
+
+    private void OnClipboardChanged()
+    {
+        // ClipboardWatcher already gates on "our window is foreground", so any
+        // text-format change at this point is a copy the user just did inside
+        // cmux (terminal pane, sidebar rename, settings dialog). conhost clears
+        // the selection immediately after copying, so comparing GetSelectedText
+        // to the clipboard would miss every terminal copy — just toast on text
+        // changes and dedupe identical payloads to ignore re-renders.
+        try
+        {
+            if (!System.Windows.Clipboard.ContainsText()) return;
+            var clip = System.Windows.Clipboard.GetText();
+            if (string.IsNullOrEmpty(clip)) return;
+            if (clip == _lastClipboardText) return;
+            _lastClipboardText = clip;
+            ShowToast("Copied");
+        }
+        catch (Exception ex) { Log.Error("OnClipboardChanged", ex); }
     }
 }
 

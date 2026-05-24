@@ -12,10 +12,20 @@ internal static class Log
 
     public static void Error(string context, Exception? ex)
     {
+        Write($"ERROR {context}: {ex}");
+    }
+
+    public static void Info(string context, string message = "")
+    {
+        Write($"INFO  {context}{(message.Length > 0 ? ": " + message : "")}");
+    }
+
+    private static void Write(string body)
+    {
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(LogPath)!);
-            var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {context}: {ex}{Environment.NewLine}";
+            var line = $"[{DateTime.Now:HH:mm:ss.fff}] {body}{Environment.NewLine}";
             lock (_lock) File.AppendAllText(LogPath, line);
         }
         catch { /* logging must never throw */ }

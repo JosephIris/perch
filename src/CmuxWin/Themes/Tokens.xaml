@@ -113,4 +113,14 @@
     <SolidColorBrush x:Key="Cmux.Selection.Brush"
                      Color="{StaticResource Cmux.Selection.Color}" />
 
+    <!-- Toast surface — deliberately light gray in BOTH themes so the toast
+         reads clearly when overlaid on the (dark) terminal area. The WPF-UI
+         acrylic surface used previously was too low-contrast against pane
+         contents to spot. Text + icon use a near-black foreground that pairs
+         with the light surface; this is one of the few places cmux intentionally
+         breaks theme symmetry for readability. -->
+    <SolidColorBrush x:Key="Cmux.Toast.Background" Color="#E8E8E8" />
+    <SolidColorBrush x:Key="Cmux.Toast.Foreground" Color="#1A1A1A" />
+    <SolidColorBrush x:Key="Cmux.Toast.Border"     Color="#BEBEBE" />
+
 </ResourceDictionary>

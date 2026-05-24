@@ -60,7 +60,12 @@ internal sealed class PaneNode
     public Guid Id { get; init; } = Guid.NewGuid();
     public SplitOrientation? Split { get; set; }
     public List<PaneNode> Children { get; set; } = new();
+    /// When set on a leaf, the pane renders a WebView2 loaded with this URL
+    /// instead of a terminal. Sessions persisted to disk preserve their
+    /// webview panes across restarts.
+    public string? Url { get; set; }
     [JsonIgnore] public bool IsLeaf => Split == null;
+    [JsonIgnore] public bool IsWebView => IsLeaf && !string.IsNullOrEmpty(Url);
 }
 
 internal enum SplitOrientation { Horizontal, Vertical }

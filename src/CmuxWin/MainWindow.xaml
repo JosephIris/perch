@@ -37,6 +37,9 @@
                     Command="{Binding CloseActivePaneCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
         <KeyBinding Key="F2"
                     Command="{Binding RenameActiveSessionCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
+        <!-- URL palette: list every URL in the active pane's buffer. -->
+        <KeyBinding Modifiers="Ctrl+Shift" Key="U"
+                    Command="{Binding ShowUrlPaletteCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
     </ui:FluentWindow.InputBindings>
 
     <ui:FluentWindow.Resources>
@@ -275,8 +278,49 @@
             </Grid>
         </Border>
 
-        <Grid x:Name="TerminalHost"
-              Grid.Row="1" Grid.Column="1" />
+        <Grid Grid.Row="1" Grid.Column="1">
+            <Grid x:Name="TerminalHost" />
+
+            <!-- Anchor: zero-size element above which the Popup positions itself.
+                 The Popup uses its own top-level HWND so it can overlay the
+                 native conhost HwndHost (WPF airspace would otherwise hide it).
+                 Anchored bottom-center, sitting 24px above the status bar. -->
+            <FrameworkElement x:Name="ToastAnchor"
+                              HorizontalAlignment="Center"
+                              VerticalAlignment="Bottom"
+                              Width="1" Height="1"
+                              Margin="0,0,0,24" />
+            <Popup x:Name="ToastPopup"
+                   PlacementTarget="{Binding ElementName=ToastAnchor}"
+                   Placement="Center"
+                   AllowsTransparency="True"
+                   StaysOpen="True"
+                   Focusable="False"
+                   IsOpen="False">
+                <Border x:Name="ToastHost"
+                        Padding="14,8"
+                        CornerRadius="{StaticResource Radius.Card}"
+                        Background="{DynamicResource Cmux.Toast.Background}"
+                        BorderBrush="{DynamicResource Cmux.Toast.Border}"
+                        BorderThickness="1"
+                        IsHitTestVisible="False"
+                        Opacity="0">
+                    <StackPanel Orientation="Horizontal">
+                        <ui:FontIcon x:Name="ToastIcon"
+                                     Glyph="&#xE8C8;"
+                                     FontFamily="{StaticResource Type.Family.Icons}"
+                                     FontSize="14"
+                                     VerticalAlignment="Center"
+                                     Margin="0,0,8,0"
+                                     Foreground="{DynamicResource Cmux.Toast.Foreground}" />
+                        <TextBlock x:Name="ToastText"
+                                   Style="{StaticResource Type.Body}"
+                                   Foreground="{DynamicResource Cmux.Toast.Foreground}"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                </Border>
+            </Popup>
+        </Grid>
 
         <!-- Status bar -->
         <Border Grid.Row="2" Grid.ColumnSpan="2"
