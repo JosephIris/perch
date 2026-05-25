@@ -81,7 +81,7 @@ public partial class MainWindow : FluentWindow
         Closing += OnClosing;
         Loaded += (_, _) =>
         {
-            StartPreviewPolling();
+            StartShellHealthPolling();
             _clipboard = new ClipboardWatcher(this);
             _clipboard.ClipboardChanged += OnClipboardChanged;
             _clipboard.Attach();
@@ -265,7 +265,7 @@ public partial class MainWindow : FluentWindow
         {
             Child = inner,
             BorderBrush = System.Windows.Media.Brushes.Transparent,
-            BorderThickness = new Thickness(2),
+            BorderThickness = new Thickness(1),
             SnapsToDevicePixels = true,
             Tag = pane.Id,
         };
@@ -298,6 +298,21 @@ public partial class MainWindow : FluentWindow
             }
         };
 
+        // "Last activity" timestamp on the owning session, bumped whenever the
+        // PTY emits output. Push-based — no GetConsoleText, no polling. Matches
+        // cmux for macOS's sidebar pattern (relative-time subtitle, not a tail).
+        var capturedSess = sess;
+        EventHandler<Microsoft.Terminal.Wpf.TerminalOutputEventArgs>? onOut = null;
+        onOut = (_, _) =>
+        {
+            // Throttle to once per second so a typing storm doesn't flood
+            // PropertyChanged into the UI thread.
+            var now = DateTime.UtcNow;
+            if (capturedSess.LastActivity is DateTime prev && (now - prev).TotalSeconds < 1) return;
+            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background,
+                () => capturedSess.LastActivity = now);
+        };
+
         var capturedPane = pane;
         var beforePids = new HashSet<int>(EnumerateOwnShellPids());
         RoutedEventHandler? once = null;
@@ -306,6 +321,8 @@ public partial class MainWindow : FluentWindow
             term.Loaded -= once;
             ApplyDefaultTheme(term);
             AttachClickHook(capturedPane.Id, term);
+            // Wire activity tracking once the TermPTY is up.
+            if (term.ConPTYTerm != null) term.ConPTYTerm.TerminalOutput += onOut;
             await System.Threading.Tasks.Task.Delay(800);
             var pid = await Dispatcher.InvokeAsync(() => PickNewShellPid(beforePids));
             if (pid > 0) _paneShellPid[capturedPane.Id] = pid;
@@ -337,9 +354,12 @@ public partial class MainWindow : FluentWindow
 
     private FrameworkElement BuildPaneHeader(Session sess, PaneNode pane)
     {
+        // Transparent header so Mica reads through the gutter between the
+        // titlebar and the terminal HwndHost. Reference apps (Windows Terminal)
+        // don't put a per-pane filled strip here.
         var bar = new Grid
         {
-            Background = (System.Windows.Media.Brush)FindResource("LayerFillColorAltBrush"),
+            Background = System.Windows.Media.Brushes.Transparent,
         };
         bar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         bar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -356,30 +376,27 @@ public partial class MainWindow : FluentWindow
         Grid.SetColumn(label, 0);
         bar.Children.Add(label);
 
+        // Use a SymbolIcon so we don't depend on Segoe Fluent Icons being
+        // installed AND on the Button template inheriting FontFamily — both
+        // of which were producing a 0-width / invisible glyph here.
         var close = new Wpf.Ui.Controls.Button
         {
-            Content = "",
-            FontFamily = (System.Windows.Media.FontFamily)FindResource("Type.Family.Icons"),
-            FontSize = 10,
+            Content = new Wpf.Ui.Controls.SymbolIcon
+            {
+                Symbol = Wpf.Ui.Controls.SymbolRegular.Dismiss12,
+                FontSize = 12,
+            },
             Appearance = Wpf.Ui.Controls.ControlAppearance.Transparent,
             Padding = new Thickness(8, 0, 8, 0),
+            MinWidth = 28,
             MinHeight = 22,
             BorderThickness = new Thickness(0),
+            ToolTip = "Close pane",
             Foreground = (System.Windows.Media.Brush)FindResource("TextFillColorTertiaryBrush"),
         };
         close.Click += (_, _) => ClosePane(sess, pane.Id);
         Grid.SetColumn(close, 1);
         bar.Children.Add(close);
-
-        var underline = new Border
-        {
-            BorderBrush = (System.Windows.Media.Brush)FindResource("ControlStrokeColorDefaultBrush"),
-            BorderThickness = new Thickness(0, 0, 0, 1),
-            VerticalAlignment = System.Windows.VerticalAlignment.Bottom,
-            Height = 1,
-        };
-        Grid.SetColumnSpan(underline, 2);
-        bar.Children.Add(underline);
 
         return bar;
     }
@@ -491,7 +508,7 @@ public partial class MainWindow : FluentWindow
     {
         if (_activePaneId == paneId) return;
         _activePaneId = paneId;
-        var accent = (System.Windows.Media.Brush)FindResource("Cmux.Selection.Brush");
+        var accent = (System.Windows.Media.Brush)FindResource("AccentFillColorDefaultBrush");
         foreach (var (id, border) in _paneBorders)
             border.BorderBrush = (id == paneId) ? accent : System.Windows.Media.Brushes.Transparent;
         UpdateStatusBar();
@@ -773,42 +790,36 @@ public partial class MainWindow : FluentWindow
         e.Handled = true;
     }
 
-    // ----- Preview polling -----
-
-    private void StartPreviewPolling()
+    // ----- Shell health polling -----
+    //
+    // We used to tail GetConsoleText every 750ms to populate a "preview"
+    // string on each session card. That copy ran on the UI thread, was heavy
+    // (full screen buffer per pane), caused visible typing lag, and the
+    // resulting text was rarely useful — the reference cmux for macOS doesn't
+    // do this at all (their sidebar shows metadata + push notifications, not
+    // a buffer tail). Dropped entirely. The timer now only watches for shell
+    // processes that have exited so we can auto-close their pane.
+    private void StartShellHealthPolling()
     {
         if (_previewTimer != null) return;
-        _previewTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(750) };
-        _previewTimer.Tick += (_, _) => PumpPreviews();
+        _previewTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+        _previewTimer.Tick += (_, _) =>
+        {
+            PollShellHealth();
+            // Nudge the sidebar's relative-time labels ("5m ago" → "6m ago")
+            // without touching the PTY. Cheap — just fires PropertyChanged on
+            // the computed string.
+            foreach (var s in _store.Sessions)
+                if (s.LastActivity != null) s.RaiseLastActivityRelativeChanged();
+        };
         _previewTimer.Start();
     }
 
-    private void PumpPreviews()
+    private void PollShellHealth()
     {
-        foreach (var s in _store.Sessions)
-        {
-            var firstLeaf = FirstLeaf(s.Root);
-            if (firstLeaf == null) continue;
-            if (!_paneTerminals.TryGetValue(firstLeaf.Id, out var term)) continue;
-            try
-            {
-                var text = term.ConPTYTerm?.GetConsoleText();
-                if (string.IsNullOrEmpty(text)) continue;
-                var lines = text.Split('\n')
-                                .Select(l => l.TrimEnd('\r', ' '))
-                                .Where(l => l.Length > 0)
-                                .ToList();
-                if (lines.Count == 0) continue;
-                var lastN = lines.Skip(Math.Max(0, lines.Count - 4));
-                s.Preview = string.Join('\n', lastN);
-            }
-            catch { }
-        }
-
-
-        // Detect dead shells: a tracked shell PID that's no longer in our shell-set means
-        // the user ran `exit` (or the shell otherwise died). Conhost may still linger to
-        // show "Session Terminated" — that's why we track shell, not conhost.
+        // A tracked shell PID that's no longer in our shell-set means the user
+        // ran `exit` (or the shell otherwise died). Conhost may linger briefly
+        // to show "Session Terminated" — that's why we track shell, not conhost.
         var liveShells = new HashSet<int>(EnumerateOwnShellPids());
         foreach (var (paneId, shellPid) in _paneShellPid.ToList())
         {
