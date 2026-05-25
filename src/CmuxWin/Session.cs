@@ -22,12 +22,31 @@ internal sealed class Session : INotifyPropertyChanged
 
     public PaneNode Root { get; set; } = new();
 
-    private string _preview = "";
+    // "Last activity" timestamp, bumped whenever the session's primary pane
+    // emits PTY output. Sidebar uses this to render a relative-time subtitle
+    // ("now" / "5m ago" / "idle"), matching cmux for macOS's pattern. Updated
+    // off the TermPTY.TerminalOutput event — no polling, no buffer copy.
+    private DateTime? _lastActivity;
     [JsonIgnore]
-    public string Preview
+    public DateTime? LastActivity
     {
-        get => _preview;
-        set { if (_preview != value) { _preview = value; OnPropertyChanged(); } }
+        get => _lastActivity;
+        set { if (_lastActivity != value) { _lastActivity = value; OnPropertyChanged(); OnPropertyChanged(nameof(LastActivityRelative)); } }
+    }
+
+    [JsonIgnore]
+    public string LastActivityRelative
+    {
+        get
+        {
+            if (_lastActivity is not DateTime ts) return "";
+            var elapsed = DateTime.UtcNow - ts;
+            if (elapsed.TotalSeconds < 5)    return "now";
+            if (elapsed.TotalSeconds < 60)   return $"{(int)elapsed.TotalSeconds}s ago";
+            if (elapsed.TotalMinutes < 60)   return $"{(int)elapsed.TotalMinutes}m ago";
+            if (elapsed.TotalHours < 24)     return $"{(int)elapsed.TotalHours}h ago";
+            return $"{(int)elapsed.TotalDays}d ago";
+        }
     }
 
     private bool _isEditing;
@@ -49,6 +68,11 @@ internal sealed class Session : INotifyPropertyChanged
             catch { return s; }
         }
     }
+
+    /// Called by the host's relative-time tick — refreshes the sidebar string
+    /// without needing the underlying timestamp to change.
+    public void RaiseLastActivityRelativeChanged()
+        => OnPropertyChanged(nameof(LastActivityRelative));
 
     public event PropertyChangedEventHandler? PropertyChanged;
     private void OnPropertyChanged([CallerMemberName] string? name = null)

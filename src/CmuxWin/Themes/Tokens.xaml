@@ -105,14 +105,6 @@
     <Duration x:Key="Motion.Fast">0:0:0.15</Duration>
     <Duration x:Key="Motion.Default">0:0:0.20</Duration>
 
-    <!-- App-specific accent for selected sidebar items + active pane border.
-         WPF-UI's AccentFillColorDefaultBrush is too desaturated in dark mode to read
-         as a clear "selected" state at sidebar-card scale, so cmux uses a vivid blue.
-         Mirrors the cmux mac ref's selection. -->
-    <Color x:Key="Cmux.Selection.Color">#3B82F6</Color>
-    <SolidColorBrush x:Key="Cmux.Selection.Brush"
-                     Color="{StaticResource Cmux.Selection.Color}" />
-
     <!-- Toast surface — deliberately light gray in BOTH themes so the toast
          reads clearly when overlaid on the (dark) terminal area. The WPF-UI
          acrylic surface used previously was too low-contrast against pane
