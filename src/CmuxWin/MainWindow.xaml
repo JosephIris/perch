@@ -43,6 +43,9 @@
     </ui:FluentWindow.InputBindings>
 
     <ui:FluentWindow.Resources>
+        <local:BoolToVisibilityConverter x:Key="BoolToVisibility" />
+        <local:ResourceKeyToBrushConverter x:Key="ResourceKeyToBrush" />
+
         <DataTemplate x:Key="SessionItemTemplate" DataType="{x:Type local:Session}">
             <Grid Margin="8,12,8,12">
                 <Grid.ContextMenu>
@@ -121,6 +124,27 @@
                                    Style="{StaticResource Type.Caption}"
                                    Foreground="{DynamicResource TextFillColorTertiaryBrush}"
                                    Margin="8,0,0,0" />
+                    </Grid>
+
+                    <!-- OSC 9 notification: third line, hidden unless HasNotification.
+                         Colored dot is keyed off Session.NotificationDotBrush which
+                         maps Level → theme brush resource key. -->
+                    <Grid Margin="0,6,0,0"
+                          Visibility="{Binding HasNotification, Converter={StaticResource BoolToVisibility}}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Ellipse Grid.Column="0"
+                                 Width="6" Height="6"
+                                 VerticalAlignment="Center"
+                                 Margin="0,0,6,0"
+                                 Fill="{Binding NotificationDotBrush, Converter={StaticResource ResourceKeyToBrush}}" />
+                        <TextBlock Grid.Column="1"
+                                   Text="{Binding NotificationText}"
+                                   Style="{StaticResource Type.Caption}"
+                                   Foreground="{DynamicResource TextFillColorPrimaryBrush}"
+                                   TextTrimming="CharacterEllipsis" />
                     </Grid>
                 </StackPanel>
             </Grid>

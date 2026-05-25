@@ -22,6 +22,40 @@ internal sealed class Session : INotifyPropertyChanged
 
     public PaneNode Root { get; set; } = new();
 
+    // Notification text emitted by an agent or shell script via OSC 9
+    // (`printf '\e]9;text\a'`). The session-level row in the sidebar shows
+    // this with a colored dot keyed off NotificationLevel. Stays until the
+    // next notify call or the pane closes.
+    private string _notificationText = "";
+    [JsonIgnore]
+    public string NotificationText
+    {
+        get => _notificationText;
+        set { if (_notificationText != value) { _notificationText = value; OnPropertyChanged(); OnPropertyChanged(nameof(HasNotification)); } }
+    }
+
+    private NotificationLevel _notificationLevel = NotificationLevel.Info;
+    [JsonIgnore]
+    public NotificationLevel NotificationLevel
+    {
+        get => _notificationLevel;
+        set { if (_notificationLevel != value) { _notificationLevel = value; OnPropertyChanged(); OnPropertyChanged(nameof(NotificationDotBrush)); } }
+    }
+
+    [JsonIgnore] public bool HasNotification => !string.IsNullOrEmpty(_notificationText);
+
+    /// Resource key for the colored dot brush — resolved by the sidebar
+    /// template against the theme dictionary. Keeps the mapping in one place
+    /// and lets the dot pick up theme accent variations.
+    [JsonIgnore]
+    public string NotificationDotBrush => _notificationLevel switch
+    {
+        CmuxWin.NotificationLevel.Success => "SystemFillColorSuccessBrush",
+        CmuxWin.NotificationLevel.Warn    => "SystemFillColorCautionBrush",
+        CmuxWin.NotificationLevel.Error   => "SystemFillColorCriticalBrush",
+        _                                  => "AccentFillColorDefaultBrush",
+    };
+
     // "Last activity" timestamp, bumped whenever the session's primary pane
     // emits PTY output. Sidebar uses this to render a relative-time subtitle
     // ("now" / "5m ago" / "idle"), matching cmux for macOS's pattern. Updated
