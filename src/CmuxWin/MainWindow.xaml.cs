@@ -298,15 +298,49 @@ public partial class MainWindow : FluentWindow
             }
         };
 
-        // "Last activity" timestamp on the owning session, bumped whenever the
-        // PTY emits output. Push-based — no GetConsoleText, no polling. Matches
-        // cmux for macOS's sidebar pattern (relative-time subtitle, not a tail).
+        // Per-pane state for the push-based sidebar:
+        //   * LastActivity timestamp (throttled to 1Hz so typing doesn't flood).
+        //   * OSC 9 parser scans the same stream for `\e]9;...\a` notifications
+        //     that agents emit; result is routed to the owning Session.
         var capturedSess = sess;
+        var oscParser = new OscParser();
         EventHandler<Microsoft.Terminal.Wpf.TerminalOutputEventArgs>? onOut = null;
-        onOut = (_, _) =>
+        onOut = (_, args) =>
         {
-            // Throttle to once per second so a typing storm doesn't flood
-            // PropertyChanged into the UI thread.
+            try
+            {
+                var data = args.Data;
+                if (!string.IsNullOrEmpty(data))
+                {
+                    var events = oscParser.Feed(data.AsSpan());
+                    if (events.Count > 0)
+                    {
+                        // Apply each event on the UI thread. Later events
+                        // overwrite earlier ones of the same kind, which is
+                        // what we want — only the latest notification / cwd
+                        // matters to the sidebar.
+                        var snapshot = new List<OscEvent>(events);
+                        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, () =>
+                        {
+                            foreach (var ev in snapshot)
+                            {
+                                switch (ev.Kind)
+                                {
+                                    case OscKind.Notification:
+                                        capturedSess.NotificationLevel = ev.Level;
+                                        capturedSess.NotificationText = ev.Text;
+                                        break;
+                                    case OscKind.Cwd:
+                                        capturedSess.Cwd = ev.Text;
+                                        break;
+                                }
+                            }
+                        });
+                    }
+                }
+            }
+            catch (Exception ex) { Log.Error("OscParser.Feed", ex); }
+
             var now = DateTime.UtcNow;
             if (capturedSess.LastActivity is DateTime prev && (now - prev).TotalSeconds < 1) return;
             Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background,
@@ -376,40 +410,88 @@ public partial class MainWindow : FluentWindow
         Grid.SetColumn(label, 0);
         bar.Children.Add(label);
 
-        // Use a SymbolIcon so we don't depend on Segoe Fluent Icons being
-        // installed AND on the Button template inheriting FontFamily — both
-        // of which were producing a 0-width / invisible glyph here.
-        var close = new Wpf.Ui.Controls.Button
+        // The close button lives in a Popup. Without this, the per-pane
+        // header occupies WPF airspace next to the conhost HwndHost, and
+        // WPF mouse-button events (WM_LBUTTONDOWN/UP) are routed by Windows
+        // to whichever child HWND sits topmost at the cursor — the native
+        // HwndTerminalClass — so the WPF Button never sees the click.
+        // A Popup is its own top-level HWND, sits above the conhost child,
+        // and receives mouse-button events normally.
+        var close = new System.Windows.Controls.Button
         {
-            Content = new Wpf.Ui.Controls.SymbolIcon
-            {
-                Symbol = Wpf.Ui.Controls.SymbolRegular.Dismiss12,
-                FontSize = 12,
-            },
-            Appearance = Wpf.Ui.Controls.ControlAppearance.Transparent,
-            Padding = new Thickness(8, 0, 8, 0),
-            MinWidth = 28,
-            MinHeight = 22,
+            Content = "\u2715",
+            Width = 28,
+            Height = 22,
+            Padding = new Thickness(0),
+            FontSize = 10,
             BorderThickness = new Thickness(0),
+            Background = System.Windows.Media.Brushes.Transparent,
+            Cursor = System.Windows.Input.Cursors.Hand,
             ToolTip = "Close pane",
             Foreground = (System.Windows.Media.Brush)FindResource("TextFillColorTertiaryBrush"),
         };
         close.Click += (_, _) => ClosePane(sess, pane.Id);
-        Grid.SetColumn(close, 1);
-        bar.Children.Add(close);
+
+        // Header keeps an invisible anchor in column 1 so layout reserves
+        // 28px on the right; the Popup positions itself against the anchor.
+        var closeAnchor = new System.Windows.Controls.Border
+        {
+            Width = 28,
+            Height = 22,
+            Background = System.Windows.Media.Brushes.Transparent,
+            Margin = new Thickness(0, 0, 4, 0),
+        };
+        var closePopup = new System.Windows.Controls.Primitives.Popup
+        {
+            PlacementTarget = closeAnchor,
+            Placement = System.Windows.Controls.Primitives.PlacementMode.Center,
+            AllowsTransparency = true,
+            StaysOpen = true,
+            Focusable = false,
+            Child = close,
+        };
+        // Tie IsOpen to the anchor's visibility. Without this, the Popup is a
+        // top-level HWND that outlives its parent: when you close the app,
+        // the WPF window tears down but the popup HWND lingers a beat;
+        // switching sessions hides the anchor but the popup stays put.
+        // Binding to IsVisible folds the popup back into normal WPF lifecycle.
+        closePopup.SetBinding(System.Windows.Controls.Primitives.Popup.IsOpenProperty,
+            new System.Windows.Data.Binding("IsVisible")
+            {
+                Source = closeAnchor,
+                Mode = System.Windows.Data.BindingMode.OneWay,
+            });
+        // Belt-and-suspenders: when the anchor unloads (pane closed), force
+        // the popup shut so its HWND is destroyed immediately.
+        closeAnchor.Unloaded += (_, _) => closePopup.IsOpen = false;
+        Grid.SetColumn(closeAnchor, 1);
+        bar.Children.Add(closeAnchor);
+        bar.Children.Add(closePopup);
 
         return bar;
     }
 
-    private EasyTerminalControl CreateTerminal(Session s) => new()
+    private EasyTerminalControl CreateTerminal(Session s)
     {
-        StartupCommandLine = string.IsNullOrEmpty(s.Shell)
+        var baseShell = string.IsNullOrEmpty(s.Shell)
             ? Shell.DefaultCommandLine(_settings.DefaultShell)
-            : s.Shell,
-        FontFamilyWhenSettingTheme = new System.Windows.Media.FontFamily(_settings.FontFamily),
-        FontSizeWhenSettingTheme = _settings.FontSize,
-        LogConPTYOutput = true,
-    };
+            : s.Shell;
+        // Pick the cwd in priority order: per-session remembered cwd (set by
+        // OSC 7 or last-known), then the global default, then no override.
+        // This is what stops us launching in the install folder.
+        var cwd = !string.IsNullOrWhiteSpace(s.Cwd) && System.IO.Directory.Exists(s.Cwd)
+            ? s.Cwd
+            : _settings.ResolveDefaultCwd();
+        var startCmd = Shell.WithStartupCwd(baseShell, cwd);
+
+        return new EasyTerminalControl
+        {
+            StartupCommandLine = startCmd,
+            FontFamilyWhenSettingTheme = new System.Windows.Media.FontFamily(_settings.FontFamily),
+            FontSizeWhenSettingTheme = _settings.FontSize,
+            LogConPTYOutput = true,
+        };
+    }
 
     // ----- Zoom: increase/decrease/reset font size live across all panes -----
 

@@ -18,6 +18,20 @@ public sealed class Settings
     /// User-chosen default shell command line. Empty = auto-detect via Shell.DetectedShells().
     public string DefaultShell { get; set; } = "";
 
+    /// Working directory used when a session has no recorded Cwd yet.
+    /// Defaults to the user's profile directory so we never land in the install
+    /// folder (Program Files / AppData). Resolved lazily so an empty stored
+    /// value falls back to %USERPROFILE% at use time.
+    public string DefaultCwd { get; set; } = "";
+
+    public string ResolveDefaultCwd()
+    {
+        if (!string.IsNullOrWhiteSpace(DefaultCwd) && Directory.Exists(DefaultCwd))
+            return DefaultCwd;
+        var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        return string.IsNullOrEmpty(profile) ? @"C:\Users" : profile;
+    }
+
     private static string SettingsPath =>
         Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),

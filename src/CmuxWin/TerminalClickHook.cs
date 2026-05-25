@@ -138,7 +138,6 @@ internal sealed class TerminalClickHook
                 try
                 {
                     var sel = _terminal?.GetSelectedText() ?? "";
-                    Log.Info("DblClick.read", $"len={sel.Length} text={sel}");
                     var url = UrlScanner.TryGetUrl(sel);
                     if (url != null)
                     {
@@ -160,7 +159,6 @@ internal sealed class TerminalClickHook
             try
             {
                 var sel = _terminal?.GetSelectedText() ?? "";
-                Log.Info("DblClick.dblclkmsg", $"len={sel.Length}");
                 var url = UrlScanner.TryGetUrl(sel);
                 if (url != null)
                 {
