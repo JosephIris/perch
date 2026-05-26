@@ -1,6 +1,6 @@
 // One Pane = one xterm.js Terminal bound to one host-side ConPty by paneId.
-// The Pane owns the DOM element where xterm renders, the FitAddon, and the
-// onData/onResize plumbing that ships bytes back to the host.
+// Owns the DOM (header + term host), the FitAddon, and the input/output
+// plumbing that ships bytes to/from the host.
 
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -14,6 +14,8 @@ const utf8 = new TextEncoder();
 export class Pane {
   readonly paneId: string;
   readonly element: HTMLElement;
+  private readonly nameEl: HTMLElement;
+  private readonly termHost: HTMLElement;
   private readonly term: Terminal;
   private readonly fit: FitAddon;
   private resizeFrame = 0;
@@ -21,12 +23,39 @@ export class Pane {
   private lastRows = -1;
   private observer?: ResizeObserver;
 
-  constructor(paneId: string) {
+  constructor(paneId: string, name: string) {
     this.paneId = paneId;
 
     this.element = document.createElement("div");
     this.element.className = "pane";
     this.element.dataset.paneId = paneId;
+
+    // Per-pane header: name label + close X. No HwndHost stealing clicks
+    // here -- the whole UI is one HWND so a plain DOM button just works.
+    const header = document.createElement("div");
+    header.className = "pane__header";
+
+    this.nameEl = document.createElement("span");
+    this.nameEl.className = "pane__name";
+    this.nameEl.textContent = name;
+    header.appendChild(this.nameEl);
+
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "pane__close";
+    close.title = "Close pane";
+    close.setAttribute("aria-label", "Close pane");
+    close.textContent = "✕";
+    close.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      send({ type: "pane.close", paneId: this.paneId });
+    });
+    header.appendChild(close);
+    this.element.appendChild(header);
+
+    this.termHost = document.createElement("div");
+    this.termHost.className = "pane__term";
+    this.element.appendChild(this.termHost);
 
     this.term = new Terminal({
       fontFamily: 'Cascadia Mono, "Cascadia Code", Consolas, monospace',
@@ -57,28 +86,26 @@ export class Pane {
       });
     });
 
-    this.element.addEventListener("focusin", () => {
-      send({ type: "pane.focus", paneId: this.paneId });
-    });
+    // Any focus inside the pane (clicking the terminal, header, or X) marks
+    // it active host-side so keyboard shortcuts know which pane to act on.
+    this.element.addEventListener("focusin", () => this.notifyFocus());
+    this.element.addEventListener("mousedown", () => this.notifyFocus());
   }
 
-  /** Attach to the DOM and start observing the host element for resizes.
-   *  term.open needs the element to already have layout dimensions or its
-   *  canvas comes out 0x0 and nothing renders even when bytes arrive.
-   *  Defer to the next animation frame so CSS Grid has measured the cell,
-   *  then explicitly fit + observe. */
+  /** Attach to the DOM and start observing for size changes. term.open must
+   *  see a measured element or its canvas comes out 0x0 -- defer to the
+   *  next animation frame so CSS Grid has settled. */
   attach(host: HTMLElement) {
     host.appendChild(this.element);
     requestAnimationFrame(() => {
-      try { this.term.open(this.element); }
+      try { this.term.open(this.termHost); }
       catch (err) { console.error("[pane] term.open failed:", err); return; }
-      try { this.fit.fit(); } catch { /* element still 0x0 -- observer will retry */ }
+      try { this.fit.fit(); } catch { /* observer will retry */ }
       this.observer = new ResizeObserver(() => this.reportResize());
-      this.observer.observe(this.element);
+      this.observer.observe(this.termHost);
     });
   }
 
-  /** Tear down xterm + DOM. Called when the pane is removed from the tree. */
   dispose() {
     this.observer?.disconnect();
     this.observer = undefined;
@@ -86,19 +113,28 @@ export class Pane {
     this.element.remove();
   }
 
-  /** Hand bytes from the host PTY into xterm's VT parser. */
   feed(b64: string) {
     this.term.write(b64ToBytes(b64));
   }
 
-  /** Render an inline banner when the backing PTY exits. */
   notifyExit(code: number) {
     this.term.writeln(`\r\n\x1b[2m[shell exited with code ${code}]\x1b[0m`);
   }
 
-  /** Forward focus to the xterm input handler. */
   focus() {
     this.term.focus();
+  }
+
+  setActive(active: boolean) {
+    this.element.classList.toggle("pane--active", active);
+  }
+
+  setName(name: string) {
+    this.nameEl.textContent = name;
+  }
+
+  private notifyFocus() {
+    send({ type: "pane.focus", paneId: this.paneId });
   }
 
   private reportResize() {

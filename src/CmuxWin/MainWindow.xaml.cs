@@ -136,6 +136,8 @@ public partial class MainWindow : FluentWindow
                 case "ready":           OnPageReady(); break;
                 case "pane.in":         OnPaneIn(root); break;
                 case "pane.resize":     OnPaneResize(root); break;
+                case "pane.split":      OnPaneSplit(root); break;
+                case "pane.close":      OnPaneClose(root); break;
                 case "session.new":     OnSessionNew(root); break;
                 case "session.select":  OnSessionSelect(root); break;
                 case "session.rename":  OnSessionRename(root); break;
@@ -165,10 +167,16 @@ public partial class MainWindow : FluentWindow
     {
         var s = ActiveSession();
         if (s == null) return;
-        var leaf = FirstLeaf(s.Root);
-        if (leaf == null) return;
-        if (_ptys.ContainsKey(leaf.Id)) return;
-        SpawnPty(s, leaf);
+        // Spawn every leaf in the active session that doesn't yet have a
+        // backing PTY. Stage 3a only ever had one leaf; stage 3b can have
+        // many after splits + relaunch.
+        foreach (var leaf in AllLeaves(s.Root))
+        {
+            if (!_ptys.ContainsKey(leaf.Id)) SpawnPty(s, leaf);
+        }
+        // Keep the active-pane marker pointing at a real leaf.
+        if (_activePaneId == null || !AllLeaves(s.Root).Any(p => p.Id == _activePaneId))
+            _activePaneId = FirstLeaf(s.Root)?.Id;
     }
 
     private Session? ActiveSession()
@@ -295,11 +303,105 @@ public partial class MainWindow : FluentWindow
 
     private void OnPaneFocus(JsonElement root)
     {
-        // Stage 3a: only one pane per session, focus is implied by active
-        // session. Stage 3b uses this when there are multiple panes inside
-        // a session.
-        if (!TryGuid(root, "paneId", out _)) return;
-        // no-op for now
+        // Stage 3b: focus shifts the active-pane marker so split-right /
+        // close-pane act on the right tile.
+        if (!TryGuid(root, "paneId", out var id)) return;
+        if (_activePaneId != id)
+        {
+            _activePaneId = id;
+            PushState();
+        }
+    }
+
+    // ---- Pane split / close ----------------------------------------------
+
+    private Guid? _activePaneId;
+
+    private void OnPaneSplit(JsonElement root)
+    {
+        if (!TryGuid(root, "paneId", out var id)) return;
+        var dirStr = root.TryGetProperty("dir", out var d) ? d.GetString() : "right";
+        var orient = dirStr == "down" ? SplitOrientation.Horizontal : SplitOrientation.Vertical;
+        var sess = OwningSession(id);
+        if (sess == null) return;
+        var newPane = new PaneNode();
+        var replacement = SplitImpl(sess.Root, id, orient, newPane);
+        if (replacement == null) return;
+        sess.Root = replacement;
+        AutoName(sess.Root, 1);
+        SpawnPty(sess, newPane);
+        _activePaneId = newPane.Id;
+        _store.Save();
+        PushState();
+    }
+
+    private void OnPaneClose(JsonElement root)
+    {
+        if (!TryGuid(root, "paneId", out var id)) return;
+        var sess = OwningSession(id);
+        if (sess == null) return;
+        // Closing the only leaf in a session = close the session.
+        if (sess.Root.IsLeaf && sess.Root.Id == id)
+        {
+            OnSessionClose(JsonDocument.Parse(
+                $"{{\"id\":\"{sess.Id:D}\"}}").RootElement);
+            return;
+        }
+        var newRoot = CloseAndCollapse(sess.Root, id);
+        if (newRoot == null) return;
+        DestroyPty(id);
+        sess.Root = newRoot;
+        AutoName(sess.Root, 1);
+        // Active pane: prefer the first remaining leaf in the same session.
+        _activePaneId = FirstLeaf(sess.Root)?.Id;
+        _store.Save();
+        PushState();
+    }
+
+    // Returns the session that owns the given pane id, or null.
+    private Session? OwningSession(Guid paneId) =>
+        _store.Sessions.FirstOrDefault(s => AllLeaves(s.Root).Any(p => p.Id == paneId));
+
+    // Tree mutations. SplitImpl wraps the matching leaf in a new split node
+    // with the original leaf + a fresh sibling as its two children, returning
+    // the (possibly new) root. Mutates `node` in place when descending into
+    // splits so the caller doesn't have to rebuild upper nodes.
+    private static PaneNode? SplitImpl(PaneNode node, Guid paneId, SplitOrientation dir, PaneNode newSibling)
+    {
+        if (node.IsLeaf)
+        {
+            if (node.Id != paneId) return null;
+            return new PaneNode
+            {
+                Split = dir,
+                Children = new List<PaneNode> { node, newSibling },
+            };
+        }
+        for (int i = 0; i < node.Children.Count; i++)
+        {
+            var rep = SplitImpl(node.Children[i], paneId, dir, newSibling);
+            if (rep != null) { node.Children[i] = rep; return node; }
+        }
+        return null;
+    }
+
+    // CloseAndCollapse removes the leaf with paneId from the subtree rooted
+    // at `node`. If a split is left with only one child, the split is
+    // replaced by that child (the parent then unwraps recursively too).
+    // Returns the replacement node, or null if the whole subtree disappeared.
+    private static PaneNode? CloseAndCollapse(PaneNode node, Guid paneId)
+    {
+        if (node.IsLeaf) return node.Id == paneId ? null : node;
+        var newChildren = new List<PaneNode>();
+        foreach (var c in node.Children)
+        {
+            var rc = CloseAndCollapse(c, paneId);
+            if (rc != null) newChildren.Add(rc);
+        }
+        if (newChildren.Count == 0) return null;
+        if (newChildren.Count == 1) return newChildren[0];   // collapse
+        node.Children = newChildren;
+        return node;
     }
 
     private static IEnumerable<PaneNode> AllLeaves(PaneNode node)
@@ -319,6 +421,7 @@ public partial class MainWindow : FluentWindow
             {
                 type = "state",
                 activeSessionId = _store.ActiveSessionId?.ToString("D") ?? "",
+                activePaneId    = _activePaneId?.ToString("D") ?? "",
                 sessions = _store.Sessions.Select(s => new
                 {
                     id    = s.Id.ToString("D"),
@@ -430,6 +533,27 @@ public partial class MainWindow : FluentWindow
             case "session.new":     OnSessionNew(root); break;
             case "session.select":  OnSessionSelect(root); break;
             case "session.close":   OnSessionClose(root); break;
+            // Stage 3b verbs. The pane.* page verbs already take {paneId,...}
+            // so we just forward the JsonElement through.
+            case "pane.split":      OnPaneSplit(root); break;
+            case "pane.close":      OnPaneClose(root); break;
+            case "pane.split-active":
+                // Convenience for the harness: targets the active pane so
+                // the script doesn't have to look up its id from disk.
+                if (_activePaneId is Guid ap)
+                {
+                    var dir = root.TryGetProperty("dir", out var d) ? d.GetString() : "right";
+                    var fakeRoot = JsonDocument.Parse($"{{\"paneId\":\"{ap:D}\",\"dir\":\"{dir}\"}}").RootElement;
+                    OnPaneSplit(fakeRoot);
+                }
+                break;
+            case "pane.close-active":
+                if (_activePaneId is Guid acp)
+                {
+                    var fakeRoot = JsonDocument.Parse($"{{\"paneId\":\"{acp:D}\"}}").RootElement;
+                    OnPaneClose(fakeRoot);
+                }
+                break;
             default:
                 Log.Info($"ControlIpc.unknown verb={verb}");
                 break;
