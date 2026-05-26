@@ -291,6 +291,74 @@ ul { list-style: none; padding: 0; margin: 0; }
   min-width: 0;
 }
 
+/* --- Shortcut hint overlay -----------------------------------------------
+ * Fluent acrylic surface that appears centered-near-bottom when the user
+ * holds Ctrl+Shift for ~300ms. Lists the active chords (T/D/S/W) and what
+ * each does so users don't have to remember. Click-through (no
+ * pointer-events). Fades in with the Win11 entry curve. */
+.shortcut-hint {
+  position: fixed;
+  left: 50%;
+  bottom: 56px;
+  transform: translate(-50%, 8px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-12);
+  min-width: 220px;
+  padding: var(--sp-12) var(--sp-16);
+  border-radius: var(--r-card);
+  background: rgba(20, 20, 20, 0.72);
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  border: 1px solid var(--color-stroke);
+  pointer-events: none;
+  opacity: 0;
+  z-index: 10;
+  transition:
+    opacity var(--dur-fast) var(--ease-entry),
+    transform var(--dur-fast) var(--ease-entry);
+}
+.shortcut-hint.is-open {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+.shortcut-hint__title {
+  font-family: var(--font-small);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+.shortcut-hint__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-8);
+}
+.shortcut-hint__list li {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-12);
+  color: var(--color-text-primary);
+}
+.shortcut-hint__list kbd {
+  font-family: var(--font-mono);
+  font-size: var(--type-caption-size);
+  min-width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 var(--sp-4);
+  border-radius: var(--r-input);
+  background: var(--color-subtle-tertiary);
+  border: 1px solid var(--color-stroke);
+  color: var(--color-text-primary);
+}
+.shortcut-hint__list span {
+  font-size: var(--type-body-size);
+  color: var(--color-text-secondary);
+}
+
 /* --- Status bar ---------------------------------------------------------- */
 .status-bar {
   grid-area: statusbar;
