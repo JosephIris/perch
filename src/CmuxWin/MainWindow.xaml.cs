@@ -1,7 +1,7 @@
 using System;
 using System.IO;
+using System.Text.Json;
 using System.Threading.Tasks;
-using System.Windows;
 using Microsoft.Web.WebView2.Core;
 using Wpf.Ui.Controls;
 
@@ -9,34 +9,29 @@ namespace CmuxWin;
 
 public partial class MainWindow : FluentWindow
 {
-    // Virtual-host name used to serve the bundled web content. WebView2 maps
-    // requests to https://cmux.local/* to a folder under our app dir; this
-    // means inside the page, `fetch('/api/...')`-style relative URLs Just
-    // Work and we never need a local HTTP server.
     private const string VirtualHost = "cmux.local";
 
     private readonly string _webRoot;
+    private readonly Settings _settings;
+
+    // Stage 2 single-pane scaffolding. Stage 3 promotes this to a per-pane
+    // dictionary keyed by the pane id from SessionStore.
+    private ConPty? _pty;
+    private const string DefaultPaneId = "default";
 
     public MainWindow()
     {
         InitializeComponent();
-
-        // wwwroot is staged next to the exe by the csproj. In development
-        // before the web bundle exists, fall back to a stub so the window
-        // still opens with a clear "missing assets" message.
         _webRoot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
-
+        _settings = Settings.Load();
         Loaded += async (_, _) => await InitWebViewAsync();
+        Closed += (_, _) => _pty?.Dispose();
     }
 
     private async Task InitWebViewAsync()
     {
         try
         {
-            // Anchor WebView2's per-app user data dir under %APPDATA%\cmux-win
-            // so we live next to errors.log / sessions.json instead of
-            // scattering EBWebView caches in the install dir (the WPF build
-            // had this side-effect — see %APPDATA%\cmux\CmuxWin.exe.WebView2).
             var userDataFolder = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
                 "cmux-win", "WebView2");
@@ -49,29 +44,19 @@ public partial class MainWindow : FluentWindow
 
             var core = Web.CoreWebView2;
 
-            // Map https://cmux.local/* -> ./wwwroot/* (read-only). We use
-            // HTTPS instead of HTTP so xterm.js + addons load under a secure
-            // context (some WebGL/clipboard features need it).
             if (Directory.Exists(_webRoot))
             {
                 core.SetVirtualHostNameToFolderMapping(
                     VirtualHost, _webRoot, CoreWebView2HostResourceAccessKind.Allow);
             }
 
-            // Quiet down the parts of Edge we don't want for an app surface.
             core.Settings.AreDefaultContextMenusEnabled = false;
-            core.Settings.AreDevToolsEnabled = true;          // keep until 1.0
+            core.Settings.AreDevToolsEnabled = true;
             core.Settings.IsStatusBarEnabled = false;
             core.Settings.IsZoomControlEnabled = false;
             core.Settings.AreBrowserAcceleratorKeysEnabled = false;
-
-            // Lets the page mark elements with CSS `app-region: drag` as
-            // draggable window areas (Fluent title bar pattern). Without
-            // this, the only way to move the window would be a thin border.
             core.Settings.IsNonClientRegionSupportEnabled = true;
 
-            // Page → host messages land here. Each message is a JSON string;
-            // the host parses { "type": "...", ... } and dispatches.
             core.WebMessageReceived += OnWebMessage;
 
             if (Directory.Exists(_webRoot))
@@ -80,9 +65,6 @@ public partial class MainWindow : FluentWindow
             }
             else
             {
-                // Bootstrap stub so a fresh clone-and-run still produces a
-                // window instead of silently failing. Once src/web/ is built
-                // into wwwroot/ this branch is dead.
                 core.NavigateToString(BootstrapHtml(_webRoot));
             }
         }
@@ -94,17 +76,133 @@ public partial class MainWindow : FluentWindow
         }
     }
 
+    // ---- Bridge ------------------------------------------------------------
+
     private void OnWebMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
-        // Phase 1: log and ignore. Once we wire panes/ConPTY/IPC, this
-        // dispatches by message type to the right handler.
+        string raw;
+        try { raw = e.TryGetWebMessageAsString(); }
+        catch (Exception ex) { Log.Error("Web.OnMessage.read", ex); return; }
         try
         {
-            var msg = e.TryGetWebMessageAsString();
-            Log.Info("Web.msg", msg);
+            using var doc = JsonDocument.Parse(raw);
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("type", out var t)) return;
+            var type = t.GetString();
+            switch (type)
+            {
+                case "ready":     OnPageReady(root); break;
+                case "pty.in":    OnPtyIn(root); break;
+                case "pty.resize":OnPtyResize(root); break;
+                default:
+                    Log.Info("Web.msg.unknown", $"type={type}");
+                    break;
+            }
         }
-        catch (Exception ex) { Log.Error("Web.OnMessage", ex); }
+        catch (JsonException ex) { Log.Error("Web.OnMessage.json", ex); }
+        catch (Exception ex)     { Log.Error("Web.OnMessage", ex); }
     }
+
+    private void OnPageReady(JsonElement _)
+    {
+        // Stage 2: spawn a single default shell for the single xterm.
+        // Stage 3 replaces this with per-session pane lifecycle.
+        if (_pty != null) return;
+        try
+        {
+            var shellCommand = Shell.DefaultCommandLine(_settings.DefaultShell);
+            var cwd = _settings.ResolveDefaultCwd();
+            // 80x24 is fine as a bootstrap; the page sends a resize as soon
+            // as FitAddon computes the real dimensions.
+            _pty = ConPty.Start(shellCommand, cols: 80, rows: 24, cwd: cwd);
+            _pty.OutputReceived += (_, bytes) => PostPtyOut(bytes);
+            _pty.Exited += (_, code) => PostPtyExit(code);
+            Log.Info("ConPty.Start", $"pid={_pty.ProcessId} cmd={shellCommand}");
+        }
+        catch (Exception ex)
+        {
+            Log.Error("ConPty.Start", ex);
+            PostHostError($"failed to spawn shell: {ex.Message}");
+        }
+    }
+
+    private void OnPtyIn(JsonElement root)
+    {
+        if (_pty == null) return;
+        if (!root.TryGetProperty("b64", out var b64El)) return;
+        var b64 = b64El.GetString();
+        if (string.IsNullOrEmpty(b64)) return;
+        try
+        {
+            var bytes = Convert.FromBase64String(b64);
+            _pty.Write(bytes);
+        }
+        catch (Exception ex) { Log.Error("Pty.In", ex); }
+    }
+
+    private void OnPtyResize(JsonElement root)
+    {
+        if (_pty == null) return;
+        var cols = root.TryGetProperty("cols", out var c) && c.TryGetInt32(out var cv) ? cv : 80;
+        var rows = root.TryGetProperty("rows", out var r) && r.TryGetInt32(out var rv) ? rv : 24;
+        _pty.Resize(cols, rows);
+    }
+
+    // ---- Host -> page ------------------------------------------------------
+
+    private void PostPtyOut(ReadOnlyMemory<byte> bytes)
+    {
+        // Marshal to UI thread because CoreWebView2 calls must come from the
+        // thread that created it. The reader thread is the only caller.
+        Dispatcher.BeginInvoke(() =>
+        {
+            try
+            {
+                var payload = JsonSerializer.Serialize(new
+                {
+                    type = "pty.out",
+                    paneId = DefaultPaneId,
+                    pid = _pty?.ProcessId ?? 0,
+                    b64 = Convert.ToBase64String(bytes.Span),
+                });
+                Web.CoreWebView2?.PostWebMessageAsJson(payload);
+            }
+            catch (Exception ex) { Log.Error("PostPtyOut", ex); }
+        });
+    }
+
+    private void PostPtyExit(int code)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            try
+            {
+                var payload = JsonSerializer.Serialize(new
+                {
+                    type = "pty.exit",
+                    paneId = DefaultPaneId,
+                    code,
+                });
+                Web.CoreWebView2?.PostWebMessageAsJson(payload);
+            }
+            catch (Exception ex) { Log.Error("PostPtyExit", ex); }
+        });
+    }
+
+    private void PostHostError(string message)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            try
+            {
+                var payload = JsonSerializer.Serialize(new { type = "host.error", message });
+                Web.CoreWebView2?.PostWebMessageAsJson(payload);
+            }
+            catch (Exception ex) { Log.Error("PostHostError", ex); }
+        });
+    }
+
+    // ---- Bootstrap stub when wwwroot is missing ---------------------------
 
     private static string BootstrapHtml(string expected) => $@"<!doctype html>
 <html><head><meta charset='utf-8'><title>cmux</title>
