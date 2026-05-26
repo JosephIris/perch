@@ -72,52 +72,20 @@ button {
 ul { list-style: none; padding: 0; margin: 0; }
 
 /* --- Layout shell ---------------------------------------------------------
- * Grid template:
+ * The host renders a real WPF title bar above the webview, so the page
+ * only owns the sidebar + workspace + status bar.
  *
- *   +---- titlebar -----------------+
- *   | sidebar | workspace           |
- *   +---- statusbar ----------------+
- *
- * Sidebar is a fixed 240px column; workspace flexes to fill.
+ *   | sidebar | workspace |
+ *   +-- statusbar --------+
  */
 #app {
   display: grid;
   grid-template-columns: 240px 1fr;
-  grid-template-rows: auto 1fr auto;
+  grid-template-rows: 1fr auto;
   grid-template-areas:
-    "titlebar titlebar"
     "sidebar  workspace"
     "statusbar statusbar";
   height: 100%;
-}
-
-/* --- Title bar ----------------------------------------------------------- */
-.title-bar {
-  grid-area: titlebar;
-  display: flex;
-  align-items: center;
-  gap: var(--sp-8);
-  height: 36px;
-  padding: 0 136px 0 var(--sp-16);   /* clear the system caption buttons */
-  font-size: var(--type-caption-size);
-  font-family: var(--font-small);
-  color: var(--color-text-secondary);
-  -webkit-app-region: drag;
-  app-region: drag;
-}
-.title-bar > * {
-  -webkit-app-region: no-drag;
-  app-region: no-drag;
-}
-.title-bar__icon {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: var(--color-accent);
-}
-.title-bar__name {
-  color: var(--color-text-primary);
-  font-weight: 600;
 }
 
 /* --- Sidebar ------------------------------------------------------------- */

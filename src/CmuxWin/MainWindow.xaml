@@ -12,9 +12,23 @@
         WindowCornerPreference="Round"
         Background="Transparent">
 
-    <!-- All UI lives inside this WebView2. The WPF side is just the window
-         chrome and the WebView2 host. ConPTY processes, the IPC layer, and
-         persistence live in C#; the bridge is host_objects + PostWebMessage. -->
-    <wv2:WebView2 x:Name="Web"
-                  DefaultBackgroundColor="Transparent" />
+    <!-- Real WPF title bar so the system caption buttons (min / max / close)
+         are actually visible. Putting them in HTML would require us to
+         re-implement min/max/close via window commands and lose the system
+         Aero-snap affordances. WPF-UI's TitleBar already integrates with
+         ExtendsContentIntoTitleBar so Mica still reads through. The webview
+         takes the rest of the window. -->
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+        <ui:TitleBar Grid.Row="0"
+                     Title="cmux"
+                     ShowMaximize="True"
+                     ShowMinimize="True" />
+        <wv2:WebView2 x:Name="Web"
+                      Grid.Row="1"
+                      DefaultBackgroundColor="Transparent" />
+    </Grid>
 </ui:FluentWindow>

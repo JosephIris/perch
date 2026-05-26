@@ -28,15 +28,31 @@
   <!-- Stage the built web bundle next to the exe so MainWindow's
        SetVirtualHostNameToFolderMapping can serve it. The web bundle is
        produced by `npm run build` in src/web/ and emitted into
-       src/CmuxWin/wwwroot/. If the bundle doesn't exist yet (fresh clone,
-       or you're working on the host without building the web side),
-       MainWindow falls back to a stub page. -->
+       src/CmuxWin/wwwroot/. -->
   <ItemGroup>
     <Content Include="wwwroot\**\*.*"
              Condition="Exists('$(MSBuildThisFileDirectory)wwwroot')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
+
+  <!-- Always run the web bundler BEFORE compiling the C# side so a `dotnet
+       build` is enough to get a fresh app.css / app.js in the output. Without
+       this, devs editing only the web side ended up with stale bundles
+       because `dotnet build` saw the csproj unchanged and skipped Content
+       copy (and the bin/wwwroot lagged behind src/CmuxWin/wwwroot). -->
+  <Target Name="BundleWeb" BeforeTargets="BeforeBuild"
+          Inputs="@(WebSource)"
+          Outputs="$(MSBuildThisFileDirectory)wwwroot\app.js">
+    <ItemGroup>
+      <WebSource Include="$(MSBuildThisFileDirectory)..\web\src\**\*.*" />
+      <WebSource Include="$(MSBuildThisFileDirectory)..\web\index.html" />
+      <WebSource Include="$(MSBuildThisFileDirectory)..\web\esbuild.config.mjs" />
+    </ItemGroup>
+    <Exec Command="npm --prefix &quot;$(MSBuildThisFileDirectory)..\web&quot; run build"
+          ConsoleToMSBuild="true"
+          IgnoreStandardErrorWarningFormat="true" />
+  </Target>
 
   <!-- cmux.exe + claude.cmd. App.xaml.cs prepends app/tools to PATH so
        panes can run `cmux ...` and so claude.cmd intercepts `claude` to

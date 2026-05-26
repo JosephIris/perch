@@ -262,6 +262,12 @@ public partial class MainWindow : FluentWindow
         var s = _store.AddNew();
         AutoName(s.Root, 1);
         _store.ActiveSessionId = s.Id;
+        // The new session's root leaf is the active pane. Without this the
+        // page renders the new session's tree but the activePaneId still
+        // points at the previous session's leaf, so the active marker
+        // misses (no border, no auto-focus) and Ctrl+Shift+W targets a
+        // pane that isn't visible.
+        _activePaneId = s.Root.Id;
         SpawnPty(s, s.Root);
         _store.Save();
         PushState();
@@ -270,8 +276,14 @@ public partial class MainWindow : FluentWindow
     private void OnSessionSelect(JsonElement root)
     {
         if (!TryGuid(root, "id", out var id)) return;
-        if (_store.Sessions.All(s => s.Id != id)) return;
+        var sess = _store.Sessions.FirstOrDefault(s => s.Id == id);
+        if (sess == null) return;
         _store.ActiveSessionId = id;
+        // Same fix as OnSessionNew: snap the active-pane marker into the
+        // newly-selected session so the workspace renders + focuses
+        // correctly. EnsureActivePaneSpawned also spawns any leaves that
+        // didn't have a PTY (cold sessions woken up).
+        _activePaneId = FirstLeaf(sess.Root)?.Id;
         EnsureActivePaneSpawned();
         _store.Save();
         PushState();
