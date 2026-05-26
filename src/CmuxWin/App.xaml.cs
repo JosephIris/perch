@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
@@ -43,6 +44,23 @@ public partial class App : System.Windows.Application
         // Anchor our process to a job so any conhost/OpenConsole/shell children
         // are reaped automatically when we exit, including ungraceful exits.
         JobObjectGuard.AssignSelfToKillOnCloseJob();
+
+        // Make `cmux` resolvable inside spawned panes. EasyTerminalControl
+        // launches each shell with our process env, so prepending PATH here
+        // propagates to every pane without any per-shell flag plumbing.
+        // The build target drops cmux.exe into <app>/tools/.
+        try
+        {
+            var appDir = System.AppContext.BaseDirectory;
+            var toolsDir = System.IO.Path.Combine(appDir, "tools");
+            if (System.IO.Directory.Exists(toolsDir))
+            {
+                var current = Environment.GetEnvironmentVariable("PATH") ?? "";
+                if (!current.Split(';').Any(p => string.Equals(p?.Trim(), toolsDir, StringComparison.OrdinalIgnoreCase)))
+                    Environment.SetEnvironmentVariable("PATH", toolsDir + ";" + current);
+            }
+        }
+        catch (Exception ex) { Log.Error("PATH.cmuxTools", ex); }
 
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
             Log.Error("AppDomain.UnhandledException", e.ExceptionObject as Exception);

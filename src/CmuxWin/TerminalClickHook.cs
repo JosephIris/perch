@@ -34,6 +34,16 @@ internal sealed class TerminalClickHook
     private static int _nextSubclassId = 1;
     private int _subclassId;
 
+    // Belt-and-suspenders root for every subclass delegate ever installed.
+    // comctl32 holds a raw function pointer to the delegate and can invoke it
+    // again during HWND teardown — sometimes long after we've removed the
+    // owning TerminalClickHook from our pane dictionary. If the GC has
+    // already collected the delegate by then, CoreCLR FailFasts the process
+    // (see WER report 6279e3a3, 2026-05-26). Pinning here means even if
+    // Detach is missed or comctl32 dispatches one more callback after
+    // RemoveWindowSubclass returns, the pointer stays valid.
+    private static readonly HashSet<SUBCLASSPROC> _rootedSubclassProcs = new();
+
     // Manual double-click detection: HwndTerminalClass may not be registered
     // with CS_DBLCLKS (in which case Windows never synthesizes WM_LBUTTONDBLCLK),
     // so we track press timing/position ourselves.
@@ -57,8 +67,27 @@ internal sealed class TerminalClickHook
 
         _subclassId = System.Threading.Interlocked.Increment(ref _nextSubclassId);
         _subclassProc = SubclassWndProc;
+        lock (_rootedSubclassProcs) _rootedSubclassProcs.Add(_subclassProc);
         SubclassRenderHwnd(_hwndHost.Handle);
         _attached = true;
+    }
+
+    public void Detach()
+    {
+        if (!_attached) return;
+        if (_subclassProc != null)
+        {
+            foreach (var hwnd in _subclassedHwnds)
+            {
+                try { RemoveWindowSubclass(hwnd, _subclassProc, (IntPtr)_subclassId); }
+                catch (Exception ex) { Log.Error("Detach.RemoveWindowSubclass", ex); }
+            }
+        }
+        _subclassedHwnds.Clear();
+        _attached = false;
+        // Intentionally keep _subclassProc in _rootedSubclassProcs: comctl32
+        // can still dispatch one final callback during DestroyWindow even
+        // after RemoveWindowSubclass returns.
     }
 
     private void SubclassRenderHwnd(IntPtr hwnd)
@@ -223,6 +252,11 @@ internal sealed class TerminalClickHook
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool SetWindowSubclass(
         IntPtr hWnd, SUBCLASSPROC pfnSubclass, IntPtr uIdSubclass, IntPtr dwRefData);
+
+    [DllImport("comctl32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool RemoveWindowSubclass(
+        IntPtr hWnd, SUBCLASSPROC pfnSubclass, IntPtr uIdSubclass);
 
     [DllImport("comctl32.dll")]
     private static extern IntPtr DefSubclassProc(
