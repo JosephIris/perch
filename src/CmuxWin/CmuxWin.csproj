@@ -37,18 +37,19 @@
   </ItemGroup>
 
   <!-- Always run the web bundler BEFORE compiling the C# side so a `dotnet
-       build` is enough to get a fresh app.css / app.js in the output. Without
-       this, devs editing only the web side ended up with stale bundles
-       because `dotnet build` saw the csproj unchanged and skipped Content
-       copy (and the bin/wwwroot lagged behind src/CmuxWin/wwwroot). -->
+       build` is enough to get a fresh app.css / app.js in the output.
+       The ItemGroup has to live outside the Target: Target.Inputs is
+       evaluated before the target body runs, so an inner ItemGroup would
+       always be empty and the Inputs/Outputs check would short-circuit
+       to "up to date" and skip the bundler. -->
+  <ItemGroup>
+    <WebSource Include="$(MSBuildThisFileDirectory)..\web\src\**\*.*" />
+    <WebSource Include="$(MSBuildThisFileDirectory)..\web\index.html" />
+    <WebSource Include="$(MSBuildThisFileDirectory)..\web\esbuild.config.mjs" />
+  </ItemGroup>
   <Target Name="BundleWeb" BeforeTargets="BeforeBuild"
           Inputs="@(WebSource)"
           Outputs="$(MSBuildThisFileDirectory)wwwroot\app.js">
-    <ItemGroup>
-      <WebSource Include="$(MSBuildThisFileDirectory)..\web\src\**\*.*" />
-      <WebSource Include="$(MSBuildThisFileDirectory)..\web\index.html" />
-      <WebSource Include="$(MSBuildThisFileDirectory)..\web\esbuild.config.mjs" />
-    </ItemGroup>
     <Exec Command="npm --prefix &quot;$(MSBuildThisFileDirectory)..\web&quot; run build"
           ConsoleToMSBuild="true"
           IgnoreStandardErrorWarningFormat="true" />
