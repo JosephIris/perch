@@ -78,6 +78,7 @@ function Invoke-CmuxTest {
     param([string]$Verb, [string]$Text)
     $verbArgs = @('test', $Verb)
     if ($PSBoundParameters.ContainsKey('Text')) {
+        # `--text` is a generic field flag in stage 3; pty.send still uses it.
         $verbArgs += @('--text', $Text)
     }
     $out = & $CmuxExe @verbArgs 2>&1

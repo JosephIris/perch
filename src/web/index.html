@@ -13,7 +13,20 @@
       <span class="title-bar__icon" aria-hidden="true"></span>
       <span class="title-bar__name">cmux</span>
     </header>
-    <main class="terminal-host" id="terminal-host"></main>
+
+    <aside class="sidebar" role="navigation" aria-label="Sessions">
+      <ul id="session-list" class="session-list" role="list"></ul>
+      <footer class="sidebar__footer">
+        <button id="new-session-button"
+                class="sidebar__primary"
+                type="button">
+          New session
+        </button>
+      </footer>
+    </aside>
+
+    <main id="workspace" class="workspace"></main>
+
     <footer class="status-bar" role="status">
       <span id="status-text">starting...</span>
     </footer>

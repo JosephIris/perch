@@ -153,34 +153,41 @@ internal static class Program
 
     private static int CmdTest(string[] args)
     {
-        // Usage: cmux test <verb> [--text <utf8 string>]
+        // Usage: cmux test <verb> [--text S] [--id GUID] [--title S] [--shell S]
         //
-        // Known verbs (stage 2):
-        //   pty.send        --text "echo hi\r"     -> writes UTF-8 bytes to the PTY
-        //   pty.snapshot                            -> logs current byte count
+        // Known verbs:
+        //   pty.send       --text "echo hi\r"   -> writes UTF-8 bytes to the PTY
+        //   pty.snapshot                         -> logs current byte count
+        //   session.new    [--shell ...]
+        //   session.select --id GUID
+        //   session.close  --id GUID
+        //   session.rename --id GUID --title S
         //
         // The host opens this pipe only when CMUX_ENABLE_TEST_IPC is set at
         // launch time; if it isn't, Connect fails fast and we tell the caller.
         if (args.Length < 2) { Console.Error.WriteLine("cmux test: missing verb"); return 2; }
         var verb = args[1];
-        string? text = null;
+        var fields = new System.Collections.Generic.Dictionary<string, string>();
         for (var i = 2; i < args.Length; i++)
         {
-            switch (args[i])
+            var key = args[i];
+            if (!key.StartsWith("--") || i + 1 >= args.Length)
             {
-                case "--text" when i + 1 < args.Length: text = args[++i]; break;
-                default:
-                    Console.Error.WriteLine($"cmux test: unknown flag {args[i]}");
-                    return 2;
+                Console.Error.WriteLine($"cmux test: bad flag {key}");
+                return 2;
             }
+            fields[key.Substring(2)] = args[++i];
         }
+
+        // Build the payload manually so we keep declared key order and avoid
+        // an anonymous-type-per-shape explosion.
+        var payload = new System.Collections.Generic.Dictionary<string, object> { ["verb"] = verb };
+        foreach (var kv in fields) payload[kv.Key] = kv.Value;
+
         try
         {
             using var client = new NamedPipeClientStream(".", @"cmux\control", PipeDirection.Out);
             client.Connect(2000);
-            object payload = text != null
-                ? new { verb, text }
-                : (object)new { verb };
             var json = JsonSerializer.Serialize(payload, JsonOpts);
             var bytes = Encoding.UTF8.GetBytes(json + "\n");
             client.Write(bytes, 0, bytes.Length);
