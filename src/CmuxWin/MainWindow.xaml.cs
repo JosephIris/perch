@@ -19,13 +19,34 @@ public partial class MainWindow : FluentWindow
     private ConPty? _pty;
     private const string DefaultPaneId = "default";
 
+    // Total bytes the PTY has emitted since launch. Read by the control-pipe
+    // 'pty.snapshot' verb so the test harness can confirm output is flowing
+    // (banner + prompt) and that a sent command produced more output.
+    private long _ptyBytesReceived;
+
+    private ControlIpcServer? _control;
+
     public MainWindow()
     {
         InitializeComponent();
         _webRoot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
         _settings = Settings.Load();
-        Loaded += async (_, _) => await InitWebViewAsync();
-        Closed += (_, _) => _pty?.Dispose();
+        Loaded += async (_, _) =>
+        {
+            await InitWebViewAsync();
+            // Off by default. Test harness sets CMUX_ENABLE_TEST_IPC before
+            // launching so it can drive the PTY without synthesizing keys.
+            if (ControlIpcServer.IsEnabled)
+            {
+                _control = new ControlIpcServer(Dispatcher, OnControlVerb);
+                _control.Start();
+            }
+        };
+        Closed += (_, _) =>
+        {
+            _control?.Dispose();
+            _pty?.Dispose();
+        };
     }
 
     private async Task InitWebViewAsync()
@@ -115,7 +136,11 @@ public partial class MainWindow : FluentWindow
             // 80x24 is fine as a bootstrap; the page sends a resize as soon
             // as FitAddon computes the real dimensions.
             _pty = ConPty.Start(shellCommand, cols: 80, rows: 24, cwd: cwd);
-            _pty.OutputReceived += (_, bytes) => PostPtyOut(bytes);
+            _pty.OutputReceived += (_, bytes) =>
+            {
+                System.Threading.Interlocked.Add(ref _ptyBytesReceived, bytes.Length);
+                PostPtyOut(bytes);
+            };
             _pty.Exited += (_, code) => PostPtyExit(code);
             Log.Info("ConPty.Start", $"pid={_pty.ProcessId} cmd={shellCommand}");
         }
@@ -123,6 +148,30 @@ public partial class MainWindow : FluentWindow
         {
             Log.Error("ConPty.Start", ex);
             PostHostError($"failed to spawn shell: {ex.Message}");
+        }
+    }
+
+    // ---- Control pipe verbs (test harness) --------------------------------
+
+    private void OnControlVerb(string verb, JsonElement root)
+    {
+        switch (verb)
+        {
+            case "pty.send":
+                if (_pty != null && root.TryGetProperty("text", out var t))
+                {
+                    var bytes = System.Text.Encoding.UTF8.GetBytes(t.GetString() ?? "");
+                    _pty.Write(bytes);
+                }
+                break;
+            case "pty.snapshot":
+                // Log so the test can grep instead of needing a duplex pipe.
+                Log.Info("Pty.snapshot",
+                    $"bytes={System.Threading.Interlocked.Read(ref _ptyBytesReceived)} pid={_pty?.ProcessId ?? 0}");
+                break;
+            default:
+                Log.Info($"ControlIpc.unknown verb={verb}");
+                break;
         }
     }
 

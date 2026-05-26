@@ -8,37 +8,35 @@ using System.Windows.Threading;
 
 namespace CmuxWin;
 
-/// App-level control pipe used by the test harness so the host can be driven
-/// without synthesizing keystrokes (SendKeys spills to whichever window has
-/// the foreground and once cost us several Chrome windows). Accepts
-/// line-delimited JSON like `{"verb":"split-right"}` and dispatches each
-/// verb to the existing UI commands on the dispatcher thread.
+/// App-level control pipe for the test harness. Off by default; only listens
+/// when CMUX_ENABLE_TEST_IPC is set in the host's environment so a normal
+/// install exposes no surface.
 ///
-/// Disabled by default — only starts when CMUX_ENABLE_TEST_IPC is set in
-/// the environment of the launching process. A normal install never opens
-/// the pipe so there's no production-facing surface to harden.
+/// Accepts line-delimited JSON like `{"verb":"pty.send","text":"echo hi\r"}`.
+/// Each message is dispatched to a host-provided callback on the UI thread,
+/// so the callback can touch WebView2 / ConPty / Session state safely.
+///
+/// The reason this exists: the previous WPF-era test harness drove the app
+/// with SendKeys.SendWait, which sends to whichever HWND has the foreground.
+/// When cmux briefly lost focus during a pane split/redraw, the keystrokes
+/// spilled into the user's Chrome and tore down browser windows. This pipe
+/// is the keystroke-free replacement -- the page never enters the picture.
 internal sealed class ControlIpcServer : IDisposable
 {
     public const string PipeName = @"cmux\control";
 
+    public delegate void VerbHandler(string verb, JsonElement root);
+
     private readonly CancellationTokenSource _cts = new();
     private readonly Dispatcher _dispatcher;
-    private readonly Action _splitRight;
-    private readonly Action _splitDown;
-    private readonly Action _closeActivePane;
+    private readonly VerbHandler _onVerb;
     private Task? _acceptLoop;
     private bool _disposed;
 
-    public ControlIpcServer(
-        Dispatcher dispatcher,
-        Action splitRight,
-        Action splitDown,
-        Action closeActivePane)
+    public ControlIpcServer(Dispatcher dispatcher, VerbHandler onVerb)
     {
         _dispatcher = dispatcher;
-        _splitRight = splitRight;
-        _splitDown = splitDown;
-        _closeActivePane = closeActivePane;
+        _onVerb = onVerb;
     }
 
     public static bool IsEnabled =>
@@ -100,24 +98,19 @@ internal sealed class ControlIpcServer : IDisposable
             using var doc = JsonDocument.Parse(json);
             if (!doc.RootElement.TryGetProperty("verb", out var v)) return;
             var verb = v.GetString();
+            if (string.IsNullOrEmpty(verb)) return;
             Log.Info($"ControlIpc.recv verb={verb}");
+            // Clone the element so the callback can outlive this method's
+            // `using var doc`. JsonElement is cheap to copy by deep-clone.
+            var clone = doc.RootElement.Clone();
             _dispatcher.BeginInvoke(() =>
             {
-                try
-                {
-                    switch (verb)
-                    {
-                        case "split-right":       _splitRight(); break;
-                        case "split-down":        _splitDown(); break;
-                        case "close-active-pane": _closeActivePane(); break;
-                        default: Log.Info($"ControlIpc.unknown verb={verb}"); break;
-                    }
-                }
+                try { _onVerb(verb!, clone); }
                 catch (Exception ex) { Log.Error($"ControlIpc.dispatch {verb}", ex); }
             });
         }
         catch (JsonException ex) { Log.Error("ControlIpc.parseJson", ex); }
-        catch (Exception ex) { Log.Error("ControlIpc.dispatch.outer", ex); }
+        catch (Exception ex)     { Log.Error("ControlIpc.dispatch.outer", ex); }
     }
 
     public void Dispose()
