@@ -14,6 +14,49 @@ html, body {
   /* Transparent so Mica from the host window reads through. */
 }
 
+/* --- Scrollbars ----------------------------------------------------------
+ * CLI / Tabby style: thin, dark, square edges, no arrows. Applied
+ * globally so xterm.js's viewport + the session list both get them.
+ * WebView2 is Chromium so ::-webkit-scrollbar wins. */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+  background: transparent;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: #2a2a2a;
+  border: 2px solid transparent;     /* inset the thumb a bit */
+  background-clip: padding-box;
+  /* No border-radius -- square corners on purpose. */
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #3a3a3a;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:active {
+  background: #4a4a4a;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+/* Don't render the up/down arrow buttons at all. Some Chromium builds in
+ * WebView2 still show legacy arrows unless every dimension is zeroed
+ * AND single/double-button variants are flattened. */
+*::-webkit-scrollbar-button,
+*::-webkit-scrollbar-button:single-button,
+*::-webkit-scrollbar-button:double-button,
+*::-webkit-scrollbar-button:start,
+*::-webkit-scrollbar-button:end {
+  width: 0;
+  height: 0;
+  display: none;
+  background: transparent;
+}
+
 button {
   font: inherit;
   color: inherit;
