@@ -153,16 +153,35 @@ internal static class Program
 
     private static int CmdTest(string[] args)
     {
-        // Usage: cmux test <split-right|split-down|close-active-pane>
+        // Usage: cmux test <verb> [--text <utf8 string>]
+        //
+        // Known verbs (stage 2):
+        //   pty.send        --text "echo hi\r"     -> writes UTF-8 bytes to the PTY
+        //   pty.snapshot                            -> logs current byte count
+        //
         // The host opens this pipe only when CMUX_ENABLE_TEST_IPC is set at
         // launch time; if it isn't, Connect fails fast and we tell the caller.
         if (args.Length < 2) { Console.Error.WriteLine("cmux test: missing verb"); return 2; }
         var verb = args[1];
+        string? text = null;
+        for (var i = 2; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--text" when i + 1 < args.Length: text = args[++i]; break;
+                default:
+                    Console.Error.WriteLine($"cmux test: unknown flag {args[i]}");
+                    return 2;
+            }
+        }
         try
         {
             using var client = new NamedPipeClientStream(".", @"cmux\control", PipeDirection.Out);
             client.Connect(2000);
-            var json = JsonSerializer.Serialize(new { verb }, JsonOpts);
+            object payload = text != null
+                ? new { verb, text }
+                : (object)new { verb };
+            var json = JsonSerializer.Serialize(payload, JsonOpts);
             var bytes = Encoding.UTF8.GetBytes(json + "\n");
             client.Write(bytes, 0, bytes.Length);
             client.Flush();
