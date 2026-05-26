@@ -1,0 +1,74 @@
+/* Design tokens — the CSS-variable mirror of what used to live in
+ * Themes/Tokens.xaml. Every component reaches for var(--cmux-...). Never
+ * literal hexes / pixel-counts in component CSS. If you need a value that
+ * isn't in here, add it here first.
+ *
+ * Same Fluent rules as the WPF version (CLAUDE.md):
+ *   - 8px grid: 4, 8, 12, 16, 24, 32, 48. No 5, 7, 13, 20.
+ *   - Radii: 4 (inputs), 8 (cards/buttons), 12 (windows/dialogs).
+ *   - Type: Segoe UI Variable with the right optical size per role.
+ *   - Theme brushes mirror WPF-UI's Fluent v2 dark palette; Mica from the
+ *     host window reads through via transparent body backgrounds.
+ */
+
+:root {
+  /* Spacing (px). */
+  --sp-4:  4px;
+  --sp-8:  8px;
+  --sp-12: 12px;
+  --sp-16: 16px;
+  --sp-24: 24px;
+  --sp-32: 32px;
+  --sp-48: 48px;
+
+  /* Radii. */
+  --r-input:  4px;
+  --r-card:   8px;
+  --r-window: 12px;
+
+  /* Type. */
+  --font-text:    "Segoe UI Variable Text",    "Segoe UI", sans-serif;
+  --font-display: "Segoe UI Variable Display", "Segoe UI", sans-serif;
+  --font-small:   "Segoe UI Variable Small",   "Segoe UI", sans-serif;
+  --font-mono:    "Cascadia Mono", "Cascadia Code", Consolas, monospace;
+
+  --type-caption-size:    12px;
+  --type-body-size:       14px;
+  --type-subtitle-size:   16px;
+  --type-title-size:      20px;
+  --type-large-size:      28px;
+  --type-body-line:       1.4;
+  --type-title-line:      1.2;
+
+  /* Color — Fluent v2 dark, mirrors WPF-UI ApplicationBackground / Text / Accent.
+   * Values pulled from Microsoft's Fluent design tokens. Light theme is a
+   * later commit; we open dark-first to match Mica + Cascadia. */
+  --color-bg:               transparent;             /* Mica shows through */
+  --color-layer:            rgba(255, 255, 255, 0.04);
+  --color-layer-alt:        rgba(255, 255, 255, 0.06);
+  --color-subtle-secondary: rgba(255, 255, 255, 0.04);
+  --color-subtle-tertiary:  rgba(255, 255, 255, 0.06);
+
+  --color-stroke:           rgba(255, 255, 255, 0.08);
+  --color-stroke-strong:    rgba(255, 255, 255, 0.14);
+
+  --color-text-primary:     rgba(255, 255, 255, 1);
+  --color-text-secondary:   rgba(255, 255, 255, 0.78);
+  --color-text-tertiary:    rgba(255, 255, 255, 0.54);
+  --color-text-disabled:    rgba(255, 255, 255, 0.36);
+
+  --color-accent:           #76B9ED;
+  --color-accent-strong:    #4cc2ff;
+
+  --color-success:          #6CCB5F;
+  --color-caution:          #FCE100;
+  --color-error:            #FF99A4;
+
+  --color-terminal-bg:      #0c0c0c;
+
+  /* Motion. Win11 entry curve. */
+  --ease-entry:   cubic-bezier(0.0, 0.0, 0.0, 1.0);
+  --ease-exit:    cubic-bezier(0.3, 0.0, 1.0, 1.0);
+  --dur-fast:     150ms;
+  --dur-normal:   200ms;
+}

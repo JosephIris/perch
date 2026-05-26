@@ -38,3 +38,9 @@ Thumbs.db
 
 # Local app state (persisted to %APPDATA%, but ignore any stray copies)
 *.local.json
+
+# Web bundle build artifacts (regenerable from src/web/)
+src/CmuxWin/wwwroot/
+
+# Node side
+src/web/node_modules/

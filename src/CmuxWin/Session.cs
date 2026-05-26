@@ -218,3 +218,10 @@ internal sealed class PaneNode
 internal enum SplitOrientation { Horizontal, Vertical }
 
 internal enum AgentState { Idle, Working, Waiting, Done }
+
+/// Severity for sidebar notification pills. Previously lived in OscParser.cs
+/// alongside the OSC 9 wire parser; the webview rewrite parses OSC sequences
+/// in JS (xterm.js exposes hooks) and pushes them back via WebMessageReceived,
+/// but the host-side Session model still needs this enum to render colored
+/// dots in the sidebar.
+internal enum NotificationLevel { Info, Success, Warn, Error }

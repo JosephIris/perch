@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>cmux</title>
+  <link rel="stylesheet" href="/xterm.css" />
+  <link rel="stylesheet" href="/app.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="title-bar" role="banner">
+      <span class="title-bar__icon" aria-hidden="true"></span>
+      <span class="title-bar__name">cmux</span>
+    </header>
+    <main class="terminal-host" id="terminal-host"></main>
+    <footer class="status-bar" role="status">
+      <span id="status-text">starting...</span>
+    </footer>
+  </div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
