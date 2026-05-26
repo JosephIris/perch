@@ -114,6 +114,12 @@ export class Workspace {
         // tree shape but not this leaf). Reattach to the new parent.
         host.appendChild(pane.element);
         pane.setName(node.name);
+        // The new parent (a split container) gives the pane a different
+        // size than before. ResizeObserver doesn't always fire on
+        // reparent if contentRect ends up the same numerically, so kick
+        // a fresh fit so the host learns about the new dimensions and
+        // PowerShell gets ResizePseudoConsole at the right size.
+        pane.forceRefit();
       }
       return;
     }

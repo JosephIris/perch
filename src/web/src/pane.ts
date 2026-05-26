@@ -92,17 +92,26 @@ export class Pane {
     this.element.addEventListener("mousedown", () => this.notifyFocus());
   }
 
-  /** Attach to the DOM and start observing for size changes. term.open must
-   *  see a measured element or its canvas comes out 0x0 -- defer to the
-   *  next animation frame so CSS Grid has settled. */
+  /** Attach to the DOM and start observing for size changes. term.open
+   *  must see a measured element or its canvas comes out 0x0; defer to
+   *  the next animation frame so CSS Grid has settled.
+   *
+   *  Multiple kickers fire reportResize() to make absolutely sure the
+   *  host gets a real pane.resize for this pane id. The ResizeObserver
+   *  is supposed to fire once on observe(), but in practice when a pane
+   *  is created during a session swap the initial contentRect is zero
+   *  -- our size guard drops that, and nothing else triggers a re-report,
+   *  so the host never spawns the PTY and the pane sits there blank. */
   attach(host: HTMLElement) {
     host.appendChild(this.element);
     requestAnimationFrame(() => {
       try { this.term.open(this.termHost); }
       catch (err) { console.error("[pane] term.open failed:", err); return; }
-      try { this.fit.fit(); } catch { /* observer will retry */ }
       this.observer = new ResizeObserver(() => this.reportResize());
       this.observer.observe(this.termHost);
+      this.reportResize();
+      requestAnimationFrame(() => this.reportResize());
+      setTimeout(() => this.reportResize(), 30);
     });
   }
 
@@ -131,6 +140,21 @@ export class Pane {
 
   setName(name: string) {
     this.nameEl.textContent = name;
+  }
+
+  /** Force a fresh fit + resize report. Used when the pane is reattached
+   *  to a different DOM parent (e.g. after a split): the ResizeObserver
+   *  fires inconsistently across browsers when an element changes parent
+   *  but its content rect computes "the same", so the host never hears
+   *  about the new dimensions and PowerShell keeps writing at the old
+   *  cols/rows -- output overflows offscreen, pane looks blank. */
+  forceRefit() {
+    this.lastCols = -1;
+    this.lastRows = -1;
+    // Two frames: one for layout to settle, one for the report.
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => this.reportResize())
+    );
   }
 
   private notifyFocus() {

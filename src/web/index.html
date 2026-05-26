@@ -25,6 +25,19 @@
     <footer class="status-bar" role="status">
       <span id="status-text">starting...</span>
     </footer>
+
+    <!-- Shortcut hint card. Appears after holding Ctrl+Shift for ~300ms,
+         disappears the moment a modifier is released. Frosted acrylic
+         background so it sits cleanly above the terminal content. -->
+    <div id="shortcut-hint" class="shortcut-hint" aria-hidden="true">
+      <div class="shortcut-hint__title">Ctrl + Shift</div>
+      <ul class="shortcut-hint__list">
+        <li><kbd>T</kbd><span>new session</span></li>
+        <li><kbd>D</kbd><span>split right</span></li>
+        <li><kbd>S</kbd><span>split down</span></li>
+        <li><kbd>W</kbd><span>close pane</span></li>
+      </ul>
+    </div>
   </div>
   <script type="module" src="/app.js"></script>
 </body>

@@ -7,6 +7,7 @@ import "./style.css";
 import { onMessage, send, type StateMessage } from "./bridge.js";
 import { Sidebar } from "./sidebar.js";
 import { Workspace } from "./workspace.js";
+import { installShortcutHint } from "./shortcut-hint.js";
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const el = document.getElementById(id);
@@ -17,6 +18,7 @@ const $ = <T extends HTMLElement>(id: string): T => {
 const sidebar = new Sidebar($("session-list"), $("new-session-button"));
 const workspace = new Workspace($("workspace"));
 const statusEl = $("status-text");
+installShortcutHint($("shortcut-hint"));
 
 let lastState: StateMessage | null = null;
 
@@ -54,25 +56,41 @@ onMessage((msg) => {
 // Ctrl+Shift+W = close pane, Ctrl+Shift+T = new session. xterm.js handles
 // Ctrl+C/V via OS clipboard already; we don't interfere.
 
+// Capture phase + ev.code: WPF's WebView2 hands keydown to xterm.js first
+// because the terminal element has focus, and xterm's keydown listener
+// turns Ctrl+letter into a control byte before the event ever bubbles
+// up to window. Capture beats that.
+//
+// All four shortcuts require Ctrl+Shift to keep Ctrl+D (EOF), Ctrl+S
+// (XOFF), Ctrl+W (delete-word) usable in the shell.
 window.addEventListener("keydown", (ev) => {
   if (!ev.ctrlKey || !ev.shiftKey) return;
   const active = workspace.getActivePaneId();
-  switch (ev.key.toUpperCase()) {
-    case "D":
-      if (active) { send({ type: "pane.split", paneId: active, dir: "right" }); ev.preventDefault(); }
-      break;
-    case "S":
-      if (active) { send({ type: "pane.split", paneId: active, dir: "down" }); ev.preventDefault(); }
-      break;
-    case "W":
-      if (active) { send({ type: "pane.close", paneId: active }); ev.preventDefault(); }
-      break;
-    case "T":
+  switch (ev.code) {
+    case "KeyT":
       send({ type: "session.new" });
-      ev.preventDefault();
+      ev.preventDefault(); ev.stopPropagation();
+      break;
+    case "KeyD":
+      if (active) {
+        send({ type: "pane.split", paneId: active, dir: "right" });
+        ev.preventDefault(); ev.stopPropagation();
+      }
+      break;
+    case "KeyS":
+      if (active) {
+        send({ type: "pane.split", paneId: active, dir: "down" });
+        ev.preventDefault(); ev.stopPropagation();
+      }
+      break;
+    case "KeyW":
+      if (active) {
+        send({ type: "pane.close", paneId: active });
+        ev.preventDefault(); ev.stopPropagation();
+      }
       break;
   }
-});
+}, /* useCapture */ true);
 
 setStatus("connecting...");
 send({ type: "ready" });
