@@ -22,6 +22,12 @@ internal static class Program
         if (args[0] == "wrap-claude") return ClaudeWrapper.Run(args);
         if (args[0] is "-h" or "--help" or "help") return PrintUsageAndExit(0);
 
+        // `cmux test <verb>` targets the app-level control pipe directly and
+        // doesn't depend on CMUX_PIPE being set. Used by the test harness so
+        // it can drive splits/closes without synthesizing keystrokes (which
+        // leaked to whatever window had focus and once tore down Chrome).
+        if (args[0] == "test") return CmdTest(args);
+
         var pipePath = Environment.GetEnvironmentVariable("CMUX_PIPE");
         if (string.IsNullOrEmpty(pipePath))
             return 0; // not in a cmux pane — silent no-op
@@ -143,6 +149,30 @@ internal static class Program
             }
         }
         return Send(pipeName, new { type = "open", name, cwd, cmd });
+    }
+
+    private static int CmdTest(string[] args)
+    {
+        // Usage: cmux test <split-right|split-down|close-active-pane>
+        // The host opens this pipe only when CMUX_ENABLE_TEST_IPC is set at
+        // launch time; if it isn't, Connect fails fast and we tell the caller.
+        if (args.Length < 2) { Console.Error.WriteLine("cmux test: missing verb"); return 2; }
+        var verb = args[1];
+        try
+        {
+            using var client = new NamedPipeClientStream(".", @"cmux\control", PipeDirection.Out);
+            client.Connect(2000);
+            var json = JsonSerializer.Serialize(new { verb }, JsonOpts);
+            var bytes = Encoding.UTF8.GetBytes(json + "\n");
+            client.Write(bytes, 0, bytes.Length);
+            client.Flush();
+            return 0;
+        }
+        catch (TimeoutException)
+        {
+            Console.Error.WriteLine("cmux test: control pipe not listening (set CMUX_ENABLE_TEST_IPC before launching cmux)");
+            return 3;
+        }
     }
 
     private static int Send(string pipeName, object payload)

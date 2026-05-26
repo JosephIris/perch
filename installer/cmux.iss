@@ -37,6 +37,12 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 
 [Files]
 Source: "..\publish\cmux-win\CmuxWin.exe"; DestDir: "{app}"; Flags: ignoreversion
+; cmux CLI + claude.cmd hook wrapper. App.xaml.cs prepends {app}\tools to
+; PATH at startup so panes can run `cmux ...` and so claude.cmd intercepts
+; `claude` to inject Claude Code's --settings hooks JSON. Without these
+; two files the agent IPC layer is dead code (hooks never fire).
+Source: "..\publish\cmux-win\tools\cmux.exe";   DestDir: "{app}\tools"; Flags: ignoreversion
+Source: "..\publish\cmux-win\tools\claude.cmd"; DestDir: "{app}\tools"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\cmux";              Filename: "{app}\CmuxWin.exe"

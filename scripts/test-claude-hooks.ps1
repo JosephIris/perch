@@ -84,7 +84,10 @@ $hooksContent = Get-Content $hooksFile -Raw
 Write-Host "  hooks JSON ($hooksFile):"
 Write-Host "    $($hooksContent.Substring(0, [Math]::Min(180, $hooksContent.Length)))..."
 
-foreach ($evt in 'SessionStart','Stop','Notification','UserPromptSubmit','SessionEnd','PreToolUse') {
+# PreToolUse is intentionally omitted by the wrapper (would fire many times
+# per second during agentic work — see ClaudeWrapper.cs comment). Check only
+# the events we actually register.
+foreach ($evt in 'SessionStart','Stop','Notification','UserPromptSubmit','SessionEnd','SubagentStop') {
     if ($hooksContent -notmatch $evt) { throw "hooks JSON missing event: $evt" }
 }
 if ($hooksContent -notmatch 'hooks claude session-start') {
@@ -113,10 +116,11 @@ $pipe = "\\.\pipe\cmux\$paneId"
 
 function Send-HookEvent {
     param([string]$EventName, [string]$StdinJson)
+    # Windows PowerShell 5.1 (.NET Framework) has no ArgumentList collection
+    # on ProcessStartInfo — only the legacy Arguments string. Event names
+    # are simple ASCII (session-start, prompt-submit, ...) so quoting is moot.
     $psi = [System.Diagnostics.ProcessStartInfo]::new($cmuxExe)
-    $psi.ArgumentList.Add('hooks')
-    $psi.ArgumentList.Add('claude')
-    $psi.ArgumentList.Add($EventName)
+    $psi.Arguments = "hooks claude $EventName"
     $psi.UseShellExecute = $false
     $psi.RedirectStandardInput = $true
     $psi.RedirectStandardError = $true
