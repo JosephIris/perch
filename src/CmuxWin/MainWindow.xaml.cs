@@ -23,6 +23,11 @@ public partial class MainWindow : FluentWindow
     // closes.
     private readonly Dictionary<Guid, ConPty> _ptys = new();
 
+    // Per-pane named-pipe server listening on \\.\pipe\cmux\<paneId>.
+    // Agents inside the pane talk to us via the cmux CLI ("cmux status
+    // working") which dials this pipe. Lifecycle mirrors _ptys exactly.
+    private readonly Dictionary<Guid, CmuxIpcServer> _paneIpc = new();
+
     // Bytes-received-since-launch per pane id. Surface for `pty.snapshot`
     // and the test harness; the page doesn't see this.
     private readonly Dictionary<Guid, long> _ptyBytesReceived = new();
@@ -53,6 +58,8 @@ public partial class MainWindow : FluentWindow
         Closed += (_, _) =>
         {
             _control?.Dispose();
+            foreach (var ipc in _paneIpc.Values) { try { ipc.Dispose(); } catch { } }
+            _paneIpc.Clear();
             foreach (var pty in _ptys.Values) { try { pty.Dispose(); } catch { } }
             _ptys.Clear();
             _store.Save();
@@ -227,6 +234,17 @@ public partial class MainWindow : FluentWindow
             };
             pty.Exited += (_, code) => PostPaneExit(paneId, code);
             _ptys[paneId] = pty;
+
+            // Agent IPC: per-pane named pipe \\.\pipe\cmux\<paneId>. The
+            // pane's shell inherits CMUX_PIPE pointing here, so `cmux
+            // status working` from inside the shell lands at OnStatus.
+            var ipc = new CmuxIpcServer(paneId, Dispatcher);
+            ipc.OnStatus += msg => OnAgentStatus(sess, paneId, msg);
+            ipc.OnNotify += msg => OnAgentNotify(sess, paneId, msg);
+            ipc.OnMeta   += msg => OnAgentMeta(sess, paneId, msg);
+            ipc.Start();
+            _paneIpc[paneId] = ipc;
+
             Log.Info("Pane.spawn", $"pane={paneId:N} pid={pty.ProcessId} shell={baseShell}");
         }
         catch (Exception ex)
@@ -238,10 +256,81 @@ public partial class MainWindow : FluentWindow
 
     private void DestroyPty(Guid paneId)
     {
+        if (_paneIpc.Remove(paneId, out var ipc)) { try { ipc.Dispose(); } catch { } }
         if (!_ptys.TryGetValue(paneId, out var pty)) return;
         _ptys.Remove(paneId);
         try { pty.Dispose(); } catch { }
         lock (_ptyBytesReceived) _ptyBytesReceived.Remove(paneId);
+    }
+
+    // ---- Agent IPC handlers (cmux status / notify / meta) ----------------
+
+    private static AgentState ParseAgentState(string? s) => s switch
+    {
+        "working" => AgentState.Working,
+        "waiting" => AgentState.Waiting,
+        "done"    => AgentState.Done,
+        _         => AgentState.Idle,
+    };
+
+    private static NotificationLevel ParseLevel(string? s) => s switch
+    {
+        "success" => NotificationLevel.Success,
+        "warn"    => NotificationLevel.Warn,
+        "warning" => NotificationLevel.Warn,
+        "error"   => NotificationLevel.Error,
+        _         => NotificationLevel.Info,
+    };
+
+    private void OnAgentStatus(Session sess, Guid paneId, StatusMessage msg)
+    {
+        // Focused-pane-wins: when a session has multiple panes only the
+        // currently-active one's status updates the session row. Without
+        // this, two agents in the same session thrash the same pill row
+        // with last-writer-wins.
+        if (_activePaneId is Guid ap && ap != paneId &&
+            AllLeaves(sess.Root).Any(p => p.Id == ap)) return;
+        sess.AgentState = ParseAgentState(msg.State);
+        sess.ActivityDetail = msg.Detail ?? "";
+        PushState();
+    }
+
+    private void OnAgentNotify(Session sess, Guid paneId, NotifyMessage msg)
+    {
+        if (_activePaneId is Guid ap && ap != paneId &&
+            AllLeaves(sess.Root).Any(p => p.Id == ap)) return;
+        sess.NotificationText = msg.Text ?? "";
+        sess.NotificationLevel = ParseLevel(msg.Level);
+        PushState();
+        PostToast(msg.Text ?? "", msg.Level);
+    }
+
+    private void OnAgentMeta(Session sess, Guid paneId, MetaMessage msg)
+    {
+        if (_activePaneId is Guid ap && ap != paneId &&
+            AllLeaves(sess.Root).Any(p => p.Id == ap)) return;
+        if (msg.Branch != null) sess.Branch = msg.Branch;
+        if (msg.Ports != null) sess.Ports = msg.Ports;
+        if (!string.IsNullOrWhiteSpace(msg.Cwd)) sess.Cwd = msg.Cwd!;
+        PushState();
+    }
+
+    private void PostToast(string text, string? level)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            try
+            {
+                var payload = JsonSerializer.Serialize(new
+                {
+                    type = "toast",
+                    text,
+                    level = string.IsNullOrEmpty(level) ? "info" : level,
+                });
+                Web.CoreWebView2?.PostWebMessageAsJson(payload);
+            }
+            catch (Exception ex) { Log.Error("PostToast", ex); }
+        });
     }
 
     // ---- Page → host handlers --------------------------------------------
@@ -464,6 +553,31 @@ public partial class MainWindow : FluentWindow
                     title = s.Title,
                     shell = s.DisplayShell,
                     rootPane = ProjectPane(s.Root),
+                    // Stage 4 agent state. All fields are transient (reset
+                    // on shell restart) but get serialized so the page can
+                    // render pills consistently without a separate update
+                    // message.
+                    agentState = s.AgentState switch
+                    {
+                        AgentState.Working => "working",
+                        AgentState.Waiting => "waiting",
+                        AgentState.Done    => "done",
+                        _                  => "idle",
+                    },
+                    activityDetail = s.ActivityDetail,
+                    branch         = s.Branch,
+                    ports          = s.Ports,
+                    notification = string.IsNullOrEmpty(s.NotificationText) ? null : new
+                    {
+                        text  = s.NotificationText,
+                        level = s.NotificationLevel switch
+                        {
+                            NotificationLevel.Success => "success",
+                            NotificationLevel.Warn    => "warn",
+                            NotificationLevel.Error   => "error",
+                            _                         => "info",
+                        },
+                    },
                 }).ToArray(),
             };
             Web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(snap));

@@ -8,6 +8,7 @@ import { onMessage, send, type StateMessage } from "./bridge.js";
 import { Sidebar } from "./sidebar.js";
 import { Workspace } from "./workspace.js";
 import { installShortcutHint } from "./shortcut-hint.js";
+import { Toast } from "./toast.js";
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const el = document.getElementById(id);
@@ -17,6 +18,7 @@ const $ = <T extends HTMLElement>(id: string): T => {
 
 const sidebar = new Sidebar($("session-list"), $("new-session-button"));
 const workspace = new Workspace($("workspace"));
+const toast = new Toast($("toast"));
 const statusEl = $("status-text");
 installShortcutHint($("shortcut-hint"));
 
@@ -44,6 +46,9 @@ onMessage((msg) => {
     case "pane.exit":
       workspace.notifyExit(msg.paneId, msg.code);
       setStatus(`pane exited (${msg.code})`);
+      break;
+    case "toast":
+      toast.show(msg.text, msg.level);
       break;
     case "host.error":
       setStatus(`error: ${msg.message}`);

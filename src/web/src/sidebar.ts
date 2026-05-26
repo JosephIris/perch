@@ -1,10 +1,6 @@
 // Sidebar = the session list + the New Session button. Hand-rolled because
-// the chrome is small enough that a framework would weigh more than it
-// saves and we want the DOM to mirror the host state shape exactly.
-//
-// Reconciles diff-free: on every state push from the host we clear and
-// rebuild. The session list is small (<100 rows in any realistic case)
-// and clearing + rebuilding is simpler than tracking item identity.
+// the chrome is small and we want the DOM to mirror the host state shape
+// exactly. Reconciles diff-free: clear + rebuild on every state push.
 
 import type { SessionView } from "./bridge.js";
 import { send } from "./bridge.js";
@@ -40,15 +36,62 @@ export class Sidebar {
     const body = document.createElement("span");
     body.className = "session-item__body";
 
+    const headRow = document.createElement("span");
+    headRow.className = "session-item__head";
     const title = document.createElement("span");
     title.className = "session-item__title";
     title.textContent = s.title;
-    body.appendChild(title);
+    headRow.appendChild(title);
+    body.appendChild(headRow);
 
     const meta = document.createElement("span");
     meta.className = "session-item__meta";
     meta.textContent = s.shell;
     body.appendChild(meta);
+
+    // Stage 4: agent state + branch + ports chips. Wraps onto a second row
+    // automatically because of flex-wrap; per-chip margin so wrapped lines
+    // breathe.
+    const hasMeta =
+      s.agentState !== "idle" || s.branch || (s.ports && s.ports.length > 0);
+    if (hasMeta) {
+      const chips = document.createElement("span");
+      chips.className = "session-item__chips";
+
+      if (s.agentState !== "idle") {
+        const pill = document.createElement("span");
+        pill.className = `chip chip--state chip--state-${s.agentState}`;
+        pill.textContent = s.agentState;
+        chips.appendChild(pill);
+      }
+      if (s.branch) {
+        const b = document.createElement("span");
+        b.className = "chip chip--badge";
+        b.textContent = `⎇ ${s.branch}`; // git-branch glyph
+        chips.appendChild(b);
+      }
+      for (const p of s.ports ?? []) {
+        const b = document.createElement("span");
+        b.className = "chip chip--badge";
+        b.textContent = `:${p}`;
+        chips.appendChild(b);
+      }
+      body.appendChild(chips);
+    }
+
+    // Notification line: colored dot + text. Same lifetime as
+    // NotificationText on the host (stays until next notify or pane close).
+    if (s.notification) {
+      const note = document.createElement("span");
+      note.className = `session-item__note session-item__note--${s.notification.level}`;
+      const dot = document.createElement("span");
+      dot.className = "session-item__note-dot";
+      note.appendChild(dot);
+      const text = document.createElement("span");
+      text.textContent = s.notification.text;
+      note.appendChild(text);
+      body.appendChild(note);
+    }
 
     item.appendChild(body);
 
@@ -57,9 +100,9 @@ export class Sidebar {
     close.className = "session-item__close";
     close.title = "Close session";
     close.setAttribute("aria-label", `Close ${s.title}`);
-    close.textContent = "✕"; // small X
+    close.textContent = "✕";
     close.addEventListener("click", (ev) => {
-      ev.stopPropagation();           // don't trigger session.select
+      ev.stopPropagation();
       send({ type: "session.close", id: s.id });
     });
     item.appendChild(close);

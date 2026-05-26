@@ -26,6 +26,14 @@
       <span id="status-text">starting...</span>
     </footer>
 
+    <!-- Toast surface for cmux notify messages. Same frosted acrylic
+         family as the shortcut hint but anchored slightly higher and
+         auto-fades after a few seconds. -->
+    <div id="toast" class="toast" role="status" aria-live="polite">
+      <span class="toast__dot" aria-hidden="true"></span>
+      <span class="toast__text"></span>
+    </div>
+
     <!-- Shortcut hint card. Appears after holding Ctrl+Shift for ~300ms,
          disappears the moment a modifier is released. Frosted acrylic
          background so it sits cleanly above the terminal content. -->
