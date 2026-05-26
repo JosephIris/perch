@@ -11,27 +11,51 @@ html, body {
   line-height: var(--type-body-line);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
-  /* WebView2 captures the whole client area; keeping the body transparent
-   * is what lets the host FluentWindow's Mica bleed through. */
+  /* Transparent so Mica from the host window reads through. */
 }
 
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+ul { list-style: none; padding: 0; margin: 0; }
+
+/* --- Layout shell ---------------------------------------------------------
+ * Grid template:
+ *
+ *   +---- titlebar -----------------+
+ *   | sidebar | workspace           |
+ *   +---- statusbar ----------------+
+ *
+ * Sidebar is a fixed 240px column; workspace flexes to fill.
+ */
 #app {
   display: grid;
+  grid-template-columns: 240px 1fr;
   grid-template-rows: auto 1fr auto;
+  grid-template-areas:
+    "titlebar titlebar"
+    "sidebar  workspace"
+    "statusbar statusbar";
   height: 100%;
 }
 
-/* --- Title bar -----------------------------------------------------------
- * The host extends content into the title-bar area so Mica reaches the
- * top edge. The system min/max/close cluster overlays at the right (~136px
- * on Win11), so we leave that gap on the right via padding-right. The whole
- * bar is marked app-region: drag so click-and-drag moves the window. */
+/* --- Title bar ----------------------------------------------------------- */
 .title-bar {
+  grid-area: titlebar;
   display: flex;
   align-items: center;
   gap: var(--sp-8);
   height: 36px;
-  padding: 0 136px 0 var(--sp-16);   /* clear the caption buttons */
+  padding: 0 136px 0 var(--sp-16);   /* clear the system caption buttons */
   font-size: var(--type-caption-size);
   font-family: var(--font-small);
   color: var(--color-text-secondary);
@@ -43,7 +67,6 @@ html, body {
   app-region: no-drag;
 }
 .title-bar__icon {
-  /* Placeholder dot for now; real icon in a later commit. */
   width: 14px;
   height: 14px;
   border-radius: 50%;
@@ -54,17 +77,141 @@ html, body {
   font-weight: 600;
 }
 
-/* --- Terminal host ------------------------------------------------------- */
-.terminal-host {
-  min-height: 0;       /* allow grid child to actually shrink */
-  display: block;
+/* --- Sidebar ------------------------------------------------------------- */
+.sidebar {
+  grid-area: sidebar;
+  display: grid;
+  grid-template-rows: 1fr auto;
+  border-right: 1px solid var(--color-stroke);
+  padding: var(--sp-8);
+  min-width: 0;
+}
+.session-list {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+/* Each session card is a row in the list. Active gets a subtle pill +
+ * a 3px accent stripe on the inner-left (Win11 nav-item pattern). */
+.session-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: 4px 1fr auto;
+  align-items: center;
+  gap: var(--sp-8);
+  padding: var(--sp-8) var(--sp-12);
+  border-radius: var(--r-card);
+  text-align: left;
+  color: var(--color-text-primary);
+  background: transparent;
+  transition: background var(--dur-fast) var(--ease-entry);
+}
+.session-item:hover {
+  background: var(--color-subtle-secondary);
+}
+.session-item--active {
+  background: var(--color-subtle-tertiary);
+}
+.session-item__accent {
+  width: 3px;
+  height: 20px;
+  border-radius: 1.5px;
+  background: transparent;
+  margin-left: 1px;       /* inset from the pill's rounded corner */
+}
+.session-item--active .session-item__accent {
+  background: var(--color-accent);
+}
+.session-item__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;     /* allow ellipsis */
+}
+.session-item__title {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.session-item__meta {
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+  font-family: var(--font-small);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.session-item__close {
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-input);
+  color: var(--color-text-tertiary);
+  opacity: 0;
+  transition:
+    opacity var(--dur-fast) var(--ease-entry),
+    background var(--dur-fast) var(--ease-entry),
+    color var(--dur-fast) var(--ease-entry);
+  font-size: 12px;
+  line-height: 1;
+}
+.session-item:hover .session-item__close,
+.session-item--active .session-item__close {
+  opacity: 1;
+}
+.session-item__close:hover {
+  background: var(--color-subtle-tertiary);
+  color: var(--color-text-primary);
+}
+
+.sidebar__footer {
+  padding-top: var(--sp-8);
+  border-top: 1px solid var(--color-stroke);
+  margin-top: var(--sp-8);
+}
+.sidebar__primary {
+  width: 100%;
+  padding: var(--sp-8) var(--sp-12);
+  border-radius: var(--r-card);
+  background: transparent;
+  color: var(--color-text-primary);
+  font-weight: 600;
+  text-align: left;
+  transition: background var(--dur-fast) var(--ease-entry);
+}
+.sidebar__primary:hover { background: var(--color-subtle-secondary); }
+
+/* --- Workspace / pane tree ----------------------------------------------- */
+.workspace {
+  grid-area: workspace;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
   background: var(--color-terminal-bg);
-  /* xterm.js fills this element. Until ConPTY is wired (next commit), the
-   * terminal is local-echo only and shows a banner. */
+}
+.split {
+  flex: 1 1 0;
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+}
+.split--h { flex-direction: column; }   /* horizontal split = stacked rows */
+.split--v { flex-direction: row; }       /* vertical split  = side by side */
+.pane {
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+  position: relative;
 }
 
 /* --- Status bar ---------------------------------------------------------- */
 .status-bar {
+  grid-area: statusbar;
   display: flex;
   align-items: center;
   padding: var(--sp-4) var(--sp-16);
