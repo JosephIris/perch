@@ -143,6 +143,10 @@ export class Pane {
       this.resizeFrame = 0;
       try { this.fit.fit(); } catch { return; }
       const { cols, rows } = this.term;
+      // Don't ship zero/tiny sizes -- the host's lazy-spawn gate ignores
+      // them, but we'd waste a round trip and a re-render. The
+      // ResizeObserver will fire again when CSS finishes laying us out.
+      if (cols < 5 || rows < 3) return;
       if (cols === this.lastCols && rows === this.lastRows) return;
       this.lastCols = cols;
       this.lastRows = rows;
