@@ -110,10 +110,10 @@ if (-not $KeepVisible) {
 Write-Host "Launched cmux pid=$($p.Id) (minimized: $(-not $KeepVisible))"
 
 # --- Assertion 1: ConPty starts a shell ------------------------------------
-$startLine = Wait-For-Log -Pattern 'ConPty\.Start: pid=\d+' -TimeoutSec 12
+$startLine = Wait-For-Log -Pattern 'Pane\.spawn:\s*pane=[0-9a-f]+\s*pid=\d+' -TimeoutSec 12
 if (-not $startLine) {
     Stop-Process -Id $p.Id -Force -EA SilentlyContinue
-    throw "FAIL: ConPty never started (no 'ConPty.Start' log line)"
+    throw "FAIL: ConPty never started (no 'Pane.spawn' log line)"
 }
 $shellPid = if ($startLine -match 'pid=(\d+)') { [int]$matches[1] } else { 0 }
 Write-Host "  [+] ConPty started: shell pid=$shellPid"
