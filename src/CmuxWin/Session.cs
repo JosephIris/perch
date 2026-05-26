@@ -44,6 +44,90 @@ internal sealed class Session : INotifyPropertyChanged
 
     [JsonIgnore] public bool HasNotification => !string.IsNullOrEmpty(_notificationText);
 
+    // ----- Workspace state pushed by `cmux status` / `cmux meta` -----
+    //
+    // All transient: each field reflects what the agent has reported during
+    // the current session. They reset to defaults across restarts — the
+    // agent's shell hooks re-push them when work resumes. Same lifetime
+    // contract as NotificationText. Persisting would invite stale values
+    // (a port that's no longer listening, a branch that's been checked out
+    // elsewhere) for no real win.
+
+    private AgentState _agentState = AgentState.Idle;
+    [JsonIgnore]
+    public AgentState AgentState
+    {
+        get => _agentState;
+        set { if (_agentState != value) { _agentState = value; OnPropertyChanged(); OnPropertyChanged(nameof(HasAgentState)); OnPropertyChanged(nameof(AgentStateText)); OnPropertyChanged(nameof(AgentStateBrushKey)); OnPropertyChanged(nameof(HasAgentMeta)); } }
+    }
+
+    [JsonIgnore] public bool HasAgentState => _agentState != AgentState.Idle;
+    [JsonIgnore] public string AgentStateText => _agentState switch
+    {
+        CmuxWin.AgentState.Working => "working",
+        CmuxWin.AgentState.Waiting => "waiting",
+        CmuxWin.AgentState.Done    => "done",
+        _                          => "",
+    };
+
+    /// Theme-brush resource key for the state pill background. Working uses
+    /// the theme accent (it's the "in progress" affordance), Waiting uses
+    /// caution (user attention requested), Done uses success.
+    [JsonIgnore] public string AgentStateBrushKey => _agentState switch
+    {
+        CmuxWin.AgentState.Working => "AccentFillColorDefaultBrush",
+        CmuxWin.AgentState.Waiting => "SystemFillColorCautionBrush",
+        CmuxWin.AgentState.Done    => "SystemFillColorSuccessBrush",
+        _                          => "SubtleFillColorTertiaryBrush",
+    };
+
+    private string _activityDetail = "";
+    [JsonIgnore]
+    public string ActivityDetail
+    {
+        get => _activityDetail;
+        set { if (_activityDetail != value) { _activityDetail = value; OnPropertyChanged(); OnPropertyChanged(nameof(HasActivityDetail)); } }
+    }
+    [JsonIgnore] public bool HasActivityDetail => !string.IsNullOrEmpty(_activityDetail);
+
+    private string _branch = "";
+    [JsonIgnore]
+    public string Branch
+    {
+        get => _branch;
+        set { if (_branch != value) { _branch = value; OnPropertyChanged(); OnPropertyChanged(nameof(HasBranch)); OnPropertyChanged(nameof(HasAgentMeta)); } }
+    }
+    [JsonIgnore] public bool HasBranch => !string.IsNullOrEmpty(_branch);
+
+    private int[] _ports = Array.Empty<int>();
+    [JsonIgnore]
+    public int[] Ports
+    {
+        get => _ports;
+        set
+        {
+            var v = value ?? Array.Empty<int>();
+            // Identity-compare by sequence so the ItemsControl doesn't churn
+            // on every meta push when nothing actually changed.
+            if (_ports.Length == v.Length)
+            {
+                bool same = true;
+                for (int i = 0; i < v.Length; i++) if (_ports[i] != v[i]) { same = false; break; }
+                if (same) return;
+            }
+            _ports = v;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(HasPorts));
+            OnPropertyChanged(nameof(HasAgentMeta));
+        }
+    }
+    [JsonIgnore] public bool HasPorts => _ports.Length > 0;
+
+    /// Any of the agent-pushed state fields populated? Controls the
+    /// visibility of the chip row in the sidebar so it collapses cleanly
+    /// when nothing's been pushed.
+    [JsonIgnore] public bool HasAgentMeta => HasAgentState || HasBranch || HasPorts;
+
     /// Resource key for the colored dot brush — resolved by the sidebar
     /// template against the theme dictionary. Keeps the mapping in one place
     /// and lets the dot pick up theme accent variations.
@@ -122,8 +206,15 @@ internal sealed class PaneNode
     /// instead of a terminal. Sessions persisted to disk preserve their
     /// webview panes across restarts.
     public string? Url { get; set; }
+    /// User- or auto-assigned name used by `cmux focus/send/open` to address
+    /// the pane from inside an agent. Persisted so addressing stays stable
+    /// across restarts. Only leaves carry names; the field is ignored on
+    /// split nodes.
+    public string? Name { get; set; }
     [JsonIgnore] public bool IsLeaf => Split == null;
     [JsonIgnore] public bool IsWebView => IsLeaf && !string.IsNullOrEmpty(Url);
 }
 
 internal enum SplitOrientation { Horizontal, Vertical }
+
+internal enum AgentState { Idle, Working, Waiting, Done }

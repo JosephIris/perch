@@ -126,6 +126,56 @@
                                    Margin="8,0,0,0" />
                     </Grid>
 
+                    <!-- Workspace state chips pushed by `cmux status` / `cmux meta`.
+                         Hidden as a group unless any agent has reported something.
+                         WrapPanel so chips spill to a second line when the
+                         sidebar is narrow (working pill + branch + 2 ports
+                         exceeds 200px). Per-chip Margin uses bottom spacing
+                         so wrapped rows have breathing room. -->
+                    <WrapPanel Margin="0,6,0,0"
+                               Visibility="{Binding HasAgentMeta, Converter={StaticResource BoolToVisibility}}">
+                        <Border Style="{StaticResource Cmux.SidebarPill}"
+                                Background="{Binding AgentStateBrushKey, Converter={StaticResource ResourceKeyToBrush}}"
+                                Visibility="{Binding HasAgentState, Converter={StaticResource BoolToVisibility}}"
+                                Margin="0,0,4,4">
+                            <TextBlock Text="{Binding AgentStateText}"
+                                       Style="{StaticResource Cmux.SidebarPillText}" />
+                        </Border>
+                        <Border Style="{StaticResource Cmux.SidebarBadge}"
+                                Visibility="{Binding HasBranch, Converter={StaticResource BoolToVisibility}}"
+                                Margin="0,0,4,4">
+                            <StackPanel Orientation="Horizontal">
+                                <ui:FontIcon Glyph="&#xF1D3;"
+                                             FontFamily="{StaticResource Type.Family.Icons}"
+                                             FontSize="10"
+                                             Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                             VerticalAlignment="Center"
+                                             Margin="0,0,3,0" />
+                                <TextBlock Text="{Binding Branch}"
+                                           Style="{StaticResource Cmux.SidebarBadgeText}"
+                                           TextTrimming="CharacterEllipsis"
+                                           MaxWidth="80" />
+                            </StackPanel>
+                        </Border>
+                        <ItemsControl ItemsSource="{Binding Ports}"
+                                      Visibility="{Binding HasPorts, Converter={StaticResource BoolToVisibility}}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <WrapPanel />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Style="{StaticResource Cmux.SidebarBadge}"
+                                            Margin="0,0,4,4">
+                                        <TextBlock Text="{Binding}"
+                                                   Style="{StaticResource Cmux.SidebarBadgeText}" />
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </WrapPanel>
+
                     <!-- OSC 9 notification: third line, hidden unless HasNotification.
                          Colored dot is keyed off Session.NotificationDotBrush which
                          maps Level → theme brush resource key. -->

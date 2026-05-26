@@ -105,6 +105,44 @@
     <Duration x:Key="Motion.Fast">0:0:0.15</Duration>
     <Duration x:Key="Motion.Default">0:0:0.20</Duration>
 
+    <!-- Sidebar state pills + badges (phase 2 of agent/CLI hooks).
+         All borders/fills come from theme brushes; the binding side sets
+         Background via DynamicResource keys on Session.AgentStateBrushKey,
+         so individual states reuse this geometry instead of redefining it. -->
+    <Thickness x:Key="Cmux.SidebarPill.Padding">6,1,6,1</Thickness>
+    <Thickness x:Key="Cmux.SidebarBadge.Padding">5,0,5,0</Thickness>
+
+    <Style x:Key="Cmux.SidebarPill" TargetType="Border">
+        <Setter Property="CornerRadius" Value="{StaticResource Radius.Input}" />
+        <Setter Property="Padding" Value="{StaticResource Cmux.SidebarPill.Padding}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <!-- No border on the pill: the background already provides the affordance.
+             Border + fill on the same element doubles up visual weight. -->
+    </Style>
+
+    <Style x:Key="Cmux.SidebarBadge" TargetType="Border">
+        <Setter Property="CornerRadius" Value="{StaticResource Radius.Input}" />
+        <Setter Property="Padding" Value="{StaticResource Cmux.SidebarBadge.Padding}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="BorderBrush" Value="{DynamicResource ControlStrokeColorDefaultBrush}" />
+        <Setter Property="Background" Value="{DynamicResource SubtleFillColorTertiaryBrush}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+
+    <Style x:Key="Cmux.SidebarPillText" TargetType="TextBlock" BasedOn="{StaticResource Type.Caption}">
+        <!-- Pill text sits on a coloured surface, so use the on-accent foreground
+             when the surface is the theme accent, and tertiary otherwise.
+             Per the constitution rule "Text on selected items stays at the
+             default foreground" we use Primary as a safe default and let the
+             dark Working pill (accent) carry it; for Caution/Success the
+             fills are dark enough that Primary still reads. -->
+        <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}" />
+    </Style>
+
+    <Style x:Key="Cmux.SidebarBadgeText" TargetType="TextBlock" BasedOn="{StaticResource Type.Caption}">
+        <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}" />
+    </Style>
+
     <!-- Toast surface — deliberately light gray in BOTH themes so the toast
          reads clearly when overlaid on the (dark) terminal area. The WPF-UI
          acrylic surface used previously was too low-contrast against pane

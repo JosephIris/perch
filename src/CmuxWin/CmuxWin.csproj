@@ -32,4 +32,15 @@
     <Resource Include="Assets\cmux.ico" />
   </ItemGroup>
 
+  <!-- Build cmux.exe as part of every CmuxWin build and copy the resulting
+       single-file EXE into the host's output dir under tools/. The host
+       prepends this dir to PATH for spawned panes so `cmux ...` resolves.
+       Also stages tools/claude.cmd, a tiny shim that intercepts `claude`
+       calls inside a pane and delegates to cmux.exe wrap-claude, which
+       injects Claude Code's settings hooks JSON. -->
+  <Target Name="BuildCmuxCli" AfterTargets="Build">
+    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\..\tools\cmux-cli\cmux-cli.csproj&quot; -c $(Configuration) -r win-x64 --self-contained true -p:PublishSingleFile=true -p:InvariantGlobalization=true -o &quot;$(OutDir)tools&quot; --nologo -v q" />
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)..\..\tools\cmux-cli\claude.cmd" DestinationFolder="$(OutDir)tools" SkipUnchangedFiles="true" />
+  </Target>
+
 </Project>

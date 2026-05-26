@@ -27,6 +27,7 @@ public partial class MainWindow : FluentWindow
     // conhost lingers briefly to show "Session Terminated" after the shell exits.
     private readonly Dictionary<Guid, int> _paneShellPid = new();
     private readonly Dictionary<Guid, TerminalClickHook> _paneClickHook = new();
+    private readonly Dictionary<Guid, CmuxIpcServer> _paneIpc = new();
     private readonly Dictionary<Guid, Microsoft.Web.WebView2.Wpf.WebView2> _paneWebViews = new();
 
     private ClipboardWatcher? _clipboard;
@@ -57,6 +58,13 @@ public partial class MainWindow : FluentWindow
     {
         _settings = Settings.Load();
         _store = SessionStore.Load();
+        // Backfill names for any sessions persisted before phase 3 added
+        // Pane.Name. Idempotent for sessions already named.
+        foreach (var s in _store.Sessions) EnsurePaneNames(s);
+        // Persist immediately on first launch so external tools (the cmux
+        // CLI, test harnesses, status pickers) can read the pane ids and
+        // pipe paths from disk without having to wait for app exit.
+        _store.Save();
 
         SplitRightCommand = new RelayCommand(_ => SplitActive(SplitOrientation.Vertical));
         SplitDownCommand = new RelayCommand(_ => SplitActive(SplitOrientation.Horizontal));
@@ -100,6 +108,7 @@ public partial class MainWindow : FluentWindow
             {
                 var s = _store.AddNew();
                 s.Shell = shell.CommandLine;
+                EnsurePaneNames(s);
                 SessionList.SelectedItem = s;
                 SessionList.ScrollIntoView(s);
             };
@@ -147,12 +156,19 @@ public partial class MainWindow : FluentWindow
     {
         if (_active == null) { StatusBarText.Text = ""; return; }
         var paneLabel = _active.DisplayShell;
+        string? paneName = null;
         if (_activePaneId is Guid pid)
         {
             var node = FindLeaf(_active.Root, pid);
             if (node?.IsWebView == true) paneLabel = WebViewLabel(node.Url!);
+            paneName = node?.Name;
         }
-        StatusBarText.Text = $"{_active.Title}  ·  {paneLabel}";
+        // Append the addressable pane name so the user can see what to pass
+        // to `cmux focus`/`cmux send`. Only shown when the name exists (it
+        // always does in fresh sessions, but defensive against load-time race).
+        StatusBarText.Text = string.IsNullOrEmpty(paneName)
+            ? $"{_active.Title}  ·  {paneLabel}"
+            : $"{_active.Title}  ·  {paneLabel}  ·  {paneName}";
     }
 
     private FrameworkElement BuildSessionContainer(Session s)
@@ -283,7 +299,49 @@ public partial class MainWindow : FluentWindow
     {
         if (_paneTerminals.TryGetValue(pane.Id, out var cached)) return cached;
 
-        var term = CreateTerminal(sess);
+        // Spin up the per-pane IPC server BEFORE we spawn the shell — the
+        // shell inherits CMUX_PIPE pointing at this pipe name, so any `cmux`
+        // CLI call from inside the pane connects to a listener that's
+        // already accepting.
+        var ipc = new CmuxIpcServer(pane.Id, Dispatcher);
+        var capturedSessForIpc = sess;
+        // Focused-pane-wins gate. Workspace state (notify / status / meta)
+        // lives on Session, so two panes in the same session both running
+        // agents would otherwise thrash the same sidebar row last-writer-wins.
+        // Instead we drop pushes from any pane that isn't currently focused.
+        // Addressing commands (focus/send/open) are not gated — they're
+        // explicit cross-pane operations.
+        var originPaneId = pane.Id;
+        bool IsActive() => _activePaneId == originPaneId;
+
+        ipc.OnNotify += msg =>
+        {
+            if (!IsActive()) return;
+            capturedSessForIpc.NotificationLevel = ParseNotificationLevel(msg.Level);
+            capturedSessForIpc.NotificationText = msg.Text ?? "";
+        };
+        ipc.OnStatus += msg =>
+        {
+            if (!IsActive()) return;
+            capturedSessForIpc.AgentState = ParseAgentState(msg.State);
+            capturedSessForIpc.ActivityDetail = msg.Detail ?? "";
+        };
+        ipc.OnMeta += msg =>
+        {
+            if (!IsActive()) return;
+            if (msg.Branch != null) capturedSessForIpc.Branch = msg.Branch;
+            if (msg.Ports  != null) capturedSessForIpc.Ports  = msg.Ports;
+            // cwd from meta updates the same field OSC 7 / OSC 9;9 write to,
+            // so a future session resume starts where the agent left it.
+            if (!string.IsNullOrEmpty(msg.Cwd)) capturedSessForIpc.Cwd = msg.Cwd!;
+        };
+        ipc.OnFocus += msg => HandleIpcFocus(originPaneId, msg);
+        ipc.OnSend  += msg => HandleIpcSend(originPaneId, msg);
+        ipc.OnOpen  += msg => HandleIpcOpen(originPaneId, msg);
+        ipc.Start();
+        _paneIpc[pane.Id] = ipc;
+
+        var term = CreateTerminal(sess, pane.Id);
         _paneTerminals[pane.Id] = term;
 
         // WPF's default Tab handler steals Tab for focus navigation before
@@ -471,7 +529,7 @@ public partial class MainWindow : FluentWindow
         return bar;
     }
 
-    private EasyTerminalControl CreateTerminal(Session s)
+    private EasyTerminalControl CreateTerminal(Session s, Guid paneId)
     {
         var baseShell = string.IsNullOrEmpty(s.Shell)
             ? Shell.DefaultCommandLine(_settings.DefaultShell)
@@ -482,7 +540,7 @@ public partial class MainWindow : FluentWindow
         var cwd = !string.IsNullOrWhiteSpace(s.Cwd) && System.IO.Directory.Exists(s.Cwd)
             ? s.Cwd
             : _settings.ResolveDefaultCwd();
-        var startCmd = Shell.WithStartupCwd(baseShell, cwd);
+        var startCmd = Shell.BuildStartupCommandLine(baseShell, cwd, paneId);
 
         return new EasyTerminalControl
         {
@@ -491,6 +549,78 @@ public partial class MainWindow : FluentWindow
             FontSizeWhenSettingTheme = _settings.FontSize,
             LogConPTYOutput = true,
         };
+    }
+
+    private static NotificationLevel ParseNotificationLevel(string? s) => s switch
+    {
+        "success" => NotificationLevel.Success,
+        "warn"    => NotificationLevel.Warn,
+        "error"   => NotificationLevel.Error,
+        _         => NotificationLevel.Info,
+    };
+
+    private static AgentState ParseAgentState(string? s) => s switch
+    {
+        "working" => AgentState.Working,
+        "waiting" => AgentState.Waiting,
+        "done"    => AgentState.Done,
+        _         => AgentState.Idle,
+    };
+
+    // ----- Addressable pane handlers (phase 3) -----
+
+    private void HandleIpcFocus(Guid originPaneId, FocusMessage msg)
+    {
+        var resolved = ResolveTarget(originPaneId, msg.Target);
+        if (resolved is not (Session sess, PaneNode pane))
+        {
+            Log.Info($"CmuxIpc.focus.miss target={msg.Target}");
+            return;
+        }
+        if (_active?.Id != sess.Id) SessionList.SelectedItem = sess;
+        SetActivePane(pane.Id);
+        FocusPane(pane.Id);
+    }
+
+    private void HandleIpcSend(Guid originPaneId, SendMessage msg)
+    {
+        var resolved = ResolveTarget(originPaneId, msg.Target);
+        if (resolved is not (Session _, PaneNode pane))
+        {
+            Log.Info($"CmuxIpc.send.miss target={msg.Target}");
+            return;
+        }
+        if (!_paneTerminals.TryGetValue(pane.Id, out var term)) return;
+        try
+        {
+            var pty = term.ConPTYTerm;
+            if (pty == null) return;
+            // Treat the input as bytes the shell sees verbatim. The CLI is
+            // responsible for any line-ending convention (it sends a literal
+            // \n when the user passes one). Use AsSpan to avoid allocating a
+            // copy — TerminalControl.WriteToTerm accepts a ReadOnlySpan<char>.
+            pty.WriteToTerm(msg.Input.AsSpan());
+        }
+        catch (Exception ex) { Log.Error("CmuxIpc.send.write", ex); }
+    }
+
+    private void HandleIpcOpen(Guid originPaneId, OpenMessage msg)
+    {
+        try
+        {
+            var s = _store.AddNew();
+            if (!string.IsNullOrWhiteSpace(msg.Name)) s.Title = msg.Name!;
+            if (!string.IsNullOrWhiteSpace(msg.Cwd))  s.Cwd   = msg.Cwd!;
+            if (!string.IsNullOrWhiteSpace(msg.Cmd))  s.Shell = msg.Cmd!;
+            EnsurePaneNames(s);
+            SessionList.SelectedItem = s;
+            SessionList.ScrollIntoView(s);
+            // Agent-driven creates persist immediately. Without this, the
+            // new session only survives if the user closes the app cleanly
+            // — and external observers (CLI, scripts) can't see it on disk.
+            _store.Save();
+        }
+        catch (Exception ex) { Log.Error("CmuxIpc.open", ex); }
     }
 
     // ----- Zoom: increase/decrease/reset font size live across all panes -----
@@ -598,6 +728,80 @@ public partial class MainWindow : FluentWindow
 
     // ----- Tree helpers -----
 
+    /// Ensures every leaf in <paramref name="sess"/> has a non-empty Name,
+    /// assigning the next unused "pane-N" slot for any unnamed leaf. Idempotent
+    /// — leaves that already have a user-or-auto-set name keep it. Called when
+    /// sessions are loaded from disk and after every split.
+    private static void EnsurePaneNames(Session sess)
+    {
+        var leaves = AllLeaves(sess.Root).ToList();
+        var taken = new HashSet<string>(leaves.Where(l => !string.IsNullOrEmpty(l.Name))
+                                              .Select(l => l.Name!),
+                                        StringComparer.OrdinalIgnoreCase);
+        var nextIdx = 1;
+        foreach (var leaf in leaves)
+        {
+            if (!string.IsNullOrEmpty(leaf.Name)) continue;
+            string candidate;
+            do { candidate = $"pane-{nextIdx++}"; } while (taken.Contains(candidate));
+            leaf.Name = candidate;
+            taken.Add(candidate);
+        }
+    }
+
+    private static IEnumerable<PaneNode> AllLeaves(PaneNode node)
+    {
+        if (node.IsLeaf) { yield return node; yield break; }
+        foreach (var c in node.Children) foreach (var l in AllLeaves(c)) yield return l;
+    }
+
+    /// Resolves a `cmux` CLI target to a (Session, PaneNode) pair.
+    ///
+    /// Scope rules:
+    ///   - Default scope is the origin pane's session.
+    ///   - "session:pane" cross-scopes — left of the colon matches Session.Title
+    ///     (case-insensitive), right of the colon matches Pane.Name.
+    ///   - A bare "session" (no colon) matches the *first* leaf of that
+    ///     session — useful for `cmux focus dev` from another workspace.
+    ///
+    /// Returns null when nothing matches; callers should log and no-op (the
+    /// CLI is fire-and-forget for phase 3).
+    private (Session sess, PaneNode pane)? ResolveTarget(Guid originPaneId, string target)
+    {
+        if (string.IsNullOrWhiteSpace(target)) return null;
+        Session? originSess = null;
+        if (_paneToSession.TryGetValue(originPaneId, out var originSessId))
+            originSess = _store.Sessions.FirstOrDefault(s => s.Id == originSessId);
+
+        string? sessionPart = null;
+        string panePart;
+        var colon = target.IndexOf(':');
+        if (colon >= 0) { sessionPart = target.Substring(0, colon); panePart = target.Substring(colon + 1); }
+        else { panePart = target; }
+
+        Session? scope;
+        if (sessionPart != null)
+        {
+            scope = _store.Sessions.FirstOrDefault(
+                s => string.Equals(s.Title, sessionPart, StringComparison.OrdinalIgnoreCase));
+            if (scope == null) return null;
+            if (string.IsNullOrEmpty(panePart))
+            {
+                var first = FirstLeaf(scope.Root);
+                return first != null ? (scope, first) : null;
+            }
+        }
+        else
+        {
+            scope = originSess;
+            if (scope == null) return null;
+        }
+
+        var leaf = AllLeaves(scope.Root).FirstOrDefault(
+            l => string.Equals(l.Name, panePart, StringComparison.OrdinalIgnoreCase));
+        return leaf != null ? (scope, leaf) : null;
+    }
+
     private static PaneNode? FirstLeaf(PaneNode node)
     {
         if (node.IsLeaf) return node;
@@ -656,6 +860,7 @@ public partial class MainWindow : FluentWindow
             }
         }
 
+        EnsurePaneNames(_active);
         RebuildSessionContainer(_active);
         SetActivePane(newLeaf.Id);
         FocusPane(newLeaf.Id);
@@ -713,7 +918,10 @@ public partial class MainWindow : FluentWindow
         }
         _paneToSession.Remove(paneId);
         _paneShellPid.Remove(paneId);
-        _paneClickHook.Remove(paneId);
+        if (_paneClickHook.Remove(paneId, out var clickHook))
+            clickHook.Detach();
+        if (_paneIpc.Remove(paneId, out var ipc))
+            ipc.Dispose();
 
         if (parent.Children.Count == 1)
         {
@@ -790,7 +998,10 @@ public partial class MainWindow : FluentWindow
             }
             _paneToSession.Remove(leafId);
             _paneShellPid.Remove(leafId);
-            _paneClickHook.Remove(leafId);
+            if (_paneClickHook.Remove(leafId, out var sessClickHook))
+                sessClickHook.Detach();
+            if (_paneIpc.Remove(leafId, out var sessIpc))
+                sessIpc.Dispose();
         }
 
         var wasActive = _active?.Id == s.Id;
@@ -971,6 +1182,16 @@ public partial class MainWindow : FluentWindow
         _settings.Save();
         _store.Save();
         _clipboard?.Dispose();
+
+        // Unsubclass every terminal HWND before the dispatcher tears them
+        // down. Without this, RemoveWindowSubclass never runs and comctl32
+        // can dispatch one last callback into a soon-to-be-collected
+        // delegate during HwndHost.AsyncDestroyWindow.
+        foreach (var hook in _paneClickHook.Values) hook.Detach();
+        _paneClickHook.Clear();
+
+        foreach (var ipc in _paneIpc.Values) ipc.Dispose();
+        _paneIpc.Clear();
     }
 
     // ----- URL actions -----
