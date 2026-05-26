@@ -36,11 +36,19 @@ export type PaneTreeView =
   | { kind: "leaf"; paneId: string; name: string; url?: string | null }
   | { kind: "split"; orientation: "h" | "v"; children: PaneTreeView[] };
 
+export type AgentStateName = "idle" | "working" | "waiting" | "done";
+export type NotificationLevel = "info" | "success" | "warn" | "error";
+
 export type SessionView = {
   id: string;
   title: string;
   shell: string;
   rootPane: PaneTreeView;
+  agentState: AgentStateName;
+  activityDetail: string;
+  branch: string;
+  ports: number[];
+  notification: { text: string; level: NotificationLevel } | null;
 };
 
 export type StateMessage = {
@@ -50,10 +58,17 @@ export type StateMessage = {
   sessions: SessionView[];
 };
 
+export type ToastMessage = {
+  type: "toast";
+  text: string;
+  level: NotificationLevel;
+};
+
 export type InMessage =
   | StateMessage
   | { type: "pane.out"; paneId: string; b64: string }
   | { type: "pane.exit"; paneId: string; code: number }
+  | ToastMessage
   | { type: "host.error"; message: string };
 
 // ---- Implementation --------------------------------------------------------
