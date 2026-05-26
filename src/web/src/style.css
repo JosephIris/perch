@@ -186,27 +186,94 @@ ul { list-style: none; padding: 0; margin: 0; }
 }
 .sidebar__primary:hover { background: var(--color-subtle-secondary); }
 
-/* --- Workspace / pane tree ----------------------------------------------- */
+/* --- Workspace / pane tree -----------------------------------------------
+ * The workspace is a recursive flex layout: each .split contains exactly
+ * two children (sub-splits or leaf .panes); .split--v lays them side by
+ * side, .split--h stacks them. Each leaf .pane is a column of header +
+ * terminal canvas. */
 .workspace {
   grid-area: workspace;
   min-height: 0;
   min-width: 0;
   display: flex;
-  background: var(--color-terminal-bg);
+}
+.workspace > .pane,
+.workspace > .split {
+  flex: 1 1 0;
 }
 .split {
   flex: 1 1 0;
   display: flex;
   min-height: 0;
   min-width: 0;
+  gap: 1px;
+  background: var(--color-stroke);  /* the gap renders as a 1px divider */
 }
-.split--h { flex-direction: column; }   /* horizontal split = stacked rows */
-.split--v { flex-direction: row; }       /* vertical split  = side by side */
-.pane {
+.split--h { flex-direction: column; }
+.split--v { flex-direction: row; }
+.split > .pane,
+.split > .split {
   flex: 1 1 0;
+}
+
+.pane {
+  display: flex;
+  flex-direction: column;
   min-height: 0;
   min-width: 0;
   position: relative;
+  background: var(--color-terminal-bg);
+  border: 1px solid transparent;     /* swap to accent when active */
+  transition: border-color var(--dur-fast) var(--ease-entry);
+}
+.pane--active {
+  border-color: var(--color-accent);
+}
+.pane__header {
+  display: flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 var(--sp-8);
+  font-family: var(--font-small);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-secondary);
+  background: transparent;
+  flex: 0 0 auto;
+}
+.pane__name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pane__close {
+  width: 20px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-input);
+  color: var(--color-text-tertiary);
+  font-size: 10px;
+  line-height: 1;
+  opacity: 0;
+  transition:
+    opacity var(--dur-fast) var(--ease-entry),
+    background var(--dur-fast) var(--ease-entry),
+    color var(--dur-fast) var(--ease-entry);
+}
+.pane:hover .pane__close,
+.pane--active .pane__close {
+  opacity: 1;
+}
+.pane__close:hover {
+  background: var(--color-subtle-tertiary);
+  color: var(--color-text-primary);
+}
+.pane__term {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
 }
 
 /* --- Status bar ---------------------------------------------------------- */

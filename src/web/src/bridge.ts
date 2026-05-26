@@ -23,6 +23,8 @@ export type OutMessage =
   | { type: "pane.in"; paneId: string; b64: string }
   | { type: "pane.resize"; paneId: string; cols: number; rows: number }
   | { type: "pane.focus"; paneId: string }
+  | { type: "pane.split"; paneId: string; dir: "right" | "down" }
+  | { type: "pane.close"; paneId: string }
   | { type: "session.new"; shell?: string }
   | { type: "session.select"; id: string }
   | { type: "session.rename"; id: string; title: string }
@@ -44,6 +46,7 @@ export type SessionView = {
 export type StateMessage = {
   type: "state";
   activeSessionId: string;
+  activePaneId: string;
   sessions: SessionView[];
 };
 
