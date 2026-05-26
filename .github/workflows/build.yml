@@ -37,6 +37,19 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          # No package-lock cache key here -- esbuild + xterm.js pin
+          # cleanly so npm ci is fast enough without it.
+
+      # The CmuxWin csproj's BundleWeb target shells out to `npm run build`
+      # before C# compilation; that needs node_modules in place.
+      - name: Install web deps
+        working-directory: src/web
+        run: npm ci
+
       - name: Restore
         run: dotnet restore src/CmuxWin/CmuxWin.csproj
 
