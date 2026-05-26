@@ -156,25 +156,22 @@ public partial class MainWindow : FluentWindow
 
     private void OnPageReady()
     {
-        // Make sure the active session's pane has a backing ConPty so the
-        // page sees output immediately. Other sessions stay cold until
-        // selected (saves N PowerShells running in the background).
-        EnsureActivePaneSpawned();
+        // Spawning is now deferred until the page reports each pane's real
+        // size via the first pane.resize. Spawning at 80x24 then resizing
+        // 50ms later made PowerShell emit its banner at the bootstrap size,
+        // then clear-and-redraw on the resize -- the user never saw the
+        // banner. By waiting for the page's measured cols/rows we hand
+        // PowerShell its final size up front.
+        EnsureActivePane();
         PushState();
     }
 
-    private void EnsureActivePaneSpawned()
+    /// Keep _activePaneId pointing at a real leaf in the active session.
+    /// Doesn't spawn PTYs.
+    private void EnsureActivePane()
     {
         var s = ActiveSession();
         if (s == null) return;
-        // Spawn every leaf in the active session that doesn't yet have a
-        // backing PTY. Stage 3a only ever had one leaf; stage 3b can have
-        // many after splits + relaunch.
-        foreach (var leaf in AllLeaves(s.Root))
-        {
-            if (!_ptys.ContainsKey(leaf.Id)) SpawnPty(s, leaf);
-        }
-        // Keep the active-pane marker pointing at a real leaf.
         if (_activePaneId == null || !AllLeaves(s.Root).Any(p => p.Id == _activePaneId))
             _activePaneId = FirstLeaf(s.Root)?.Id;
     }
@@ -196,7 +193,7 @@ public partial class MainWindow : FluentWindow
 
     // ---- ConPty spawn / teardown -----------------------------------------
 
-    private void SpawnPty(Session sess, PaneNode pane)
+    private void SpawnPty(Session sess, PaneNode pane, int cols = 80, int rows = 24)
     {
         try
         {
@@ -210,7 +207,7 @@ public partial class MainWindow : FluentWindow
             // env vars per-pane so agents inside the shell can call back
             // into our IPC layer (stage 4 reactivates that pipe).
             var startCmd = Shell.BuildStartupCommandLine(baseShell, cwd, pane.Id);
-            var pty = ConPty.Start(startCmd, cols: 80, rows: 24, cwd: cwd);
+            var pty = ConPty.Start(startCmd, cols: cols, rows: rows, cwd: cwd);
             var paneId = pane.Id;
             pty.OutputReceived += (_, bytes) =>
             {
@@ -251,9 +248,19 @@ public partial class MainWindow : FluentWindow
     private void OnPaneResize(JsonElement root)
     {
         if (!TryGuid(root, "paneId", out var id)) return;
-        if (!_ptys.TryGetValue(id, out var pty)) return;
         var cols = root.TryGetProperty("cols", out var c) && c.TryGetInt32(out var cv) ? cv : 80;
         var rows = root.TryGetProperty("rows", out var r) && r.TryGetInt32(out var rv) ? rv : 24;
+
+        // Lazy spawn: first pane.resize for a pane creates its ConPty at
+        // the page's measured size, so PowerShell's banner is laid out at
+        // the final dimensions and never has to be cleared-and-redrawn.
+        if (!_ptys.TryGetValue(id, out var pty))
+        {
+            var sess = OwningSession(id);
+            var pane = sess == null ? null : AllLeaves(sess.Root).FirstOrDefault(p => p.Id == id);
+            if (sess != null && pane != null) SpawnPty(sess, pane, cols, rows);
+            return;
+        }
         pty.Resize(cols, rows);
     }
 
@@ -262,13 +269,9 @@ public partial class MainWindow : FluentWindow
         var s = _store.AddNew();
         AutoName(s.Root, 1);
         _store.ActiveSessionId = s.Id;
-        // The new session's root leaf is the active pane. Without this the
-        // page renders the new session's tree but the activePaneId still
-        // points at the previous session's leaf, so the active marker
-        // misses (no border, no auto-focus) and Ctrl+Shift+W targets a
-        // pane that isn't visible.
+        // The new session's root leaf is the active pane. PTY spawns
+        // lazily on first pane.resize from the page (sized correctly).
         _activePaneId = s.Root.Id;
-        SpawnPty(s, s.Root);
         _store.Save();
         PushState();
     }
@@ -279,12 +282,9 @@ public partial class MainWindow : FluentWindow
         var sess = _store.Sessions.FirstOrDefault(s => s.Id == id);
         if (sess == null) return;
         _store.ActiveSessionId = id;
-        // Same fix as OnSessionNew: snap the active-pane marker into the
-        // newly-selected session so the workspace renders + focuses
-        // correctly. EnsureActivePaneSpawned also spawns any leaves that
-        // didn't have a PTY (cold sessions woken up).
+        // PTYs for the selected session's panes spawn lazily on first
+        // pane.resize. Just point _activePaneId at a real leaf.
         _activePaneId = FirstLeaf(sess.Root)?.Id;
-        EnsureActivePaneSpawned();
         _store.Save();
         PushState();
     }
@@ -308,7 +308,7 @@ public partial class MainWindow : FluentWindow
         // Tear down every PTY owned by this session.
         foreach (var leaf in AllLeaves(sess.Root).ToList()) DestroyPty(leaf.Id);
         _store.Remove(sess);
-        EnsureActivePaneSpawned();
+        EnsureActivePane();
         _store.Save();
         PushState();
     }
@@ -341,7 +341,7 @@ public partial class MainWindow : FluentWindow
         if (replacement == null) return;
         sess.Root = replacement;
         AutoName(sess.Root, 1);
-        SpawnPty(sess, newPane);
+        // PTY spawns lazily on first pane.resize from the page.
         _activePaneId = newPane.Id;
         _store.Save();
         PushState();
