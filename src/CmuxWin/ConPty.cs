@@ -160,6 +160,8 @@ internal sealed class ConPty : IDisposable
         }
     }
 
+    private Thread? _watcherThread;
+
     private void StartReader()
     {
         _readerThread = new Thread(ReaderLoop)
@@ -168,6 +170,38 @@ internal sealed class ConPty : IDisposable
             Name = $"ConPty.Reader[{ProcessId}]",
         };
         _readerThread.Start();
+
+        // The reader can sit blocked in Read forever if ConPTY keeps the
+        // pipe open after the attached shell dies (which it does -- only
+        // ClosePseudoConsole closes the pipes). Watch the process handle
+        // directly so a quick-exit shows up as an Exited event we can
+        // surface to the page, instead of "pane just goes blank forever".
+        _watcherThread = new Thread(() =>
+        {
+            try
+            {
+                if (_proc.hProcess == IntPtr.Zero) return;
+                // INFINITE -- wakes when the process exits.
+                WaitForSingleObject(_proc.hProcess, 0xFFFFFFFF);
+                if (_disposed) return;
+                int code = -1;
+                if (GetExitCodeProcess(_proc.hProcess, out var c)) code = (int)c;
+                Log.Info($"ConPty.process-exited pid={ProcessId} code={code}");
+                // Pop the PTY: closes the pipes and unblocks the reader so
+                // its finally block can fire (which also raises Exited; we
+                // race that intentionally, the event handler is idempotent
+                // because subscribers compare paneId state).
+                try { if (_hPC != IntPtr.Zero) ClosePseudoConsole(_hPC); } catch { }
+                _hPC = IntPtr.Zero;
+                try { Exited?.Invoke(this, code); } catch { }
+            }
+            catch (Exception ex) { Log.Error("ConPty.Watcher", ex); }
+        })
+        {
+            IsBackground = true,
+            Name = $"ConPty.Watcher[{ProcessId}]",
+        };
+        _watcherThread.Start();
     }
 
     private void ReaderLoop()
