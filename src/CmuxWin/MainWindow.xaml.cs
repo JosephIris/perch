@@ -195,6 +195,16 @@ public partial class MainWindow : FluentWindow
 
     private void SpawnPty(Session sess, PaneNode pane, int cols = 80, int rows = 24)
     {
+        // Idempotency guard. If we somehow reach SpawnPty for a pane that
+        // already has a backing ConPty, leaking it would leave an orphan
+        // shell + give the page two byte streams for one xterm (output
+        // interleaved beyond recognition). Log + bail; callers shouldn't
+        // hit this but defensive is cheap.
+        if (_ptys.ContainsKey(pane.Id))
+        {
+            Log.Info($"Pane.spawn.dup pane={pane.Id:N} -- already has a PTY, skipping");
+            return;
+        }
         try
         {
             var baseShell = string.IsNullOrEmpty(sess.Shell)
@@ -248,17 +258,31 @@ public partial class MainWindow : FluentWindow
     private void OnPaneResize(JsonElement root)
     {
         if (!TryGuid(root, "paneId", out var id)) return;
-        var cols = root.TryGetProperty("cols", out var c) && c.TryGetInt32(out var cv) ? cv : 80;
-        var rows = root.TryGetProperty("rows", out var r) && r.TryGetInt32(out var rv) ? rv : 24;
+        var cols = root.TryGetProperty("cols", out var c) && c.TryGetInt32(out var cv) ? cv : 0;
+        var rows = root.TryGetProperty("rows", out var r) && r.TryGetInt32(out var rv) ? rv : 0;
 
-        // Lazy spawn: first pane.resize for a pane creates its ConPty at
-        // the page's measured size, so PowerShell's banner is laid out at
-        // the final dimensions and never has to be cleared-and-redrawn.
+        // Don't act on degenerate measurements -- the page sends one before
+        // CSS Grid has finished laying out the pane on first paint, and a
+        // resize-to-tiny followed by resize-to-real makes PowerShell clear
+        // the screen between the two (banner + prompt evicted).
+        if (cols < 5 || rows < 3)
+        {
+            Log.Info($"Pane.resize.skip pane={id:N} cols={cols} rows={rows}");
+            return;
+        }
+
+        // Lazy spawn: first valid pane.resize for a pane creates its
+        // ConPty at the page's measured size, so PowerShell's banner is
+        // laid out at the final dimensions and never has to be cleared.
         if (!_ptys.TryGetValue(id, out var pty))
         {
             var sess = OwningSession(id);
             var pane = sess == null ? null : AllLeaves(sess.Root).FirstOrDefault(p => p.Id == id);
-            if (sess != null && pane != null) SpawnPty(sess, pane, cols, rows);
+            if (sess != null && pane != null)
+            {
+                Log.Info($"Pane.resize.spawn pane={id:N} cols={cols} rows={rows}");
+                SpawnPty(sess, pane, cols, rows);
+            }
             return;
         }
         pty.Resize(cols, rows);
