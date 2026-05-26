@@ -1,0 +1,75 @@
+@import "./tokens.css";
+
+html, body {
+  margin: 0;
+  height: 100%;
+  width: 100%;
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+  font-family: var(--font-text);
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  /* WebView2 captures the whole client area; keeping the body transparent
+   * is what lets the host FluentWindow's Mica bleed through. */
+}
+
+#app {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  height: 100%;
+}
+
+/* --- Title bar -----------------------------------------------------------
+ * The host extends content into the title-bar area so Mica reaches the
+ * top edge. The system min/max/close cluster overlays at the right (~136px
+ * on Win11), so we leave that gap on the right via padding-right. The whole
+ * bar is marked app-region: drag so click-and-drag moves the window. */
+.title-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  height: 36px;
+  padding: 0 136px 0 var(--sp-16);   /* clear the caption buttons */
+  font-size: var(--type-caption-size);
+  font-family: var(--font-small);
+  color: var(--color-text-secondary);
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+.title-bar > * {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+.title-bar__icon {
+  /* Placeholder dot for now; real icon in a later commit. */
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--color-accent);
+}
+.title-bar__name {
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+
+/* --- Terminal host ------------------------------------------------------- */
+.terminal-host {
+  min-height: 0;       /* allow grid child to actually shrink */
+  display: block;
+  background: var(--color-terminal-bg);
+  /* xterm.js fills this element. Until ConPTY is wired (next commit), the
+   * terminal is local-echo only and shows a banner. */
+}
+
+/* --- Status bar ---------------------------------------------------------- */
+.status-bar {
+  display: flex;
+  align-items: center;
+  padding: var(--sp-4) var(--sp-16);
+  font-family: var(--font-small);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-secondary);
+  border-top: 1px solid var(--color-stroke);
+}

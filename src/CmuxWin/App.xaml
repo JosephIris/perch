@@ -4,12 +4,13 @@
              xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
              xmlns:local="clr-namespace:CmuxWin"
              StartupUri="MainWindow.xaml">
+    <!-- Mica + window-chrome theming still come from WPF-UI; all content
+         theming lives in the webview's CSS. -->
     <Application.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
                 <ui:ThemesDictionary Theme="Dark" />
                 <ui:ControlsDictionary />
-                <ResourceDictionary Source="Themes/Tokens.xaml" />
             </ResourceDictionary.MergedDictionaries>
         </ResourceDictionary>
     </Application.Resources>

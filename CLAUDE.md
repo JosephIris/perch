@@ -1,8 +1,26 @@
-# UI Design Constitution — WPF Terminal App
+# UI Design Constitution — WebView2 + xterm.js Terminal App
 
-You are working on a native WPF (.NET 8) application with Win11 Mica chrome,
-native window decorations, and the Microsoft.Terminal.Core renderer. This is
-NOT a web app. No Chromium, no React, no Tailwind. All UI is XAML.
+You are working on a .NET 8 Windows app whose host shell is a `FluentWindow`
+with Win11 Mica chrome and native window decorations, but whose entire UI
+content (chrome + terminal panes) renders inside a single WebView2 hosting
+xterm.js and a hand-rolled HTML/CSS chrome.
+
+The WPF side is intentionally tiny: window lifetime, ConPTY processes, the
+existing IPC layer (CmuxIpc, ControlIpcServer, ClaudeWrapper, HookHandler),
+SessionStore, Settings. Everything visible to the user is HTML/CSS/JS.
+
+The previous WPF + Microsoft.Terminal.Wpf implementation is preserved at tag
+`wpf-final` and branch `wpf-archive` — go back to that branch if the webview
+direction needs to be revisited.
+
+Stack rules:
+- **Use vanilla TypeScript + CSS.** No React, no Vue, no Svelte, no Tailwind.
+  The chrome is small enough that a framework adds more weight than it saves.
+- **xterm.js is the terminal renderer.** Use its WebGL addon for performance,
+  WebLinks for hyperlinks, FitAddon for resizing, Unicode11Addon, SearchAddon.
+- **Build with esbuild.** Single bundle dropped into `src/CmuxWin/wwwroot/`,
+  served to WebView2 via a virtual host (`https://cmux.local/`).
+- **No CDN dependencies at runtime.** Everything ships bundled and offline.
 
 ## Target aesthetic
 
@@ -16,17 +34,20 @@ Reference quality bar: Windows Terminal, VS Code's Windows build, Files app
 
 ## Library
 
-Use WPF-UI (lepoco/wpfui) as the control baseline. Prefer its controls over
-stock WPF controls (`ui:Button` over `Button`, `ui:TextBox` over `TextBox`,
-`ui:NavigationView`, `ui:ContentDialog`, etc.). Do not mix in MaterialDesign,
-HandyControl, or other kits.
+No UI framework. Plain HTML elements with CSS-variable-driven styling. The
+chrome is small (sidebar, optional tab strip, status bar, context menus,
+flyouts) and reaching for a framework would balloon the bundle.
+
+For Fluent surfaces inside the webview (acrylic cards, dialogs, etc.) hand-
+write the CSS using the design tokens below. Mica still comes from the
+WPF host window — the webview body is transparent so Mica reads through.
 
 ## Design tokens — ground truth
 
-All spacing, type, color, and radius values MUST come from the central
-ResourceDictionary (Themes/Tokens.xaml). Never hardcode literals in views.
-If a token doesn't exist for what you need, add it to Tokens.xaml first,
-then consume it. Tokens to respect:
+All spacing, type, color, and radius values MUST come from CSS variables
+defined in `src/web/src/tokens.css`. Never hardcode literals in component
+CSS. If a token doesn't exist for what you need, add it to tokens.css first,
+then consume it via `var(--cmux-...)`. Tokens to respect:
 
 - Spacing scale: 4, 8, 12, 16, 24, 32, 48 (no 5, 7, 13, 20)
 - Corner radius: 4 (inputs), 8 (cards/buttons), 12 (windows/dialogs)

@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
@@ -6,7 +6,6 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
-    <UseWindowsForms>true</UseWindowsForms>
     <Platforms>x64</Platforms>
     <PlatformTarget>x64</PlatformTarget>
     <UseRidGraph>true</UseRidGraph>
@@ -17,38 +16,38 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="CI.Microsoft.Terminal.Wpf" Version="1.22.250204002" />
-    <PackageReference Include="EasyWindowsTerminalControl" Version="1.0.36" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2792.45" />
     <PackageReference Include="System.Management" Version="10.0.8" />
     <PackageReference Include="WPF-UI" Version="4.3.0" />
   </ItemGroup>
 
   <ItemGroup>
-    <Page Update="Themes\Tokens.xaml">
-      <SubType>Designer</SubType>
-      <Generator>MSBuild:Compile</Generator>
-    </Page>
     <Resource Include="Assets\cmux.ico" />
   </ItemGroup>
 
-  <!-- Build cmux.exe as part of every CmuxWin build and copy the resulting
-       single-file EXE into the host's output dir under tools/. The host
-       prepends this dir to PATH for spawned panes so `cmux ...` resolves.
-       Also stages tools/claude.cmd, a tiny shim that intercepts `claude`
-       calls inside a pane and delegates to cmux.exe wrap-claude, which
-       injects Claude Code's settings hooks JSON. -->
+  <!-- Stage the built web bundle next to the exe so MainWindow's
+       SetVirtualHostNameToFolderMapping can serve it. The web bundle is
+       produced by `npm run build` in src/web/ and emitted into
+       src/CmuxWin/wwwroot/. If the bundle doesn't exist yet (fresh clone,
+       or you're working on the host without building the web side),
+       MainWindow falls back to a stub page. -->
+  <ItemGroup>
+    <Content Include="wwwroot\**\*.*"
+             Condition="Exists('$(MSBuildThisFileDirectory)wwwroot')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <!-- cmux.exe + claude.cmd. App.xaml.cs prepends app/tools to PATH so
+       panes can run `cmux ...` and so claude.cmd intercepts `claude` to
+       inject Claude Code's hooks settings JSON. -->
   <Target Name="BuildCmuxCli" AfterTargets="Build">
     <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\..\tools\cmux-cli\cmux-cli.csproj&quot; -c $(Configuration) -r win-x64 --self-contained true -p:PublishSingleFile=true -p:InvariantGlobalization=true -o &quot;$(OutDir)tools&quot; --nologo -v q" />
     <Copy SourceFiles="$(MSBuildThisFileDirectory)..\..\tools\cmux-cli\claude.cmd" DestinationFolder="$(OutDir)tools" SkipUnchangedFiles="true" />
   </Target>
 
-  <!-- `dotnet publish` copies bin to PublishDir but ignores the tools/ subdir
-       BuildCmuxCli stages there, so production builds shipped a CmuxWin.exe
-       with no cmux.exe alongside — App.xaml.cs's PATH-prepend pointed at a
-       nonexistent dir, claude.cmd never resolved, and Claude Code hooks
-       silently never fired. Republish cmux-cli straight into PublishDir
-       and copy claude.cmd there too so the installer can see it. -->
+  <!-- `dotnet publish` ignores tools/ from BuildCmuxCli's OutDir, so we
+       republish into PublishDir/tools for the installer to pick up. -->
   <Target Name="PublishCmuxCli" AfterTargets="Publish">
     <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\..\tools\cmux-cli\cmux-cli.csproj&quot; -c $(Configuration) -r win-x64 --self-contained true -p:PublishSingleFile=true -p:InvariantGlobalization=true -o &quot;$(PublishDir)tools&quot; --nologo -v q" />
     <Copy SourceFiles="$(MSBuildThisFileDirectory)..\..\tools\cmux-cli\claude.cmd" DestinationFolder="$(PublishDir)tools" SkipUnchangedFiles="true" />
