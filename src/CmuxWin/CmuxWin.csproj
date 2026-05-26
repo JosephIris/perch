@@ -43,4 +43,15 @@
     <Copy SourceFiles="$(MSBuildThisFileDirectory)..\..\tools\cmux-cli\claude.cmd" DestinationFolder="$(OutDir)tools" SkipUnchangedFiles="true" />
   </Target>
 
+  <!-- `dotnet publish` copies bin to PublishDir but ignores the tools/ subdir
+       BuildCmuxCli stages there, so production builds shipped a CmuxWin.exe
+       with no cmux.exe alongside — App.xaml.cs's PATH-prepend pointed at a
+       nonexistent dir, claude.cmd never resolved, and Claude Code hooks
+       silently never fired. Republish cmux-cli straight into PublishDir
+       and copy claude.cmd there too so the installer can see it. -->
+  <Target Name="PublishCmuxCli" AfterTargets="Publish">
+    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\..\tools\cmux-cli\cmux-cli.csproj&quot; -c $(Configuration) -r win-x64 --self-contained true -p:PublishSingleFile=true -p:InvariantGlobalization=true -o &quot;$(PublishDir)tools&quot; --nologo -v q" />
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)..\..\tools\cmux-cli\claude.cmd" DestinationFolder="$(PublishDir)tools" SkipUnchangedFiles="true" />
+  </Target>
+
 </Project>

@@ -31,6 +31,7 @@ public partial class MainWindow : FluentWindow
     private readonly Dictionary<Guid, Microsoft.Web.WebView2.Wpf.WebView2> _paneWebViews = new();
 
     private ClipboardWatcher? _clipboard;
+    private ControlIpcServer? _control;
     private DispatcherTimer? _toastTimer;
 
     private Session? _active;
@@ -93,6 +94,19 @@ public partial class MainWindow : FluentWindow
             _clipboard = new ClipboardWatcher(this);
             _clipboard.ClipboardChanged += OnClipboardChanged;
             _clipboard.Attach();
+
+            // Off by default. Test harness sets CMUX_ENABLE_TEST_IPC before
+            // launching so it can drive the app without synthesizing keys
+            // (SendKeys leaks to whatever window has the foreground).
+            if (ControlIpcServer.IsEnabled)
+            {
+                _control = new ControlIpcServer(
+                    Dispatcher,
+                    () => SplitActive(SplitOrientation.Vertical),
+                    () => SplitActive(SplitOrientation.Horizontal),
+                    CloseActivePane);
+                _control.Start();
+            }
         };
     }
 
@@ -468,63 +482,45 @@ public partial class MainWindow : FluentWindow
         Grid.SetColumn(label, 0);
         bar.Children.Add(label);
 
-        // The close button lives in a Popup. Without this, the per-pane
-        // header occupies WPF airspace next to the conhost HwndHost, and
-        // WPF mouse-button events (WM_LBUTTONDOWN/UP) are routed by Windows
-        // to whichever child HWND sits topmost at the cursor — the native
-        // HwndTerminalClass — so the WPF Button never sees the click.
-        // A Popup is its own top-level HWND, sits above the conhost child,
-        // and receives mouse-button events normally.
-        var close = new System.Windows.Controls.Button
+        // Per-pane close X. Previous implementations wrapped this in a Popup
+        // because a stock WPF Button "next to" the conhost HwndHost was
+        // reportedly losing WM_LBUTTONDOWN to the native HwndTerminalClass.
+        // The Popup solved click delivery but introduced worse bugs: Popups
+        // are top-level HWNDs that don't track the parent window's bounds —
+        // on move/resize/session-switch the popup drifted, occasionally
+        // rendering its X outside the app window entirely.
+        //
+        // WPF airspace only conflicts with HwndHost when a managed control
+        // overlaps the native HWND. Here the header sits in its own Grid
+        // row (height 22, Row 0) above the conhost (Row 1, *) — they do
+        // not share airspace, so a regular WPF button works correctly and
+        // sticks to the window the way users expect.
+        var close = new Wpf.Ui.Controls.Button
         {
-            Content = "\u2715",
-            Width = 28,
-            Height = 22,
+            Appearance = Wpf.Ui.Controls.ControlAppearance.Transparent,
+            Width = 24,
+            Height = 18,
             Padding = new Thickness(0),
-            FontSize = 10,
-            BorderThickness = new Thickness(0),
-            Background = System.Windows.Media.Brushes.Transparent,
+            Margin = new Thickness(0, 0, 6, 0),
+            CornerRadius = new CornerRadius(4),
             Cursor = System.Windows.Input.Cursors.Hand,
             ToolTip = "Close pane",
+            VerticalAlignment = System.Windows.VerticalAlignment.Center,
+            HorizontalAlignment = System.Windows.HorizontalAlignment.Right,
             Foreground = (System.Windows.Media.Brush)FindResource("TextFillColorTertiaryBrush"),
-        };
-        close.Click += (_, _) => ClosePane(sess, pane.Id);
-
-        // Header keeps an invisible anchor in column 1 so layout reserves
-        // 28px on the right; the Popup positions itself against the anchor.
-        var closeAnchor = new System.Windows.Controls.Border
-        {
-            Width = 28,
-            Height = 22,
-            Background = System.Windows.Media.Brushes.Transparent,
-            Margin = new Thickness(0, 0, 4, 0),
-        };
-        var closePopup = new System.Windows.Controls.Primitives.Popup
-        {
-            PlacementTarget = closeAnchor,
-            Placement = System.Windows.Controls.Primitives.PlacementMode.Center,
-            AllowsTransparency = true,
-            StaysOpen = true,
-            Focusable = false,
-            Child = close,
-        };
-        // Tie IsOpen to the anchor's visibility. Without this, the Popup is a
-        // top-level HWND that outlives its parent: when you close the app,
-        // the WPF window tears down but the popup HWND lingers a beat;
-        // switching sessions hides the anchor but the popup stays put.
-        // Binding to IsVisible folds the popup back into normal WPF lifecycle.
-        closePopup.SetBinding(System.Windows.Controls.Primitives.Popup.IsOpenProperty,
-            new System.Windows.Data.Binding("IsVisible")
+            Content = new Wpf.Ui.Controls.SymbolIcon
             {
-                Source = closeAnchor,
-                Mode = System.Windows.Data.BindingMode.OneWay,
-            });
-        // Belt-and-suspenders: when the anchor unloads (pane closed), force
-        // the popup shut so its HWND is destroyed immediately.
-        closeAnchor.Unloaded += (_, _) => closePopup.IsOpen = false;
-        Grid.SetColumn(closeAnchor, 1);
-        bar.Children.Add(closeAnchor);
-        bar.Children.Add(closePopup);
+                Symbol = Wpf.Ui.Controls.SymbolRegular.Dismiss12,
+                FontSize = 10,
+            },
+        };
+        // SymbolIcon content gives the button no automation Name, so screen
+        // readers and our UIA test harness can't address it. Set explicitly.
+        System.Windows.Automation.AutomationProperties.SetName(close, "Close pane");
+        System.Windows.Automation.AutomationProperties.SetAutomationId(close, $"close-pane-{pane.Id:N}");
+        close.Click += (_, _) => ClosePane(sess, pane.Id);
+        Grid.SetColumn(close, 1);
+        bar.Children.Add(close);
 
         return bar;
     }
@@ -1182,6 +1178,7 @@ public partial class MainWindow : FluentWindow
         _settings.Save();
         _store.Save();
         _clipboard?.Dispose();
+        _control?.Dispose();
 
         // Unsubclass every terminal HWND before the dispatcher tears them
         // down. Without this, RemoveWindowSubclass never runs and comctl32
