@@ -47,6 +47,11 @@ Source: "..\publish\cmux-win\wwwroot\*"; DestDir: "{app}\wwwroot"; Flags: ignore
 ; two files the agent IPC layer is dead code (hooks never fire).
 Source: "..\publish\cmux-win\tools\cmux.exe";   DestDir: "{app}\tools"; Flags: ignoreversion
 Source: "..\publish\cmux-win\tools\claude.cmd"; DestDir: "{app}\tools"; Flags: ignoreversion
+; Microsoft Edge WebView2 Runtime evergreen bootstrapper (~150KB). Downloaded
+; by CI into publish/. Runs only when the runtime isn't already present
+; (see NeedsWebView2 in [Code]). Without this, cmux launches into a blank
+; page on machines without WebView2 — Win11 ships it; older Win10 may not.
+Source: "..\publish\MicrosoftEdgeWebview2Setup.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall; Check: NeedsWebView2
 
 [Icons]
 Name: "{group}\cmux";              Filename: "{app}\CmuxWin.exe"
@@ -54,4 +59,22 @@ Name: "{group}\Uninstall cmux";    Filename: "{uninstallexe}"
 Name: "{userdesktop}\cmux";        Filename: "{app}\CmuxWin.exe"; Tasks: desktopicon
 
 [Run]
+; Install WebView2 Runtime first if missing — the app can't run without it.
+Filename: "{tmp}\MicrosoftEdgeWebview2Setup.exe"; Parameters: "/silent /install"; Flags: waituntilterminated; Check: NeedsWebView2; StatusMsg: "Installing Microsoft Edge WebView2 Runtime..."
 Filename: "{app}\CmuxWin.exe"; Description: "Launch cmux"; Flags: nowait postinstall skipifsilent
+
+[Code]
+function NeedsWebView2: Boolean;
+var Pv: string;
+begin
+  // WebView2 Runtime registers itself under EdgeUpdate\Clients. Check both
+  // 64-bit + 32-bit views since the registrar varies by OS bitness.
+  if RegQueryStringValue(HKEY_LOCAL_MACHINE, 'SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', 'pv', Pv) then
+    Result := (Pv = '') or (Pv = '0.0.0.0')
+  else if RegQueryStringValue(HKEY_LOCAL_MACHINE, 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', 'pv', Pv) then
+    Result := (Pv = '') or (Pv = '0.0.0.0')
+  else if RegQueryStringValue(HKEY_CURRENT_USER, 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', 'pv', Pv) then
+    Result := (Pv = '') or (Pv = '0.0.0.0')
+  else
+    Result := True;
+end;

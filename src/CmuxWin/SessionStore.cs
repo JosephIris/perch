@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 
 namespace CmuxWin;
 
@@ -42,6 +43,18 @@ internal sealed class SessionStore
                 {
                     // Defensive: any session without a Root (shouldn't happen) gets a fresh leaf
                     s.Root ??= new PaneNode();
+                    // One-shot migration: pre-IsAutoTitle data has the
+                    // flag at its default (true), but a user-renamed session
+                    // shouldn't get its title overwritten by the auto-
+                    // rename pipeline. Match the old regex once at load to
+                    // decide who's still "auto" vs already-user-named.
+                    if (!Regex.IsMatch(s.Title ?? "", @"^(main|session( \d+)?)$", RegexOptions.IgnoreCase))
+                        s.IsAutoTitle = false;
+                    foreach (var leaf in AllLeavesOf(s.Root))
+                    {
+                        if (!Regex.IsMatch(leaf.Name ?? "", @"^pane-\d+$", RegexOptions.IgnoreCase))
+                            leaf.IsAutoName = false;
+                    }
                     store.Sessions.Add(s);
                 }
                 store.ActiveSessionId = dto.ActiveSessionId;
@@ -56,6 +69,7 @@ internal sealed class SessionStore
     private static SessionStore SeedDefault(SessionStore store)
     {
         var first = new Session { Title = "main" };
+        first.Root.ColorIndex = 0;
         store.Sessions.Add(first);
         store.ActiveSessionId = first.Id;
         return store;
@@ -80,9 +94,30 @@ internal sealed class SessionStore
     public Session AddNew()
     {
         var s = new Session { Title = NextUntitled() };
+        s.Root.ColorIndex = PickUnusedColor();
         Sessions.Add(s);
         return s;
     }
+
+    /// Picks a color (0..5) not currently used by ANY leaf in ANY session.
+    /// Falls back to round-robin once all six are taken. Both new-session
+    /// roots and pane splits go through this so no two panes ever share a
+    /// color until the palette is exhausted.
+    public int PickUnusedColor()
+    {
+        var used = new HashSet<int>(
+            Sessions.SelectMany(x => Leaves(x.Root)).Select(p => p.ColorIndex));
+        for (int i = 0; i < 6; i++) if (!used.Contains(i)) return i;
+        return Sessions.Sum(x => CountLeaves(x.Root)) % 6;
+    }
+    private static int CountLeaves(PaneNode n) =>
+        n.IsLeaf ? 1 : n.Children.Sum(CountLeaves);
+    private static IEnumerable<PaneNode> Leaves(PaneNode n)
+    {
+        if (n.IsLeaf) { yield return n; yield break; }
+        foreach (var c in n.Children) foreach (var l in Leaves(c)) yield return l;
+    }
+    private static IEnumerable<PaneNode> AllLeavesOf(PaneNode n) => Leaves(n);
 
     public Session Remove(Session s)
     {

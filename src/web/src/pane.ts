@@ -3,11 +3,21 @@
 // plumbing that ships bytes to/from the host.
 
 import { Terminal } from "@xterm/xterm";
+import type { ILinkProvider, ILink } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
-import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
+import { WebglAddon } from "@xterm/addon-webgl";
 
 import { b64ToBytes, bytesToB64, send } from "./bridge.js";
+import type { PaneTreeView } from "./bridge.js";
+import { showLinkMenu } from "./link-menu.js";
+import { buildPaneHeader, applyChips } from "./pane-header.js";
+
+// URL regex — same as @xterm/addon-web-links's strictUrlRegex, copied so
+// our custom provider doesn't depend on the addon at all. Matches
+// http(s)://… up to the first whitespace / quote / disallowed-final.
+const URL_RE =
+  /(https?|HTTPS?):[/]{2}[^\s"'!*(){}|\\\^<>`]*[^\s"':,.!?{}|\\\^~\[\]`()<>]/;
 
 const utf8 = new TextEncoder();
 
@@ -15,6 +25,11 @@ export class Pane {
   readonly paneId: string;
   readonly element: HTMLElement;
   private readonly nameEl: HTMLElement;
+  private readonly stateDotEl: HTMLElement;
+  private readonly stateLabelEl: HTMLElement;
+  private readonly colorDotEl: HTMLElement;
+  private readonly branchEl: HTMLElement;
+  private readonly commitsEl: HTMLElement;
   private readonly termHost: HTMLElement;
   private readonly term: Terminal;
   private readonly fit: FitAddon;
@@ -30,53 +45,79 @@ export class Pane {
     this.element.className = "pane";
     this.element.dataset.paneId = paneId;
 
-    // Per-pane header: name label + close X. No HwndHost stealing clicks
-    // here -- the whole UI is one HWND so a plain DOM button just works.
-    const header = document.createElement("div");
-    header.className = "pane__header";
-
-    this.nameEl = document.createElement("span");
-    this.nameEl.className = "pane__name";
+    // Per-pane header — color dot · name (double-click to rename) · state
+    // dot + state word · close. The color dot is the persistent feature
+    // tag the user assigns; the state dot reflects whatever cmux status
+    // last reported for THIS pane (not the whole session).
+    const header = buildPaneHeader(paneId);
+    this.element.appendChild(header.root);
+    this.nameEl       = header.nameEl;
+    this.stateDotEl   = header.stateDotEl;
+    this.stateLabelEl = header.stateLabelEl;
+    this.colorDotEl   = header.colorDotEl;
+    this.branchEl     = header.branchEl;
+    this.commitsEl    = header.commitsEl;
     this.nameEl.textContent = name;
-    header.appendChild(this.nameEl);
-
-    const close = document.createElement("button");
-    close.type = "button";
-    close.className = "pane__close";
-    close.title = "Close pane";
-    close.setAttribute("aria-label", "Close pane");
-    close.textContent = "✕";
-    close.addEventListener("click", (ev) => {
-      ev.stopPropagation();
-      send({ type: "pane.close", paneId: this.paneId });
-    });
-    header.appendChild(close);
-    this.element.appendChild(header);
 
     this.termHost = document.createElement("div");
     this.termHost.className = "pane__term";
     this.element.appendChild(this.termHost);
 
+    // Terminal theme. Background is --color-terminal-bg (#1f1f1f), one
+    // step LIGHTER than --color-sidebar-surface (#181818) so the pane
+    // reads as the "lifted" surface and the sidebar reads as "recessed"
+    // navigation — see docs/DESIGN-BIBLE.md "Surface tone". xterm reads
+    // these once at construction time; updating the CSS variables doesn't
+    // change the canvas — bump explicitly via setOption if needed.
     this.term = new Terminal({
-      fontFamily: 'Cascadia Mono, "Cascadia Code", Consolas, monospace',
+      fontFamily:
+        '"Geist Mono Variable", "Cascadia Code", "Cascadia Mono", Consolas, monospace',
       fontSize: 13,
-      lineHeight: 1.2,
+      // Bump the variable-font weight axis. Geist Mono Variable supports
+      // 100–900; 600 / 800 gives a denser, more present terminal that
+      // pairs with Inter at 380 in the chrome (chrome reads light,
+      // terminal reads weighty — clear hierarchy).
+      fontWeight: 600,
+      fontWeightBold: 800,
+      // Terminal convention. 1.0 lets block characters (▀▄█) and
+      // box-drawing characters (─│┌┘) tile flush across rows. Bumping
+      // above 1.0 inserts a leading gap that those glyphs can't fill, so
+      // TUIs (Claude Code, vim, htop) look broken. 1.0 is what Windows
+      // Terminal / iTerm2 / Alacritty default to.
+      lineHeight: 1.0,
       cursorBlink: true,
       cursorStyle: "block",
       allowProposedApi: true,
       scrollback: 10_000,
       theme: {
-        background: "#0c0c0c",
-        foreground: "#cdd6f4",
-        cursor: "#cdd6f4",
-        selectionBackground: "rgba(118, 185, 237, 0.3)",
+        background: "#1f1f1f",
+        foreground: "rgba(255, 255, 255, 0.92)",
+        cursor: "#76B9ED",
+        cursorAccent: "#1f1f1f",
+        selectionBackground: "rgba(118, 185, 237, 0.32)",
       },
     });
     this.fit = new FitAddon();
     this.term.loadAddon(this.fit);
-    this.term.loadAddon(new WebLinksAddon());
     this.term.loadAddon(new Unicode11Addon());
     this.term.unicode.activeVersion = "11";
+
+    // Custom link provider — always underlines URLs (decorations.underline:
+    // true) and routes clicks to our link-action menu instead of opening
+    // a new window. Replaces @xterm/addon-web-links entirely.
+    this.term.registerLinkProvider(
+      makeUrlLinkProvider(this.term, this.paneId)
+    );
+
+    // OSC 7 (cwd notification, file://hostname/path). PowerShell's prompt
+    // hook injected by Shell.cs emits this on every prompt redraw. Forward
+    // to the host so it can run git rev-parse and auto-fill the branch
+    // chip without the agent having to call `cmux meta --branch`.
+    this.term.parser.registerOscHandler(7, (data) => {
+      const cwd = parseOsc7Cwd(data);
+      if (cwd) send({ type: "pane.cwd", paneId: this.paneId, cwd });
+      return true;
+    });
 
     this.term.onData((data) => {
       send({
@@ -133,6 +174,21 @@ export class Pane {
     requestAnimationFrame(() => {
       try { this.term.open(this.termHost); }
       catch (err) { console.error("[pane] term.open failed:", err); return; }
+      // Switch to the WebGL renderer AFTER the canvas is mounted. WebGL's
+      // glyph atlas extends block / Powerline characters across the full
+      // cell height, which the default canvas renderer does not — without
+      // this, TUIs like Claude Code, vim, htop show faint horizontal
+      // stripes through ▀▄█ block characters because the rasterized glyph
+      // is the font's em size (smaller than the cell). Wrapped in
+      // try/catch because some WebView2 builds fail WebGL context
+      // creation and we want a working fallback.
+      try {
+        const webgl = new WebglAddon();
+        webgl.onContextLoss(() => webgl.dispose());
+        this.term.loadAddon(webgl);
+      } catch (err) {
+        console.warn("[pane] WebGL renderer unavailable, using canvas:", err);
+      }
       this.observer = new ResizeObserver(() => this.reportResize());
       this.observer.observe(this.termHost);
       this.reportResize();
@@ -149,7 +205,16 @@ export class Pane {
   }
 
   feed(b64: string) {
-    this.term.write(b64ToBytes(b64));
+    // Inject ANSI SGR underline codes around URL matches so they render
+    // persistently underlined (not just on hover). xterm's link
+    // decorations are hover-only by design — to get always-underline we
+    // pre-process the byte stream and let xterm's own SGR parser handle
+    // the styling. The URL text in the buffer stays clean (codes are
+    // OUTSIDE the URL), so the link provider's regex still matches for
+    // clicks. URLs split across feed() chunks are emitted unstyled —
+    // acceptable for v1, real-world shells write a URL in one chunk.
+    const bytes = b64ToBytes(b64);
+    this.term.write(injectUrlUnderlines(bytes));
   }
 
   notifyExit(code: number) {
@@ -166,6 +231,35 @@ export class Pane {
 
   setName(name: string) {
     this.nameEl.textContent = name;
+  }
+
+  /** Push the latest per-leaf state into the header. Called from
+   *  workspace.applyState on every render — must be idempotent and cheap. */
+  applyLeafView(leaf: Extract<PaneTreeView, { kind: "leaf" }>) {
+    this.nameEl.textContent = leaf.name;
+    this.stateDotEl.dataset.state = leaf.agentState;
+    this.stateLabelEl.textContent =
+      leaf.agentState === "idle" ? "" : leaf.agentState;
+    this.colorDotEl.dataset.color = String(leaf.colorIndex);
+    // data-color on the pane element drives the CSS rule that tints
+    // .pane__name text in the same color as the dot — features pop
+    // visually distinct without the user reading the name.
+    this.element.dataset.color = String(leaf.colorIndex);
+    applyChips(this.branchEl, this.commitsEl, leaf);
+  }
+
+  /** Bump the terminal font size by `delta` px, clamped to [9, 32].
+   * Re-fits afterward so cols/rows reflect the new cell metrics. */
+  changeFontSize(delta: number) {
+    const next = Math.max(9, Math.min(32, (this.term.options.fontSize ?? 13) + delta));
+    this.term.options.fontSize = next;
+    this.forceRefit();
+  }
+
+  /** Reset the terminal font size to the default. */
+  resetFontSize() {
+    this.term.options.fontSize = 13;
+    this.forceRefit();
   }
 
   /** Force a fresh fit + resize report. Used when the pane is reattached
@@ -203,4 +297,116 @@ export class Pane {
       send({ type: "pane.resize", paneId: this.paneId, cols, rows });
     });
   }
+}
+
+// ---- OSC 7 parser ----------------------------------------------------------
+// Input form: "file://<host>/<path>" — we want the local path. Spec says
+// the host is the originating machine; we ignore it (we're not crossing
+// machines). Path is percent-decoded. On Windows the path comes back as
+// "/C:/Users/..." — strip the leading slash before / before drive letter.
+
+function parseOsc7Cwd(data: string): string | null {
+  const prefix = "file://";
+  if (!data.startsWith(prefix)) return null;
+  const slash = data.indexOf("/", prefix.length);
+  if (slash < 0) return null;
+  let path = data.slice(slash);
+  try { path = decodeURIComponent(path); } catch { /* malformed */ }
+  // Windows: "/C:/foo" → "C:/foo" → "C:\foo".
+  if (/^\/[A-Za-z]:\//.test(path)) path = path.slice(1);
+  path = path.replace(/\//g, "\\");
+  return path;
+}
+
+// ---- URL underline injector -----------------------------------------------
+// SGR sequences for terminal underline on/off, encoded as bytes.
+const SGR_UNDERLINE_ON  = new Uint8Array([0x1b, 0x5b, 0x34, 0x6d]);       // ESC[4m
+const SGR_UNDERLINE_OFF = new Uint8Array([0x1b, 0x5b, 0x32, 0x34, 0x6d]); // ESC[24m
+
+function injectUrlUnderlines(bytes: Uint8Array): Uint8Array {
+  // Treat the byte stream as Latin-1 — URLs are ASCII so the regex
+  // matches correctly, and we only need byte OFFSETS not text content.
+  // Going through TextDecoder/Encoder would corrupt partial UTF-8
+  // sequences at chunk boundaries.
+  let text = "";
+  for (let i = 0; i < bytes.length; i++) text += String.fromCharCode(bytes[i]);
+  const rex = new RegExp(URL_RE.source, "g");
+  const matches: Array<{ start: number; end: number }> = [];
+  let m: RegExpExecArray | null;
+  while ((m = rex.exec(text))) {
+    matches.push({ start: m.index, end: m.index + m[0].length });
+  }
+  if (matches.length === 0) return bytes;
+  // Build the output: original bytes interleaved with SGR escapes.
+  const totalExtra =
+    matches.length * (SGR_UNDERLINE_ON.length + SGR_UNDERLINE_OFF.length);
+  const out = new Uint8Array(bytes.length + totalExtra);
+  let read = 0;
+  let write = 0;
+  for (const match of matches) {
+    // Copy bytes up to URL start
+    out.set(bytes.subarray(read, match.start), write);
+    write += match.start - read;
+    // Insert ESC[4m
+    out.set(SGR_UNDERLINE_ON, write);
+    write += SGR_UNDERLINE_ON.length;
+    // Copy URL bytes
+    out.set(bytes.subarray(match.start, match.end), write);
+    write += match.end - match.start;
+    // Insert ESC[24m
+    out.set(SGR_UNDERLINE_OFF, write);
+    write += SGR_UNDERLINE_OFF.length;
+    read = match.end;
+  }
+  // Copy remainder
+  out.set(bytes.subarray(read), write);
+  return out;
+}
+
+// ---- URL link provider -----------------------------------------------------
+// Custom xterm link provider that always-underlines matched URLs and
+// routes activation through our link-menu (instead of window.open).
+// Replaces @xterm/addon-web-links — we keep the same regex, drop the
+// dependency, and own decoration + activation behavior. Closures over the
+// pane's own Terminal so split panes each get their own provider.
+
+function makeUrlLinkProvider(term: Terminal, paneId: string): ILinkProvider {
+  return {
+    provideLinks(y: number, callback: (links: ILink[] | undefined) => void) {
+      const buffer = term.buffer.active;
+      const line = buffer.getLine(y - 1);
+      if (!line) return callback(undefined);
+      const text = line.translateToString(true);
+      const rex = new RegExp(URL_RE.source, "g");
+      const out: ILink[] = [];
+      let match: RegExpExecArray | null;
+      while ((match = rex.exec(text))) {
+        const start = match.index + 1;       // 1-based column
+        const end = start + match[0].length; // exclusive
+        out.push({
+          range: { start: { x: start, y }, end: { x: end - 1, y } },
+          text: match[0],
+          decorations: { underline: true, pointerCursor: true },
+          activate: (ev: MouseEvent, uri: string) => {
+            const x = ev.clientX || window.innerWidth / 2;
+            const y2 = ev.clientY || window.innerHeight / 2;
+            // Wipe any selection xterm started on the underlying
+            // mousedown — without this, moving the cursor over the menu
+            // extends the selection across the terminal (the menu sits
+            // above visually but xterm is still tracking).
+            try { term.clearSelection(); } catch { /* defensive */ }
+            // Blur the terminal so its mouse tracker stops responding to
+            // moves while the menu is up. The first menu item gets focus
+            // inside showLinkMenu; we just nudge xterm out of focus
+            // proactively.
+            try { (term.textarea as HTMLTextAreaElement | undefined)?.blur(); } catch {}
+            showLinkMenu(uri, x, y2, paneId);
+            ev.preventDefault();
+            ev.stopPropagation();
+          },
+        });
+      }
+      callback(out);
+    },
+  };
 }

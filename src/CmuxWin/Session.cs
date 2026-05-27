@@ -17,6 +17,15 @@ internal sealed class Session : INotifyPropertyChanged
         set { if (_title != value) { _title = value; OnPropertyChanged(); } }
     }
 
+    /// True while Title is still an auto-derived name (the default "main"/
+    /// "session N", or a repo basename pulled from cwd via OSC 7). The
+    /// auto-rename pipeline is gated on this — a user-typed rename sets it
+    /// false, after which OSC 7 events never overwrite the title.
+    /// Persisted so the flag survives restarts. Defaults true on new
+    /// sessions; SessionStore.Load runs a one-shot migration that flips
+    /// it false for any loaded session whose title doesn't look auto.
+    public bool IsAutoTitle { get; set; } = true;
+
     public string Shell { get; set; } = "";
     public string Cwd { get; set; } = "";
 
@@ -211,8 +220,44 @@ internal sealed class PaneNode
     /// across restarts. Only leaves carry names; the field is ignored on
     /// split nodes.
     public string? Name { get; set; }
+
+    /// True while Name is the auto-assigned "pane-N" placeholder OR an
+    /// auto-derived title (e.g. a URL pane's website <title>). User-typed
+    /// rename via pane.rename flips this false; subsequent URL-pane title
+    /// changes won't overwrite. Persisted alongside Name.
+    public bool IsAutoName { get; set; } = true;
+
+    /// Color tag index into the pane palette (0..5). Auto-assigned at
+    /// split time, user can edit via the pane header context menu. Persisted
+    /// so feature-marking ("the simulator-fix one is yellow") survives
+    /// restarts and reattaches. See docs/DESIGN-BIBLE.md once we have the
+    /// "Pane tagging" section.
+    public int ColorIndex { get; set; }
+
+    // ----- Per-pane transient state (set by cmux notify/status/meta) ------
+    // All JsonIgnore: these are pushed by the running agent each time it
+    // takes a turn. Persisting would invite stale values across restarts.
+    // Multiple panes per session each carry their own state (previously
+    // these lived on Session — last-writer-wins thrashed when two agents
+    // ran simultaneously). Sidebar SessionView aggregates per-pane state
+    // for the row indicator.
+
+    [JsonIgnore] public AgentState AgentState { get; set; } = AgentState.Idle;
+    [JsonIgnore] public string ActivityDetail { get; set; } = "";
+    [JsonIgnore] public string NotificationText { get; set; } = "";
+    [JsonIgnore] public NotificationLevel NotificationLevel { get; set; } = NotificationLevel.Info;
+    [JsonIgnore] public string Branch { get; set; } = "";
+    [JsonIgnore] public int[] Ports { get; set; } = Array.Empty<int>();
+
+    /// HEAD sha captured at the start of an agent session (Claude Code's
+    /// session-start hook). Empty when no session is active. CommitCount is
+    /// recomputed each time the agent reports a state change.
+    [JsonIgnore] public string CommitBaseline { get; set; } = "";
+    [JsonIgnore] public int CommitCount { get; set; }
+
     [JsonIgnore] public bool IsLeaf => Split == null;
     [JsonIgnore] public bool IsWebView => IsLeaf && !string.IsNullOrEmpty(Url);
+    [JsonIgnore] public bool HasNotification => !string.IsNullOrEmpty(NotificationText);
 }
 
 internal enum SplitOrientation { Horizontal, Vertical }

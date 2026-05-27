@@ -26,6 +26,7 @@ internal sealed class CmuxIpcServer : IDisposable
     public event Action<FocusMessage>? OnFocus;
     public event Action<SendMessage>? OnSend;
     public event Action<OpenMessage>? OnOpen;
+    public event Action<GitBaselineMessage>? OnGitBaseline;
 
     private readonly CancellationTokenSource _cts = new();
     private readonly Dispatcher _dispatcher;
@@ -126,6 +127,10 @@ internal sealed class CmuxIpcServer : IDisposable
                     var om = JsonSerializer.Deserialize<OpenMessage>(json, IpcJson.Options);
                     if (om != null) _dispatcher.BeginInvoke(() => OnOpen?.Invoke(om));
                     break;
+                case "git.baseline":
+                    var gb = JsonSerializer.Deserialize<GitBaselineMessage>(json, IpcJson.Options);
+                    if (gb != null) _dispatcher.BeginInvoke(() => OnGitBaseline?.Invoke(gb));
+                    break;
             }
         }
         catch (JsonException ex) { Log.Error("CmuxIpc.Dispatch.Json", ex); }
@@ -177,3 +182,10 @@ internal sealed record OpenMessage(
     [property: JsonPropertyName("name")] string? Name,
     [property: JsonPropertyName("cwd")] string? Cwd,
     [property: JsonPropertyName("cmd")] string? Cmd);
+
+/// Sent by the cc HookHandler on Claude's session-start, after it captures
+/// HEAD locally via `git rev-parse HEAD`. The host stores this on the pane
+/// and recomputes commit count via `git rev-list <sha>..HEAD --count` each
+/// time the pane's state changes.
+internal sealed record GitBaselineMessage(
+    [property: JsonPropertyName("sha")] string Sha);

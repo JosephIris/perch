@@ -13,22 +13,60 @@
         Background="Transparent">
 
     <!-- Real WPF title bar so the system caption buttons (min / max / close)
-         are actually visible. Putting them in HTML would require us to
-         re-implement min/max/close via window commands and lose the system
-         Aero-snap affordances. WPF-UI's TitleBar already integrates with
-         ExtendsContentIntoTitleBar so Mica still reads through. The webview
-         takes the rest of the window. -->
+         are actually visible. We keep WPF-UI's TitleBar for that reason but
+         drop the "cmux" title text — chrome stays minimal, matching the
+         Claude desktop pattern. The sidebar toggle lives here so it stays
+         clickable when the webview-side sidebar is collapsed.
+
+         See docs/DESIGN-BIBLE.md "Vocabulary > Affordance" and
+         "Sidebar pattern". -->
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
+        <!-- Explicit Height so the title bar is no taller than the toggle +
+             caption buttons need. WPF-UI's default is ~36–40px; shrinking to
+             32 removes a visible strip of dead space below the controls. -->
         <ui:TitleBar Grid.Row="0"
-                     Title="cmux"
+                     Height="32"
                      ShowMaximize="True"
-                     ShowMinimize="True" />
-        <wv2:WebView2 x:Name="Web"
-                      Grid.Row="1"
-                      DefaultBackgroundColor="Transparent" />
+                     ShowMinimize="True">
+            <ui:TitleBar.Header>
+                <!-- Icon row in the title bar. Today: sidebar toggle only.
+                     Search / back / forward stay deferred until they have
+                     real behavior to invoke. -->
+                <StackPanel Orientation="Horizontal"
+                            HorizontalAlignment="Left"
+                            VerticalAlignment="Center"
+                            Margin="4,0,0,0">
+                    <ui:Button x:Name="SidebarToggleBtn"
+                               Appearance="Transparent"
+                               Padding="4"
+                               Margin="0"
+                               ToolTip="Toggle sidebar (Ctrl+B)"
+                               Click="OnSidebarToggleClick">
+                        <ui:SymbolIcon Symbol="PanelLeft20"
+                                       FontSize="14" />
+                    </ui:Button>
+                </StackPanel>
+            </ui:TitleBar.Header>
+        </ui:TitleBar>
+        <Grid Grid.Row="1">
+            <!-- Main WebView2 hosts the chrome (sidebar, workspace shell)
+                 and all terminal panes via xterm.js. -->
+            <wv2:WebView2 x:Name="Web"
+                          DefaultBackgroundColor="Transparent" />
+
+            <!-- Canvas overlay for URL panes. Each URL leaf in the pane
+                 tree spawns a real WebView2 control here (managed by
+                 MainWindow.xaml.cs), positioned via Canvas.Left/Top.
+                 Background={x:Null} so empty regions don't block clicks
+                 to the WebView2 underneath — only the WebView2 children
+                 catch mouse events. -->
+            <Canvas x:Name="UrlPaneOverlay"
+                    Background="{x:Null}"
+                    IsHitTestVisible="True" />
+        </Grid>
     </Grid>
 </ui:FluentWindow>

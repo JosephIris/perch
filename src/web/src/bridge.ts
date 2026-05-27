@@ -23,32 +23,70 @@ export type OutMessage =
   | { type: "pane.in"; paneId: string; b64: string }
   | { type: "pane.resize"; paneId: string; cols: number; rows: number }
   | { type: "pane.focus"; paneId: string }
-  | { type: "pane.split"; paneId: string; dir: "right" | "down" }
+  /* When `url` is set the new leaf is a webview pane (iframe) instead of
+   * a terminal. Used by the URL action menu's "Open in pane right/down". */
+  | { type: "pane.split"; paneId: string; dir: "right" | "down"; url?: string }
   | { type: "pane.close"; paneId: string }
   | { type: "session.new"; shell?: string }
   | { type: "session.select"; id: string }
   | { type: "session.rename"; id: string; title: string }
-  | { type: "session.close"; id: string };
+  | { type: "session.close"; id: string }
+  /* Open a URL externally — host resolves to the OS default browser. */
+  | { type: "url.open"; url: string }
+  /* Pane rename + color tag changes from the pane header chrome. */
+  | { type: "pane.rename"; paneId: string; name: string }
+  | { type: "pane.recolor"; paneId: string; colorIndex: number }
+  /* Pane cwd update from xterm's OSC 7 handler. Host uses it to auto-fill
+   * the branch chip via `git rev-parse`. */
+  | { type: "pane.cwd"; paneId: string; cwd: string }
+  /* URL pane layout — page reports a rect for the placeholder; host
+   * sizes a real WebView2 control to match. First layout creates the
+   * WebView2; subsequent layouts reposition/resize. */
+  | { type: "urlpane.layout"; paneId: string; url: string; x: number; y: number; w: number; h: number }
+  | { type: "urlpane.dispose"; paneId: string };
 
 // ---- Incoming message shapes (host -> page) --------------------------------
 
-export type PaneTreeView =
-  | { kind: "leaf"; paneId: string; name: string; url?: string | null }
-  | { kind: "split"; orientation: "h" | "v"; children: PaneTreeView[] };
-
 export type AgentStateName = "idle" | "working" | "waiting" | "done";
 export type NotificationLevel = "info" | "success" | "warn" | "error";
+
+export type PaneTreeView =
+  | {
+      kind: "leaf";
+      paneId: string;
+      name: string;
+      url?: string | null;
+      /* Color tag (0–5) into the pane palette in style.css. */
+      colorIndex: number;
+      /* Per-pane agent state — pane header surfaces this directly so
+       * each pane's status is visible without going through the sidebar. */
+      agentState: AgentStateName;
+      activityDetail: string;
+      branch: string;
+      ports: number[];
+      notification: { text: string; level: NotificationLevel } | null;
+      /* Commits made since the agent session's baseline. 0 when no
+       * baseline is set. */
+      commitCount: number;
+    }
+  | { kind: "split"; orientation: "h" | "v"; children: PaneTreeView[] };
 
 export type SessionView = {
   id: string;
   title: string;
   shell: string;
   rootPane: PaneTreeView;
+  /* Session-level fields are aggregations of the panes' per-pane state.
+   * agentState = most-urgent across panes (waiting > working > done > idle). */
   agentState: AgentStateName;
   activityDetail: string;
   branch: string;
   ports: number[];
   notification: { text: string; level: NotificationLevel } | null;
+  /* Pane-count breakdown so the sidebar can render "3 panes · 1 waiting". */
+  paneCount: number;
+  waitingCount: number;
+  workingCount: number;
 };
 
 export type StateMessage = {
@@ -69,7 +107,13 @@ export type InMessage =
   | { type: "pane.out"; paneId: string; b64: string }
   | { type: "pane.exit"; paneId: string; code: number }
   | ToastMessage
-  | { type: "host.error"; message: string };
+  | { type: "host.error"; message: string }
+  /* UI commands the WPF host can issue to the webview (e.g. a chrome
+   * button in the title bar telling the webview to flip a class). */
+  | { type: "ui.sidebar.toggle" }
+  /* Triggered on main-window move/resize so URL panes re-emit their
+   * placeholder rect and the host can reposition the child Windows. */
+  | { type: "ui.urlpane.relayout" };
 
 // ---- Implementation --------------------------------------------------------
 

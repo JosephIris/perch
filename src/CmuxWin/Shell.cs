@@ -67,6 +67,18 @@ internal static class Shell
                 {
                     sb.Append("$env:CMUX_PIPE='").Append(EscapePs(pipePath)).Append("'; ");
                     sb.Append("$env:CMUX_PANE_ID='").Append(EscapePs(paneIdStr!)).Append("'; ");
+                    // OSC 7 prompt hook — wraps the existing prompt function so
+                    // every prompt redraw also emits ESC]7;file:///<cwd>BEL.
+                    // The host's xterm OSC parser sees this and forwards the
+                    // cwd to MainWindow which runs git rev-parse to fill the
+                    // branch chip without the agent having to call cmux meta.
+                    // PowerShell-specific — cmd / WSL get their own hooks later.
+                    sb.Append("$function:__cmuxOld = $function:prompt; ");
+                    sb.Append("function global:prompt { ");
+                    sb.Append("  $p = (Get-Location).ProviderPath; ");
+                    sb.Append("  if ($p) { [Console]::Write([char]27 + ']7;file:///' + ($p -replace '\\\\','/') + [char]7) }; ");
+                    sb.Append("  & $function:__cmuxOld ");
+                    sb.Append("}; ");
                 }
                 if (hasCwd)
                     sb.Append("Set-Location -LiteralPath '").Append(EscapePs(cwd!)).Append("'; ");
