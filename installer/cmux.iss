@@ -37,6 +37,10 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 
 [Files]
 Source: "..\publish\cmux-win\CmuxWin.exe"; DestDir: "{app}"; Flags: ignoreversion
+; Web bundle (xterm.js + chrome). MainWindow.xaml.cs maps {app}\wwwroot
+; to https://cmux.local/ via SetVirtualHostNameToFolderMapping; without
+; these files WebView2 shows the "Web bundle not found" fallback page.
+Source: "..\publish\cmux-win\wwwroot\*"; DestDir: "{app}\wwwroot"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; cmux CLI + claude.cmd hook wrapper. App.xaml.cs prepends {app}\tools to
 ; PATH at startup so panes can run `cmux ...` and so claude.cmd intercepts
 ; `claude` to inject Claude Code's --settings hooks JSON. Without these
