@@ -232,7 +232,14 @@ public partial class MainWindow : FluentWindow
                     _ptyBytesReceived[paneId] = (_ptyBytesReceived.TryGetValue(paneId, out var n) ? n : 0) + bytes.Length;
                 PostPaneOut(paneId, bytes);
             };
-            pty.Exited += (_, code) => PostPaneExit(paneId, code);
+            pty.Exited += (_, code) =>
+            {
+                // Drop the dead PTY + IPC so a subsequent pane.resize naturally
+                // respawns into the same paneId. Without this the resize handler
+                // sees a stale _ptys entry and just calls Resize on a dead pty.
+                Dispatcher.BeginInvoke(() => DestroyPty(paneId));
+                PostPaneExit(paneId, code);
+            };
             _ptys[paneId] = pty;
 
             // Agent IPC: per-pane named pipe \\.\pipe\cmux\<paneId>. The
@@ -245,7 +252,7 @@ public partial class MainWindow : FluentWindow
             ipc.Start();
             _paneIpc[paneId] = ipc;
 
-            Log.Info("Pane.spawn", $"pane={paneId:N} pid={pty.ProcessId} shell={baseShell}");
+            Log.Info("Pane.spawn", $"pane={paneId:N} pid={pty.ProcessId} shell={baseShell} cmd={startCmd}");
         }
         catch (Exception ex)
         {
