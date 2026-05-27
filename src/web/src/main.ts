@@ -58,8 +58,9 @@ onMessage((msg) => {
 
 // ---- Keybindings -----------------------------------------------------------
 // Match Windows Terminal: Ctrl+Shift+D = right, Ctrl+Shift+S = down,
-// Ctrl+Shift+W = close pane, Ctrl+Shift+T = new session. xterm.js handles
-// Ctrl+C/V via OS clipboard already; we don't interfere.
+// Ctrl+Shift+W = close pane, Ctrl+Shift+T = new session. Ctrl+Shift+C/V
+// (clipboard) is handled by xterm.js; right-click copy/paste lives on
+// each Pane's termHost (see pane.ts).
 
 // Capture phase + ev.code: WPF's WebView2 hands keydown to xterm.js first
 // because the terminal element has focus, and xterm's keydown listener

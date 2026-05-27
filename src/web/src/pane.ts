@@ -90,6 +90,32 @@ export class Pane {
     // it active host-side so keyboard shortcuts know which pane to act on.
     this.element.addEventListener("focusin", () => this.notifyFocus());
     this.element.addEventListener("mousedown", () => this.notifyFocus());
+
+    // Windows Terminal-style right-click: copy if there's a selection,
+    // otherwise paste the clipboard. WebView2 grants navigator.clipboard
+    // access for the cmux.local virtual host without prompting.
+    this.termHost.addEventListener("contextmenu", (ev) => {
+      ev.preventDefault();
+      this.handleRightClick();
+    });
+  }
+
+  private async handleRightClick() {
+    if (this.term.hasSelection()) {
+      const text = this.term.getSelection();
+      if (text) {
+        try { await navigator.clipboard.writeText(text); }
+        catch (err) { console.error("[pane] clipboard write failed:", err); }
+      }
+      this.term.clearSelection();
+      return;
+    }
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text) this.term.paste(text);
+    } catch (err) {
+      console.error("[pane] clipboard read failed:", err);
+    }
   }
 
   /** Attach to the DOM and start observing for size changes. term.open
