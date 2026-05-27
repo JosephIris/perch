@@ -161,6 +161,16 @@ internal sealed class ConPty : IDisposable
     }
 
     private Thread? _watcherThread;
+    private int _exitedFired;
+
+    private void RaiseExited(int code)
+    {
+        // Watcher and Reader both detect death (process-exit vs pipe-EOF) and
+        // race to raise Exited. Without this guard the page would receive two
+        // pane.exit messages and render "[shell exited]" twice.
+        if (Interlocked.Exchange(ref _exitedFired, 1) != 0) return;
+        try { Exited?.Invoke(this, code); } catch { }
+    }
 
     private void StartReader()
     {
@@ -193,7 +203,7 @@ internal sealed class ConPty : IDisposable
                 // because subscribers compare paneId state).
                 try { if (_hPC != IntPtr.Zero) ClosePseudoConsole(_hPC); } catch { }
                 _hPC = IntPtr.Zero;
-                try { Exited?.Invoke(this, code); } catch { }
+                RaiseExited(code);
             }
             catch (Exception ex) { Log.Error("ConPty.Watcher", ex); }
         })
@@ -232,7 +242,7 @@ internal sealed class ConPty : IDisposable
                     GetExitCodeProcess(_proc.hProcess, out var c)) code = (int)c;
             }
             catch { }
-            try { Exited?.Invoke(this, code); } catch { }
+            RaiseExited(code);
         }
     }
 
