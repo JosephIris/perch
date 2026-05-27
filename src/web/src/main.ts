@@ -22,6 +22,19 @@ const toast = new Toast($("toast"));
 const statusEl = $("status-text");
 installShortcutHint($("shortcut-hint"));
 
+// Sidebar collapse. The toggle button lives in the WPF title bar (see
+// MainWindow.xaml's TitleBar.Header) and reaches the webview via the
+// "ui.sidebar.toggle" message handled below. Ctrl+B is the keyboard
+// shortcut. CSS handles the visual: #app's grid column shrinks and the
+// sidebar effectively disappears.
+const appEl = $("app");
+function toggleSidebar() {
+  appEl.classList.toggle("app--sidebar-collapsed");
+  // The pane container resizes when the sidebar column changes width,
+  // and the per-pane ResizeObserver fires xterm's fit addon automatically.
+  // No explicit refit needed here.
+}
+
 let lastState: StateMessage | null = null;
 
 function setStatus(text: string) { statusEl.textContent = text; }
@@ -53,6 +66,16 @@ onMessage((msg) => {
     case "host.error":
       setStatus(`error: ${msg.message}`);
       break;
+    case "ui.sidebar.toggle":
+      toggleSidebar();
+      break;
+    case "ui.urlpane.relayout":
+      // Host moved/resized — ask every UrlPane to re-emit its layout so
+      // the corresponding child Window repositions. Workspace exposes
+      // this through nudgeUrlPanes; cheap, just walks the pane map and
+      // calls forceRefit on URL panes.
+      workspace.nudgeUrlPanes();
+      break;
   }
 });
 
@@ -69,6 +92,37 @@ onMessage((msg) => {
 //
 // All four shortcuts require Ctrl+Shift to keep Ctrl+D (EOF), Ctrl+S
 // (XOFF), Ctrl+W (delete-word) usable in the shell.
+// Ctrl+B = toggle sidebar (Claude desktop convention, matches VS Code's
+// "Toggle Side Bar" default). No Shift — we want it press-and-done.
+// Ctrl+= / Ctrl++  → bump terminal font size in active pane.
+// Ctrl+-           → shrink.
+// Ctrl+0           → reset to default 13px.
+window.addEventListener("keydown", (ev) => {
+  if (!ev.ctrlKey || ev.altKey) return;
+  if (ev.shiftKey && ev.code !== "Equal") return;   // allow Ctrl+Shift+= as Ctrl+=
+  if (ev.code === "KeyB" && !ev.shiftKey) {
+    toggleSidebar();
+    ev.preventDefault();
+    ev.stopPropagation();
+    return;
+  }
+  const pane = workspace.getActivePane();
+  if (!pane) return;
+  if (ev.code === "Equal") {
+    pane.changeFontSize(+1);
+    ev.preventDefault();
+    ev.stopPropagation();
+  } else if (ev.code === "Minus") {
+    pane.changeFontSize(-1);
+    ev.preventDefault();
+    ev.stopPropagation();
+  } else if (ev.code === "Digit0") {
+    pane.resetFontSize();
+    ev.preventDefault();
+    ev.stopPropagation();
+  }
+}, /* useCapture */ true);
+
 window.addEventListener("keydown", (ev) => {
   if (!ev.ctrlKey || !ev.shiftKey) return;
   const active = workspace.getActivePaneId();
@@ -100,6 +154,74 @@ window.addEventListener("keydown", (ev) => {
 
 setStatus("connecting...");
 send({ type: "ready" });
+
+// ---- Font / cell diagnostic --------------------------------------------
+// Replaces the status sub-label with concrete, measurable values that
+// prove which fonts are actually loaded and how big the terminal cells
+// are rendering. Without this it's impossible to tell whether a CSS
+// change landed at runtime; with it, the answer is on-screen.
+//
+// Detection method: render a known string in the target font and in a
+// known wildly-different fallback ("monospace" generic), compare widths.
+// If they differ, the target font is loaded. Works for both bundled
+// (@font-face) and system-installed fonts.
+function isFontLoaded(name: string): boolean {
+  const probe = document.createElement("span");
+  probe.style.position = "absolute";
+  probe.style.visibility = "hidden";
+  probe.style.whiteSpace = "nowrap";
+  probe.style.fontSize = "72px";
+  probe.textContent = "MMMiiii_0123456789";
+  document.body.appendChild(probe);
+  probe.style.fontFamily = "monospace";
+  const fallback = probe.offsetWidth;
+  probe.style.fontFamily = `"${name}", monospace`;
+  const actual = probe.offsetWidth;
+  document.body.removeChild(probe);
+  return actual !== fallback && actual > 0;
+}
+
+function measureTerminalCell(): { w: number; h: number } | null {
+  // Get cell height from xterm's own row element — that's the
+  // authoritative value because it reflects fontSize × lineHeight after
+  // pixel rounding. For width, render N copies of "M" in an independent
+  // probe with the same font config and divide; xterm row spans contain
+  // the full row text (~80 chars per row) so we can't read a single
+  // char's width from them directly.
+  const rowsEl = document.querySelector<HTMLElement>(".xterm-rows");
+  if (!rowsEl || !rowsEl.firstElementChild) return null;
+  const rowH = (rowsEl.firstElementChild as HTMLElement).offsetHeight;
+
+  const probe = document.createElement("span");
+  probe.style.position = "absolute";
+  probe.style.visibility = "hidden";
+  probe.style.whiteSpace = "pre";
+  probe.style.fontSize = "13px";
+  probe.style.lineHeight = "1";
+  probe.style.fontFamily =
+    '"Geist Mono Variable", "Cascadia Code", "Cascadia Mono", monospace';
+  const N = 80;
+  probe.textContent = "M".repeat(N);
+  document.body.appendChild(probe);
+  const cellW = probe.offsetWidth / N;
+  document.body.removeChild(probe);
+  return { w: Math.round(cellW * 10) / 10, h: rowH };
+}
+
+// Font diagnostic stays available on window.__fontDiag for DevTools
+// poking; we no longer surface it in the sidebar footer now that we
+// trust the bundle.
+document.fonts.ready.then(() => {
+  setTimeout(() => {
+    (window as unknown as { __fontDiag: object }).__fontDiag = {
+      inter: isFontLoaded("Inter Variable"),
+      geistMono: isFontLoaded("Geist Mono Variable"),
+      cascadiaCode: isFontLoaded("Cascadia Code"),
+      cascadiaMono: isFontLoaded("Cascadia Mono"),
+      cell: measureTerminalCell(),
+    };
+  }, 800);
+});
 
 // lastState is kept for debugging; surface it for devtools poking.
 (window as unknown as { __cmux: unknown }).__cmux = { get state() { return lastState; } };

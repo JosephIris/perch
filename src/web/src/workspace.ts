@@ -6,14 +6,33 @@
 
 import type { PaneTreeView, SessionView } from "./bridge.js";
 import { Pane } from "./pane.js";
+import { UrlPane } from "./url-pane.js";
+import { PANE_LEAVE_MS, SESSION_SWAP_MS } from "./anim.js";
+
+type LeafPane = Pane | UrlPane;
+
+/** Stable string for a pane tree's SHAPE — leaf paneIds + split
+ *  orientations, in document order. Used to skip the DOM rebuild on
+ *  no-op renders (pure focus changes). Does NOT include the active-pane
+ *  marker or any other state that toggles via setActive. */
+function treeSignature(node: PaneTreeView): string {
+  if (node.kind === "leaf") return `L:${node.paneId}:${node.url ?? ""}`;
+  return `S(${node.orientation}:${node.children.map(treeSignature).join(",")})`;
+}
 
 export class Workspace {
   private readonly root: HTMLElement;
-  private readonly panes = new Map<string, Pane>();
+  private readonly panes = new Map<string, LeafPane>();
   // Bytes that arrive before the matching Pane is attached.
   private readonly pendingBytes = new Map<string, string[]>();
   private currentSessionId: string | null = null;
   private activePaneId: string | null = null;
+  // Signature of the last rendered tree (paneIds + split shape). When the
+  // next render comes in with the same signature, we skip the DOM
+  // rebuild entirely — only setActive runs. Without this, every focus
+  // change triggers replaceChildren which interrupts the focus-fade CSS
+  // transition (DOM removal resets transitions on re-insert).
+  private lastTreeSignature: string | null = null;
 
   constructor(rootEl: HTMLElement) {
     this.root = rootEl;
@@ -27,29 +46,125 @@ export class Workspace {
       return;
     }
 
+    // Session swap → fade out, swap content, fade in. Same-session updates
+    // are incremental and never trigger the fade so focus/state changes
+    // don't blink. We re-enter the function with the same args after the
+    // fade-out timeout has cleared the old content.
+    if (this.currentSessionId && this.currentSessionId !== activeSession.id) {
+      this.animateSwap(activeSession, activePaneId);
+      return;
+    }
+
     // On session change, tear down old panes (different paneIds, no reuse).
     // Within the same session, we keep Pane instances around so scrollback
     // and cursor position survive a split / close re-render.
     if (this.currentSessionId !== activeSession.id) {
       this.disposeAllPanes();
+      this.lastTreeSignature = null;
       this.currentSessionId = activeSession.id;
     } else {
-      // Drop panes that are no longer in the tree (closed since last render).
+      // Identify panes that are leaving (in our map, not in the new tree).
+      // If any, run a fade-out + scale animation BEFORE committing the
+      // DOM rebuild — otherwise the closing pane snaps to gone and its
+      // siblings collapse the space instantly.
       const keep = new Set<string>();
       this.collectLeafIds(activeSession.rootPane, keep);
+      const leaving: string[] = [];
       for (const id of [...this.panes.keys()]) {
-        if (!keep.has(id)) {
-          this.panes.get(id)?.dispose();
-          this.panes.delete(id);
+        if (!keep.has(id)) leaving.push(id);
+      }
+      if (leaving.length > 0) {
+        for (const id of leaving) {
+          const pane = this.panes.get(id);
+          if (!pane) continue;
+          pane.element.classList.add("pane--leaving");
+          // For URL panes: tear down the host-side WebView2 immediately
+          // so the child window closes at the START of the fade, in sync
+          // with the placeholder div's opacity transition. Without this
+          // the WebView2 sits full-opacity over a fading placeholder and
+          // the close feels clunky.
+          if (pane instanceof UrlPane) pane.beginLeaving();
         }
+        // After the animation, dispose the leaving panes + commit the
+        // tree rebuild. Re-entering render() with the latest state push
+        // would race; we just inline the commit here.
+        const ses = activeSession;
+        const active = activePaneId;
+        window.setTimeout(() => {
+          for (const id of leaving) {
+            this.panes.get(id)?.dispose();
+            this.panes.delete(id);
+          }
+          this.commitRender(ses, active);
+        }, PANE_LEAVE_MS);
+        return;
       }
     }
 
-    this.root.replaceChildren();
-    this.renderTree(activeSession.rootPane, this.root);
+    this.commitRender(activeSession, activePaneId);
+  }
+
+  /** Final commit step shared by the close-animation path and the
+   *  no-removal path. Pushes per-pane state and rebuilds the DOM only
+   *  when the tree shape changed. */
+  private commitRender(activeSession: SessionView, activePaneId: string | null) {
+    // Push per-pane state to every existing Pane on every state message.
+    // This is cheap (just attribute/text updates) and never re-mounts
+    // DOM, so in-flight CSS transitions survive. The signature-gated
+    // DOM rebuild below only runs when the tree SHAPE changes (split,
+    // close, session swap).
+    this.applyState(activeSession.rootPane);
+
+    // Only rebuild the DOM when the tree shape actually changed. A pure
+    // focus or state change pushes the same shape — we MUST NOT re-mount
+    // the panes in that case (removing+re-inserting a DOM element cancels
+    // in-flight CSS transitions, killing the focus-fade effect).
+    const signature = treeSignature(activeSession.rootPane);
+    if (signature !== this.lastTreeSignature) {
+      this.root.replaceChildren();
+      this.renderTree(activeSession.rootPane, this.root);
+      this.lastTreeSignature = signature;
+    }
 
     // Apply active marker after the DOM is up.
     this.setActive(activePaneId);
+  }
+
+  /** Crossfade between sessions. Fade-out the current contents, swap them
+   *  for the new session's panes, fade back in. Cheap visual signal that
+   *  "you switched contexts" — same family as the focus-fade and 200ms
+   *  is the standard chrome transition duration in tokens.css. */
+  private animateSwap(activeSession: SessionView, activePaneId: string | null) {
+    this.root.classList.add("workspace--switching");
+    window.setTimeout(() => {
+      this.disposeAllPanes();
+      this.lastTreeSignature = null;
+      this.currentSessionId = activeSession.id;
+      this.root.replaceChildren();
+      this.renderTree(activeSession.rootPane, this.root);
+      this.applyState(activeSession.rootPane);
+      this.lastTreeSignature = treeSignature(activeSession.rootPane);
+      this.setActive(activePaneId);
+      // One rAF so the just-inserted DOM has a frame to lay out before
+      // the opacity transition starts — otherwise the in-fade is skipped
+      // (Chromium treats the freshly-inserted node as never having been
+      // transparent and snaps it straight to 1).
+      requestAnimationFrame(() => {
+        this.root.classList.remove("workspace--switching");
+      });
+    }, SESSION_SWAP_MS);
+  }
+
+  /** Walk the tree and push the latest per-leaf state into existing Pane
+   *  instances. Called on every render before the DOM-rebuild check so
+   *  state updates are visible even when structure didn't change. */
+  private applyState(node: PaneTreeView) {
+    if (node.kind === "leaf") {
+      const pane = this.panes.get(node.paneId);
+      if (pane) pane.applyLeafView(node);
+      return;
+    }
+    for (const c of node.children) this.applyState(c);
   }
 
   feed(paneId: string, b64: string) {
@@ -81,6 +196,23 @@ export class Workspace {
 
   getActivePaneId(): string | null { return this.activePaneId; }
 
+  /** Returns the Pane currently marked active, or null. Used by the
+   *  font-size shortcuts in main.ts; only terminal Panes will actually
+   *  resize, UrlPane.changeFontSize is a no-op. */
+  /** Ask every URL pane to re-emit its layout. Called by main.ts on
+   *  ui.urlpane.relayout (fired by host on window move / resize). */
+  nudgeUrlPanes() {
+    for (const pane of this.panes.values()) {
+      if (pane instanceof UrlPane) pane.forceRefit();
+    }
+  }
+
+  getActivePane(): LeafPane | null {
+    return this.activePaneId
+      ? this.panes.get(this.activePaneId) ?? null
+      : null;
+  }
+
   private clear() {
     this.disposeAllPanes();
     this.root.replaceChildren();
@@ -101,9 +233,27 @@ export class Workspace {
     if (node.kind === "leaf") {
       let pane = this.panes.get(node.paneId);
       if (!pane) {
-        pane = new Pane(node.paneId, node.name);
+        // URL leaves render as iframe-backed UrlPane; everything else is
+        // a terminal-backed Pane. The discriminator lives in the host's
+        // PaneTreeView (set when OnPaneSplit was passed a `url`).
+        pane = node.url
+          ? new UrlPane(node.paneId, node.name, node.url)
+          : new Pane(node.paneId, node.name);
         this.panes.set(node.paneId, pane);
         pane.attach(host);
+        // Push initial state so the freshly-created pane header reflects
+        // whatever the host already knows (e.g. after a reattach).
+        pane.applyLeafView(node);
+        // Fade in. The class triggers the @keyframes pane-enter animation
+        // once (CSS animations replay on next add/remove of the class).
+        // Cleaned up via animationend so we don't accumulate classes.
+        const el = pane.element;
+        el.classList.add("pane--entering");
+        el.addEventListener(
+          "animationend",
+          () => el.classList.remove("pane--entering"),
+          { once: true },
+        );
         const queued = this.pendingBytes.get(node.paneId);
         if (queued) {
           for (const b64 of queued) pane.feed(b64);

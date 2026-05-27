@@ -75,6 +75,23 @@ jobs:
             -p:EnableCompressionInSingleFile=true `
             -o publish/cmux-win
 
+      # Bundle the WebView2 Runtime evergreen bootstrapper into the
+      # installer. Win11 has WebView2 preinstalled; older Win10 may not,
+      # and without it the app shows a blank webview. The bootstrapper
+      # itself is small (~150KB) and silently no-ops when the runtime is
+      # already present. The installer only runs it on machines that
+      # need it (see NeedsWebView2 in cmux.iss).
+      - name: Download WebView2 Runtime bootstrapper
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path publish | Out-Null
+          Invoke-WebRequest `
+            -Uri "https://go.microsoft.com/fwlink/p/?LinkId=2124703" `
+            -OutFile "publish/MicrosoftEdgeWebview2Setup.exe" `
+            -UseBasicParsing
+          Get-Item publish/MicrosoftEdgeWebview2Setup.exe |
+            Select-Object Name, Length
+
       - name: Build installer (Inno Setup)
         shell: pwsh
         run: |

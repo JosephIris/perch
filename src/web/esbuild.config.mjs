@@ -23,6 +23,13 @@ async function copyStatics() {
     resolve(here, "node_modules/@xterm/xterm/css/xterm.css"),
     resolve(outDir, "xterm.css")
   );
+  // Bundled humanist webfont (Inter Variable). Lives in src/web/fonts/ in
+  // source, copied to wwwroot/fonts/ on every build. Referenced from
+  // tokens.css via @font-face. WebView2 serves wwwroot/ under
+  // https://cmux.local/, so the runtime URL is /fonts/InterVariable.woff2.
+  await cp(resolve(here, "fonts"), resolve(outDir, "fonts"), {
+    recursive: true,
+  });
 }
 
 await rm(outDir, { recursive: true, force: true });
@@ -37,6 +44,10 @@ const opts = {
   // Single-bundle JS + a single CSS file from the imported tokens/style sheets.
   outfile: resolve(outDir, "app.js"),
   loader: { ".css": "css" },
+  // Don't try to resolve absolute /fonts/* URLs from CSS — those are
+  // served at runtime by WebView2's virtual host. esbuild rewrites them
+  // verbatim into the output.
+  external: ["/fonts/*"],
   sourcemap: "linked",
   // Minify in non-watch builds — the page load is local, but smaller bundles
   // mean faster startup.

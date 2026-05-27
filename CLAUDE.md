@@ -64,6 +64,18 @@ then consume it via `var(--cmux-...)`. Tokens to respect:
   Never use Inter, SF Pro, Calibri, or any non-Segoe family for app chrome.
   Set `TextOptions.TextFormattingMode="Ideal"` and `TextRenderingMode="ClearType"`
   on text-heavy containers.
+- **Font family — bundled humanist sans (Inter), Segoe UI Variable as
+  fallback.** We bundle Inter Variable (rsms/inter, OFL-licensed) at
+  `src/web/fonts/InterVariable.woff2` and serve it from the webview's
+  virtual host. Inter is the closest free analog to Söhne (Claude's brand
+  font) on Windows — open apertures, humanist proportions, calmer at small
+  sizes than Segoe UI Variable's geometric cuts. Segoe UI Variable stays
+  in the fallback chain so the app never hard-fails if the bundle is
+  unreachable, and the terminal surface still uses Cascadia Mono.
+  Constitution note: this supersedes the earlier "never use Inter" rule,
+  which was written before we had a clear humanist-vs-geometric reason to
+  swap. Don't bundle additional fonts without a similarly-explicit
+  hierarchy reason.
 - Color: consume `{DynamicResource}` from the WPF-UI theme dictionaries
   (ApplicationBackgroundBrush, TextFillColorPrimaryBrush, AccentFillColorDefaultBrush,
   etc.). Never hardcode hex.
@@ -169,10 +181,17 @@ regress them without a screenshot showing the new approach reads better.
 
 ### Selection / accent treatment
 
-- Selected nav items: subtle gray pill (`SubtleFillColorTertiaryBrush` or
-  similar) + a 3px-wide vertical accent stripe on the inner-left edge
-  (`AccentFillColorDefaultBrush`), inset top/bottom so the pill's rounded
-  corners still read. Never a vivid full-fill accent — that reads as a
+- **Sidebar / session list:** soft gray pill, no accent stripe. We
+  deliberately diverged from the WPF-UI nav default here to match the
+  Claude desktop / Files-app feel — calmer, with selection signaled by
+  fill alone. The selected row uses a slightly stronger subtle fill than
+  hover (`--color-subtle-tertiary` vs `--color-subtle-secondary`) and that
+  is the only difference. No 3px accent stripe, no left-edge marker.
+- Other nav surfaces (settings, command palettes if/when added) may still
+  use a 3px-wide vertical accent stripe + pill — that's the Win11 default
+  and it's appropriate when the list is the *primary* navigation. The
+  sidebar is secondary nav (the workspace is primary) so it stays quiet.
+- Never a vivid full-fill accent for selection — that reads as a
   call-to-action button, not a selected state.
 - Active pane / focus rings: 1px theme accent at most. Never 2px, never
   glowing.
@@ -197,15 +216,25 @@ regress them without a screenshot showing the new approach reads better.
 
 ### Sidebar pattern
 
-- Each row: title (BodyStrong) + secondary label (Caption) + optional
-  trailing label (Caption, tertiary brush). Pure data, no live tail of the
-  terminal buffer. Modeled after cmux for macOS's
-  `CmuxExtensionSidebarRenderRow`.
+- Each row: title + secondary label + optional trailing label. Pure data,
+  no live tail of the terminal buffer. Modeled after cmux for macOS's
+  `CmuxExtensionSidebarRenderRow`, but tuned toward the Claude desktop /
+  Files-app feel: warmer, calmer, less Windows-Terminal-style density.
+- **Typography on the sidebar row:**
+    - Title: 14px, **weight 500** (not 600). BodyStrong reads too
+      assertive next to a quiet pill — we want a confident-but-relaxed
+      title, like the conversation list in Claude desktop.
+    - Secondary label: 12px, `--color-text-tertiary`, regular weight.
+    - Optional trailing label / chip: 11–12px, regular weight.
+- **Row geometry:** 8px vertical, 12px horizontal padding inside the pill;
+  8px gap between consecutive rows (not 4px — claude-desktop / Files
+  breathe more than WPF-UI's default sample app). Pill radius 6–8px.
+- **Selection:** pill fill only, no accent stripe (see "Selection / accent
+  treatment" above).
 - Activity timestamp ("now" / "5m ago") is bumped from the
   `TermPTY.TerminalOutput` event (push), throttled to ~1Hz. Never
   `GetConsoleText()` — it copies the entire screen buffer on the UI thread
   and causes typing lag.
-- Item spacing: 4px between cards. 2px reads cramped.
 
 ### Corner radii
 

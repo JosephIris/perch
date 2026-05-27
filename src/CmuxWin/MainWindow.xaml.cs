@@ -49,6 +49,23 @@ public partial class MainWindow : FluentWindow
         Loaded += async (_, _) =>
         {
             await InitWebViewAsync();
+            // URL-pane controller owns the per-URL-pane WebView2 lifecycle.
+            // Wired after WebView2 init so Web.TransformToAncestor returns
+            // valid coords inside the controller.
+            _urlPaneCtrl = new UrlPaneController(this, Web);
+            _urlPaneCtrl.AutoTitleRequested += (paneId, title) =>
+                ApplyAutoTitle(paneId, title);
+            // On every main-window size change (interactive drag,
+            // maximize, restore, snap), tell the page to re-emit each URL
+            // pane's rect. forceRefit() in url-pane.ts invalidates the
+            // rect cache so the IPC always fires, even when the page
+            // thinks size hasn't changed yet (which can happen if the
+            // CSS reflow lags behind the HWND resize by a frame).
+            SizeChanged += (_, _) =>
+            {
+                if (_urlPaneCtrl?.HasPanes == true)
+                    try { Web.CoreWebView2?.PostWebMessageAsJson("{\"type\":\"ui.urlpane.relayout\"}"); } catch { }
+            };
             if (ControlIpcServer.IsEnabled)
             {
                 _control = new ControlIpcServer(Dispatcher, OnControlVerb);
@@ -125,6 +142,17 @@ public partial class MainWindow : FluentWindow
         }
     }
 
+    // ---- WPF chrome → webview commands ------------------------------------
+    // The WPF-side title bar carries the sidebar toggle so it stays
+    // clickable when the webview hides the sidebar. We don't track the
+    // collapse state here — we just hand the verb off and let the page
+    // flip its own class. See main.ts's "ui.sidebar.toggle" handler.
+
+    private void OnSidebarToggleClick(object sender, System.Windows.RoutedEventArgs e)
+    {
+        Web.CoreWebView2?.PostWebMessageAsJson("{\"type\":\"ui.sidebar.toggle\"}");
+    }
+
     // ---- Page bridge ------------------------------------------------------
 
     private void OnWebMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
@@ -145,11 +173,17 @@ public partial class MainWindow : FluentWindow
                 case "pane.resize":     OnPaneResize(root); break;
                 case "pane.split":      OnPaneSplit(root); break;
                 case "pane.close":      OnPaneClose(root); break;
+                case "pane.rename":     OnPaneRename(root); break;
+                case "pane.recolor":    OnPaneRecolor(root); break;
+                case "pane.cwd":        OnPaneCwd(root); break;
+                case "urlpane.layout":  OnUrlPaneLayout(root); break;
+                case "urlpane.dispose": OnUrlPaneDispose(root); break;
                 case "session.new":     OnSessionNew(root); break;
                 case "session.select":  OnSessionSelect(root); break;
                 case "session.rename":  OnSessionRename(root); break;
                 case "session.close":   OnSessionClose(root); break;
                 case "pane.focus":      OnPaneFocus(root); break;
+                case "url.open":        OnUrlOpen(root); break;
                 default:
                     Log.Info("Web.msg.unknown", $"type={type}");
                     break;
@@ -249,6 +283,7 @@ public partial class MainWindow : FluentWindow
             ipc.OnStatus += msg => OnAgentStatus(sess, paneId, msg);
             ipc.OnNotify += msg => OnAgentNotify(sess, paneId, msg);
             ipc.OnMeta   += msg => OnAgentMeta(sess, paneId, msg);
+            ipc.OnGitBaseline += msg => OnGitBaseline(sess, paneId, msg);
             ipc.Start();
             _paneIpc[paneId] = ipc;
 
@@ -289,37 +324,121 @@ public partial class MainWindow : FluentWindow
         _         => NotificationLevel.Info,
     };
 
+    // Agent IPC writes per-pane state now — each pane in a session carries
+    // its own AgentState / Branch / Ports / Notification, so 3-5 parallel
+    // agents per repo don't thrash one shared row. The sidebar aggregates
+    // by computing "most urgent" across panes; the pane header shows its
+    // own state inline.
+
+    private static PaneNode? FindPane(Session sess, Guid paneId)
+        => AllLeaves(sess.Root).FirstOrDefault(p => p.Id == paneId);
+
     private void OnAgentStatus(Session sess, Guid paneId, StatusMessage msg)
     {
-        // Focused-pane-wins: when a session has multiple panes only the
-        // currently-active one's status updates the session row. Without
-        // this, two agents in the same session thrash the same pill row
-        // with last-writer-wins.
-        if (_activePaneId is Guid ap && ap != paneId &&
-            AllLeaves(sess.Root).Any(p => p.Id == ap)) return;
-        sess.AgentState = ParseAgentState(msg.State);
-        sess.ActivityDetail = msg.Detail ?? "";
+        var pane = FindPane(sess, paneId);
+        if (pane == null) return;
+        var prev = pane.AgentState;
+        pane.AgentState = ParseAgentState(msg.State);
+        pane.ActivityDetail = msg.Detail ?? "";
+        // Attention nudge: any → Waiting transition flashes the taskbar
+        // (only when our window isn't already foreground). One place to
+        // raise the signal so it works for both Claude-via-hooks and any
+        // other agent calling `cmux status waiting` directly.
+        if (prev != AgentState.Waiting && pane.AgentState == AgentState.Waiting)
+        {
+            FlashAttention();
+        }
+        // Refresh the cc-session commit counter on every state change
+        // (cheap if no baseline is set, otherwise one `git rev-list`).
+        _ = RefreshCommitCountAsync(pane);
         PushState();
+    }
+
+    // Baseline received from the cc HookHandler on session-start. An empty
+    // sha clears the counter (session-end). Triggers an immediate count
+    // refresh so the chip shows "+0 commits" right away instead of waiting
+    // for the next state transition.
+    private void OnGitBaseline(Session sess, Guid paneId, GitBaselineMessage msg)
+    {
+        var pane = FindPane(sess, paneId);
+        if (pane == null) return;
+        pane.CommitBaseline = msg.Sha ?? "";
+        if (string.IsNullOrEmpty(pane.CommitBaseline))
+        {
+            pane.CommitCount = 0;
+            PushState();
+            return;
+        }
+        _ = RefreshCommitCountAsync(pane);
+    }
+
+    private async System.Threading.Tasks.Task RefreshCommitCountAsync(PaneNode pane)
+    {
+        if (string.IsNullOrEmpty(pane.CommitBaseline)) return;
+        if (!_paneCwd.TryGetValue(pane.Id, out var cwd) || string.IsNullOrEmpty(cwd)) return;
+        var count = await GitProc.CommitsSinceAsync(pane.CommitBaseline, cwd);
+        if (count is not int n) return;
+        await Dispatcher.InvokeAsync(() =>
+        {
+            if (pane.CommitCount != n) { pane.CommitCount = n; PushState(); }
+        });
     }
 
     private void OnAgentNotify(Session sess, Guid paneId, NotifyMessage msg)
     {
-        if (_activePaneId is Guid ap && ap != paneId &&
-            AllLeaves(sess.Root).Any(p => p.Id == ap)) return;
-        sess.NotificationText = msg.Text ?? "";
-        sess.NotificationLevel = ParseLevel(msg.Level);
+        var pane = FindPane(sess, paneId);
+        if (pane == null) return;
+        pane.NotificationText = msg.Text ?? "";
+        pane.NotificationLevel = ParseLevel(msg.Level);
         PushState();
         PostToast(msg.Text ?? "", msg.Level);
     }
 
     private void OnAgentMeta(Session sess, Guid paneId, MetaMessage msg)
     {
-        if (_activePaneId is Guid ap && ap != paneId &&
-            AllLeaves(sess.Root).Any(p => p.Id == ap)) return;
-        if (msg.Branch != null) sess.Branch = msg.Branch;
-        if (msg.Ports != null) sess.Ports = msg.Ports;
+        var pane = FindPane(sess, paneId);
+        if (pane == null) return;
+        if (msg.Branch != null) pane.Branch = msg.Branch;
+        if (msg.Ports != null) pane.Ports = msg.Ports;
+        // Cwd stays at session level for now — it seeds the default cwd
+        // for new panes. Per-pane cwd is implicit in the shell process.
         if (!string.IsNullOrWhiteSpace(msg.Cwd)) sess.Cwd = msg.Cwd!;
         PushState();
+    }
+
+    // FlashWindowEx P/Invoke for the taskbar-attention nudge. Defined inline
+    // here because it's the only place in the app that needs it; if more
+    // surfaces need to flash we can promote to a NativeMethods helper.
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool FlashWindowEx(ref FLASHWINFO pwfi);
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct FLASHWINFO {
+        public uint cbSize;
+        public IntPtr hwnd;
+        public uint dwFlags;
+        public uint uCount;
+        public uint dwTimeout;
+    }
+    private const uint FLASHW_ALL = 3;
+    private const uint FLASHW_TIMERNOFG = 12;     // stop flashing when foreground
+    private void FlashAttention()
+    {
+        try
+        {
+            var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
+            if (hwnd == IntPtr.Zero) return;
+            var fi = new FLASHWINFO
+            {
+                cbSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf<FLASHWINFO>(),
+                hwnd = hwnd,
+                dwFlags = FLASHW_ALL | FLASHW_TIMERNOFG,
+                uCount = 5,
+                dwTimeout = 0,
+            };
+            FlashWindowEx(ref fi);
+        }
+        catch (Exception ex) { Log.Error("FlashAttention", ex); }
     }
 
     private void PostToast(string text, string? level)
@@ -416,6 +535,7 @@ public partial class MainWindow : FluentWindow
         var s = _store.Sessions.FirstOrDefault(x => x.Id == id);
         if (s == null) return;
         s.Title = t.GetString() ?? s.Title;
+        s.IsAutoTitle = false;     // user committed a name — never auto-overwrite
         _store.Save();
         PushState();
     }
@@ -456,13 +576,187 @@ public partial class MainWindow : FluentWindow
         var orient = dirStr == "down" ? SplitOrientation.Horizontal : SplitOrientation.Vertical;
         var sess = OwningSession(id);
         if (sess == null) return;
-        var newPane = new PaneNode();
+        // When `url` is present the new leaf is a webview pane (iframe) —
+        // the page renders an iframe for leaves whose Url is non-null
+        // instead of an xterm. Otherwise the new leaf is a normal PTY
+        // pane and the PTY spawns lazily on first pane.resize.
+        var url = root.TryGetProperty("url", out var u) ? u.GetString() : null;
+        // Pick a color not used by any other pane (across all sessions).
+        // Falls back to round-robin once all six are taken. See
+        // SessionStore.PickUnusedColor for the strategy.
+        var newPane = new PaneNode
+        {
+            Url = string.IsNullOrEmpty(url) ? null : url,
+            ColorIndex = _store.PickUnusedColor(),
+        };
         var replacement = SplitImpl(sess.Root, id, orient, newPane);
         if (replacement == null) return;
         sess.Root = replacement;
         AutoName(sess.Root, 1);
-        // PTY spawns lazily on first pane.resize from the page.
         _activePaneId = newPane.Id;
+        _store.Save();
+        PushState();
+    }
+
+    // Open a URL in the OS default browser. Shell-execute via Process.Start
+    // is the canonical Win32 way — the OS uses the user's configured
+    // protocol handler (Edge / Chrome / Firefox). Validate scheme so we
+    // can't be tricked into launching arbitrary `file://` or `cmd://`
+    // schemes from terminal output.
+    private void OnUrlOpen(JsonElement root)
+    {
+        if (!root.TryGetProperty("url", out var u)) return;
+        var url = u.GetString();
+        if (string.IsNullOrEmpty(url)) return;
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return;
+        if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
+        {
+            Log.Info("url.open.rejected", $"scheme={uri.Scheme}");
+            return;
+        }
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = url,
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception ex)
+        {
+            Log.Error("url.open", ex);
+        }
+    }
+
+    // Pane rename / recolor — both persist via SessionStore so feature
+    // names ("simulator-fix", "kanban-integration") and color tags survive
+    // restarts. AutoName() won't overwrite a user-set name because it only
+    // fills in when Name is null/empty.
+    private void OnPaneRename(JsonElement root)
+    {
+        if (!TryGuid(root, "paneId", out var id)) return;
+        if (!root.TryGetProperty("name", out var n)) return;
+        var name = (n.GetString() ?? "").Trim();
+        if (string.IsNullOrEmpty(name)) return;
+        var sess = OwningSession(id);
+        if (sess == null) return;
+        var pane = AllLeaves(sess.Root).FirstOrDefault(p => p.Id == id);
+        if (pane == null) return;
+        pane.Name = name;
+        pane.IsAutoName = false;    // user committed a name — never auto-overwrite
+        _store.Save();
+        PushState();
+    }
+
+    private void OnPaneRecolor(JsonElement root)
+    {
+        if (!TryGuid(root, "paneId", out var id)) return;
+        if (!root.TryGetProperty("colorIndex", out var c)) return;
+        if (!c.TryGetInt32(out var idx)) return;
+        // Palette has 6 colors; wrap user input safely.
+        idx = ((idx % 6) + 6) % 6;
+        var sess = OwningSession(id);
+        if (sess == null) return;
+        var pane = AllLeaves(sess.Root).FirstOrDefault(p => p.Id == id);
+        if (pane == null) return;
+        pane.ColorIndex = idx;
+        _store.Save();
+        PushState();
+    }
+
+    // OSC 7 from the pane's shell — give us the cwd, we figure out the
+    // branch. Cached per pane so we don't shell-out to git on every prompt
+    // redraw (PowerShell fires OSC 7 on every Enter, even when cwd hasn't
+    // changed). Branch update pushes state when it actually changes.
+    private readonly Dictionary<Guid, string> _paneCwd = new();
+    private void OnPaneCwd(JsonElement root)
+    {
+        if (!TryGuid(root, "paneId", out var id)) return;
+        if (!root.TryGetProperty("cwd", out var c)) return;
+        var cwd = c.GetString();
+        if (string.IsNullOrEmpty(cwd)) return;
+        if (_paneCwd.TryGetValue(id, out var prev) && prev == cwd) return;
+        _paneCwd[id] = cwd;
+        var sess = OwningSession(id);
+        if (sess == null) return;
+        var pane = AllLeaves(sess.Root).FirstOrDefault(p => p.Id == id);
+        if (pane == null) return;
+        // Resolve the branch off-thread — git can take 50–200ms on a big
+        // repo and we don't want to stall the message pump. Also try to
+        // auto-name the session by the repo basename (so "tab per repo"
+        // works without manual rename) — but only when the title still
+        // looks like our default ("main" / "session" / "session N").
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            var branch  = await GitProc.BranchAsync(cwd!);
+            var repoTop = sess.IsAutoTitle ? await GitProc.TopLevelAsync(cwd!) : null;
+            await Dispatcher.InvokeAsync(() =>
+            {
+                var dirty = false;
+                if (branch != null && pane.Branch != branch) { pane.Branch = branch; dirty = true; }
+                if (!string.IsNullOrEmpty(repoTop) && sess.IsAutoTitle)
+                {
+                    var name = System.IO.Path.GetFileName(repoTop!.TrimEnd('/', '\\'));
+                    if (!string.IsNullOrEmpty(name) && sess.Title != name)
+                    {
+                        sess.Title = name;
+                        _store.Save();
+                        dirty = true;
+                    }
+                }
+                if (dirty) PushState();
+            });
+        });
+    }
+
+    // Git helpers moved to GitProc.cs — pure static, no MainWindow state.
+
+    private UrlPaneController? _urlPaneCtrl;
+
+    // Win32 message constants kept here for future use. We previously
+    // hooked WM_ENTERSIZEMOVE/EXITSIZEMOVE to hide URL panes during drag
+    // but the show timing race made the WebView2 reappear at a stale
+    // position. Simpler approach: rely on SizeChanged → ui.urlpane.relayout
+    // → page re-emits rect → host MoveTo. forceRefit() invalidates the
+    // cache so the rect is always re-sent.
+    private IntPtr MainWndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+        => IntPtr.Zero;
+
+    // -------------------------------------------------------------------
+    // URL-pane WebView2 overlay management.
+    //
+    // The webview-side UrlPane is a thin placeholder div that reports its
+    // bounding rect on every layout change. We use that rect to position
+    // a real WebView2 control on the WPF Canvas overlay so URL panes
+    // aren't subject to iframe restrictions (X-Frame-Options, CSP) — they
+    // get a full browser instance instead.
+    //
+    // Lifecycle:
+    //   urlpane.layout (first time) → instantiate WebView2 + navigate
+    //   urlpane.layout (subsequent)  → reposition + resize
+    //   urlpane.dispose              → tear down
+    //   session swap / pane close    → dispose all that are no longer in tree
+
+    // URL-pane lifecycle is owned by UrlPaneController — see that file for
+    // the SetParent + DIP→pixel math + WebView2 ownership. MainWindow only
+    // forwards the two dispatch messages + the auto-title callback.
+
+    private void OnUrlPaneLayout(JsonElement root)  => _urlPaneCtrl?.OnLayout(root);
+    private void OnUrlPaneDispose(JsonElement root) => _urlPaneCtrl?.OnDispose(root);
+
+    /// Rename a pane to the website's <title> — but only if the user
+    /// hasn't already manually renamed it (IsAutoName guard).
+    private void ApplyAutoTitle(Guid paneId, string title)
+    {
+        var sess = OwningSession(paneId);
+        if (sess == null) return;
+        var pane = AllLeaves(sess.Root).FirstOrDefault(p => p.Id == paneId);
+        if (pane == null) return;
+        if (!pane.IsAutoName) return;     // user committed a name
+        // Trim absurdly long titles (some sites set 200+ char titles).
+        if (title.Length > 60) title = title.Substring(0, 60).TrimEnd() + "…";
+        if (pane.Name == title) return;
+        pane.Name = title;
         _store.Save();
         PushState();
     }
@@ -498,6 +792,16 @@ public partial class MainWindow : FluentWindow
     // with the original leaf + a fresh sibling as its two children, returning
     // the (possibly new) root. Mutates `node` in place when descending into
     // splits so the caller doesn't have to rebuild upper nodes.
+    //
+    // FLAT-SPLIT behavior: when the new split is in the SAME direction as
+    // the parent we descended through, we flatten — the parent absorbs the
+    // newly-wrapped split's children directly. So splitting pane-2 to the
+    // right inside an already-vertical split yields three flat siblings
+    // (pane-1 | pane-2 | pane-3 each at 1fr) instead of nested
+    // (pane-1 | (pane-2 | pane-3) with the new pane taking half of pane-2).
+    // Same applies to horizontal splits ("down" inside an already-down
+    // split). flex: 1 1 0 on .split children then gives even sizing for
+    // any pane count.
     private static PaneNode? SplitImpl(PaneNode node, Guid paneId, SplitOrientation dir, PaneNode newSibling)
     {
         if (node.IsLeaf)
@@ -512,7 +816,20 @@ public partial class MainWindow : FluentWindow
         for (int i = 0; i < node.Children.Count; i++)
         {
             var rep = SplitImpl(node.Children[i], paneId, dir, newSibling);
-            if (rep != null) { node.Children[i] = rep; return node; }
+            if (rep == null) continue;
+            // Flatten: if the replacement is a split in the same direction
+            // as us, splice its children into our children list at the
+            // same index instead of nesting it.
+            if (rep.Split == node.Split)
+            {
+                node.Children.RemoveAt(i);
+                node.Children.InsertRange(i, rep.Children);
+            }
+            else
+            {
+                node.Children[i] = rep;
+            }
+            return node;
         }
         return null;
     }
@@ -554,37 +871,43 @@ public partial class MainWindow : FluentWindow
                 type = "state",
                 activeSessionId = _store.ActiveSessionId?.ToString("D") ?? "",
                 activePaneId    = _activePaneId?.ToString("D") ?? "",
-                sessions = _store.Sessions.Select(s => new
+                sessions = _store.Sessions.Select(s =>
                 {
-                    id    = s.Id.ToString("D"),
-                    title = s.Title,
-                    shell = s.DisplayShell,
-                    rootPane = ProjectPane(s.Root),
-                    // Stage 4 agent state. All fields are transient (reset
-                    // on shell restart) but get serialized so the page can
-                    // render pills consistently without a separate update
-                    // message.
-                    agentState = s.AgentState switch
+                    // Aggregate per-pane state to the session row. Most-urgent
+                    // wins: Waiting > Working > Done > Idle. The first pane
+                    // with the winning state also lends its activity detail
+                    // and notification (so the sidebar shows the one that
+                    // wants attention).
+                    var leaves = AllLeaves(s.Root).ToArray();
+                    var aggState = AggregateState(leaves);
+                    var attentionPane = leaves.FirstOrDefault(p => p.AgentState == aggState)
+                                     ?? leaves.FirstOrDefault();
+                    var anyNotify = leaves.FirstOrDefault(p => p.HasNotification);
+                    var paneCount = leaves.Length;
+                    var waitingCount = leaves.Count(p => p.AgentState == AgentState.Waiting);
+                    var workingCount = leaves.Count(p => p.AgentState == AgentState.Working);
+                    return new
                     {
-                        AgentState.Working => "working",
-                        AgentState.Waiting => "waiting",
-                        AgentState.Done    => "done",
-                        _                  => "idle",
-                    },
-                    activityDetail = s.ActivityDetail,
-                    branch         = s.Branch,
-                    ports          = s.Ports,
-                    notification = string.IsNullOrEmpty(s.NotificationText) ? null : new
-                    {
-                        text  = s.NotificationText,
-                        level = s.NotificationLevel switch
+                        id    = s.Id.ToString("D"),
+                        title = s.Title,
+                        shell = s.DisplayShell,
+                        rootPane = ProjectPane(s.Root),
+                        agentState = StateToString(aggState),
+                        activityDetail = attentionPane?.ActivityDetail ?? "",
+                        // Branch + ports aggregate by union; user typically
+                        // has one branch per pane (one per worktree).
+                        branch = leaves.Select(p => p.Branch).FirstOrDefault(b => !string.IsNullOrEmpty(b)) ?? "",
+                        ports  = leaves.SelectMany(p => p.Ports).Distinct().ToArray(),
+                        notification = anyNotify == null ? null : new
                         {
-                            NotificationLevel.Success => "success",
-                            NotificationLevel.Warn    => "warn",
-                            NotificationLevel.Error   => "error",
-                            _                         => "info",
+                            text  = anyNotify.NotificationText,
+                            level = LevelToString(anyNotify.NotificationLevel),
                         },
-                    },
+                        // Pane breakdown so the sidebar can say "3 panes · 1 waiting".
+                        paneCount,
+                        waitingCount,
+                        workingCount,
+                    };
                 }).ToArray(),
             };
             Web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(snap));
@@ -601,6 +924,24 @@ public partial class MainWindow : FluentWindow
                 paneId = node.Id.ToString("D"),
                 name = node.Name ?? "pane",
                 url = node.Url,
+                colorIndex = node.ColorIndex,
+                // Per-pane state — shows up in the pane header so each
+                // pane's agent status is visible at a glance, no clicking
+                // through the sidebar to figure out which one needs you.
+                agentState = StateToString(node.AgentState),
+                activityDetail = node.ActivityDetail,
+                branch = node.Branch,
+                ports  = node.Ports,
+                /* Commits made since cc session-start (HEAD baseline). 0 when
+                 * no session is active. Surfaces as "+N commits" chip in the
+                 * pane header so the user can see at a glance how much work
+                 * the agent has actually landed. */
+                commitCount = node.CommitCount,
+                notification = string.IsNullOrEmpty(node.NotificationText) ? null : new
+                {
+                    text  = node.NotificationText,
+                    level = LevelToString(node.NotificationLevel),
+                },
             };
         return new
         {
@@ -609,6 +950,34 @@ public partial class MainWindow : FluentWindow
             children = node.Children.Select(ProjectPane).ToArray(),
         };
     }
+
+    /// Most-urgent state across panes. Drives the session row indicator.
+    /// Order: Waiting > Working > Done > Idle.
+    private static AgentState AggregateState(IEnumerable<PaneNode> leaves)
+    {
+        var seen = AgentState.Idle;
+        foreach (var p in leaves)
+        {
+            if (p.AgentState == AgentState.Waiting) return AgentState.Waiting;
+            if (p.AgentState == AgentState.Working) seen = AgentState.Working;
+            else if (p.AgentState == AgentState.Done && seen != AgentState.Working) seen = AgentState.Done;
+        }
+        return seen;
+    }
+    private static string StateToString(AgentState s) => s switch
+    {
+        AgentState.Working => "working",
+        AgentState.Waiting => "waiting",
+        AgentState.Done    => "done",
+        _                  => "idle",
+    };
+    private static string LevelToString(NotificationLevel l) => l switch
+    {
+        NotificationLevel.Success => "success",
+        NotificationLevel.Warn    => "warn",
+        NotificationLevel.Error   => "error",
+        _                         => "info",
+    };
 
     private void PostPaneOut(Guid paneId, ReadOnlyMemory<byte> bytes)
     {

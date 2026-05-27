@@ -59,6 +59,20 @@ internal static class HookHandler
         {
             case "session-start":
                 Send(pipeName, new { type = "status", state = "working", detail = "claude started" });
+                // Capture HEAD as the commit-count baseline for THIS cc
+                // session. Host recomputes count via git rev-list on each
+                // subsequent state change. No git? No baseline — nothing
+                // surfaces, no harm.
+                var baseline = TryGitRevParseHead();
+                if (!string.IsNullOrEmpty(baseline))
+                    Send(pipeName, new { type = "git.baseline", sha = baseline });
+                break;
+
+            case "session-end":
+                Send(pipeName, new { type = "status", state = "idle", detail = (string?)null });
+                // Clear the baseline so the count doesn't keep ticking after
+                // the cc session ends.
+                Send(pipeName, new { type = "git.baseline", sha = "" });
                 break;
 
             case "prompt-submit":
@@ -81,10 +95,6 @@ internal static class HookHandler
             case "subagent-stop":
                 // Subagent finished; not a state transition for the top-level
                 // pane. Skip — agents tend to fire many of these.
-                break;
-
-            case "session-end":
-                Send(pipeName, new { type = "status", state = "idle", detail = (string?)null });
                 break;
 
             case "pre-tool-use":
@@ -129,6 +139,33 @@ internal static class HookHandler
         }
         if (s != null && maxLen > 0 && s.Length > maxLen) s = s.Substring(0, maxLen) + "…";
         return s;
+    }
+
+    /// Run `git rev-parse HEAD` in the cwd Claude was launched from. Returns
+    /// the sha on success, null if git fails (no repo, no git on PATH, etc).
+    /// Synchronous + short timeout — the hook must stay fast.
+    private static string? TryGitRevParseHead()
+    {
+        try
+        {
+            using var p = new System.Diagnostics.Process
+            {
+                StartInfo = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "git",
+                    Arguments = "rev-parse HEAD",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                },
+            };
+            if (!p.Start()) return null;
+            if (!p.WaitForExit(1500)) { try { p.Kill(); } catch { } return null; }
+            if (p.ExitCode != 0) return null;
+            return p.StandardOutput.ReadToEnd().Trim();
+        }
+        catch { return null; }
     }
 
     private static void Send(string pipeName, object payload)

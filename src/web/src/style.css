@@ -78,42 +78,128 @@ ul { list-style: none; padding: 0; margin: 0; }
  *   | sidebar | workspace |
  *   +-- statusbar --------+
  */
+/* Window padding + inter-column gap. Mica shows through the gap so the
+ * sidebar and workspace each read as cards floating on the OS backdrop —
+ * see docs/DESIGN-BIBLE.md "Surface tone". When the sidebar collapses,
+ * the grid column goes to 0 + the column gap disappears so the workspace
+ * uses the full window width. */
 #app {
   display: grid;
   grid-template-columns: 240px 1fr;
-  grid-template-rows: 1fr auto;
-  grid-template-areas:
-    "sidebar  workspace"
-    "statusbar statusbar";
+  grid-template-rows: 1fr;
+  grid-template-areas: "sidebar workspace";
+  column-gap: var(--sp-8);
+  /* No top padding — the WPF title bar already provides the breathing
+   * room. With padding-top, the sidebar and workspace cards float below
+   * the title bar with a strip of dead space above them. */
+  padding: 0 var(--sp-8) var(--sp-8) var(--sp-8);
   height: 100%;
+  box-sizing: border-box;
+  transition: grid-template-columns var(--dur-normal) var(--ease-entry);
+}
+#app.app--sidebar-collapsed {
+  grid-template-columns: 0 1fr;
+  column-gap: 0;
 }
 
-/* --- Sidebar ------------------------------------------------------------- */
+/* --- Sidebar ------------------------------------------------------------
+ * Layout mirrors Claude desktop: top-of-sidebar action(s) ("New session"),
+ * then a small section label ("Recents"), then the recents list. No
+ * bottom-anchored primary button. See CLAUDE.md "Sidebar pattern". */
 .sidebar {
   grid-area: sidebar;
   display: grid;
-  grid-template-rows: 1fr auto;
-  border-right: 1px solid var(--color-stroke);
-  padding: var(--sp-8);
+  grid-template-rows: auto auto 1fr auto;
+  background: var(--color-sidebar-surface);
+  border-radius: var(--r-card);
+  padding: var(--sp-8) var(--sp-4) var(--sp-8) var(--sp-8);
   min-width: 0;
+  gap: var(--sp-4);
+  overflow: hidden;
 }
+/* When the sidebar is collapsed, the WPF-side title-bar button is the
+ * only way back — see MainWindow.xaml. Hide the sidebar entirely so the
+ * workspace gets the full width. */
+.app--sidebar-collapsed .sidebar {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* Top action group. Each action reads as a quiet text row that fills the
+ * pill on hover — same rhythm as a selected session, no accent fill. */
+.sidebar__top-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.sidebar__action {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  width: 100%;
+  padding: 6px var(--sp-12);
+  border-radius: var(--r-pill);
+  color: var(--color-text-primary);
+  font-weight: 380;
+  text-align: left;
+  transition: background var(--dur-fast) var(--ease-entry);
+}
+.sidebar__action:hover {
+  background: var(--color-subtle-secondary);
+}
+.sidebar__action-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  color: var(--color-text-tertiary);
+  font-size: 14px;
+  line-height: 1;
+}
+.sidebar__action-label {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Tiny section label above the recents list. Uppercase / tracked caption,
+ * matches Claude's "RECENTS" treatment. */
+.sidebar__section-label {
+  margin-top: var(--sp-8);
+  padding: 0 var(--sp-12);
+  font-family: var(--font-small);
+  font-size: 11px;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+  user-select: none;
+}
+
 .session-list {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: var(--sp-4);
+  /* Tight rhythm — Claude desktop / Slack feel. 2px between rows so the
+   * pill on hover/selected still reads as discrete without the list
+   * looking gappy. */
+  gap: 2px;
 }
 
-/* Each session card is a row in the list. Active gets a subtle pill +
- * a 3px accent stripe on the inner-left (Win11 nav-item pattern). */
+/* Each session row is a single-line button: status dot, title with
+ * optional inline shell suffix, and a hover-only close icon. Hover and
+ * selected differ only by fill — no accent stripe (sidebar is secondary
+ * nav). Branch / ports / notification render on additional muted lines
+ * only when present, so quiet sessions stay tight.
+ * See CLAUDE.md "Sidebar pattern" + "Selection / accent treatment". */
 .session-item {
   position: relative;
   display: grid;
-  grid-template-columns: 4px 1fr auto;
+  grid-template-columns: 10px 1fr auto;
   align-items: center;
   gap: var(--sp-8);
-  padding: var(--sp-8) var(--sp-12);
-  border-radius: var(--r-card);
+  padding: 6px var(--sp-12);
+  border-radius: var(--r-pill);
   text-align: left;
   color: var(--color-text-primary);
   background: transparent;
@@ -125,86 +211,100 @@ ul { list-style: none; padding: 0; margin: 0; }
 .session-item--active {
   background: var(--color-subtle-tertiary);
 }
-.session-item__accent {
-  width: 3px;
-  height: 20px;
-  border-radius: 1.5px;
-  background: transparent;
-  margin-left: 1px;       /* inset from the pill's rounded corner */
-}
-.session-item--active .session-item__accent {
-  background: var(--color-accent);
-}
-.session-item__body {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;     /* allow ellipsis */
-}
-.session-item__title {
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.session-item__meta {
-  font-size: var(--type-caption-size);
-  color: var(--color-text-tertiary);
-  font-family: var(--font-small);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 
-/* Stage 4: agent state chips + notification line on the session card.
- * Chips wrap onto a new line so the sidebar doesn't grow when a session
- * has both a state pill and a branch + port badges. */
-.session-item__chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp-4);
-  margin-top: var(--sp-4);
-}
-.chip {
-  display: inline-flex;
-  align-items: center;
-  height: 18px;
-  padding: 0 var(--sp-8);
-  border-radius: 9px;
-  font-family: var(--font-small);
-  font-size: 11px;
-  line-height: 1;
-  white-space: nowrap;
-  color: var(--color-text-secondary);
-  background: var(--color-subtle-tertiary);
-}
-.chip--state {
-  font-weight: 600;
-  letter-spacing: 0.2px;
-  color: var(--color-text-primary);
-}
-.chip--state-working { background: var(--color-accent-soft); color: var(--color-text-primary); }
-.chip--state-waiting { background: rgba(252, 225, 0, 0.25);    color: var(--color-caution); }
-.chip--state-done    { background: rgba(108, 203, 95, 0.2);    color: var(--color-success); }
-.chip--badge { color: var(--color-text-secondary); }
-
-.session-item__note {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-8);
-  margin-top: var(--sp-8);
-  color: var(--color-text-primary);
-  font-size: var(--type-caption-size);
-}
-.session-item__note-dot {
-  width: 6px; height: 6px;
+/* Status dot. Color comes from --color-state-* via the data-state attr.
+ * Idle = hollow ring (transparent fill + tertiary stroke) so the column
+ * still occupies its 10px slot and the row alignment never jitters. */
+.session-item__dot {
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
-  background: var(--color-accent);
+  background: var(--color-state-idle);
+  box-shadow: inset 0 0 0 1px var(--color-text-tertiary);
   flex: 0 0 auto;
 }
-.session-item__note--success .session-item__note-dot { background: var(--color-success); }
-.session-item__note--warn    .session-item__note-dot { background: var(--color-caution); }
-.session-item__note--error   .session-item__note-dot { background: var(--color-error); }
+.session-item__dot[data-state="working"] {
+  background: var(--color-state-working);
+  box-shadow: none;
+}
+.session-item__dot[data-state="waiting"] {
+  background: var(--color-state-waiting);
+  box-shadow: none;
+}
+.session-item__dot[data-state="done"] {
+  background: var(--color-state-done);
+  box-shadow: none;
+}
+.session-item__dot[data-state="error"] {
+  background: var(--color-state-error);
+  box-shadow: none;
+}
+
+.session-item__primary {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-4);
+  min-width: 0;     /* allow ellipsis */
+  overflow: hidden;
+}
+.session-item__title {
+  /* Inter at the variable axis 380 (between Light and Regular). Renders
+   * closer to Söhne 400 weight, which is what Claude desktop uses. The
+   * variable-font axis goes 100–900 continuously per @font-face. */
+  font-weight: 380;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.session-item__shell {
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* Secondary metadata line (branch + ports). Appears below the primary
+ * line when present, spanning the title column. Tertiary color, small
+ * type, no chip pills — Claude-style "just text, calmer." */
+.session-item__meta {
+  grid-column: 2 / 3;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-8);
+  margin-top: 2px;
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+}
+.session-item__meta-item--alert {
+  color: var(--color-caution);
+}
+
+/* Notification line: colored leading character + text. Same lifetime as
+ * NotificationText on the host. Compact — sits inside the row's pill. */
+.session-item__note {
+  grid-column: 2 / 3;
+  display: flex;
+  align-items: center;
+  margin-top: 2px;
+  font-size: var(--type-caption-size);
+  color: var(--color-text-secondary);
+}
+.session-item__note::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  margin-right: var(--sp-8);
+  flex: 0 0 auto;
+}
+.session-item__note--success::before { background: var(--color-success); }
+.session-item__note--warn::before    { background: var(--color-caution); }
+.session-item__note--error::before   { background: var(--color-error); }
 
 .session-item__close {
   width: 22px;
@@ -231,33 +331,54 @@ ul { list-style: none; padding: 0; margin: 0; }
   color: var(--color-text-primary);
 }
 
-.sidebar__footer {
-  padding-top: var(--sp-8);
-  border-top: 1px solid var(--color-stroke);
-  margin-top: var(--sp-8);
-}
-.sidebar__primary {
-  width: 100%;
-  padding: var(--sp-8) var(--sp-12);
-  border-radius: var(--r-card);
-  background: transparent;
-  color: var(--color-text-primary);
-  font-weight: 600;
-  text-align: left;
-  transition: background var(--dur-fast) var(--ease-entry);
-}
-.sidebar__primary:hover { background: var(--color-subtle-secondary); }
-
 /* --- Workspace / pane tree -----------------------------------------------
  * The workspace is a recursive flex layout: each .split contains exactly
  * two children (sub-splits or leaf .panes); .split--v lays them side by
  * side, .split--h stacks them. Each leaf .pane is a column of header +
  * terminal canvas. */
+/* Workspace area. The outer #app padding handles the window-edge gap;
+ * splits use the gap CSS property to space their children. Each .pane
+ * is its own rounded card — at any level of nesting — so splits never
+ * "break" the rounded edges or eat the gap.
+ *
+ * The opacity transition fires on session swap: workspace.ts toggles
+ * .workspace--switching for a brief crossfade between sessions. State /
+ * focus changes within the same session NEVER trigger this — they're
+ * incremental DOM updates so transitions on existing elements survive. */
 .workspace {
   grid-area: workspace;
   min-height: 0;
   min-width: 0;
   display: flex;
+  opacity: 1;
+  transition: opacity var(--dur-normal) var(--ease-entry);
+}
+.workspace--switching {
+  opacity: 0;
+}
+
+/* Newly-created pane fade-in. workspace.ts adds .pane--entering on each
+ * Pane/UrlPane that's freshly constructed; the @keyframes animation
+ * plays once, then animationend strips the class. */
+.pane--entering {
+  animation: pane-enter var(--dur-normal) var(--ease-entry);
+}
+@keyframes pane-enter {
+  from { opacity: 0; transform: scale(0.97); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+/* Closing pane fade-out + slight shrink. workspace.ts marks .pane--leaving
+ * before disposing — the animation runs for 200ms then the DOM is
+ * detached. pointer-events:none so a half-faded pane doesn't intercept
+ * clicks. `forwards` keeps the final opacity until removal. */
+.pane--leaving {
+  animation: pane-leave var(--dur-normal) var(--ease-exit) forwards;
+  pointer-events: none;
+}
+@keyframes pane-leave {
+  from { opacity: 1; transform: scale(1); }
+  to   { opacity: 0; transform: scale(0.94); }
 }
 .workspace > .pane,
 .workspace > .split {
@@ -268,8 +389,12 @@ ul { list-style: none; padding: 0; margin: 0; }
   display: flex;
   min-height: 0;
   min-width: 0;
-  gap: 1px;
-  background: var(--color-stroke);  /* the gap renders as a 1px divider */
+  /* Real gap between split children so each pane keeps its rounded
+   * edges. Mica / sidebar background shows through the gap. Previously
+   * this was a 1px stroke pretending to be a divider — switching to a
+   * real gap makes splits feel like discrete cards. */
+  gap: var(--sp-8);
+  background: transparent;
 }
 .split--h { flex-direction: column; }
 .split--v { flex-direction: row; }
@@ -285,24 +410,43 @@ ul { list-style: none; padding: 0; margin: 0; }
   min-width: 0;
   position: relative;
   background: var(--color-terminal-bg);
-  border: 1px solid transparent;
-  /* border-box so the active border is included in flex sizing -- with
-   * content-box (the default) the right border overflows the workspace
-   * and is clipped by the window edge. */
+  /* Every pane is a rounded card — at any nesting depth — so splits
+   * never butcher the rounded edges. overflow:hidden clips the xterm
+   * canvas / iframe content into the rounded shape. */
+  border-radius: var(--r-card);
+  overflow: hidden;
+  /* Two-step focus indicator, both neutral white (no blue):
+   *   - unfocused: 1px @ 0.06 — present but quiet, gives every pane
+   *     a defined edge so split children read as cards.
+   *   - focused: 1px @ 0.22 + an outer 1px @ 0.08 box-shadow that fades
+   *     in as a "halo" so focus is unmistakable without ever shouting.
+   * See docs/DESIGN-BIBLE.md "Selection / hover / focus". */
+  border: 1px solid rgba(255, 255, 255, 0.06);
   box-sizing: border-box;
-  transition: border-color var(--dur-fast) var(--ease-entry);
+  transition:
+    border-color 250ms var(--ease-entry),
+    box-shadow 250ms var(--ease-entry);
 }
 .pane--active {
-  border-color: var(--color-accent-soft);
+  border-color: rgba(255, 255, 255, 0.22);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08);
 }
+/* Pane header — color tag · name · state dot + word · close.
+ *   - color tag: persistent feature-marker the user assigns
+ *   - name: editable inline (double-click)
+ *   - state: per-pane agent state from cmux status
+ *   - close: hover-only ✕
+ * Caption-tier type, tertiary color, no chrome. The header is metadata,
+ * not a tab — quiet so it doesn't compete with the terminal content. */
 .pane__header {
   display: flex;
   align-items: center;
+  gap: 6px;
   height: 22px;
   padding: 0 var(--sp-8);
   font-family: var(--font-small);
-  font-size: var(--type-caption-size);
-  color: var(--color-text-secondary);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
   background: transparent;
   flex: 0 0 auto;
 }
@@ -311,10 +455,157 @@ ul { list-style: none; padding: 0; margin: 0; }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  cursor: text;
+  /* Name color follows the pane's color tag — features show their identity
+   * in their tag color so when you glance across 3-5 panes each working on
+   * a different feature, you read by color first, then text. */
+  color: var(--color-pane-tag-0);
+  font-weight: 500;
+}
+.pane[data-color="0"] .pane__name { color: var(--color-pane-tag-0); }
+.pane[data-color="1"] .pane__name { color: var(--color-pane-tag-1); }
+.pane[data-color="2"] .pane__name { color: var(--color-pane-tag-2); }
+.pane[data-color="3"] .pane__name { color: var(--color-pane-tag-3); }
+.pane[data-color="4"] .pane__name { color: var(--color-pane-tag-4); }
+.pane[data-color="5"] .pane__name { color: var(--color-pane-tag-5); }
+.pane__name-input {
+  flex: 1 1 auto;
+  background: var(--color-subtle-secondary);
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--r-input);
+  color: var(--color-text-primary);
+  font: inherit;
+  padding: 0 4px;
+  outline: none;
+  min-width: 0;
+}
+.pane__name-input:focus {
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+/* Color-tag dot. Click cycles palette. Slightly larger hit area than the
+ * 8px dot so it's clickable but not visually heavy. */
+.pane__color {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-pane-tag-0);
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  cursor: pointer;
+  transition: transform var(--dur-fast) var(--ease-entry);
+}
+.pane__color:hover { transform: scale(1.3); }
+
+/* Color picker popup — anchored under the pane's color dot. Same acrylic
+ * family as the link menu. */
+.color-picker {
+  position: fixed;
+  display: grid;
+  grid-template-columns: repeat(6, auto);
+  gap: 6px;
+  padding: 8px;
+  border-radius: var(--r-card);
+  background: rgba(28, 28, 28, 0.96);
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  border: 1px solid var(--color-stroke);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  z-index: 30;
+}
+.color-picker__swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  margin: 0;
+  padding: 0;
+  cursor: pointer;
+  transition:
+    transform var(--dur-fast) var(--ease-entry),
+    border-color var(--dur-fast) var(--ease-entry);
+}
+.color-picker__swatch:hover  { transform: scale(1.15); }
+.color-picker__swatch--current { border-color: rgba(255, 255, 255, 0.6); }
+.color-picker__swatch[data-color="0"] { background: var(--color-pane-tag-0); }
+.color-picker__swatch[data-color="1"] { background: var(--color-pane-tag-1); }
+.color-picker__swatch[data-color="2"] { background: var(--color-pane-tag-2); }
+.color-picker__swatch[data-color="3"] { background: var(--color-pane-tag-3); }
+.color-picker__swatch[data-color="4"] { background: var(--color-pane-tag-4); }
+.color-picker__swatch[data-color="5"] { background: var(--color-pane-tag-5); }
+.pane__color[data-color="0"] { background: var(--color-pane-tag-0); }
+.pane__color[data-color="1"] { background: var(--color-pane-tag-1); }
+.pane__color[data-color="2"] { background: var(--color-pane-tag-2); }
+.pane__color[data-color="3"] { background: var(--color-pane-tag-3); }
+.pane__color[data-color="4"] { background: var(--color-pane-tag-4); }
+.pane__color[data-color="5"] { background: var(--color-pane-tag-5); }
+
+/* State indicator (dot + word). Same data-state attribute scheme as the
+ * sidebar row, so visual treatment stays consistent across the app. */
+.pane__state-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-state-idle);
+  box-shadow: inset 0 0 0 1px var(--color-text-tertiary);
+  flex: 0 0 auto;
+}
+.pane__state-dot[data-state="working"] {
+  background: var(--color-state-working);
+  box-shadow: none;
+}
+.pane__state-dot[data-state="waiting"] {
+  background: var(--color-state-waiting);
+  box-shadow: none;
+  /* Subtle pulse so "waiting on me" actively catches the eye. */
+  animation: pane-waiting-pulse 1.6s ease-in-out infinite;
+}
+.pane__state-dot[data-state="done"] {
+  background: var(--color-state-done);
+  box-shadow: none;
+}
+@keyframes pane-waiting-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.5; }
+}
+/* Header chips: branch (auto-detected from cwd) and commit count (cc
+ * session baseline → rev-list). Caption-tier text, subtle bg, no border.
+ * Hidden when empty (applyChips toggles display). */
+.pane__chip {
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  background: var(--color-subtle-secondary);
+  padding: 1px 6px;
+  border-radius: 8px;
+  line-height: 1.4;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+.pane__chip--commits {
+  /* Green-tinted because it's a positive metric — agent landed work. */
+  color: var(--color-success);
+  background: rgba(108, 203, 95, 0.12);
+}
+
+.pane__state-label {
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  text-transform: lowercase;
+  letter-spacing: 0.3px;
+  flex: 0 0 auto;
+}
+/* When state is waiting, push the label color to caution so the row
+ * reads "this needs you" even peripherally. */
+.pane__state-dot[data-state="waiting"] + .pane__state-label {
+  color: var(--color-caution);
 }
 .pane__close {
-  width: 20px;
-  height: 18px;
+  width: 18px;
+  height: 16px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -322,15 +613,9 @@ ul { list-style: none; padding: 0; margin: 0; }
   color: var(--color-text-tertiary);
   font-size: 10px;
   line-height: 1;
-  opacity: 0;
   transition:
-    opacity var(--dur-fast) var(--ease-entry),
     background var(--dur-fast) var(--ease-entry),
     color var(--dur-fast) var(--ease-entry);
-}
-.pane:hover .pane__close,
-.pane--active .pane__close {
-  opacity: 1;
 }
 .pane__close:hover {
   background: var(--color-subtle-tertiary);
@@ -340,6 +625,102 @@ ul { list-style: none; padding: 0; margin: 0; }
   flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
+  /* Inner padding so terminal cells don't kiss the rounded pane edge.
+   * xterm renders to a canvas inside this host; the FitAddon reads the
+   * host's content rect, so padding correctly shrinks the available
+   * cols/rows. The .pane background fills the padding area so the look
+   * is "text has breathing room," not "text on a different surface." */
+  padding: var(--sp-4) var(--sp-8) var(--sp-8);
+  box-sizing: border-box;
+}
+/* URL pane body. The outer slot provides padding between the pane border
+ * and the URL content — same rhythm as the terminal pane's --sp-4 top /
+ * --sp-8 sides/bottom. The actual WebView2 is overlaid by WPF at the
+ * INNER content rect (UrlPane reports content.getBoundingClientRect via
+ * urlpane.layout). The slot's background fills the padded ring so the
+ * WebView2 looks centered inside breathing space. */
+.pane__urlslot {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  padding: var(--sp-4) var(--sp-8) var(--sp-8);
+  background: var(--color-terminal-bg);
+  box-sizing: border-box;
+}
+.pane__urlcontent {
+  width: 100%;
+  height: 100%;
+  border-radius: var(--r-card);
+  overflow: hidden;
+}
+
+/* --- Link action menu ---------------------------------------------------
+ * Floating menu shown when the user clicks a URL in the terminal. Lives
+ * outside the normal flow (position:fixed) and dismisses on Esc /
+ * click-outside. Same acrylic family as the toast / shortcut hint. */
+.link-menu {
+  position: fixed;
+  display: flex;
+  flex-direction: column;
+  min-width: 240px;
+  padding: var(--sp-4);
+  border-radius: var(--r-card);
+  background: rgba(28, 28, 28, 0.96);
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  border: 1px solid var(--color-stroke);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  z-index: 30;
+  font-family: var(--font-text);
+  font-size: var(--type-body-size);
+  color: var(--color-text-primary);
+}
+.link-menu__url {
+  padding: var(--sp-4) var(--sp-8);
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-bottom: 1px solid var(--color-stroke);
+  margin-bottom: var(--sp-4);
+  user-select: none;
+}
+.link-menu__item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  width: 100%;
+  padding: 6px var(--sp-8);
+  border-radius: var(--r-input);
+  color: var(--color-text-primary);
+  font-weight: 380;
+  font-size: 13px;
+  text-align: left;
+  transition: background var(--dur-fast) var(--ease-entry);
+}
+.link-menu__item:hover,
+.link-menu__item:focus-visible {
+  background: var(--color-subtle-secondary);
+  outline: none;
+}
+.link-menu__icon {
+  color: var(--color-text-secondary);
+  flex: 0 0 auto;
+}
+.link-menu__label {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.link-menu__hint {
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  flex: 0 0 auto;
+  padding-left: var(--sp-12);
 }
 
 /* --- Toast --------------------------------------------------------------
@@ -451,14 +832,59 @@ ul { list-style: none; padding: 0; margin: 0; }
   color: var(--color-text-secondary);
 }
 
-/* --- Status bar ---------------------------------------------------------- */
-.status-bar {
-  grid-area: statusbar;
+/* --- Sidebar footer / identity ------------------------------------------
+ * Static identity row at the bottom of the sidebar (cmux mark + label +
+ * sub-label that doubles as the live status). Replaces the old
+ * window-bottom status bar; the status text it carries lives at
+ * #status-text exactly like before so main.ts's setStatus() still works. */
+.sidebar__footer {
+  margin-top: var(--sp-8);
+  padding-top: var(--sp-4);
+  border-top: 1px solid var(--color-sidebar-stroke);
+}
+.sidebar__identity {
   display: flex;
   align-items: center;
-  padding: var(--sp-4) var(--sp-16);
-  font-family: var(--font-small);
-  font-size: var(--type-caption-size);
+  gap: var(--sp-8);
+  width: 100%;
+  padding: 6px var(--sp-12);
+  border-radius: var(--r-pill);
+  color: var(--color-text-primary);
+  text-align: left;
+  transition: background var(--dur-fast) var(--ease-entry);
+}
+.sidebar__identity:hover {
+  background: var(--color-subtle-secondary);
+}
+.sidebar__identity-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--r-input);
+  background: var(--color-subtle-tertiary);
   color: var(--color-text-secondary);
-  border-top: 1px solid var(--color-stroke);
+  font-size: 13px;
+  line-height: 1;
+  flex: 0 0 auto;
+}
+.sidebar__identity-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.sidebar__identity-name {
+  font-weight: 380;
+  font-size: 13px;
+  color: var(--color-text-primary);
+}
+.sidebar__identity-sub {
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }

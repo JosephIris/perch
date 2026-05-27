@@ -11,6 +11,34 @@
  *     host window reads through via transparent body backgrounds.
  */
 
+/* --- Webfont ------------------------------------------------------------
+ * Inter Variable (rsms/inter v4.0, OFL). Bundled at build time from
+ * src/web/fonts/ into wwwroot/fonts/ by esbuild.config.mjs.
+ *
+ * Constitution: humanist sans for chrome (Claude desktop / VS Code feel)
+ * with Segoe UI Variable in the fallback chain. See CLAUDE.md "Font
+ * family — bundled humanist sans" for the rationale. */
+@font-face {
+  font-family: "Inter Variable";
+  src: url("/fonts/InterVariable.woff2") format("woff2-variations");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: block;
+}
+
+/* Geist Mono Variable (vercel/geist-font, OFL). Bundled at build time.
+ * Picked as the terminal font because it's a humanist, SF-Mono-inspired
+ * design that pairs with Inter without feeling out of place, and the
+ * variable woff2 is small (~72KB). Falls back to Cascadia Code (system,
+ * Win11) if the bundle fails to load. */
+@font-face {
+  font-family: "Geist Mono Variable";
+  src: url("/fonts/GeistMonoVariable.woff2") format("woff2-variations");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: block;
+}
+
 :root {
   /* Spacing (px). */
   --sp-4:  4px;
@@ -23,14 +51,22 @@
 
   /* Radii. */
   --r-input:  4px;
+  --r-pill:   6px;       /* sidebar row pill — slightly tighter than card */
   --r-card:   8px;
   --r-window: 12px;
 
-  /* Type. */
-  --font-text:    "Segoe UI Variable Text",    "Segoe UI", sans-serif;
-  --font-display: "Segoe UI Variable Display", "Segoe UI", sans-serif;
-  --font-small:   "Segoe UI Variable Small",   "Segoe UI", sans-serif;
-  --font-mono:    "Cascadia Mono", "Cascadia Code", Consolas, monospace;
+  /* Type. Inter Variable first; Segoe UI Variable's optical sizes are
+   * kept in the fallback chain so the app degrades gracefully if the
+   * bundled font fails to load. */
+  --font-text:    "Inter Variable", "Segoe UI Variable Text",    "Segoe UI", sans-serif;
+  --font-display: "Inter Variable", "Segoe UI Variable Display", "Segoe UI", sans-serif;
+  --font-small:   "Inter Variable", "Segoe UI Variable Small",   "Segoe UI", sans-serif;
+  /* Terminal font. Geist Mono Variable first — bundled humanist mono
+   * inspired by SF Mono, pairs with Inter for chrome ↔ terminal cohesion.
+   * Cascadia Code stays as the next fallback (system, Win11) and renders
+   * just as well thanks to xterm's WebGL renderer extending block glyphs
+   * to the full cell. See docs/DESIGN-BIBLE.md "Font policy". */
+  --font-mono:    "Geist Mono Variable", "Cascadia Code", "Cascadia Mono", Consolas, monospace;
 
   --type-caption-size:    12px;
   --type-body-size:       14px;
@@ -46,16 +82,35 @@
   --color-bg:               transparent;             /* Mica shows through */
   --color-layer:            rgba(255, 255, 255, 0.04);
   --color-layer-alt:        rgba(255, 255, 255, 0.06);
-  --color-subtle-secondary: rgba(255, 255, 255, 0.04);
-  --color-subtle-tertiary:  rgba(255, 255, 255, 0.06);
+
+  /* Sidebar surface — opaque, intentionally DARKER than the workspace.
+   * Claude desktop / VS Code / Files all stagger the two by ~5–7 RGB
+   * units so the sidebar reads as "recessed" navigation and the main
+   * content reads as "lifted" surface — without needing a hairline /
+   * shadow / accent stripe to do that work. Keep the diff small (single
+   * digits) so the staircase stays calm. */
+  --color-sidebar-surface:  #181818;
+  --color-sidebar-stroke:   rgba(255, 255, 255, 0.04);   /* barely-there */
+
+  /* Sidebar selection / hover. Tuned to read like Claude desktop's calm
+   * pills against the opaque #1d1d1d sidebar surface. The hover/selected
+   * delta is intentional and the *only* signal of selection — no accent
+   * stripe (see CLAUDE.md "Selection / accent treatment"). */
+  --color-subtle-secondary: rgba(255, 255, 255, 0.04);   /* hover */
+  --color-subtle-tertiary:  rgba(255, 255, 255, 0.08);   /* selected */
 
   --color-stroke:           rgba(255, 255, 255, 0.08);
   --color-stroke-strong:    rgba(255, 255, 255, 0.14);
 
-  --color-text-primary:     rgba(255, 255, 255, 1);
-  --color-text-secondary:   rgba(255, 255, 255, 0.78);
-  --color-text-tertiary:    rgba(255, 255, 255, 0.54);
-  --color-text-disabled:    rgba(255, 255, 255, 0.36);
+  /* Primary text is intentionally NOT pure white. Pure 100% over dark
+   * surfaces always reads heavier than the actual font weight, which is
+   * why Claude desktop / VS Code / Files all sit around ~85–92% white for
+   * body text. We use 92% here as the body default; the bold/title use
+   * cases lift back to ~98% via per-element rules if needed. */
+  --color-text-primary:     rgba(255, 255, 255, 0.92);
+  --color-text-secondary:   rgba(255, 255, 255, 0.72);
+  --color-text-tertiary:    rgba(255, 255, 255, 0.5);
+  --color-text-disabled:    rgba(255, 255, 255, 0.34);
 
   --color-accent:           #76B9ED;
   --color-accent-strong:    #4cc2ff;
@@ -68,7 +123,36 @@
   --color-caution:          #FCE100;
   --color-error:            #FF99A4;
 
-  --color-terminal-bg:      #0c0c0c;
+  /* Status-dot palette. Drives the small colored circle on the left of
+   * each session row (replacement for the old chip pill). One CSS variable
+   * per agent state keeps the markup state-data-driven via
+   * `data-state="working"` selectors. */
+  --color-state-idle:       transparent;            /* no fill, hollow ring */
+  --color-state-working:    #4cc2ff;                /* same hue as accent */
+  --color-state-waiting:    var(--color-caution);
+  --color-state-done:       var(--color-success);
+  --color-state-error:      var(--color-error);
+
+  /* Pane color-tag palette. 6 distinguishable hues that read well on the
+   * #1f1f1f pane surface, used to mark "this pane is the simulator-fix
+   * worktree, that pane is the kanban one" — pick from a small fixed set
+   * so the user doesn't fall into a "pick a color" rabbit hole and so
+   * adjacent panes stay distinct without manual tuning. */
+  --color-pane-tag-0:       #76B9ED;   /* blue   (accent family) */
+  --color-pane-tag-1:       #6CCB5F;   /* green */
+  --color-pane-tag-2:       #FCE100;   /* yellow */
+  --color-pane-tag-3:       #FF9E5E;   /* orange */
+  --color-pane-tag-4:       #FF99A4;   /* pink/red */
+  --color-pane-tag-5:       #C792EA;   /* purple */
+
+  /* Terminal cell background. One step LIGHTER than the sidebar surface
+   * so the pane reads as the "lifted" surface and the sidebar reads as
+   * "recessed" navigation — same staircase Claude desktop / VS Code use.
+   * xterm.js renders into a canvas, so this token is read once at
+   * Terminal construction time (pane.ts) — change the value, rebuild,
+   * and existing panes need a re-open to pick it up. */
+  --color-terminal-bg:      #1f1f1f;
+  --color-terminal-fg:      rgba(255, 255, 255, 0.92);
 
   /* Motion. Win11 entry curve. */
   --ease-entry:   cubic-bezier(0.0, 0.0, 0.0, 1.0);

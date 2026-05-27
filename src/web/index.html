@@ -4,27 +4,51 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>cmux</title>
+  <link rel="preload" href="/fonts/InterVariable.woff2"
+        as="font" type="font/woff2" crossorigin />
   <link rel="stylesheet" href="/xterm.css" />
   <link rel="stylesheet" href="/app.css" />
 </head>
 <body>
   <div id="app">
     <aside class="sidebar" role="navigation" aria-label="Sessions">
-      <ul id="session-list" class="session-list" role="list"></ul>
-      <footer class="sidebar__footer">
+      <!-- Top actions. Modeled on Claude desktop's sidebar header:
+           primary verb at the top, with a labeled section ("Recents")
+           between it and the session list. -->
+      <div class="sidebar__top-actions">
         <button id="new-session-button"
-                class="sidebar__primary"
+                class="sidebar__action"
                 type="button">
-          New session
+          <span class="sidebar__action-icon" aria-hidden="true">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="1.8"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19"/>
+              <line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+          </span>
+          <span class="sidebar__action-label">New session</span>
+        </button>
+      </div>
+      <div class="sidebar__section-label">Recents</div>
+      <ul id="session-list" class="session-list" role="list"></ul>
+
+      <!-- Bottom row: app identity + (future) settings. Mirrors Claude's
+           user-info row at the bottom of the sidebar. Today it shows a
+           static app label; later it can grow a settings flyout. -->
+      <footer class="sidebar__footer">
+        <button class="sidebar__identity" type="button"
+                title="cmux for Windows" aria-label="cmux">
+          <span class="sidebar__identity-mark" aria-hidden="true">▣</span>
+          <span class="sidebar__identity-text">
+            <span class="sidebar__identity-name">cmux</span>
+            <span class="sidebar__identity-sub" id="status-text">starting…</span>
+          </span>
         </button>
       </footer>
     </aside>
 
     <main id="workspace" class="workspace"></main>
-
-    <footer class="status-bar" role="status">
-      <span id="status-text">starting...</span>
-    </footer>
 
     <!-- Toast surface for cmux notify messages. Same frosted acrylic
          family as the shortcut hint but anchored slightly higher and
