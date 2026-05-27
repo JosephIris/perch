@@ -50,6 +50,17 @@ jobs:
         working-directory: src/web
         run: npm ci
 
+      # Pre-build the web bundle BEFORE dotnet publish. The csproj's
+      # <Content Include="wwwroot\**"> item is evaluated when MSBuild
+      # loads the project (before any target runs), so on a fresh clone
+      # where wwwroot/ doesn't exist yet the Content set is empty and
+      # `dotnet publish` ships nothing under wwwroot — even though
+      # BundleWeb later populates it. Running the bundler first means
+      # wwwroot/ exists at evaluation time and the files get copied.
+      - name: Build web bundle
+        working-directory: src/web
+        run: npm run build
+
       - name: Restore
         run: dotnet restore src/CmuxWin/CmuxWin.csproj
 
