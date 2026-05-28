@@ -118,8 +118,9 @@ export class UrlPane {
     );
   }
   focus() { /* native WebView2 handles its own focus */ }
-  changeFontSize(_delta: number) { /* no-op */ }
-  resetFontSize() { /* no-op */ }
+  changeFontSize(_delta: number): number { return 0; }
+  resetFontSize(): number { return 0; }
+  setFontSize(_size: number) { /* no-op */ }
 
   applyLeafView(leaf: Extract<PaneTreeView, { kind: "leaf" }>) {
     this.nameEl.textContent = leaf.name;
@@ -128,6 +129,7 @@ export class UrlPane {
       leaf.agentState === "idle" ? "" : leaf.agentState;
     this.colorDotEl.dataset.color = String(leaf.colorIndex);
     this.element.dataset.color = String(leaf.colorIndex);
+    this.element.dataset.state = leaf.agentState;
     applyChips(this.branchEl, this.commitsEl, leaf);
     // The URL itself doesn't change once a pane is created — but if it
     // ever does (future feature), we'd want to re-navigate. The layout

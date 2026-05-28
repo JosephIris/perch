@@ -16,10 +16,22 @@ import { buildPaneHeader, applyChips } from "./pane-header.js";
 // URL regex — same as @xterm/addon-web-links's strictUrlRegex, copied so
 // our custom provider doesn't depend on the addon at all. Matches
 // http(s)://… up to the first whitespace / quote / disallowed-final.
+//
+// IMPORTANT: control bytes (\x00-\x1F including ESC) are excluded from
+// BOTH char classes. Without this, the regex happily absorbs an ANSI
+// escape sequence that immediately follows a URL ("http://x.com\x1b[0m"),
+// causing injectUrlUnderlines to stick its \x1b[24m INSIDE that
+// sequence, splitting "[0m" off as literal text and leaving the
+// underline ON for the rest of the line — which is exactly the bug
+// users saw where the underline extended past the URL.
 const URL_RE =
-  /(https?|HTTPS?):[/]{2}[^\s"'!*(){}|\\\^<>`]*[^\s"':,.!?{}|\\\^~\[\]`()<>]/;
+  /(https?|HTTPS?):[/]{2}[^\s\x00-\x1f"'!*(){}|\\\^<>`]*[^\s\x00-\x1f"':,.!?{}|\\\^~\[\]`()<>]/;
 
 const utf8 = new TextEncoder();
+
+export const DEFAULT_FONT_SIZE = 13;
+export const MIN_FONT_SIZE = 9;
+export const MAX_FONT_SIZE = 32;
 
 export class Pane {
   readonly paneId: string;
@@ -38,7 +50,7 @@ export class Pane {
   private lastRows = -1;
   private observer?: ResizeObserver;
 
-  constructor(paneId: string, name: string) {
+  constructor(paneId: string, name: string, fontSize: number = DEFAULT_FONT_SIZE) {
     this.paneId = paneId;
 
     this.element = document.createElement("div");
@@ -72,7 +84,7 @@ export class Pane {
     this.term = new Terminal({
       fontFamily:
         '"Geist Mono Variable", "Cascadia Code", "Cascadia Mono", Consolas, monospace',
-      fontSize: 13,
+      fontSize: clampFontSize(fontSize),
       // Bump the variable-font weight axis. Geist Mono Variable supports
       // 100–900; 600 / 800 gives a denser, more present terminal that
       // pairs with Inter at 380 in the chrome (chrome reads light,
@@ -87,8 +99,24 @@ export class Pane {
       lineHeight: 1.0,
       cursorBlink: true,
       cursorStyle: "block",
+      // When the xterm Terminal isn't focused, draw nothing for the
+      // cursor — eliminates the "two blinking cursors fighting for the
+      // eye" effect that shows up the moment a second pane is alive.
+      // workspace.setActive routes focus to the active pane and explicitly
+      // blurs the previously-active one, so xterm's own focused/blurred
+      // state stays in sync with which pane the user is acting on.
+      cursorInactiveStyle: "none",
       allowProposedApi: true,
       scrollback: 10_000,
+      // Tell xterm we're driving it from a ConPTY (Windows' pseudo-tty).
+      // This switches xterm's reflow heuristics into ConPTY mode: lines
+      // that wrap in the buffer are tracked with a per-line "this came in
+      // as a continuation" flag, so a width change re-wraps coherently
+      // instead of leaving fragments stranded in the scrollback. Without
+      // this, resizing a pane mid-output (the common case: drag a split
+      // boundary while Claude is streaming) corrupted the visible
+      // scrollback. Supersedes the deprecated windowsMode flag.
+      windowsPty: { backend: "conpty" },
       theme: {
         background: "#1f1f1f",
         foreground: "rgba(255, 255, 255, 0.92)",
@@ -227,6 +255,13 @@ export class Pane {
 
   setActive(active: boolean) {
     this.element.classList.toggle("pane--active", active);
+    // Drive xterm's own focused state in lockstep with whether we're the
+    // active pane. Without this, every Terminal a user has clicked stays
+    // "focused" from xterm's perspective and renders its own blinking
+    // cursor — with cursorInactiveStyle="none" this blur() is what makes
+    // inactive panes go cursor-free instead of double-blinking.
+    if (active) this.term.focus();
+    else        this.term.blur();
   }
 
   setName(name: string) {
@@ -245,21 +280,41 @@ export class Pane {
     // .pane__name text in the same color as the dot — features pop
     // visually distinct without the user reading the name.
     this.element.dataset.color = String(leaf.colorIndex);
+    // data-state on the pane element drives the attention-pulse border
+    // animation when the agent reports "waiting" (typically: needs
+    // permission). The CSS pulses border-color, no shadow — see the
+    // [data-state="waiting"] rule in style.css.
+    this.element.dataset.state = leaf.agentState;
     applyChips(this.branchEl, this.commitsEl, leaf);
   }
 
   /** Bump the terminal font size by `delta` px, clamped to [9, 32].
-   * Re-fits afterward so cols/rows reflect the new cell metrics. */
-  changeFontSize(delta: number) {
-    const next = Math.max(9, Math.min(32, (this.term.options.fontSize ?? 13) + delta));
+   * Re-fits afterward so cols/rows reflect the new cell metrics.
+   * Returns the resulting size (already clamped) so callers can ship it
+   * to the host for persistence. */
+  changeFontSize(delta: number): number {
+    const next = clampFontSize((this.term.options.fontSize ?? DEFAULT_FONT_SIZE) + delta);
+    this.setFontSize(next);
+    return next;
+  }
+
+  /** Reset the terminal font size to the default. */
+  resetFontSize(): number {
+    this.setFontSize(DEFAULT_FONT_SIZE);
+    return DEFAULT_FONT_SIZE;
+  }
+
+  /** Apply a font size from the outside (e.g. on initial prefs push from
+   *  host). Idempotent — skips the refit if the value already matches. */
+  setFontSize(size: number) {
+    const next = clampFontSize(size);
+    if (this.term.options.fontSize === next) return;
     this.term.options.fontSize = next;
     this.forceRefit();
   }
 
-  /** Reset the terminal font size to the default. */
-  resetFontSize() {
-    this.term.options.fontSize = 13;
-    this.forceRefit();
+  getFontSize(): number {
+    return this.term.options.fontSize ?? DEFAULT_FONT_SIZE;
   }
 
   /** Force a fresh fit + resize report. Used when the pane is reattached
@@ -297,6 +352,11 @@ export class Pane {
       send({ type: "pane.resize", paneId: this.paneId, cols, rows });
     });
   }
+}
+
+function clampFontSize(n: number): number {
+  if (!Number.isFinite(n)) return DEFAULT_FONT_SIZE;
+  return Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, Math.round(n)));
 }
 
 // ---- OSC 7 parser ----------------------------------------------------------

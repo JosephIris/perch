@@ -43,7 +43,18 @@ export type OutMessage =
    * sizes a real WebView2 control to match. First layout creates the
    * WebView2; subsequent layouts reposition/resize. */
   | { type: "urlpane.layout"; paneId: string; url: string; x: number; y: number; w: number; h: number }
-  | { type: "urlpane.dispose"; paneId: string };
+  | { type: "urlpane.dispose"; paneId: string }
+  /* User preferences (terminal font size, etc.) — host persists to
+   * Settings.cs so it survives restart. */
+  | { type: "prefs.set"; fontSize?: number }
+  /* Settings dialog: page asks the host for current settings + the list
+   * of detected shells, host replies with a settings.data message. */
+  | { type: "settings.request" }
+  /* Settings dialog save. Each field is optional so the page can send a
+   * partial update; the host only overwrites provided keys. defaultShell
+   * is the shell COMMAND LINE (matching one of settings.data.shells[].cmd)
+   * or "" for auto-detect. */
+  | { type: "settings.save"; defaultShell?: string; defaultCwd?: string; fontSize?: number };
 
 // ---- Incoming message shapes (host -> page) --------------------------------
 
@@ -94,6 +105,10 @@ export type StateMessage = {
   activeSessionId: string;
   activePaneId: string;
   sessions: SessionView[];
+  /* User preferences ferried with every state push — cheap and means the
+   * page never has to ask. fontSize is the default terminal cell size
+   * applied to new Panes; existing panes follow it too on every state. */
+  prefs: { fontSize: number };
 };
 
 export type ToastMessage = {
@@ -102,18 +117,36 @@ export type ToastMessage = {
   level: NotificationLevel;
 };
 
+/* Reply to settings.request. shells is the host's detected-shell list;
+ * cmd is the command line to store as defaultShell. defaultCwdResolved is
+ * what an empty defaultCwd falls back to (shown as the input placeholder
+ * so the user sees where new sessions actually land). */
+export type SettingsDataMessage = {
+  type: "settings.data";
+  shells: { name: string; cmd: string }[];
+  defaultShell: string;
+  defaultCwd: string;
+  defaultCwdResolved: string;
+  fontSize: number;
+};
+
 export type InMessage =
   | StateMessage
   | { type: "pane.out"; paneId: string; b64: string }
   | { type: "pane.exit"; paneId: string; code: number }
   | ToastMessage
+  | SettingsDataMessage
   | { type: "host.error"; message: string }
   /* UI commands the WPF host can issue to the webview (e.g. a chrome
    * button in the title bar telling the webview to flip a class). */
   | { type: "ui.sidebar.toggle" }
   /* Triggered on main-window move/resize so URL panes re-emit their
    * placeholder rect and the host can reposition the child Windows. */
-  | { type: "ui.urlpane.relayout" };
+  | { type: "ui.urlpane.relayout" }
+  /* Host asks the page to open the settings dialog (title-bar gear or the
+   * test harness). The page already has the open path wired to the
+   * sidebar gear; this just lets the host trigger it too. */
+  | { type: "ui.open-settings" };
 
 // ---- Implementation --------------------------------------------------------
 

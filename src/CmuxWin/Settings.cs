@@ -70,5 +70,11 @@ public sealed class Settings
 }
 
 [JsonSerializable(typeof(Settings))]
-[JsonSourceGenerationOptions(WriteIndented = true)]
+// AllowNamedFloatingPointLiterals so WindowLeft/Top = NaN (the "no recorded
+// position yet" sentinel) round-trips as the JSON token "NaN" instead of
+// throwing inside Save(). Without it the whole settings file silently
+// fails to write on first save, since the Save() catch swallows.
+[JsonSourceGenerationOptions(
+    WriteIndented = true,
+    NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals)]
 public partial class SettingsJsonContext : JsonSerializerContext { }

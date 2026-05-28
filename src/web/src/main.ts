@@ -9,6 +9,7 @@ import { Sidebar } from "./sidebar.js";
 import { Workspace } from "./workspace.js";
 import { installShortcutHint } from "./shortcut-hint.js";
 import { Toast } from "./toast.js";
+import { openSettings, applySettingsData } from "./settings.js";
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const el = document.getElementById(id);
@@ -21,6 +22,8 @@ const workspace = new Workspace($("workspace"));
 const toast = new Toast($("toast"));
 const statusEl = $("status-text");
 installShortcutHint($("shortcut-hint"));
+
+$("settings-button").addEventListener("click", () => openSettings());
 
 // Sidebar collapse. The toggle button lives in the WPF title bar (see
 // MainWindow.xaml's TitleBar.Header) and reaches the webview via the
@@ -47,6 +50,11 @@ onMessage((msg) => {
   switch (msg.type) {
     case "state": {
       lastState = msg;
+      // Apply prefs BEFORE rendering panes so the very first Pane in a
+      // freshly-launched app opens at the persisted font size instead of
+      // briefly flashing the default 13px and then resizing on the next
+      // tick. msg.prefs is always present (host always populates it).
+      if (msg.prefs) workspace.applyPrefs(msg.prefs);
       sidebar.render(msg.sessions, msg.activeSessionId);
       const active = activeOf(msg);
       workspace.render(active, msg.activePaneId || null);
@@ -63,11 +71,17 @@ onMessage((msg) => {
     case "toast":
       toast.show(msg.text, msg.level);
       break;
+    case "settings.data":
+      applySettingsData(msg);
+      break;
     case "host.error":
       setStatus(`error: ${msg.message}`);
       break;
     case "ui.sidebar.toggle":
       toggleSidebar();
+      break;
+    case "ui.open-settings":
+      openSettings();
       break;
     case "ui.urlpane.relayout":
       // Host moved/resized — ask every UrlPane to re-emit its layout so
@@ -109,15 +123,18 @@ window.addEventListener("keydown", (ev) => {
   const pane = workspace.getActivePane();
   if (!pane) return;
   if (ev.code === "Equal") {
-    pane.changeFontSize(+1);
+    const size = pane.changeFontSize(+1);
+    if (size) send({ type: "prefs.set", fontSize: size });
     ev.preventDefault();
     ev.stopPropagation();
   } else if (ev.code === "Minus") {
-    pane.changeFontSize(-1);
+    const size = pane.changeFontSize(-1);
+    if (size) send({ type: "prefs.set", fontSize: size });
     ev.preventDefault();
     ev.stopPropagation();
   } else if (ev.code === "Digit0") {
-    pane.resetFontSize();
+    const size = pane.resetFontSize();
+    if (size) send({ type: "prefs.set", fontSize: size });
     ev.preventDefault();
     ev.stopPropagation();
   }

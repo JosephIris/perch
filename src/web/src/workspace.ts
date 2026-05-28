@@ -5,7 +5,7 @@
 // terminal state.
 
 import type { PaneTreeView, SessionView } from "./bridge.js";
-import { Pane } from "./pane.js";
+import { Pane, DEFAULT_FONT_SIZE } from "./pane.js";
 import { UrlPane } from "./url-pane.js";
 import { PANE_LEAVE_MS, SESSION_SWAP_MS } from "./anim.js";
 
@@ -27,6 +27,10 @@ export class Workspace {
   private readonly pendingBytes = new Map<string, string[]>();
   private currentSessionId: string | null = null;
   private activePaneId: string | null = null;
+  // Default font size for newly-created Panes. Updated on each state push
+  // from the host's persisted prefs, so a freshly-split pane opens at the
+  // user's saved size instead of the hardcoded default.
+  private defaultFontSize: number = DEFAULT_FONT_SIZE;
   // Signature of the last rendered tree (paneIds + split shape). When the
   // next render comes in with the same signature, we skip the DOM
   // rebuild entirely — only setActive runs. Without this, every focus
@@ -199,6 +203,16 @@ export class Workspace {
   /** Returns the Pane currently marked active, or null. Used by the
    *  font-size shortcuts in main.ts; only terminal Panes will actually
    *  resize, UrlPane.changeFontSize is a no-op. */
+  /** Apply user prefs from a state push: store as the default for future
+   *  new panes, and update existing terminal panes that don't already
+   *  match. Idempotent — Pane.setFontSize skips the refit on a no-op. */
+  applyPrefs(prefs: { fontSize: number }) {
+    this.defaultFontSize = prefs.fontSize;
+    for (const pane of this.panes.values()) {
+      if (pane instanceof Pane) pane.setFontSize(prefs.fontSize);
+    }
+  }
+
   /** Ask every URL pane to re-emit its layout. Called by main.ts on
    *  ui.urlpane.relayout (fired by host on window move / resize). */
   nudgeUrlPanes() {
@@ -238,7 +252,7 @@ export class Workspace {
         // PaneTreeView (set when OnPaneSplit was passed a `url`).
         pane = node.url
           ? new UrlPane(node.paneId, node.name, node.url)
-          : new Pane(node.paneId, node.name);
+          : new Pane(node.paneId, node.name, this.defaultFontSize);
         this.panes.set(node.paneId, pane);
         pane.attach(host);
         // Push initial state so the freshly-created pane header reflects

@@ -184,6 +184,9 @@ public partial class MainWindow : FluentWindow
                 case "session.close":   OnSessionClose(root); break;
                 case "pane.focus":      OnPaneFocus(root); break;
                 case "url.open":        OnUrlOpen(root); break;
+                case "prefs.set":       OnPrefsSet(root); break;
+                case "settings.request": OnSettingsRequest(); break;
+                case "settings.save":    OnSettingsSave(root); break;
                 default:
                     Log.Info("Web.msg.unknown", $"type={type}");
                     break;
@@ -468,6 +471,26 @@ public partial class MainWindow : FluentWindow
         if (!root.TryGetProperty("b64", out var b64El)) return;
         try { pty.Write(Convert.FromBase64String(b64El.GetString() ?? "")); }
         catch (Exception ex) { Log.Error("Pane.In", ex); }
+
+        // Clear stale 'waiting' as soon as the user types: the most common
+        // case is Claude's "needs your permission" notification — the hook
+        // fires `status=waiting` on the prompt, but Claude doesn't always
+        // fire a follow-up status (`pre-tool-use` etc.) until the next tool
+        // call, so the waiting pill lingers after the user has clearly
+        // already responded. Any keystroke into the pane is unambiguous
+        // proof the user is no longer being waited on; flip to working and
+        // let the agent's next real status overwrite us. Working keeps the
+        // visual breadcrumb "something is running" instead of dropping to
+        // idle which would imply the agent is dormant.
+        var sess = OwningSession(id);
+        if (sess == null) return;
+        var pane = FindPane(sess, id);
+        if (pane != null && pane.AgentState == AgentState.Waiting)
+        {
+            pane.AgentState = AgentState.Working;
+            pane.NotificationText = "";
+            PushState();
+        }
     }
 
     private void OnPaneResize(JsonElement root)
@@ -503,9 +526,19 @@ public partial class MainWindow : FluentWindow
         pty.Resize(cols, rows);
     }
 
-    private void OnSessionNew(JsonElement _)
+    private void OnSessionNew(JsonElement root)
     {
         var s = _store.AddNew();
+        // Optional shell command line — when present (e.g. the page's
+        // "new session with shell X", or the stability harness varying
+        // shells) the session spawns that shell instead of the default.
+        if (root.ValueKind == JsonValueKind.Object &&
+            root.TryGetProperty("shell", out var sh) &&
+            sh.ValueKind == JsonValueKind.String)
+        {
+            var shell = sh.GetString();
+            if (!string.IsNullOrWhiteSpace(shell)) s.Shell = shell;
+        }
         AutoName(s.Root, 1);
         _store.ActiveSessionId = s.Id;
         // The new session's root leaf is the active pane. PTY spawns
@@ -563,6 +596,80 @@ public partial class MainWindow : FluentWindow
             _activePaneId = id;
             PushState();
         }
+    }
+
+    // User changed a preference from the page (Ctrl +/- font size). Persist
+    // immediately so the value survives even a hard crash; no need to
+    // re-push state since the page already applied the change locally.
+    private void OnPrefsSet(JsonElement root)
+    {
+        var dirty = false;
+        if (root.TryGetProperty("fontSize", out var fs) && fs.TryGetInt32(out var n))
+        {
+            // Clamp on the host side too — the page already clamps, but
+            // an out-of-band IPC sender shouldn't be able to poke garbage
+            // into Settings.json.
+            var clamped = Math.Max(9, Math.Min(32, n));
+            if (_settings.FontSize != clamped)
+            {
+                _settings.FontSize = clamped;
+                dirty = true;
+            }
+        }
+        if (dirty) _settings.Save();
+    }
+
+    // Page opened the settings dialog and wants current values + the list
+    // of shells we can offer. Detected-shell enumeration touches the disk
+    // / PATH so we don't ship it on every state push — only on request.
+    private void OnSettingsRequest()
+    {
+        try
+        {
+            var shells = Shell.DetectedShells()
+                .Select(s => new { name = s.Name, cmd = s.CommandLine })
+                .ToArray();
+            var payload = new
+            {
+                type = "settings.data",
+                shells,
+                defaultShell = _settings.DefaultShell,
+                defaultCwd = _settings.DefaultCwd,
+                defaultCwdResolved = _settings.ResolveDefaultCwd(),
+                fontSize = _settings.FontSize,
+            };
+            Web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(payload));
+        }
+        catch (Exception ex) { Log.Error("OnSettingsRequest", ex); }
+    }
+
+    // Page saved the settings dialog. Each field is optional — only
+    // overwrite the keys present in the message. Shell/cwd take effect on
+    // the next session spawn (lazy); fontSize re-pushes state so live
+    // panes pick it up via the prefs ferry in PushState.
+    private void OnSettingsSave(JsonElement root)
+    {
+        var dirty = false;
+        var fontChanged = false;
+        if (root.TryGetProperty("defaultShell", out var sh) && sh.ValueKind == JsonValueKind.String)
+        {
+            var v = sh.GetString() ?? "";
+            if (_settings.DefaultShell != v) { _settings.DefaultShell = v; dirty = true; }
+        }
+        if (root.TryGetProperty("defaultCwd", out var cwd) && cwd.ValueKind == JsonValueKind.String)
+        {
+            var v = cwd.GetString() ?? "";
+            if (_settings.DefaultCwd != v) { _settings.DefaultCwd = v; dirty = true; }
+        }
+        if (root.TryGetProperty("fontSize", out var fs) && fs.TryGetInt32(out var n))
+        {
+            var clamped = Math.Max(9, Math.Min(32, n));
+            if (_settings.FontSize != clamped) { _settings.FontSize = clamped; dirty = true; fontChanged = true; }
+        }
+        if (dirty) _settings.Save();
+        // Re-push so the font size propagates to live panes (no-op for
+        // shell/cwd, which only matter at next spawn — but cheap).
+        if (fontChanged) PushState();
     }
 
     // ---- Pane split / close ----------------------------------------------
@@ -871,6 +978,11 @@ public partial class MainWindow : FluentWindow
                 type = "state",
                 activeSessionId = _store.ActiveSessionId?.ToString("D") ?? "",
                 activePaneId    = _activePaneId?.ToString("D") ?? "",
+                // User prefs ferried with every state push. Cheap (two
+                // ints in JSON) and means the page never has to ask. Used
+                // by Workspace.applyPrefs to set the default size of new
+                // panes after a split.
+                prefs = new { fontSize = _settings.FontSize },
                 sessions = _store.Sessions.Select(s =>
                 {
                     // Aggregate per-pane state to the session row. Most-urgent
@@ -1065,11 +1177,18 @@ public partial class MainWindow : FluentWindow
             case "pane.close":      OnPaneClose(root); break;
             case "pane.split-active":
                 // Convenience for the harness: targets the active pane so
-                // the script doesn't have to look up its id from disk.
+                // the script doesn't have to look up its id from disk. An
+                // optional --url makes the new leaf a URL (WebView2) pane,
+                // so the stability harness can exercise that lifecycle.
                 if (_activePaneId is Guid ap)
                 {
                     var dir = root.TryGetProperty("dir", out var d) ? d.GetString() : "right";
-                    var fakeRoot = JsonDocument.Parse($"{{\"paneId\":\"{ap:D}\",\"dir\":\"{dir}\"}}").RootElement;
+                    var url = root.TryGetProperty("url", out var uu) ? uu.GetString() : null;
+                    var urlPart = string.IsNullOrEmpty(url)
+                        ? ""
+                        : $",\"url\":{JsonSerializer.Serialize(url)}";
+                    var fakeRoot = JsonDocument.Parse(
+                        $"{{\"paneId\":\"{ap:D}\",\"dir\":\"{dir}\"{urlPart}}}").RootElement;
                     OnPaneSplit(fakeRoot);
                 }
                 break;
@@ -1078,6 +1197,84 @@ public partial class MainWindow : FluentWindow
                 {
                     var fakeRoot = JsonDocument.Parse($"{{\"paneId\":\"{acp:D}\"}}").RootElement;
                     OnPaneClose(fakeRoot);
+                }
+                break;
+            case "prefs.set":
+                // Mirror the page → host wire: cmux test passes flags as
+                // strings, so parse fontSize defensively. OnPrefsSet then
+                // does its own clamp + save.
+                {
+                    if (root.TryGetProperty("fontSize", out var fs) &&
+                        int.TryParse(fs.GetString(), out var n))
+                    {
+                        var fakeRoot = JsonDocument.Parse($"{{\"fontSize\":{n}}}").RootElement;
+                        OnPrefsSet(fakeRoot);
+                    }
+                }
+                break;
+            case "pane.simulate-input":
+                // Synthesize a `pane.in` arrival for the active pane so
+                // tests can drive OnPaneIn without a real keystroke and
+                // without WebView2 input simulation. The point is to
+                // exercise the side-effects of OnPaneIn (e.g. "clear stale
+                // waiting") not the PTY write itself — but we ship the
+                // bytes too so the path stays realistic.
+                if (_activePaneId is Guid sap)
+                {
+                    var text = root.TryGetProperty("text", out var t) ? (t.GetString() ?? "x") : "x";
+                    var b64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(text));
+                    var fakeRoot = JsonDocument.Parse(
+                        $"{{\"paneId\":\"{sap:D}\",\"b64\":\"{b64}\"}}").RootElement;
+                    OnPaneIn(fakeRoot);
+                }
+                break;
+            case "ui.open-settings":
+                Web.CoreWebView2?.PostWebMessageAsJson("{\"type\":\"ui.open-settings\"}");
+                break;
+            case "settings.save":
+                // Mirror the page → host settings.save wire so the harness
+                // can exercise persistence without DOM interaction. cmux
+                // test passes flags as strings; OnSettingsSave reads the
+                // same property names. fontSize comes through as a string,
+                // so re-wrap it as a number for OnSettingsSave's TryGetInt32.
+                {
+                    var shell = root.TryGetProperty("defaultShell", out var sv) ? sv.GetString() : null;
+                    var cwd   = root.TryGetProperty("defaultCwd", out var cv) ? cv.GetString() : null;
+                    var fsStr = root.TryGetProperty("fontSize", out var fv) ? fv.GetString() : null;
+                    var sb = new System.Text.StringBuilder("{");
+                    var parts = new List<string>();
+                    if (shell != null) parts.Add($"\"defaultShell\":{JsonSerializer.Serialize(shell)}");
+                    if (cwd != null)   parts.Add($"\"defaultCwd\":{JsonSerializer.Serialize(cwd)}");
+                    if (fsStr != null && int.TryParse(fsStr, out var fsn)) parts.Add($"\"fontSize\":{fsn}");
+                    sb.Append(string.Join(",", parts)).Append('}');
+                    OnSettingsSave(JsonDocument.Parse(sb.ToString()).RootElement);
+                }
+                break;
+            case "state.dump":
+                // Dump the current per-pane state as a single Log.Info line
+                // so tests can grep errors.log for assertions. Format is
+                // intentionally machine-readable: STATE_DUMP{json}.
+                {
+                    var snap = _store.Sessions.Select(s => new
+                    {
+                        id = s.Id.ToString("D"),
+                        active = _store.ActiveSessionId == s.Id,
+                        panes = AllLeaves(s.Root).Select(p => new
+                        {
+                            id = p.Id.ToString("D"),
+                            name = p.Name,
+                            agentState = StateToString(p.AgentState),
+                            notification = p.NotificationText,
+                        }).ToArray(),
+                    }).ToArray();
+                    var prefs = new
+                    {
+                        fontSize = _settings.FontSize,
+                        defaultShell = _settings.DefaultShell,
+                        defaultCwd = _settings.DefaultCwd,
+                    };
+                    var dump = new { sessions = snap, prefs };
+                    Log.Info("StateDump", "STATE_DUMP" + JsonSerializer.Serialize(dump));
                 }
                 break;
             default:
