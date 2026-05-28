@@ -33,9 +33,9 @@
       <div class="sidebar__section-label">Recents</div>
       <ul id="session-list" class="session-list" role="list"></ul>
 
-      <!-- Bottom row: app identity + (future) settings. Mirrors Claude's
-           user-info row at the bottom of the sidebar. Today it shows a
-           static app label; later it can grow a settings flyout. -->
+      <!-- Bottom row: app identity + settings. Mirrors Claude's user-info
+           row at the bottom of the sidebar. The identity block is static;
+           the gear opens the settings dialog. -->
       <footer class="sidebar__footer">
         <button class="sidebar__identity" type="button"
                 title="cmux for Windows" aria-label="cmux">
@@ -44,6 +44,15 @@
             <span class="sidebar__identity-name">cmux</span>
             <span class="sidebar__identity-sub" id="status-text">starting…</span>
           </span>
+        </button>
+        <button id="settings-button" class="sidebar__settings" type="button"
+                title="Settings" aria-label="Settings">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+               stroke="currentColor" stroke-width="1.7"
+               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+          </svg>
         </button>
       </footer>
     </aside>

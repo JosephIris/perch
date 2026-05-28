@@ -431,6 +431,25 @@ ul { list-style: none; padding: 0; margin: 0; }
   border-color: rgba(255, 255, 255, 0.22);
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08);
 }
+/* Attention pulse: when the agent reports "waiting" (typically a Claude
+ * permission prompt) the pane border breathes between two warm-tinted
+ * stroke values. Hairline-only, no halo, no glow — Constitution rule.
+ * The animation runs on every waiting pane regardless of focus so the
+ * one that needs you stands out across a 3-5 pane split, but stays
+ * subtle enough that a long-waiting pane fades into peripheral vision
+ * instead of nagging. */
+.pane[data-state="waiting"] {
+  animation: pane-attention 2.4s var(--ease-entry) infinite;
+}
+@keyframes pane-attention {
+  0%, 100% { border-color: rgba(255, 200, 90, 0.18); }
+  50%      { border-color: rgba(255, 200, 90, 0.50); }
+}
+/* When the active-pane indicator and the attention pulse fight, focus
+ * wins — the user is already on this pane, no need to nag. */
+.pane--active[data-state="waiting"] {
+  animation: none;
+}
 /* Pane header — color tag · name · state dot + word · close.
  *   - color tag: persistent feature-marker the user assigns
  *   - name: editable inline (double-click)
@@ -838,6 +857,9 @@ ul { list-style: none; padding: 0; margin: 0; }
  * window-bottom status bar; the status text it carries lives at
  * #status-text exactly like before so main.ts's setStatus() still works. */
 .sidebar__footer {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
   margin-top: var(--sp-8);
   padding-top: var(--sp-4);
   border-top: 1px solid var(--color-sidebar-stroke);
@@ -846,12 +868,37 @@ ul { list-style: none; padding: 0; margin: 0; }
   display: flex;
   align-items: center;
   gap: var(--sp-8);
-  width: 100%;
+  flex: 1 1 auto;
+  min-width: 0;
   padding: 6px var(--sp-12);
   border-radius: var(--r-pill);
   color: var(--color-text-primary);
   text-align: left;
   transition: background var(--dur-fast) var(--ease-entry);
+}
+/* Gear button — square, icon-only, quiet until hover. Matches the
+ * identity row's pill radius and hover fill so the footer reads as one
+ * cohesive control group. */
+.sidebar__settings {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--r-pill);
+  color: var(--color-text-tertiary);
+  transition:
+    background var(--dur-fast) var(--ease-entry),
+    color var(--dur-fast) var(--ease-entry);
+}
+.sidebar__settings:hover {
+  background: var(--color-subtle-secondary);
+  color: var(--color-text-secondary);
+}
+.sidebar__settings:focus-visible {
+  outline: 1px solid var(--color-accent-soft);
+  outline-offset: -1px;
 }
 .sidebar__identity:hover {
   background: var(--color-subtle-secondary);
@@ -887,4 +934,221 @@ ul { list-style: none; padding: 0; margin: 0; }
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* ---- Settings dialog ----------------------------------------------------
+ * Centered modal over a dimmed backdrop. The card is a 12px-radius window
+ * surface (r-window) with a hairline border — no shadow-and-border on the
+ * same element per the Constitution, but a dialog is one of the two
+ * sanctioned shadow surfaces (flyouts + dialogs), so we use a soft shadow
+ * for elevation and skip the border-glow. Rows follow the CardControl
+ * pattern: text block left, control right. */
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.4);
+  animation: settings-fade-in var(--dur-normal) var(--ease-entry);
+}
+.settings-overlay--closing {
+  animation: settings-fade-out var(--dur-fast) var(--ease-exit);
+}
+@keyframes settings-fade-in  { from { opacity: 0; } to { opacity: 1; } }
+@keyframes settings-fade-out { from { opacity: 1; } to { opacity: 0; } }
+
+.settings-card {
+  width: 520px;
+  max-width: calc(100vw - var(--sp-48));
+  max-height: calc(100vh - var(--sp-48));
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  padding: var(--sp-24);
+  border-radius: var(--r-window);
+  background: rgba(32, 32, 32, 0.98);
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  font-family: var(--font-text);
+  color: var(--color-text-primary);
+  animation: settings-rise var(--dur-normal) var(--ease-entry);
+}
+@keyframes settings-rise {
+  from { transform: translateY(8px); }
+  to   { transform: translateY(0); }
+}
+.settings-card__title {
+  margin: 0 0 var(--sp-16);
+  font-family: var(--font-display);
+  font-size: var(--type-title-size);
+  font-weight: 600;
+  line-height: var(--type-title-line);
+  color: var(--color-text-primary);
+}
+.settings-card__body {
+  display: flex;
+  flex-direction: column;
+}
+
+/* CardControl row: label + description left, control right. Grouped by
+ * spacing (a hairline divider between rows), not boxes. */
+.settings-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-16);
+  padding: var(--sp-16) 0;
+  border-bottom: 1px solid var(--color-stroke);
+}
+.settings-row:last-child { border-bottom: none; }
+.settings-row__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.settings-row__label {
+  font-size: var(--type-body-size);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.settings-row__desc {
+  font-family: var(--font-small);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+  line-height: var(--type-body-line);
+}
+
+/* Controls — 4px radius (inputs), subtle fill, hairline border that
+ * brightens to accent on focus. */
+.settings-control {
+  flex: 0 0 auto;
+  font-family: var(--font-text);
+  font-size: var(--type-body-size);
+  color: var(--color-text-primary);
+  background: var(--color-subtle-secondary);
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--r-input);
+  padding: 6px var(--sp-8);
+  transition: border-color var(--dur-fast) var(--ease-entry);
+}
+.settings-control:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+.settings-control--text {
+  width: 260px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+.settings-control--number { width: 72px; text-align: right; }
+.settings-control--text::placeholder {
+  color: var(--color-text-disabled);
+}
+
+.settings-card__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-8);
+  margin-top: var(--sp-24);
+}
+.settings-btn {
+  font-family: var(--font-text);
+  font-size: var(--type-body-size);
+  font-weight: 600;
+  padding: 6px var(--sp-16);
+  border-radius: var(--r-input);
+  transition:
+    background var(--dur-fast) var(--ease-entry),
+    border-color var(--dur-fast) var(--ease-entry);
+}
+/* Secondary action is a subtle/outline variant (no full fill) per the
+ * anti-pattern rules. */
+.settings-btn--subtle {
+  color: var(--color-text-primary);
+  background: transparent;
+  border: 1px solid var(--color-stroke);
+}
+.settings-btn--subtle:hover { background: var(--color-subtle-secondary); }
+/* Primary action carries the accent fill — the one CTA in the dialog. */
+.settings-btn--accent {
+  color: #06243a;
+  background: var(--color-accent);
+  border: 1px solid var(--color-accent);
+}
+.settings-btn--accent:hover { background: var(--color-accent-strong); }
+.settings-btn:focus-visible {
+  outline: 1px solid var(--color-accent-soft);
+  outline-offset: 2px;
+}
+
+/* ---- Custom dropdown (combobox) ----------------------------------------
+ * Replaces native <select> so the option popup renders on our dark
+ * surface. Trigger matches the other settings controls; popup matches the
+ * link-menu flyout family (frosted, hairline, soft shadow). */
+.dropdown { position: relative; flex: 0 0 auto; }
+.dropdown__trigger {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  min-width: 240px;
+  padding: 6px var(--sp-8);
+  font-family: var(--font-text);
+  font-size: var(--type-body-size);
+  color: var(--color-text-primary);
+  background: var(--color-subtle-secondary);
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--r-input);
+  text-align: left;
+  transition: border-color var(--dur-fast) var(--ease-entry);
+}
+.dropdown__trigger:hover { border-color: var(--color-stroke-strong); }
+.dropdown__trigger:focus-visible {
+  outline: none;
+  border-color: var(--color-accent);
+}
+.dropdown__label {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dropdown__chevron {
+  flex: 0 0 auto;
+  color: var(--color-text-tertiary);
+}
+.dropdown__popup {
+  position: fixed;
+  z-index: 50;
+  max-height: 280px;
+  overflow-y: auto;
+  padding: var(--sp-4);
+  border-radius: var(--r-card);
+  background: rgba(32, 32, 32, 0.98);
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  border: 1px solid var(--color-stroke);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  animation: settings-fade-in var(--dur-fast) var(--ease-entry);
+}
+.dropdown__option {
+  display: block;
+  width: 100%;
+  padding: 6px var(--sp-8);
+  border-radius: var(--r-input);
+  font-family: var(--font-text);
+  font-size: 13px;
+  color: var(--color-text-primary);
+  text-align: left;
+  white-space: nowrap;
+}
+/* Active = keyboard/hover cursor. Selected = the current value (a faint
+ * accent tint so it's findable when the popup opens). */
+.dropdown__option--active { background: var(--color-subtle-secondary); }
+.dropdown__option--selected { color: var(--color-accent); }
+.dropdown__option--selected.dropdown__option--active {
+  background: var(--color-subtle-tertiary);
 }
