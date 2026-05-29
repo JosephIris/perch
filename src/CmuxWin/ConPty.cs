@@ -32,6 +32,48 @@ internal sealed class ConPty : IDisposable
 
     public int ProcessId { get; private set; }
 
+    // ---- Flow control (backpressure) -------------------------------------
+    // The reader can read 8 KB and fire OutputReceived far faster than the
+    // WebView2 page can parse+render it into xterm. With nothing throttling
+    // it, the page's internal write buffer grows without bound under a fast
+    // producer (a `cat bigfile`, an agent streaming, npm progress). Two such
+    // panes share ONE renderer thread, so the backlog starves keystroke
+    // handling and the whole UI freezes — the bug this guards against.
+    //
+    // Gate: we count bytes handed to OutputReceived but not yet acked by the
+    // page (it acks once xterm finishes the matching write). When the unacked
+    // backlog crosses the high-water mark we block the reader; an ack that
+    // drops it below the low-water mark unblocks it. Net effect: the page is
+    // never asked to swallow more than ~HighWaterBytes ahead of what it has
+    // actually rendered, so memory stays flat and the renderer thread stays
+    // responsive to input.
+    //
+    // CMUX_DISABLE_FLOW_CONTROL=1 reverts to the old fire-and-forget path so
+    // the perf test can demonstrate the regression on demand.
+    private static readonly bool FlowControlEnabled =
+        string.IsNullOrEmpty(Environment.GetEnvironmentVariable("CMUX_DISABLE_FLOW_CONTROL"));
+    private const long HighWaterBytes = 256 * 1024;
+    private const long LowWaterBytes  = 64 * 1024;
+    private readonly ManualResetEventSlim _readGate = new(initialState: true);
+    private long _outstanding;
+    private long _maxOutstanding;
+
+    /// Peak unacked backlog (bytes) observed over this PTY's lifetime.
+    /// Diagnostic only — the perf test reads it to prove the gate engaged
+    /// and kept the backlog bounded.
+    public long MaxOutstanding => Interlocked.Read(ref _maxOutstanding);
+
+    /// Called by the host when the page reports it has finished writing
+    /// `bytes` worth of output into xterm. Shrinks the unacked backlog and
+    /// resumes the reader once it drops below the low-water mark.
+    public void Ack(long bytes)
+    {
+        if (bytes <= 0) return;
+        var cur = Interlocked.Add(ref _outstanding, -bytes);
+        if (cur < 0) { Interlocked.Exchange(ref _outstanding, 0); cur = 0; }
+        if (FlowControlEnabled && cur < LowWaterBytes) _readGate.Set();
+    }
+
     private IntPtr _hPC;
     private SafeFileHandle? _ptyInWrite;     // we write -> shell stdin
     private SafeFileHandle? _ptyOutRead;     // we read  <- shell stdout/stderr
@@ -221,6 +263,14 @@ internal sealed class ConPty : IDisposable
         {
             while (!_disposed)
             {
+                // Backpressure: block here while the page is still ~256 KB
+                // behind on rendering what we've already sent. An ack wakes
+                // us; Dispose also sets the gate so we can observe _disposed.
+                if (FlowControlEnabled)
+                {
+                    _readGate.Wait();
+                    if (_disposed) break;
+                }
                 int n;
                 try { n = _outStream!.Read(buf, 0, buf.Length); }
                 catch (IOException) { break; }
@@ -228,6 +278,15 @@ internal sealed class ConPty : IDisposable
                 if (n <= 0) break;
                 var copy = new byte[n];
                 Buffer.BlockCopy(buf, 0, copy, 0, n);
+                // Track the unacked backlog ALWAYS — it's the test's primary,
+                // non-flaky signal (renderer-falls-behind = bytes). Only the
+                // actual blocking is gated, so disabling flow control lets the
+                // backlog grow unbounded to demonstrate the regression.
+                var cur = Interlocked.Add(ref _outstanding, n);
+                if (cur > _maxOutstanding) _maxOutstanding = cur; // single writer
+                // Past the high-water mark: stop reading after this chunk
+                // until the page acks enough to drop back under low water.
+                if (FlowControlEnabled && cur >= HighWaterBytes) _readGate.Reset();
                 try { OutputReceived?.Invoke(this, copy); }
                 catch (Exception ex) { Log.Error("ConPty.Output.handler", ex); }
             }
@@ -272,6 +331,10 @@ internal sealed class ConPty : IDisposable
         // EOF on the pipes, which unblocks ReaderLoop.
         try { if (_hPC != IntPtr.Zero) ClosePseudoConsole(_hPC); } catch { }
         _hPC = IntPtr.Zero;
+        // Wake a reader parked on the backpressure gate so it can see
+        // _disposed and exit instead of blocking until an ack that will
+        // never come.
+        try { _readGate.Set(); } catch { }
         try { _inStream?.Dispose(); }  catch { }
         try { _outStream?.Dispose(); } catch { }
         try { _ptyInWrite?.Dispose(); } catch { }
@@ -279,6 +342,7 @@ internal sealed class ConPty : IDisposable
         // Reader thread should exit on its own once the pipes are closed;
         // give it a brief grace period.
         try { _readerThread?.Join(500); } catch { }
+        try { _readGate.Dispose(); } catch { }
         try { if (_proc.hThread  != IntPtr.Zero) CloseHandle(_proc.hThread);  } catch { }
         try { if (_proc.hProcess != IntPtr.Zero) CloseHandle(_proc.hProcess); } catch { }
     }

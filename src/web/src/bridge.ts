@@ -21,7 +21,14 @@ declare global {
 export type OutMessage =
   | { type: "ready" }
   | { type: "pane.in"; paneId: string; b64: string }
+  /* Backpressure ack: sent once xterm finishes writing a pane.out chunk so
+   * the host can shrink that PTY's unacked backlog and resume reading.
+   * `bytes` is the ORIGINAL pane.out byte count (pre-underline-injection),
+   * matching what the host counted when it sent the chunk. */
+  | { type: "pane.ack"; paneId: string; bytes: number }
   | { type: "pane.resize"; paneId: string; cols: number; rows: number }
+  /* Test-only: reply to a host render.ping, measuring renderer round-trip. */
+  | { type: "render.pong"; id: number }
   | { type: "pane.focus"; paneId: string }
   /* When `url` is set the new leaf is a webview pane (iframe) instead of
    * a terminal. Used by the URL action menu's "Open in pane right/down". */
@@ -143,6 +150,9 @@ export type InMessage =
   /* Triggered on main-window move/resize so URL panes re-emit their
    * placeholder rect and the host can reposition the child Windows. */
   | { type: "ui.urlpane.relayout" }
+  /* Test-only: host asks the page to round-trip a marker through its main
+   * thread so the host can time renderer responsiveness under load. */
+  | { type: "render.ping"; id: number }
   /* Host asks the page to open the settings dialog (title-bar gear or the
    * test harness). The page already has the open path wired to the
    * sidebar gear; this just lets the host trigger it too. */

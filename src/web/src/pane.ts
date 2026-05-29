@@ -242,7 +242,15 @@ export class Pane {
     // clicks. URLs split across feed() chunks are emitted unstyled —
     // acceptable for v1, real-world shells write a URL in one chunk.
     const bytes = b64ToBytes(b64);
-    this.term.write(injectUrlUnderlines(bytes));
+    const n = bytes.length;
+    // Ack the ORIGINAL byte count once xterm has drained this write. The
+    // host uses the ack to release PTY backpressure (see ConPty flow
+    // control); acking only after the write callback fires is what bounds
+    // the renderer's buffer under a fast producer. We report `n` (pre-
+    // underline-injection) to match the byte count the host sent.
+    this.term.write(injectUrlUnderlines(bytes), () => {
+      send({ type: "pane.ack", paneId: this.paneId, bytes: n });
+    });
   }
 
   notifyExit(code: number) {
@@ -383,17 +391,28 @@ function parseOsc7Cwd(data: string): string | null {
 const SGR_UNDERLINE_ON  = new Uint8Array([0x1b, 0x5b, 0x34, 0x6d]);       // ESC[4m
 const SGR_UNDERLINE_OFF = new Uint8Array([0x1b, 0x5b, 0x32, 0x34, 0x6d]); // ESC[24m
 
+// Hoisted out of injectUrlUnderlines so we don't recompile the regex on
+// every PTY chunk (this runs per ~8 KB of output, per pane). The /g flag
+// makes it stateful; we always run exec() to completion (until null), which
+// resets lastIndex, so a single shared instance is safe across calls.
+const URL_RE_G = new RegExp(URL_RE.source, "g");
+// Latin-1 maps bytes 0x00–0xFF 1:1 to char codes, so decode() gives us the
+// exact byte OFFSETS the regex needs without a per-char concat loop and
+// without corrupting partial UTF-8 (we only use offsets, never the text).
+const LATIN1 = new TextDecoder("latin1");
+
 function injectUrlUnderlines(bytes: Uint8Array): Uint8Array {
-  // Treat the byte stream as Latin-1 — URLs are ASCII so the regex
-  // matches correctly, and we only need byte OFFSETS not text content.
-  // Going through TextDecoder/Encoder would corrupt partial UTF-8
-  // sequences at chunk boundaries.
-  let text = "";
-  for (let i = 0; i < bytes.length; i++) text += String.fromCharCode(bytes[i]);
-  const rex = new RegExp(URL_RE.source, "g");
+  // Fast path: a URL needs a "://", so it must contain a ':' (0x3a). The
+  // overwhelming majority of terminal chunks have none — skip the decode +
+  // regex entirely for them. This keeps the hot output path cheap so it
+  // can't stall the renderer thread that also services keystrokes.
+  if (!bytes.includes(0x3a)) return bytes;
+
+  const text = LATIN1.decode(bytes);
+  URL_RE_G.lastIndex = 0;
   const matches: Array<{ start: number; end: number }> = [];
   let m: RegExpExecArray | null;
-  while ((m = rex.exec(text))) {
+  while ((m = URL_RE_G.exec(text))) {
     matches.push({ start: m.index, end: m.index + m[0].length });
   }
   if (matches.length === 0) return bytes;
