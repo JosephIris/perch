@@ -83,6 +83,13 @@ onMessage((msg) => {
     case "ui.open-settings":
       openSettings();
       break;
+    case "render.ping":
+      // Reply immediately. This runs on the renderer's main-thread task
+      // queue — the same queue that delivers keystrokes to xterm — so the
+      // host's measured round-trip is a faithful proxy for input latency
+      // under load. See scripts/test-perf-flow.ps1.
+      send({ type: "render.pong", id: msg.id });
+      break;
     case "ui.urlpane.relayout":
       // Host moved/resized — ask every UrlPane to re-emit its layout so
       // the corresponding child Window repositions. Workspace exposes

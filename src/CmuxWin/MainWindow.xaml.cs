@@ -111,9 +111,24 @@ public partial class MainWindow : FluentWindow
                 "cmux-win", "WebView2");
             Directory.CreateDirectory(userDataFolder);
 
+            // In test mode (CMUX_ENABLE_TEST_IPC) disable Chromium's
+            // background/occlusion throttling. Harnesses park the window
+            // off-screen so churn stays off the user's display; without these
+            // flags Chromium would throttle rAF/timers (and pause rendering on
+            // occlusion), which both stops the lazy PTY spawn and invalidates
+            // any renderer-performance measurement. No effect on a normal run.
+            CoreWebView2EnvironmentOptions? options = null;
+            if (ControlIpcServer.IsEnabled)
+                options = new CoreWebView2EnvironmentOptions(additionalBrowserArguments:
+                    "--disable-renderer-backgrounding " +
+                    "--disable-background-timer-throttling " +
+                    "--disable-backgrounding-occluded-windows " +
+                    "--disable-features=CalculateNativeWinOcclusion");
+
             var env = await CoreWebView2Environment.CreateAsync(
                 browserExecutableFolder: null,
-                userDataFolder: userDataFolder);
+                userDataFolder: userDataFolder,
+                options: options);
             await Web.EnsureCoreWebView2Async(env);
 
             var core = Web.CoreWebView2;
@@ -170,7 +185,9 @@ public partial class MainWindow : FluentWindow
             {
                 case "ready":           OnPageReady(); break;
                 case "pane.in":         OnPaneIn(root); break;
+                case "pane.ack":        OnPaneAck(root); break;
                 case "pane.resize":     OnPaneResize(root); break;
+                case "render.pong":     OnRenderPong(root); break;
                 case "pane.split":      OnPaneSplit(root); break;
                 case "pane.close":      OnPaneClose(root); break;
                 case "pane.rename":     OnPaneRename(root); break;
@@ -491,6 +508,32 @@ public partial class MainWindow : FluentWindow
             pane.NotificationText = "";
             PushState();
         }
+    }
+
+    // The page acks each xterm write once it's drained; we shrink that
+    // pane's PTY backpressure backlog so the reader can resume. See the
+    // flow-control block in ConPty for why this exists.
+    private void OnPaneAck(JsonElement root)
+    {
+        if (!TryGuid(root, "paneId", out var id)) return;
+        if (!root.TryGetProperty("bytes", out var b) || !b.TryGetInt64(out var n)) return;
+        if (_ptys.TryGetValue(id, out var pty)) pty.Ack(n);
+    }
+
+    // Renderer-responsiveness probe (test-only). The control pipe fires
+    // render.ping; we round-trip it through the page's main thread and log
+    // the latency. Under the old fire-and-forget output path a flooded
+    // renderer makes this round-trip take seconds (the same thread that
+    // would process a keystroke is buried in the write backlog); with flow
+    // control it stays in the low-ms range. See scripts/test-perf-flow.ps1.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<int, long> _pingSent = new();
+    private void OnRenderPong(JsonElement root)
+    {
+        if (!root.TryGetProperty("id", out var ie) || !ie.TryGetInt32(out var id)) return;
+        if (!_pingSent.TryRemove(id, out var ts)) return;
+        var ms = (System.Diagnostics.Stopwatch.GetTimestamp() - ts) * 1000.0
+                 / System.Diagnostics.Stopwatch.Frequency;
+        Log.Info("RenderPong", $"RENDER_PONG id={id} ms={ms:F1}");
     }
 
     private void OnPaneResize(JsonElement root)
@@ -1248,6 +1291,35 @@ public partial class MainWindow : FluentWindow
                     if (fsStr != null && int.TryParse(fsStr, out var fsn)) parts.Add($"\"fontSize\":{fsn}");
                     sb.Append(string.Join(",", parts)).Append('}');
                     OnSettingsSave(JsonDocument.Parse(sb.ToString()).RootElement);
+                }
+                break;
+            case "render.ping":
+                // Round-trip a marker through the page's main thread and log
+                // the latency on return (OnRenderPong). The test fires these
+                // while two panes flood to measure renderer responsiveness.
+                {
+                    // `cmux test` sends flag values as strings; a raw pipe
+                    // client may send a JSON number. Accept either.
+                    var id = 0;
+                    if (root.TryGetProperty("id", out var ie))
+                    {
+                        if (ie.ValueKind == JsonValueKind.Number) ie.TryGetInt32(out id);
+                        else int.TryParse(ie.GetString(), out id);
+                    }
+                    _pingSent[id] = System.Diagnostics.Stopwatch.GetTimestamp();
+                    Web.CoreWebView2?.PostWebMessageAsJson($"{{\"type\":\"render.ping\",\"id\":{id}}}");
+                }
+                break;
+            case "pty.flowstats":
+                // Log the peak unacked backlog per pane in the active session.
+                // Proves the backpressure gate kept the renderer from falling
+                // arbitrarily far behind. Format: FLOW pane=<id> max=<bytes>.
+                {
+                    var s = ActiveSession();
+                    if (s != null)
+                        foreach (var leaf in AllLeaves(s.Root))
+                            if (_ptys.TryGetValue(leaf.Id, out var pty))
+                                Log.Info("FlowStats", $"FLOW pane={leaf.Id:D} max={pty.MaxOutstanding}");
                 }
                 break;
             case "state.dump":
