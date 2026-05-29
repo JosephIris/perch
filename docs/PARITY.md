@@ -21,6 +21,7 @@ is missing most of the agent-orchestration layer on top.
 | Agent as first-class concept | Agent presets (Claude Code, Codex, Aider, …) | `Session.Shell` string + ClaudeWrapper/HookHandler | 🟡 |
 | Run review UI | Diff viewer, file tree, accept/discard per run | None | ❌ |
 | Session/pane terminal | xterm.js + splits | xterm.js + recursive splits + lazy spawn + JobObject cleanup | ✅ |
+| Crash/session restore | Saves layout + cwd + scrollback (best-effort) + browser state on quit; resumes agent sessions via saved native session id; `Reopen Previous Session` / `cmux restore-session` | Layout + cwd + names + colours + URL panes persist & restore (incremental save → survives crashes). No scrollback, no agent resume yet. Agent resume spec'd in `docs/SESSION-RESUME.md` | 🟡 |
 | Per-session named pipe / IPC | Unix socket + `cmux` CLI verbs | Identical verb set over `\\.\pipe\cmux\<paneId>` | ✅ server / ❌ CLI |
 | `cmux` CLI binary | Ships a CLI agents invoke inside the pane | None — agents have to write JSON to the pipe themselves | ❌ |
 | Claude Code hooks | Wraps Claude, intercepts hook events → status/notify | `ClaudeWrapper.cs`, `HookHandler.cs` | 🟡 |
@@ -53,6 +54,15 @@ is missing most of the agent-orchestration layer on top.
    Job-Object-scoped TCP scan + `git rev-parse` closes this for free.
 5. **Command palette + in-pane search UI.** Table stakes for 2026; the
    xterm search addon is already loaded.
+
+## Tracked TODOs
+
+- [ ] **Claude Code session resume** (agent-layer crash/restart restore).
+  Spec complete — see [`docs/SESSION-RESUME.md`](SESSION-RESUME.md). Capture
+  `session_id` from the `SessionStart` hook → persist on `PaneNode` → respawn
+  with `claude --resume <id>` behind a `ResumeAgentsOnLaunch` setting. ~6 small
+  touch points; verify the `--resume` flag / `session_id` field against the
+  installed Claude Code before building.
 
 ## Suggested Windows implementation notes
 
