@@ -438,17 +438,30 @@ ul { list-style: none; padding: 0; margin: 0; }
  * one that needs you stands out across a 3-5 pane split, but stays
  * subtle enough that a long-waiting pane fades into peripheral vision
  * instead of nagging. */
-.pane[data-state="waiting"] {
+.pane[data-state="waiting"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 1px solid rgba(255, 200, 90, 0.50);
+  border-radius: inherit;
+  pointer-events: none;
+  /* Breathe via OPACITY, not border-color. Opacity animates on the
+   * compositor (GPU) and never repaints the pane — whereas animating
+   * border-color forced a full pane repaint every frame for as long as the
+   * agent waited (minutes), and because the pane is a rounded overflow:hidden
+   * box around the WebGL canvas, that re-rastered the terminal through the
+   * corner mask continuously. The opacity range maps 0.36→1.0 of the 0.50
+   * stroke = the original 0.18→0.50 breath. Same look, ~free. */
   animation: pane-attention 2.4s var(--ease-entry) infinite;
 }
 @keyframes pane-attention {
-  0%, 100% { border-color: rgba(255, 200, 90, 0.18); }
-  50%      { border-color: rgba(255, 200, 90, 0.50); }
+  0%, 100% { opacity: 0.36; }
+  50%      { opacity: 1; }
 }
 /* When the active-pane indicator and the attention pulse fight, focus
  * wins — the user is already on this pane, no need to nag. */
-.pane--active[data-state="waiting"] {
-  animation: none;
+.pane--active[data-state="waiting"]::after {
+  content: none;
 }
 /* Pane header — color tag · name · state dot + word · close.
  *   - color tag: persistent feature-marker the user assigns

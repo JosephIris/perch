@@ -124,14 +124,17 @@ export class Workspace {
     // the panes in that case (removing+re-inserting a DOM element cancels
     // in-flight CSS transitions, killing the focus-fade effect).
     const signature = treeSignature(activeSession.rootPane);
-    if (signature !== this.lastTreeSignature) {
+    const rebuilt = signature !== this.lastTreeSignature;
+    if (rebuilt) {
       this.root.replaceChildren();
       this.renderTree(activeSession.rootPane, this.root);
       this.lastTreeSignature = signature;
     }
 
-    // Apply active marker after the DOM is up.
-    this.setActive(activePaneId);
+    // Apply active marker after the DOM is up. Only steal keyboard focus when
+    // the tree was rebuilt (split/close re-created the element) — a pure
+    // state push must not refocus, or it fights the user's clicks.
+    this.setActive(activePaneId, rebuilt);
   }
 
   /** Crossfade between sessions. Fade-out the current contents, swap them
@@ -148,7 +151,7 @@ export class Workspace {
       this.renderTree(activeSession.rootPane, this.root);
       this.applyState(activeSession.rootPane);
       this.lastTreeSignature = treeSignature(activeSession.rootPane);
-      this.setActive(activePaneId);
+      this.setActive(activePaneId, /* forceFocus (DOM rebuilt) */ true);
       // One rAF so the just-inserted DOM has a frame to lay out before
       // the opacity transition starts — otherwise the in-fade is skipped
       // (Chromium treats the freshly-inserted node as never having been
@@ -183,17 +186,28 @@ export class Workspace {
     this.panes.get(paneId)?.notifyExit(code);
   }
 
-  /** Update the active-pane visual marker. */
-  setActive(paneId: string | null) {
-    if (this.activePaneId && this.activePaneId !== paneId) {
+  /** Update the active-pane visual marker, and move keyboard focus ONLY when
+   *  the active pane actually changed or the DOM was just rebuilt
+   *  (`forceFocus`).
+   *
+   *  This method runs on every state push, and state pushes fire on every
+   *  agent status/notify/meta — several times a second when agents are busy.
+   *  The previous version re-focused the terminal unconditionally on every
+   *  call, which stole keyboard focus back from whatever pane the user had
+   *  clicked into, wiped in-progress text selections, and made focus appear
+   *  to "jump to the wrong pane". Gating focus on an actual change kills that
+   *  storm while still focusing correctly on click / split / session swap. */
+  setActive(paneId: string | null, forceFocus = false) {
+    const changed = paneId !== this.activePaneId;
+    if (changed && this.activePaneId) {
       this.panes.get(this.activePaneId)?.setActive(false);
     }
     this.activePaneId = paneId;
-    if (paneId) {
-      const pane = this.panes.get(paneId);
+    if (!paneId) return;
+    const pane = this.panes.get(paneId);
+    if (changed || forceFocus) {
       pane?.setActive(true);
-      // Forward keyboard focus too so typing always lands in the active pane
-      // -- requestAnimationFrame ensures the DOM is settled before focus.
+      // requestAnimationFrame ensures the DOM is settled before focus.
       requestAnimationFrame(() => pane?.focus());
     }
   }
