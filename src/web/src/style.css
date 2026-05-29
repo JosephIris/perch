@@ -110,9 +110,19 @@ ul { list-style: none; padding: 0; margin: 0; }
   grid-area: sidebar;
   display: grid;
   grid-template-rows: auto auto 1fr auto;
+  /* Explicit column is REQUIRED. Without it the single implicit column is an
+   * `auto` track, which is treated as indefinite-width — so every `width:100%`
+   * / `minmax(0,1fr)` / text-overflow:ellipsis inside the sidebar collapses to
+   * shrink-to-fit and long session titles overrun the pane, clipping the close
+   * X and footer gear. minmax(0,1fr) pins the column to the sidebar width and
+   * forbids content from expanding it, making child percentages resolve. */
+  grid-template-columns: minmax(0, 1fr);
   background: var(--color-sidebar-surface);
   border-radius: var(--r-card);
-  padding: var(--sp-8) var(--sp-4) var(--sp-8) var(--sp-8);
+  /* Symmetric horizontal padding. The right edge was 4px, which left the
+   * hover close-X and the footer gear jammed against the overflow:hidden
+   * edge and looking clipped — 8px gives them breathing room. */
+  padding: var(--sp-8);
   min-width: 0;
   gap: var(--sp-4);
   overflow: hidden;
@@ -195,8 +205,18 @@ ul { list-style: none; padding: 0; margin: 0; }
 .session-item {
   position: relative;
   display: grid;
-  grid-template-columns: 10px 1fr auto;
+  /* minmax(0, 1fr) — NOT a bare 1fr. A bare fr track has an implicit
+   * min-width:auto (min-content), so a long nowrap title refuses to shrink
+   * and pushes the close-button column off the clipped right edge. minmax(0,…)
+   * lets the title track collapse so the title ellipsizes and the X stays put. */
+  grid-template-columns: 10px minmax(0, 1fr) auto;
   align-items: center;
+  /* Fill the (now definite, see .sidebar grid-template-columns) row width and
+   * allow the grid to shrink, so the minmax title track ellipsizes instead of
+   * the row growing to fit the title and clipping the close X. */
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   gap: var(--sp-8);
   padding: 6px var(--sp-12);
   border-radius: var(--r-pill);
@@ -252,19 +272,11 @@ ul { list-style: none; padding: 0; margin: 0; }
    * closer to Söhne 400 weight, which is what Claude desktop uses. The
    * variable-font axis goes 100–900 continuously per @font-face. */
   font-weight: 380;
+  min-width: 0;     /* flex child must allow shrink for the ellipsis to engage */
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.session-item__shell {
-  font-size: var(--type-caption-size);
-  color: var(--color-text-tertiary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-}
-
 /* Secondary metadata line (branch + ports). Appears below the primary
  * line when present, spanning the title column. Tertiary color, small
  * type, no chip pills — Claude-style "just text, calmer." */
@@ -307,6 +319,12 @@ ul { list-style: none; padding: 0; margin: 0; }
 .session-item__note--error::before   { background: var(--color-error); }
 
 .session-item__close {
+  /* Explicit column 3 so it never gets shoved off the clipped edge. Do NOT
+   * add grid-row: 1 / -1 here: with no grid-template-rows the `-1` line is
+   * degenerate, which mis-places the button and collapses this auto column to
+   * 0 — the title then eats column 3 and the X spills into overflow:hidden.
+   * The X sits on the title row (row 1), which is the right place anyway. */
+  grid-column: 3 / 4;
   width: 22px;
   height: 22px;
   display: flex;
@@ -786,6 +804,17 @@ ul { list-style: none; padding: 0; margin: 0; }
   opacity: 1;
   transform: translate(-50%, 0);
 }
+/* Pinned to the pane that fired it: absolute inside the .pane (which is
+ * position:relative), centered on the pane's width, hugging its bottom edge.
+ * Inherits the same translate-based centering + entry transition as the
+ * window-centered variant, so only position/anchor differ. */
+.toast--pinned {
+  position: absolute;
+  bottom: var(--sp-16);
+  /* Never wider than the pane it's pinned to (panes can be narrow in a
+   * multi-split). Stays centered via the translateX(-50%). */
+  max-width: calc(100% - 2 * var(--sp-16));
+}
 .toast__dot {
   width: 8px; height: 8px;
   border-radius: 50%;
@@ -882,7 +911,10 @@ ul { list-style: none; padding: 0; margin: 0; }
   align-items: center;
   gap: var(--sp-8);
   flex: 1 1 auto;
+  /* Shrink + clip so the long status sub-label ellipsizes instead of shoving
+   * the gear off the (now definite-width, see .sidebar) footer. */
   min-width: 0;
+  overflow: hidden;
   padding: 6px var(--sp-12);
   border-radius: var(--r-pill);
   color: var(--color-text-primary);

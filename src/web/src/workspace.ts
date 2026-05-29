@@ -214,6 +214,13 @@ export class Workspace {
 
   getActivePaneId(): string | null { return this.activePaneId; }
 
+  /** The root DOM element of a mounted pane, or null when that pane isn't in
+   *  the currently-rendered session. Used to anchor the notify toast to the
+   *  pane that fired it. */
+  paneElement(paneId: string): HTMLElement | null {
+    return this.panes.get(paneId)?.element ?? null;
+  }
+
   /** Returns the Pane currently marked active, or null. Used by the
    *  font-size shortcuts in main.ts; only terminal Panes will actually
    *  resize, UrlPane.changeFontSize is a no-op. */

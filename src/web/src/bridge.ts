@@ -122,6 +122,9 @@ export type ToastMessage = {
   type: "toast";
   text: string;
   level: NotificationLevel;
+  /* Pane that fired the notify. The page anchors the toast to that pane's
+   * bottom-center; absent / not-in-view falls back to window-centered. */
+  paneId?: string;
 };
 
 /* Reply to settings.request. shells is the host's detected-shell list;
