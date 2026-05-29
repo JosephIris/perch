@@ -34,7 +34,7 @@ public sealed class Settings
 
     private static string SettingsPath =>
         Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            AppPaths.DataRoot,
             "cmux-win",
             "settings.json");
 

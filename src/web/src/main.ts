@@ -69,7 +69,11 @@ onMessage((msg) => {
       setStatus(`pane exited (${msg.code})`);
       break;
     case "toast":
-      toast.show(msg.text, msg.level);
+      toast.show(
+        msg.text,
+        msg.level,
+        msg.paneId ? workspace.paneElement(msg.paneId) : null,
+      );
       break;
     case "settings.data":
       applySettingsData(msg);

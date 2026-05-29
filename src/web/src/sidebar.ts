@@ -37,9 +37,11 @@ export class Sidebar {
     dot.dataset.state = s.agentState;
     item.appendChild(dot);
 
-    // Primary line: title + (optional) inline shell suffix. Single line by
-    // design — branch / ports / notifications get a second muted line below
-    // only when present, so quiet sessions stay tight.
+    // Primary line: title only. The shell used to ride here as a "· pwsh"
+    // suffix, but in a 240px sidebar it forced BOTH the title and the shell
+    // to truncate ("product-tools-... · powers..."), which is hard to parse.
+    // The active session's shell already shows in the footer, so the row
+    // gives the title the whole line for a single clean ellipsis instead.
     const primary = document.createElement("span");
     primary.className = "session-item__primary";
 
@@ -47,13 +49,6 @@ export class Sidebar {
     title.className = "session-item__title";
     title.textContent = s.title;
     primary.appendChild(title);
-
-    if (s.shell) {
-      const shell = document.createElement("span");
-      shell.className = "session-item__shell";
-      shell.textContent = `· ${s.shell}`;
-      primary.appendChild(shell);
-    }
     item.appendChild(primary);
 
     // Optional secondary line: pane-count breakdown · branch · ports.

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Microsoft.Web.WebView2.Core;
 using Wpf.Ui.Controls;
@@ -87,17 +88,23 @@ public partial class MainWindow : FluentWindow
     {
         // PaneNode.Name doubles as the human-readable address for `cmux
         // focus/send/open`. Auto-assign pane-N for leaves missing a name.
-        foreach (var s in _store.Sessions) AutoName(s.Root, n: 1);
+        foreach (var s in _store.Sessions) AutoName(s.Root);
     }
-    private int AutoName(PaneNode node, int n)
+    // Next "pane-N" = highest existing N + 1, NOT a positional index. Positional
+    // numbering collided after a close+split: close pane-1, the split collapses
+    // and the survivor keeps "pane-2", then the next split's walker counts the
+    // survivor as position 1 and assigns the new pane "pane-2" too — two panes,
+    // same name. Scanning for the max keeps every auto name unique.
+    private static void AutoName(PaneNode root)
     {
-        if (node.IsLeaf)
+        int max = 0;
+        foreach (var leaf in AllLeaves(root))
         {
-            if (string.IsNullOrEmpty(node.Name)) node.Name = $"pane-{n}";
-            return n + 1;
+            var m = Regex.Match(leaf.Name ?? "", @"^pane-(\d+)$", RegexOptions.IgnoreCase);
+            if (m.Success && int.TryParse(m.Groups[1].Value, out var k) && k > max) max = k;
         }
-        foreach (var c in node.Children) n = AutoName(c, n);
-        return n;
+        foreach (var leaf in AllLeaves(root))
+            if (string.IsNullOrEmpty(leaf.Name)) leaf.Name = $"pane-{++max}";
     }
 
     // ---- WebView2 init ----------------------------------------------------
@@ -107,7 +114,7 @@ public partial class MainWindow : FluentWindow
         try
         {
             var userDataFolder = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                AppPaths.DataRoot,
                 "cmux-win", "WebView2");
             Directory.CreateDirectory(userDataFolder);
 
@@ -304,6 +311,7 @@ public partial class MainWindow : FluentWindow
             ipc.OnNotify += msg => OnAgentNotify(sess, paneId, msg);
             ipc.OnMeta   += msg => OnAgentMeta(sess, paneId, msg);
             ipc.OnGitBaseline += msg => OnGitBaseline(sess, paneId, msg);
+            ipc.OnTitle  += msg => OnAgentTitle(sess, paneId, msg);
             ipc.Start();
             _paneIpc[paneId] = ipc;
 
@@ -374,6 +382,37 @@ public partial class MainWindow : FluentWindow
         PushState();
     }
 
+    // Auto-name a still-auto-named terminal pane from the agent's first prompt
+    // — "capture what's happening" from the content of the first message.
+    // First prompt wins: once we derive a name we flip IsAutoName off so later
+    // prompts (and the URL-pane auto-title path) won't relabel it, matching the
+    // manual-rename semantics. A user double-click rename still overrides.
+    private void OnAgentTitle(Session sess, Guid paneId, TitleMessage msg)
+    {
+        var pane = FindPane(sess, paneId);
+        if (pane == null) return;
+        if (pane.IsWebView) return;        // URL panes name from <title>
+        if (!pane.IsAutoName) return;      // user- or prompt-named already
+        var name = CleanPaneTitle(msg.Text);
+        if (string.IsNullOrEmpty(name) || pane.Name == name) return;
+        pane.Name = name;
+        pane.IsAutoName = false;           // sticky: first message defines it
+        _store.Save();
+        PushState();
+    }
+
+    // Normalize a free-text prompt into a short pane label: collapse every
+    // whitespace run (newlines, tabs, repeats) to a single space, trim, and
+    // cap at a tab-sized length with an ellipsis.
+    private static string CleanPaneTitle(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return "";
+        var s = Regex.Replace(raw.Trim(), @"\s+", " ");
+        const int max = 40;
+        if (s.Length > max) s = s.Substring(0, max).TrimEnd() + "…";
+        return s;
+    }
+
     // Baseline received from the cc HookHandler on session-start. An empty
     // sha clears the counter (session-end). Triggers an immediate count
     // refresh so the chip shows "+0 commits" right away instead of waiting
@@ -411,7 +450,7 @@ public partial class MainWindow : FluentWindow
         pane.NotificationText = msg.Text ?? "";
         pane.NotificationLevel = ParseLevel(msg.Level);
         PushState();
-        PostToast(msg.Text ?? "", msg.Level);
+        PostToast(msg.Text ?? "", msg.Level, paneId);
     }
 
     private void OnAgentMeta(Session sess, Guid paneId, MetaMessage msg)
@@ -461,7 +500,7 @@ public partial class MainWindow : FluentWindow
         catch (Exception ex) { Log.Error("FlashAttention", ex); }
     }
 
-    private void PostToast(string text, string? level)
+    private void PostToast(string text, string? level, Guid paneId)
     {
         Dispatcher.BeginInvoke(() =>
         {
@@ -472,6 +511,11 @@ public partial class MainWindow : FluentWindow
                     type = "toast",
                     text,
                     level = string.IsNullOrEmpty(level) ? "info" : level,
+                    // Which pane fired it — the page anchors the toast to that
+                    // pane's bottom-center (falls back to window-centered when
+                    // the pane isn't in the visible session). "D" format to
+                    // match the leaf paneIds sent in state / pane.out.
+                    paneId = paneId.ToString("D"),
                 });
                 Web.CoreWebView2?.PostWebMessageAsJson(payload);
             }
@@ -582,7 +626,7 @@ public partial class MainWindow : FluentWindow
             var shell = sh.GetString();
             if (!string.IsNullOrWhiteSpace(shell)) s.Shell = shell;
         }
-        AutoName(s.Root, 1);
+        AutoName(s.Root);
         _store.ActiveSessionId = s.Id;
         // The new session's root leaf is the active pane. PTY spawns
         // lazily on first pane.resize from the page (sized correctly).
@@ -742,7 +786,7 @@ public partial class MainWindow : FluentWindow
         var replacement = SplitImpl(sess.Root, id, orient, newPane);
         if (replacement == null) return;
         sess.Root = replacement;
-        AutoName(sess.Root, 1);
+        AutoName(sess.Root);
         _activePaneId = newPane.Id;
         _store.Save();
         PushState();
@@ -927,7 +971,7 @@ public partial class MainWindow : FluentWindow
         if (newRoot == null) return;
         DestroyPty(id);
         sess.Root = newRoot;
-        AutoName(sess.Root, 1);
+        AutoName(sess.Root);
         // Active pane: prefer the first remaining leaf in the same session.
         _activePaneId = FirstLeaf(sess.Root)?.Id;
         _store.Save();

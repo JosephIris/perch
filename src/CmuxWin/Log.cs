@@ -7,7 +7,7 @@ internal static class Log
 {
     private static readonly object _lock = new();
     private static readonly string LogPath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        AppPaths.DataRoot,
         "cmux-win", "errors.log");
 
     public static void Error(string context, Exception? ex)

@@ -27,6 +27,7 @@ internal sealed class CmuxIpcServer : IDisposable
     public event Action<SendMessage>? OnSend;
     public event Action<OpenMessage>? OnOpen;
     public event Action<GitBaselineMessage>? OnGitBaseline;
+    public event Action<TitleMessage>? OnTitle;
 
     private readonly CancellationTokenSource _cts = new();
     private readonly Dispatcher _dispatcher;
@@ -131,6 +132,10 @@ internal sealed class CmuxIpcServer : IDisposable
                     var gb = JsonSerializer.Deserialize<GitBaselineMessage>(json, IpcJson.Options);
                     if (gb != null) _dispatcher.BeginInvoke(() => OnGitBaseline?.Invoke(gb));
                     break;
+                case "title":
+                    var t = JsonSerializer.Deserialize<TitleMessage>(json, IpcJson.Options);
+                    if (t != null) _dispatcher.BeginInvoke(() => OnTitle?.Invoke(t));
+                    break;
             }
         }
         catch (JsonException ex) { Log.Error("CmuxIpc.Dispatch.Json", ex); }
@@ -189,3 +194,9 @@ internal sealed record OpenMessage(
 /// time the pane's state changes.
 internal sealed record GitBaselineMessage(
     [property: JsonPropertyName("sha")] string Sha);
+
+/// Sent by the cc HookHandler on Claude's first UserPromptSubmit. Carries the
+/// (already length-bounded) prompt text the host uses to auto-name a still-
+/// auto-named pane — "capture what's happening" from the first message.
+internal sealed record TitleMessage(
+    [property: JsonPropertyName("text")] string Text);

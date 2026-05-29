@@ -15,7 +15,7 @@ internal sealed class SessionStore
     public Guid? ActiveSessionId { get; set; }
 
     private static string StorePath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        AppPaths.DataRoot,
         "cmux-win",
         "sessions.json");
 

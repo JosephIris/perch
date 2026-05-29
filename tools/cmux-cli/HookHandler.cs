@@ -79,6 +79,13 @@ internal static class HookHandler
                 // User just submitted a prompt → agent is thinking. Include
                 // the prompt's leading chars as detail when present.
                 Send(pipeName, new { type = "status", state = "working", detail = StringFrom(root, "prompt", maxLen: 60) ?? "thinking" });
+                // Also forward the prompt as a title candidate so the host can
+                // auto-name a still-unnamed pane after the first message. Send
+                // a longer slice than the activity detail (the host cleans +
+                // truncates to a tab-sized label); skip when there's no prompt.
+                var promptText = StringFrom(root, "prompt", maxLen: 200);
+                if (!string.IsNullOrWhiteSpace(promptText))
+                    Send(pipeName, new { type = "title", text = promptText });
                 break;
 
             case "notification":
