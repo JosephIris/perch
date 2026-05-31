@@ -101,14 +101,20 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed: $LASTEXITCODE" }
           Get-ChildItem publish/installer
 
-      # Upload build outputs as artifacts ONLY for non-tag builds (a quick way
-      # to grab a main/PR/dispatch build from the Actions run page). Tag builds
-      # publish the same binaries to GitHub Releases below, so artifacts there
-      # would just be redundant copies. Actions-artifact storage is small
-      # (0.5 GB on the free plan) and each build is ~90 MB, so we also cap
-      # retention at 5 days — without this the 90-day default piled up ~4.6 GB.
+      # Upload build outputs as artifacts ONLY for PRs and manual dispatch —
+      # a quick way to grab a build from the Actions run page. Tag builds go
+      # to GitHub Releases below; routine `main` pushes don't need a grab-able
+      # copy and uploading on every one just churns the tiny 0.5 GB free
+      # Actions-storage quota (the 90-day default once piled up ~4.6 GB).
+      #
+      # continue-on-error: a throwaway convenience artifact must NEVER fail the
+      # build. GitHub recalculates storage usage only every 6-12 hours, so the
+      # quota can read "full" for hours after a cleanup — without this the
+      # upload step reds the whole run over a non-essential copy. Capped at
+      # 5-day retention as a second guard against accumulation.
       - name: Upload installer artifact
-        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        if: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: cmux-Setup-${{ env.APP_VERSION }}
@@ -117,7 +123,8 @@ jobs:
           retention-days: 5
 
       - name: Upload portable exe artifact
-        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        if: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: cmux-portable-${{ env.APP_VERSION }}
