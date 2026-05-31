@@ -359,20 +359,33 @@ ul { list-style: none; padding: 0; margin: 0; }
  * is its own rounded card — at any level of nesting — so splits never
  * "break" the rounded edges or eat the gap.
  *
- * The opacity transition fires on session swap: workspace.ts toggles
- * .workspace--switching for a brief crossfade between sessions. State /
- * focus changes within the same session NEVER trigger this — they're
- * incremental DOM updates so transitions on existing elements survive. */
+ * Each session is a .workspace__stage child that stays mounted across
+ * switches and is hidden (display:none) when inactive — that's what keeps a
+ * session's terminals (and scrollback) alive when you tab away. The incoming
+ * stage fades in via .workspace__stage--in on switch. State / focus changes
+ * within the same session NEVER rebuild — they're incremental DOM updates so
+ * transitions on existing elements survive. */
 .workspace {
   grid-area: workspace;
   min-height: 0;
   min-width: 0;
   display: flex;
-  opacity: 1;
-  transition: opacity var(--dur-normal) var(--ease-entry);
 }
-.workspace--switching {
-  opacity: 0;
+/* Per-session stage. Exactly one is visible at a time; it fills the
+ * workspace and lays out the session's pane tree (a single .pane or .split
+ * root). */
+.workspace__stage {
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+}
+.workspace__stage--in {
+  animation: stage-in var(--dur-normal) var(--ease-entry);
+}
+@keyframes stage-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 
 /* Newly-created pane fade-in. workspace.ts adds .pane--entering on each
@@ -398,8 +411,8 @@ ul { list-style: none; padding: 0; margin: 0; }
   from { opacity: 1; transform: scale(1); }
   to   { opacity: 0; transform: scale(0.94); }
 }
-.workspace > .pane,
-.workspace > .split {
+.workspace__stage > .pane,
+.workspace__stage > .split {
   flex: 1 1 0;
 }
 .split {

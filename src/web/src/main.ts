@@ -56,8 +56,11 @@ onMessage((msg) => {
       // tick. msg.prefs is always present (host always populates it).
       if (msg.prefs) workspace.applyPrefs(msg.prefs);
       sidebar.render(msg.sessions, msg.activeSessionId);
+      // Pass the full session list + active id: the workspace keeps a stage
+      // per session alive across switches (preserving terminal scrollback)
+      // and disposes a stage only when its session drops out of this list.
+      workspace.render(msg.sessions, msg.activeSessionId || null, msg.activePaneId || null);
       const active = activeOf(msg);
-      workspace.render(active, msg.activePaneId || null);
       setStatus(active ? `${active.title}  ${active.shell}` : "no session");
       break;
     }
