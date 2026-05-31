@@ -31,11 +31,17 @@ const COLOR_COUNT = 6;
 
 /** Render branch + commit-count chips in the pane header. Both elements
  *  are toggled visible only when they have content; styling lives in
- *  style.css (.pane__chip + variants). */
+ *  style.css (.pane__chip + variants).
+ *
+ *  The commit chip is shown only on the ACTIVE pane. Commits are repo-wide,
+ *  not pane-scoped — panes sharing a worktree all see the same HEAD, so
+ *  surfacing "+N commits" on every one of them was noise. Gating on focus
+ *  pins it to the single pane the user is looking at. */
 export function applyChips(
   branchEl: HTMLElement,
   commitsEl: HTMLElement,
-  leaf: Extract<PaneTreeView, { kind: "leaf" }>
+  leaf: Extract<PaneTreeView, { kind: "leaf" }>,
+  active: boolean
 ) {
   if (leaf.branch) {
     branchEl.textContent = `⎇ ${leaf.branch}`;
@@ -44,7 +50,7 @@ export function applyChips(
     branchEl.textContent = "";
     branchEl.style.display = "none";
   }
-  if (leaf.commitCount > 0) {
+  if (leaf.commitCount > 0 && active) {
     commitsEl.textContent = `+${leaf.commitCount} commit${leaf.commitCount === 1 ? "" : "s"}`;
     commitsEl.style.display = "";
   } else {
@@ -76,7 +82,8 @@ export function buildPaneHeader(paneId: string): PaneHeader {
 
   const nameEl = document.createElement("span");
   nameEl.className = "pane__name";
-  nameEl.title = "Double-click to rename";
+  // No native `title` — Pane attaches a custom tooltip showing the full
+  // first-prompt text (falling back to a rename hint) via attachTooltip.
   nameEl.addEventListener("dblclick", (ev) => {
     ev.stopPropagation();
     startInlineRename(paneId, nameEl);

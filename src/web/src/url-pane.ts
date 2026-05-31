@@ -130,7 +130,9 @@ export class UrlPane {
     this.colorDotEl.dataset.color = String(leaf.colorIndex);
     this.element.dataset.color = String(leaf.colorIndex);
     this.element.dataset.state = leaf.agentState;
-    applyChips(this.branchEl, this.commitsEl, leaf);
+    // URL panes never carry a commit baseline (commitCount is always 0), so
+    // the focus-gating flag is moot — pass false.
+    applyChips(this.branchEl, this.commitsEl, leaf, false);
     // The URL itself doesn't change once a pane is created — but if it
     // ever does (future feature), we'd want to re-navigate. The layout
     // message carries the URL on every push so the host can detect.

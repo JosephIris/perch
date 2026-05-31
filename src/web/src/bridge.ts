@@ -65,7 +65,7 @@ export type OutMessage =
 
 // ---- Incoming message shapes (host -> page) --------------------------------
 
-export type AgentStateName = "idle" | "working" | "waiting" | "done";
+export type AgentStateName = "idle" | "working" | "waiting" | "permission";
 export type NotificationLevel = "info" | "success" | "warn" | "error";
 
 export type PaneTreeView =
@@ -73,6 +73,9 @@ export type PaneTreeView =
       kind: "leaf";
       paneId: string;
       name: string;
+      /* Full first-prompt text the label was cut from; shown in the pane
+       * header hover tooltip. Empty when the pane wasn't auto-named. */
+      nameFull?: string;
       url?: string | null;
       /* Color tag (0–5) into the pane palette in style.css. */
       colorIndex: number;

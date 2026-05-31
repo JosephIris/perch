@@ -73,21 +73,22 @@ internal sealed class Session : INotifyPropertyChanged
     [JsonIgnore] public bool HasAgentState => _agentState != AgentState.Idle;
     [JsonIgnore] public string AgentStateText => _agentState switch
     {
-        CmuxWin.AgentState.Working => "working",
-        CmuxWin.AgentState.Waiting => "waiting",
-        CmuxWin.AgentState.Done    => "done",
-        _                          => "",
+        CmuxWin.AgentState.Working    => "working",
+        CmuxWin.AgentState.Waiting    => "waiting",
+        CmuxWin.AgentState.Permission => "permission",
+        _                             => "",
     };
 
     /// Theme-brush resource key for the state pill background. Working uses
     /// the theme accent (it's the "in progress" affordance), Waiting uses
-    /// caution (user attention requested), Done uses success.
+    /// caution (your feedback wanted), Permission uses critical (agent is
+    /// blocked on you — the loudest signal).
     [JsonIgnore] public string AgentStateBrushKey => _agentState switch
     {
-        CmuxWin.AgentState.Working => "AccentFillColorDefaultBrush",
-        CmuxWin.AgentState.Waiting => "SystemFillColorCautionBrush",
-        CmuxWin.AgentState.Done    => "SystemFillColorSuccessBrush",
-        _                          => "SubtleFillColorTertiaryBrush",
+        CmuxWin.AgentState.Working    => "AccentFillColorDefaultBrush",
+        CmuxWin.AgentState.Waiting    => "SystemFillColorCautionBrush",
+        CmuxWin.AgentState.Permission => "SystemFillColorCriticalBrush",
+        _                             => "SubtleFillColorTertiaryBrush",
     };
 
     private string _activityDetail = "";
@@ -227,6 +228,24 @@ internal sealed class PaneNode
     /// changes won't overwrite. Persisted alongside Name.
     public bool IsAutoName { get; set; } = true;
 
+    /// True once the user manually renames the pane (pane.rename). A
+    /// user-named pane is NEVER re-titled by the agent — distinct from
+    /// IsAutoName, which a URL pane keeps true so its <title> stays live.
+    public bool IsUserNamed { get; set; }
+
+    /// Whether the next agent first-prompt title may (re)name this pane.
+    /// Set false once a prompt names it, so only the FIRST prompt of a
+    /// Claude session defines the label. Re-enabled on session-start
+    /// (new Claude / `/clear`) for any pane the user hasn't named — that's
+    /// what lets "ctrl+c twice → relaunch" or `/clear` rename from the new
+    /// first message. Persisted so the per-session lock survives a reattach.
+    public bool AllowAutoName { get; set; } = true;
+
+    /// The full first-prompt text the auto-name was derived from. Name is a
+    /// 40-char label cut from this; the pane header shows the whole thing in
+    /// a hover tooltip. Persisted so the tooltip survives restart.
+    public string? NamePrompt { get; set; }
+
     /// Color tag index into the pane palette (0..5). Auto-assigned at
     /// split time, user can edit via the pane header context menu. Persisted
     /// so feature-marking ("the simulator-fix one is yellow") survives
@@ -262,7 +281,13 @@ internal sealed class PaneNode
 
 internal enum SplitOrientation { Horizontal, Vertical }
 
-internal enum AgentState { Idle, Working, Waiting, Done }
+// Idle      → no agent activity (hollow dot).
+// Working   → agent is running / thinking (blue).
+// Waiting   → agent finished its turn or nudged for input; waiting on YOUR
+//             feedback (yellow). Maps from Claude's Stop + idle Notification.
+// Permission→ agent is BLOCKED on a permission prompt and can't proceed
+//             without you (red, louder). Maps from a permission Notification.
+internal enum AgentState { Idle, Working, Waiting, Permission }
 
 /// Severity for sidebar notification pills. Previously lived in OscParser.cs
 /// alongside the OSC 9 wire parser; the webview rewrite parses OSC sequences
