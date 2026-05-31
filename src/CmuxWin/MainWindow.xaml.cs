@@ -312,6 +312,7 @@ public partial class MainWindow : FluentWindow
             ipc.OnMeta   += msg => OnAgentMeta(sess, paneId, msg);
             ipc.OnGitBaseline += msg => OnGitBaseline(sess, paneId, msg);
             ipc.OnTitle  += msg => OnAgentTitle(sess, paneId, msg);
+            ipc.OnNameReset += msg => OnNameReset(sess, paneId, msg);
             ipc.Start();
             _paneIpc[paneId] = ipc;
 
@@ -337,10 +338,10 @@ public partial class MainWindow : FluentWindow
 
     private static AgentState ParseAgentState(string? s) => s switch
     {
-        "working" => AgentState.Working,
-        "waiting" => AgentState.Waiting,
-        "done"    => AgentState.Done,
-        _         => AgentState.Idle,
+        "working"    => AgentState.Working,
+        "waiting"    => AgentState.Waiting,
+        "permission" => AgentState.Permission,
+        _            => AgentState.Idle,
     };
 
     private static NotificationLevel ParseLevel(string? s) => s switch
@@ -368,11 +369,14 @@ public partial class MainWindow : FluentWindow
         var prev = pane.AgentState;
         pane.AgentState = ParseAgentState(msg.State);
         pane.ActivityDetail = msg.Detail ?? "";
-        // Attention nudge: any → Waiting transition flashes the taskbar
-        // (only when our window isn't already foreground). One place to
-        // raise the signal so it works for both Claude-via-hooks and any
-        // other agent calling `cmux status waiting` directly.
-        if (prev != AgentState.Waiting && pane.AgentState == AgentState.Waiting)
+        // Attention nudge: any transition INTO an attention state (waiting
+        // for feedback, or blocked on permission) flashes the taskbar (only
+        // when our window isn't already foreground). One place to raise the
+        // signal so it works for both Claude-via-hooks and any other agent
+        // calling `cmux status waiting|permission` directly.
+        static bool IsAttention(AgentState st) =>
+            st is AgentState.Waiting or AgentState.Permission;
+        if (!IsAttention(prev) && IsAttention(pane.AgentState))
         {
             FlashAttention();
         }
@@ -382,23 +386,49 @@ public partial class MainWindow : FluentWindow
         PushState();
     }
 
-    // Auto-name a still-auto-named terminal pane from the agent's first prompt
-    // — "capture what's happening" from the content of the first message.
-    // First prompt wins: once we derive a name we flip IsAutoName off so later
-    // prompts (and the URL-pane auto-title path) won't relabel it, matching the
-    // manual-rename semantics. A user double-click rename still overrides.
+    // Auto-name a terminal pane from the agent's first prompt — "capture
+    // what's happening" from the content of the first message. The FIRST
+    // prompt of each Claude session wins: we name the pane then drop
+    // AllowAutoName so later prompts in the same session don't churn the
+    // label. A new session (relaunch / `/clear`) re-arms AllowAutoName via
+    // OnNameReset, so the new first message re-titles. A user double-click
+    // rename sets IsUserNamed and locks the label permanently.
     private void OnAgentTitle(Session sess, Guid paneId, TitleMessage msg)
     {
         var pane = FindPane(sess, paneId);
         if (pane == null) return;
         if (pane.IsWebView) return;        // URL panes name from <title>
-        if (!pane.IsAutoName) return;      // user- or prompt-named already
+        if (pane.IsUserNamed) return;      // user committed a name — never touch
+        if (!pane.AllowAutoName) return;   // already named this session
         var name = CleanPaneTitle(msg.Text);
-        if (string.IsNullOrEmpty(name) || pane.Name == name) return;
-        pane.Name = name;
-        pane.IsAutoName = false;           // sticky: first message defines it
+        if (string.IsNullOrEmpty(name)) return;
+        // Keep the full prompt for the header hover tooltip even when the
+        // label is a 40-char cut of it.
+        pane.NamePrompt = msg.Text?.Trim();
+        pane.AllowAutoName = false;        // first message of this session defines it
+        if (pane.Name != name)
+        {
+            pane.Name = name;
+        }
         _store.Save();
         PushState();
+    }
+
+    // New Claude session in a terminal pane (fresh launch after ctrl+c twice,
+    // or `/clear`) re-arms auto-naming so the next first prompt re-titles the
+    // pane to the new task. We don't wipe the current label here — it stays
+    // until the next prompt replaces it. Skipped for user-named panes and for
+    // "resume" (a resumed session keeps its established label).
+    private void OnNameReset(Session sess, Guid paneId, NameResetMessage msg)
+    {
+        var pane = FindPane(sess, paneId);
+        if (pane == null) return;
+        if (pane.IsWebView) return;
+        if (pane.IsUserNamed) return;
+        if (string.Equals(msg.Source, "resume", StringComparison.OrdinalIgnoreCase)) return;
+        if (pane.AllowAutoName) return;    // already armed; nothing to do
+        pane.AllowAutoName = true;
+        _store.Save();
     }
 
     // Normalize a free-text prompt into a short pane label: collapse every
@@ -546,7 +576,7 @@ public partial class MainWindow : FluentWindow
         var sess = OwningSession(id);
         if (sess == null) return;
         var pane = FindPane(sess, id);
-        if (pane != null && pane.AgentState == AgentState.Waiting)
+        if (pane != null && pane.AgentState is AgentState.Waiting or AgentState.Permission)
         {
             pane.AgentState = AgentState.Working;
             pane.NotificationText = "";
@@ -838,6 +868,9 @@ public partial class MainWindow : FluentWindow
         if (pane == null) return;
         pane.Name = name;
         pane.IsAutoName = false;    // user committed a name — never auto-overwrite
+        pane.IsUserNamed = true;    // and the agent must never re-title it
+        pane.AllowAutoName = false;
+        pane.NamePrompt = null;     // drop the prompt tooltip — label is now the user's
         _store.Save();
         PushState();
     }
@@ -1083,7 +1116,7 @@ public partial class MainWindow : FluentWindow
                                      ?? leaves.FirstOrDefault();
                     var anyNotify = leaves.FirstOrDefault(p => p.HasNotification);
                     var paneCount = leaves.Length;
-                    var waitingCount = leaves.Count(p => p.AgentState == AgentState.Waiting);
+                    var waitingCount = leaves.Count(p => p.AgentState is AgentState.Waiting or AgentState.Permission);
                     var workingCount = leaves.Count(p => p.AgentState == AgentState.Working);
                     return new
                     {
@@ -1122,6 +1155,10 @@ public partial class MainWindow : FluentWindow
                 kind = "leaf",
                 paneId = node.Id.ToString("D"),
                 name = node.Name ?? "pane",
+                // Full first-prompt text for the header hover tooltip; the
+                // label above is a 40-char cut of it. Empty when the pane was
+                // never auto-named from a prompt (placeholder / user-named).
+                nameFull = node.NamePrompt ?? "",
                 url = node.Url,
                 colorIndex = node.ColorIndex,
                 // Per-pane state — shows up in the pane header so each
@@ -1151,24 +1188,24 @@ public partial class MainWindow : FluentWindow
     }
 
     /// Most-urgent state across panes. Drives the session row indicator.
-    /// Order: Waiting > Working > Done > Idle.
+    /// Order: Permission > Waiting > Working > Idle.
     private static AgentState AggregateState(IEnumerable<PaneNode> leaves)
     {
         var seen = AgentState.Idle;
         foreach (var p in leaves)
         {
-            if (p.AgentState == AgentState.Waiting) return AgentState.Waiting;
-            if (p.AgentState == AgentState.Working) seen = AgentState.Working;
-            else if (p.AgentState == AgentState.Done && seen != AgentState.Working) seen = AgentState.Done;
+            if (p.AgentState == AgentState.Permission) return AgentState.Permission;
+            if (p.AgentState == AgentState.Waiting) seen = AgentState.Waiting;
+            else if (p.AgentState == AgentState.Working && seen != AgentState.Waiting) seen = AgentState.Working;
         }
         return seen;
     }
     private static string StateToString(AgentState s) => s switch
     {
-        AgentState.Working => "working",
-        AgentState.Waiting => "waiting",
-        AgentState.Done    => "done",
-        _                  => "idle",
+        AgentState.Working    => "working",
+        AgentState.Waiting    => "waiting",
+        AgentState.Permission => "permission",
+        _                     => "idle",
     };
     private static string LevelToString(NotificationLevel l) => l switch
     {

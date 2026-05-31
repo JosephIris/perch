@@ -85,7 +85,7 @@ internal static class Program
 
     private static int CmdStatus(string pipeName, string[] args)
     {
-        // Usage: cmux status <idle|working|waiting|done> [detail...]
+        // Usage: cmux status <idle|working|waiting|permission> [detail...]
         if (args.Length < 2) { Console.Error.WriteLine("cmux status: missing state"); return 2; }
         var state = args[1];
         var detail = args.Length > 2 ? string.Join(' ', args, 2, args.Length - 2) : null;
@@ -243,7 +243,7 @@ internal static class Program
     {
         Console.WriteLine("Usage:");
         Console.WriteLine("  cmux notify [--level info|success|warn|error] <text...>");
-        Console.WriteLine("  cmux status <idle|working|waiting|done> [detail...]");
+        Console.WriteLine("  cmux status <idle|working|waiting|permission> [detail...]");
         Console.WriteLine("  cmux meta [--branch X] [--port N]... [--cwd path]");
         Console.WriteLine("  cmux focus <pane-name|session:pane>");
         Console.WriteLine("  cmux send <target> <input...>");

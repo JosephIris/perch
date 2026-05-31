@@ -251,8 +251,8 @@ ul { list-style: none; padding: 0; margin: 0; }
   background: var(--color-state-waiting);
   box-shadow: none;
 }
-.session-item__dot[data-state="done"] {
-  background: var(--color-state-done);
+.session-item__dot[data-state="permission"] {
+  background: var(--color-state-permission);
   box-shadow: none;
 }
 .session-item__dot[data-state="error"] {
@@ -449,14 +449,17 @@ ul { list-style: none; padding: 0; margin: 0; }
   border-color: rgba(255, 255, 255, 0.22);
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08);
 }
-/* Attention pulse: when the agent reports "waiting" (typically a Claude
- * permission prompt) the pane border breathes between two warm-tinted
- * stroke values. Hairline-only, no halo, no glow — Constitution rule.
- * The animation runs on every waiting pane regardless of focus so the
- * one that needs you stands out across a 3-5 pane split, but stays
- * subtle enough that a long-waiting pane fades into peripheral vision
- * instead of nagging. */
-.pane[data-state="waiting"]::after {
+/* Attention pulse: a colored hairline border breathes around a pane that
+ * wants you. Two flavors:
+ *   - waiting    → warm yellow, calm 2.4s breath (turn done / wants feedback)
+ *   - permission → red, faster + brighter floor (agent is BLOCKED — loud)
+ * Hairline-only, no halo, no glow — Constitution rule. Runs on every such
+ * pane REGARDLESS of focus: the state reflects the agent's status, not
+ * whether you've looked at it, so clicking into a still-blocked pane must
+ * not make it look handled — and with 3-5 panes you need to keep tracking
+ * which others still need you while you act on one. */
+.pane[data-state="waiting"]::after,
+.pane[data-state="permission"]::after {
   content: "";
   position: absolute;
   inset: 0;
@@ -472,14 +475,19 @@ ul { list-style: none; padding: 0; margin: 0; }
    * stroke = the original 0.18→0.50 breath. Same look, ~free. */
   animation: pane-attention 2.4s var(--ease-entry) infinite;
 }
+/* Permission is the loud one: red stroke, faster cadence, brighter floor so
+ * it never fades to near-invisible the way the calm yellow can. */
+.pane[data-state="permission"]::after {
+  border-color: rgba(255, 92, 108, 0.65);
+  animation: pane-attention-loud 1.3s var(--ease-entry) infinite;
+}
 @keyframes pane-attention {
   0%, 100% { opacity: 0.36; }
   50%      { opacity: 1; }
 }
-/* When the active-pane indicator and the attention pulse fight, focus
- * wins — the user is already on this pane, no need to nag. */
-.pane--active[data-state="waiting"]::after {
-  content: none;
+@keyframes pane-attention-loud {
+  0%, 100% { opacity: 0.6; }
+  50%      { opacity: 1; }
 }
 /* Pane header — color tag · name · state dot + word · close.
  *   - color tag: persistent feature-marker the user assigns
@@ -612,9 +620,11 @@ ul { list-style: none; padding: 0; margin: 0; }
   /* Subtle pulse so "waiting on me" actively catches the eye. */
   animation: pane-waiting-pulse 1.6s ease-in-out infinite;
 }
-.pane__state-dot[data-state="done"] {
-  background: var(--color-state-done);
+.pane__state-dot[data-state="permission"] {
+  background: var(--color-state-permission);
   box-shadow: none;
+  /* Faster, deeper pulse — blocked-on-you reads louder than wants-feedback. */
+  animation: pane-waiting-pulse 1s ease-in-out infinite;
 }
 @keyframes pane-waiting-pulse {
   0%, 100% { opacity: 1; }
@@ -649,9 +659,12 @@ ul { list-style: none; padding: 0; margin: 0; }
   flex: 0 0 auto;
 }
 /* When state is waiting, push the label color to caution so the row
- * reads "this needs you" even peripherally. */
+ * reads "this needs you" even peripherally. Permission goes red. */
 .pane__state-dot[data-state="waiting"] + .pane__state-label {
   color: var(--color-caution);
+}
+.pane__state-dot[data-state="permission"] + .pane__state-label {
+  color: var(--color-state-permission);
 }
 .pane__close {
   width: 18px;
@@ -708,6 +721,36 @@ ul { list-style: none; padding: 0; margin: 0; }
  * Floating menu shown when the user clicks a URL in the terminal. Lives
  * outside the normal flow (position:fixed) and dismisses on Esc /
  * click-outside. Same acrylic family as the toast / shortcut hint. */
+/* --- Custom tooltip -----------------------------------------------------
+ * Hover tooltip used for the pane name (shows the full first-prompt the
+ * 40-char label was cut from). Same acrylic family as the link menu / color
+ * picker; caption-tier text, pre-wrap so long multi-line prompts read
+ * naturally. Fades in via opacity — no layout shift, no native title. */
+.cmux-tooltip {
+  position: fixed;
+  left: 0;
+  top: 0;
+  max-width: 360px;
+  padding: var(--sp-8) var(--sp-12);
+  border-radius: var(--r-card);
+  background: rgba(28, 28, 28, 0.96);
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  border: 1px solid var(--color-stroke);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  z-index: 40;
+  font-family: var(--font-small);
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--color-text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-entry);
+}
+.cmux-tooltip--visible { opacity: 1; }
+
 .link-menu {
   position: fixed;
   display: flex;

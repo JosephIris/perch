@@ -129,7 +129,8 @@
    * `data-state="working"` selectors. */
   --color-state-idle:       transparent;            /* no fill, hollow ring */
   --color-state-working:    #4cc2ff;                /* same hue as accent */
-  --color-state-waiting:    var(--color-caution);
+  --color-state-waiting:    var(--color-caution);   /* yellow: wants your feedback */
+  --color-state-permission: #ff5c6c;                /* red: blocked on you, loud */
   --color-state-done:       var(--color-success);
   --color-state-error:      var(--color-error);
 

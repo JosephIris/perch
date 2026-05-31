@@ -12,6 +12,7 @@ import { b64ToBytes, bytesToB64, send } from "./bridge.js";
 import type { PaneTreeView } from "./bridge.js";
 import { showLinkMenu } from "./link-menu.js";
 import { buildPaneHeader, applyChips } from "./pane-header.js";
+import { attachTooltip } from "./tooltip.js";
 
 // URL regex — same as @xterm/addon-web-links's strictUrlRegex, copied so
 // our custom provider doesn't depend on the addon at all. Matches
@@ -49,6 +50,13 @@ export class Pane {
   private lastCols = -1;
   private lastRows = -1;
   private observer?: ResizeObserver;
+  private isActive = false;
+  // Latest per-leaf view, kept so setActive() can re-evaluate focus-gated
+  // chrome (the commit chip only shows on the active pane) without waiting
+  // for the next state push.
+  private lastLeaf?: Extract<PaneTreeView, { kind: "leaf" }>;
+  // Full first-prompt text for the name tooltip; updated from each leaf view.
+  private nameFull = "";
 
   constructor(paneId: string, name: string, fontSize: number = DEFAULT_FONT_SIZE) {
     this.paneId = paneId;
@@ -70,6 +78,11 @@ export class Pane {
     this.branchEl     = header.branchEl;
     this.commitsEl    = header.commitsEl;
     this.nameEl.textContent = name;
+    // Custom hover tooltip on the name: the full first-prompt the label was
+    // cut from, or a rename hint when there's no prompt behind the name.
+    attachTooltip(this.nameEl, () =>
+      this.nameFull || "Double-click to rename"
+    );
 
     this.termHost = document.createElement("div");
     this.termHost.className = "pane__term";
@@ -97,7 +110,15 @@ export class Pane {
       // TUIs (Claude Code, vim, htop) look broken. 1.0 is what Windows
       // Terminal / iTerm2 / Alacritty default to.
       lineHeight: 1.0,
-      cursorBlink: true,
+      // Blink ONLY on the active pane — see setActive(). cursorBlink runs a
+      // standing animation loop per Terminal; with several panes alive (the
+      // exact case the user hit) the inactive panes' blink loops kept
+      // toggling the WebGL cursor overlay while Claude's "thinking" spinner
+      // streamed redraws, and the out-of-phase blink/redraw made the cursor
+      // jump and ghost. Inactive panes draw no cursor anyway
+      // (cursorInactiveStyle:"none"), so their blink loop is pure cost — we
+      // start with it off and enable it only for whichever pane is focused.
+      cursorBlink: false,
       cursorStyle: "block",
       // When the xterm Terminal isn't focused, draw nothing for the
       // cursor — eliminates the "two blinking cursors fighting for the
@@ -262,6 +283,7 @@ export class Pane {
   }
 
   setActive(active: boolean) {
+    this.isActive = active;
     this.element.classList.toggle("pane--active", active);
     // Drive xterm's own focused state in lockstep with whether we're the
     // active pane. Without this, every Terminal a user has clicked stays
@@ -270,6 +292,14 @@ export class Pane {
     // inactive panes go cursor-free instead of double-blinking.
     if (active) this.term.focus();
     else        this.term.blur();
+    // Only the focused pane runs a cursor-blink loop (see the constructor
+    // note) — keeps the multi-pane cursor calm during heavy output.
+    this.term.options.cursorBlink = active;
+    // The commit chip is focus-gated; re-evaluate it now that active changed
+    // without waiting for the next state push.
+    if (this.lastLeaf) {
+      applyChips(this.branchEl, this.commitsEl, this.lastLeaf, active);
+    }
   }
 
   setName(name: string) {
@@ -279,6 +309,8 @@ export class Pane {
   /** Push the latest per-leaf state into the header. Called from
    *  workspace.applyState on every render — must be idempotent and cheap. */
   applyLeafView(leaf: Extract<PaneTreeView, { kind: "leaf" }>) {
+    this.lastLeaf = leaf;
+    this.nameFull = leaf.nameFull ?? "";
     this.nameEl.textContent = leaf.name;
     this.stateDotEl.dataset.state = leaf.agentState;
     this.stateLabelEl.textContent =
@@ -293,7 +325,7 @@ export class Pane {
     // permission). The CSS pulses border-color, no shadow — see the
     // [data-state="waiting"] rule in style.css.
     this.element.dataset.state = leaf.agentState;
-    applyChips(this.branchEl, this.commitsEl, leaf);
+    applyChips(this.branchEl, this.commitsEl, leaf, this.isActive);
   }
 
   /** Bump the terminal font size by `delta` px, clamped to [9, 32].

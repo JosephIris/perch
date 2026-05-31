@@ -39,21 +39,37 @@ internal sealed class SessionStore
             var dto = JsonSerializer.Deserialize(json, SessionStoreJsonContext.Default.SessionStoreDto);
             if (dto?.Sessions is { Count: > 0 })
             {
+                // Schema migration only for pre-v2 files (no Version field).
+                // v2 persists IsUserNamed/AllowAutoName explicitly, so re-
+                // running the name-heuristic on every load would re-lock
+                // agent-auto-named panes and break re-name-on-new-session.
+                var legacy = dto.Version < 2;
                 foreach (var s in dto.Sessions)
                 {
                     // Defensive: any session without a Root (shouldn't happen) gets a fresh leaf
                     s.Root ??= new PaneNode();
-                    // One-shot migration: pre-IsAutoTitle data has the
-                    // flag at its default (true), but a user-renamed session
-                    // shouldn't get its title overwritten by the auto-
-                    // rename pipeline. Match the old regex once at load to
-                    // decide who's still "auto" vs already-user-named.
-                    if (!Regex.IsMatch(s.Title ?? "", @"^(main|session( \d+)?)$", RegexOptions.IgnoreCase))
-                        s.IsAutoTitle = false;
-                    foreach (var leaf in AllLeavesOf(s.Root))
+                    if (legacy)
                     {
-                        if (!Regex.IsMatch(leaf.Name ?? "", @"^pane-\d+$", RegexOptions.IgnoreCase))
-                            leaf.IsAutoName = false;
+                        // Pre-IsAutoTitle data has the flag at its default
+                        // (true), but a user-renamed session shouldn't get
+                        // its title overwritten by the auto-rename pipeline.
+                        // Match the old regex once to decide "auto" vs
+                        // already-user-named.
+                        if (!Regex.IsMatch(s.Title ?? "", @"^(main|session( \d+)?)$", RegexOptions.IgnoreCase))
+                            s.IsAutoTitle = false;
+                        foreach (var leaf in AllLeavesOf(s.Root))
+                        {
+                            // Any non-placeholder name in legacy data is
+                            // treated as user-owned: pre-v2 we can't tell a
+                            // manual rename from a first-prompt auto-name, so
+                            // lock it rather than risk clobbering a user name.
+                            if (!Regex.IsMatch(leaf.Name ?? "", @"^pane-\d+$", RegexOptions.IgnoreCase))
+                            {
+                                leaf.IsAutoName = false;
+                                leaf.IsUserNamed = true;
+                                leaf.AllowAutoName = false;
+                            }
+                        }
                     }
                     store.Sessions.Add(s);
                 }
@@ -82,6 +98,7 @@ internal sealed class SessionStore
             Directory.CreateDirectory(Path.GetDirectoryName(StorePath)!);
             var dto = new SessionStoreDto
             {
+                Version = 2,
                 Sessions = Sessions.ToList(),
                 ActiveSessionId = ActiveSessionId,
             };
@@ -151,6 +168,10 @@ internal sealed class SessionStore
 
 internal sealed class SessionStoreDto
 {
+    /// Store schema version. Absent (0) in pre-v2 files, which triggers the
+    /// one-shot name-flag migration in Load(). v2 added per-pane
+    /// IsUserNamed / AllowAutoName.
+    public int Version { get; set; }
     public List<Session>? Sessions { get; set; }
     public Guid? ActiveSessionId { get; set; }
 }

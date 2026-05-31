@@ -59,6 +59,12 @@ internal static class HookHandler
         {
             case "session-start":
                 Send(pipeName, new { type = "status", state = "working", detail = "claude started" });
+                // Re-arm pane auto-naming so the next first prompt re-titles
+                // the pane to the new task — that's what makes a fresh launch
+                // (ctrl+c twice → relaunch) or `/clear` pick up a new name.
+                // The host skips this for source="resume" and for user-named
+                // panes. `source` is Claude's SessionStart source.
+                Send(pipeName, new { type = "name.reset", source = StringFrom(root, "source") });
                 // Capture HEAD as the commit-count baseline for THIS cc
                 // session. Host recomputes count via git rev-list on each
                 // subsequent state change. No git? No baseline — nothing
@@ -81,22 +87,32 @@ internal static class HookHandler
                 Send(pipeName, new { type = "status", state = "working", detail = StringFrom(root, "prompt", maxLen: 60) ?? "thinking" });
                 // Also forward the prompt as a title candidate so the host can
                 // auto-name a still-unnamed pane after the first message. Send
-                // a longer slice than the activity detail (the host cleans +
-                // truncates to a tab-sized label); skip when there's no prompt.
-                var promptText = StringFrom(root, "prompt", maxLen: 200);
+                // a generous slice: the host cuts a ~40-char label AND keeps
+                // the rest for the pane-header hover tooltip ("full original
+                // message"). Skip when there's no prompt.
+                var promptText = StringFrom(root, "prompt", maxLen: 400);
                 if (!string.IsNullOrWhiteSpace(promptText))
                     Send(pipeName, new { type = "title", text = promptText });
                 break;
 
             case "notification":
-                // Permission requests, "waiting for input" prompts, etc.
+                // Claude's Notification hook fires for two distinct cases:
+                //   1. a permission request (agent is BLOCKED, can't proceed)
+                //   2. an idle nudge ("waiting for your input" after 60s)
+                // We split them: a permission prompt is the loud red state,
+                // an idle nudge is the same yellow "waiting for feedback" as
+                // a finished turn. Detect by the message text.
                 var msg = StringFrom(root, "message") ?? "claude needs attention";
+                var isPermission = msg.IndexOf("permission", StringComparison.OrdinalIgnoreCase) >= 0;
                 Send(pipeName, new { type = "notify", level = "warn", text = msg });
-                Send(pipeName, new { type = "status", state = "waiting", detail = (string?)null });
+                Send(pipeName, new { type = "status", state = isPermission ? "permission" : "waiting", detail = (string?)null });
                 break;
 
             case "stop":
-                Send(pipeName, new { type = "status", state = "done", detail = (string?)null });
+                // Turn complete — the agent is now waiting on YOUR feedback.
+                // Yellow "waiting", not a green "done": after Stop the ball is
+                // in the user's court, so it reads as an attention state.
+                Send(pipeName, new { type = "status", state = "waiting", detail = (string?)null });
                 break;
 
             case "subagent-stop":

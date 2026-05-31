@@ -28,6 +28,7 @@ internal sealed class CmuxIpcServer : IDisposable
     public event Action<OpenMessage>? OnOpen;
     public event Action<GitBaselineMessage>? OnGitBaseline;
     public event Action<TitleMessage>? OnTitle;
+    public event Action<NameResetMessage>? OnNameReset;
 
     private readonly CancellationTokenSource _cts = new();
     private readonly Dispatcher _dispatcher;
@@ -136,6 +137,10 @@ internal sealed class CmuxIpcServer : IDisposable
                     var t = JsonSerializer.Deserialize<TitleMessage>(json, IpcJson.Options);
                     if (t != null) _dispatcher.BeginInvoke(() => OnTitle?.Invoke(t));
                     break;
+                case "name.reset":
+                    var nrm = JsonSerializer.Deserialize<NameResetMessage>(json, IpcJson.Options);
+                    if (nrm != null) _dispatcher.BeginInvoke(() => OnNameReset?.Invoke(nrm));
+                    break;
             }
         }
         catch (JsonException ex) { Log.Error("CmuxIpc.Dispatch.Json", ex); }
@@ -200,3 +205,11 @@ internal sealed record GitBaselineMessage(
 /// auto-named pane — "capture what's happening" from the first message.
 internal sealed record TitleMessage(
     [property: JsonPropertyName("text")] string Text);
+
+/// Sent by the cc HookHandler on Claude's session-start (new launch or
+/// `/clear`). Re-enables agent auto-naming for the pane so the NEXT first
+/// prompt re-titles it — unless the user manually named it. `source` is
+/// Claude's SessionStart source ("startup" | "clear" | "resume"); the host
+/// skips the reset on "resume" so resumed sessions keep their label.
+internal sealed record NameResetMessage(
+    [property: JsonPropertyName("source")] string? Source);
