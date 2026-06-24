@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <!-- Perch minimal glyph: just the lens + eye, floated off the head and
+       enlarged (same proportions as on the bird). For the smallest sizes
+       (e.g. the 14px sidebar mark). For a fully monochrome mark, swap the
+       lens stroke #76B9ED -> currentColor and the eye -> currentColor. -->
+  <g transform="translate(12 12) scale(4.0) translate(-17 -9)">
+    <circle cx="17" cy="9" r="1.95" fill="none" stroke="#76B9ED" stroke-width="0.55"/>
+    <circle cx="17" cy="9" r="0.95" fill="#15233b"/>
+  </g>
+</svg>

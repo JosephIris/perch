@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <!-- Perch mascot: "Monocle Guy", pose 2 (absorbed/inquisitive) - head tipped
+       down ~15deg on a drooping branch, focused brow + accent monocle + string.
+       body/branch/feet = currentColor (set light on a dark surface);
+       monocle + string = accent #76B9ED; eye + brow = dark, read on the body. -->
+  <path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 8.8 C 7.5 11, 13 13.4, 20 16.2"/>
+  <g transform="translate(-0.6 -3.4) rotate(15 12.3 15.6)">
+    <path fill="none" stroke="currentColor" stroke-width="1.0" stroke-linecap="round" d="M11.3 14.1 V 15.7 M13.4 14.1 V 15.7"/>
+    <path fill="currentColor" d="M19.9 10.0 C 19.5 7.9, 17.6 6.3, 15.4 6.5 C 13.9 6.5, 12.5 6.8, 11.4 7.4 C 9.2 7.6, 7.0 5.9, 4.9 6.3 C 6.2 7.8, 7.2 9.7, 8.5 11.1 C 9.6 12.7, 10.9 14.4, 12.6 14.4 C 14.0 14.4, 15.2 13.9, 16.1 13.0 C 17.1 12.4, 18.0 11.9, 18.6 11.2 C 19.1 10.9, 19.6 10.6, 19.9 10.0 Z"/>
+    <path fill="none" stroke="#15233b" stroke-width="0.85" stroke-linecap="round" d="M15.9 7.25 C 16.6 7.2, 17.4 7.5, 18.05 8.05"/>
+    <circle cx="17" cy="9" r="0.95" fill="#15233b"/>
+    <circle cx="17" cy="9" r="1.95" fill="none" stroke="#76B9ED" stroke-width="0.6"/>
+    <path fill="none" stroke="#76B9ED" stroke-width="0.5" stroke-linecap="round" d="M17.6 10.8 C 17.8 11.7, 17.5 12.5, 16.9 13.1"/>
+  </g>
+</svg>
