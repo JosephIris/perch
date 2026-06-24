@@ -1,6 +1,8 @@
-# cmux-win
+# Perch
 
-[![Build](https://github.com/JosephIris/cmux-win/actions/workflows/build.yml/badge.svg)](https://github.com/JosephIris/cmux-win/actions/workflows/build.yml)
+**A power tool for non-power users.**
+
+[![Build](https://github.com/JosephIris/perch/actions/workflows/build.yml/badge.svg)](https://github.com/JosephIris/perch/actions/workflows/build.yml)
 
 Native Win11 Fluent terminal app with sessions, nested pane splits, and per-session previews —
 the missing Windows equivalent of [manaflow-ai/cmux](https://github.com/manaflow-ai/cmux).
@@ -57,7 +59,7 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-Releases land at https://github.com/JosephIris/cmux-win/releases.
+Releases land at https://github.com/JosephIris/perch/releases.
 
 ## Design constitution
 

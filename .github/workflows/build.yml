@@ -145,9 +145,9 @@ jobs:
           $installer = "publish/installer/cmux-Setup-$env:APP_VERSION.exe"
 
           $notes = @"
-          ## cmux $env:GITHUB_REF_NAME
+          ## Perch $env:GITHUB_REF_NAME
 
-          Native Win11 Fluent terminal app. Self-contained — no .NET install needed.
+          A power tool for non-power users. Self-contained - no .NET install needed.
 
           **Downloads**
           - ``cmux-Setup-$env:APP_VERSION.exe`` — installer (Start menu + uninstaller)
@@ -157,5 +157,5 @@ jobs:
           gh release create $env:GITHUB_REF_NAME `
             $installer `
             $portable `
-            --title "cmux $env:GITHUB_REF_NAME" `
+            --title "Perch $env:GITHUB_REF_NAME" `
             --notes $notes

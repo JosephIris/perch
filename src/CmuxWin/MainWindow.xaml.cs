@@ -160,7 +160,7 @@ public partial class MainWindow : FluentWindow
         {
             Log.Error("WebView2.Init", ex);
             System.Windows.MessageBox.Show($"WebView2 failed to initialize:\n\n{ex.Message}",
-                "cmux", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Error);
+                "Perch", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Error);
         }
     }
 
