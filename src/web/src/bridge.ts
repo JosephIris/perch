@@ -108,6 +108,8 @@ export type SessionView = {
   paneCount: number;
   waitingCount: number;
   workingCount: number;
+  /* Relative "last activity" string ("now" / "5m ago") for the dashboard. */
+  lastActivity: string;
 };
 
 export type StateMessage = {
