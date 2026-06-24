@@ -29,9 +29,23 @@
           </span>
           <span class="sidebar__action-label">New session</span>
         </button>
+        <!-- Opens the dashboard (full-window attention view). Badge = how many
+             projects are waiting on you. -->
+        <button id="open-dashboard" class="sidebar__icon-btn" type="button"
+                title="Open dashboard (Ctrl+Shift+A)" aria-label="Open dashboard">
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none"
+               stroke="currentColor" stroke-width="1.4">
+            <rect x="2" y="2" width="5" height="5" rx="1"/>
+            <rect x="9" y="2" width="5" height="5" rx="1"/>
+            <rect x="2" y="9" width="5" height="5" rx="1"/>
+            <rect x="9" y="9" width="5" height="5" rx="1"/>
+          </svg>
+          <span class="sidebar__icon-badge" id="dash-badge" style="display:none">0</span>
+        </button>
       </div>
-      <div class="sidebar__section-label">Recents</div>
-      <ul id="session-list" class="session-list" role="list"></ul>
+      <!-- Sections (Needs you / Projects) are rendered by sidebar.ts into
+           this scroll container. -->
+      <div id="sidebar-scroll" class="sidebar__scroll"></div>
 
       <!-- Bottom row: app identity + settings. Mirrors Claude's user-info
            row at the bottom of the sidebar. The identity block is static;
@@ -58,6 +72,10 @@
     </aside>
 
     <main id="workspace" class="workspace"></main>
+
+    <!-- Dashboard: full-window attention view. Hidden until opened via the
+         ▦ button or Ctrl+Shift+A. Rendered entirely by dashboard.ts. -->
+    <section id="dashboard" class="dashboard" aria-hidden="true"></section>
 
     <!-- Toast surface for cmux notify messages. Same frosted acrylic
          family as the shortcut hint but anchored slightly higher and

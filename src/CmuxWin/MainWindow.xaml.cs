@@ -1139,6 +1139,8 @@ public partial class MainWindow : FluentWindow
                         paneCount,
                         waitingCount,
                         workingCount,
+                        // Relative "last activity" for the dashboard card footer.
+                        lastActivity = s.LastActivityRelative,
                     };
                 }).ToArray(),
             };

@@ -109,7 +109,8 @@ ul { list-style: none; padding: 0; margin: 0; }
 .sidebar {
   grid-area: sidebar;
   display: grid;
-  grid-template-rows: auto auto 1fr auto;
+  /* top-actions · scroll (Needs you + Projects sections) · footer */
+  grid-template-rows: auto 1fr auto;
   /* Explicit column is REQUIRED. Without it the single implicit column is an
    * `auto` track, which is treated as indefinite-width — so every `width:100%`
    * / `minmax(0,1fr)` / text-overflow:ellipsis inside the sidebar collapses to
@@ -135,24 +136,71 @@ ul { list-style: none; padding: 0; margin: 0; }
   pointer-events: none;
 }
 
+/* Scroll container holding the rendered sections (Needs you + Projects). The
+ * per-section .session-list elements no longer scroll individually — the whole
+ * stack scrolls here so section labels travel with their rows. */
+.sidebar__scroll {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
 /* Top action group. Each action reads as a quiet text row that fills the
  * pill on hover — same rhythm as a selected session, no accent fill. */
 .sidebar__top-actions {
   display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: 2px;
 }
 .sidebar__action {
   display: flex;
   align-items: center;
   gap: var(--sp-8);
-  width: 100%;
+  flex: 1 1 auto;
+  min-width: 0;
   padding: 6px var(--sp-12);
   border-radius: var(--r-pill);
   color: var(--color-text-primary);
   font-weight: 380;
   text-align: left;
   transition: background var(--dur-fast) var(--ease-entry);
+}
+/* Small square icon button beside New session — opens the dashboard. The
+ * badge shows how many projects are waiting on you. */
+.sidebar__icon-btn {
+  position: relative;
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-pill);
+  color: var(--color-text-secondary);
+  transition:
+    background var(--dur-fast) var(--ease-entry),
+    color var(--dur-fast) var(--ease-entry);
+}
+.sidebar__icon-btn:hover {
+  background: var(--color-subtle-secondary);
+  color: var(--color-text-primary);
+}
+.sidebar__icon-badge {
+  position: absolute;
+  top: 0;
+  right: 0;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--color-caution);
+  color: #1a1a00;
+  font-family: var(--font-small);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 14px;
+  text-align: center;
+  border: 2px solid var(--color-sidebar-surface);
 }
 .sidebar__action:hover {
   background: var(--color-subtle-secondary);
@@ -185,15 +233,19 @@ ul { list-style: none; padding: 0; margin: 0; }
   color: var(--color-text-tertiary);
   user-select: none;
 }
+/* "· N" count after a section label (e.g. Needs you · 2). */
+.sidebar__section-count {
+  color: var(--color-text-tertiary);
+}
 
 .session-list {
-  overflow-y: auto;
   display: flex;
   flex-direction: column;
-  /* Tight rhythm — Claude desktop / Slack feel. 2px between rows so the
-   * pill on hover/selected still reads as discrete without the list
-   * looking gappy. */
-  gap: 2px;
+  /* 6px between framed rows so the per-item borders read as discrete cards
+   * without touching. */
+  gap: 6px;
+  margin-top: var(--sp-4);
+  margin-bottom: var(--sp-8);
 }
 
 /* Each session row is a single-line button: status dot, title with
@@ -218,18 +270,25 @@ ul { list-style: none; padding: 0; margin: 0; }
   min-width: 0;
   box-sizing: border-box;
   gap: var(--sp-8);
-  padding: 6px var(--sp-12);
-  border-radius: var(--r-pill);
+  padding: 8px var(--sp-12);
+  /* Per-item frame (cmux tabs-as-cards). Constant 1px border = the frame;
+   * hover/selected deepen the fill, active strengthens the border. No accent
+   * stripe — see CLAUDE.md "Selection / accent treatment". */
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--r-card);
   text-align: left;
   color: var(--color-text-primary);
   background: transparent;
-  transition: background var(--dur-fast) var(--ease-entry);
+  transition:
+    background var(--dur-fast) var(--ease-entry),
+    border-color var(--dur-fast) var(--ease-entry);
 }
 .session-item:hover {
   background: var(--color-subtle-secondary);
 }
 .session-item--active {
   background: var(--color-subtle-tertiary);
+  border-color: var(--color-stroke-strong);
 }
 
 /* Status dot. Color comes from --color-state-* via the data-state attr.
@@ -297,11 +356,13 @@ ul { list-style: none; padding: 0; margin: 0; }
 /* Notification line: colored leading character + text. Same lifetime as
  * NotificationText on the host. Compact — sits inside the row's pill. */
 .session-item__note {
-  grid-column: 2 / 3;
+  grid-column: 2 / -1;
   display: flex;
-  align-items: center;
-  margin-top: 2px;
+  align-items: flex-start;
+  gap: var(--sp-8);
+  margin-top: var(--sp-4);
   font-size: var(--type-caption-size);
+  line-height: 1.3;
   color: var(--color-text-secondary);
 }
 .session-item__note::before {
@@ -311,8 +372,15 @@ ul { list-style: none; padding: 0; margin: 0; }
   height: 6px;
   border-radius: 50%;
   background: var(--color-accent);
-  margin-right: var(--sp-8);
+  margin-top: 4px;
   flex: 0 0 auto;
+}
+/* Clamp the ask to 2 lines so the framed row stays tight. */
+.session-item__note-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 .session-item__note--success::before { background: var(--color-success); }
 .session-item__note--warn::before    { background: var(--color-caution); }
@@ -1253,3 +1321,198 @@ ul { list-style: none; padding: 0; margin: 0; }
 .dropdown__option--selected.dropdown__option--active {
   background: var(--color-subtle-tertiary);
 }
+
+/* --- Dashboard ----------------------------------------------------------
+ * Full-window attention view. Same derived state as the sidebar, grouped as
+ * cards. Hidden until body.show-dashboard. Built by dashboard.ts. */
+.dashboard {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: var(--color-terminal-bg);
+  display: none;
+  flex-direction: column;
+  padding: var(--sp-32) var(--sp-32) var(--sp-24);
+  overflow-y: auto;
+}
+body.show-dashboard .dashboard { display: flex; }
+
+.dash__head { display: flex; align-items: center; gap: var(--sp-16); margin-bottom: var(--sp-24); }
+.dash__title { font-family: var(--font-display); font-size: var(--type-title-size); font-weight: 600; color: var(--color-text-primary); }
+.dash__counts { display: flex; gap: 6px; }
+.dash__count {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-small);
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: var(--r-pill);
+  background: var(--color-subtle-secondary);
+  color: var(--color-text-secondary);
+}
+.dash__count::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.dash__count--alert { color: var(--color-caution); }
+.dash__count--work  { color: var(--color-accent-strong); }
+.dash__count--muted { color: var(--color-text-tertiary); }
+.dash__count--muted::before { background: transparent; box-shadow: inset 0 0 0 1px currentColor; }
+.dash__close { margin-left: auto; width: 32px; height: 32px; display: grid; place-items: center; border-radius: var(--r-pill); color: var(--color-text-secondary); }
+.dash__close:hover { background: var(--color-subtle-secondary); color: var(--color-text-primary); }
+
+.dash__group-label {
+  font-family: var(--font-small);
+  font-size: 11px;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+  margin: var(--sp-16) 0 var(--sp-12);
+}
+.dash__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: var(--sp-12);
+}
+
+.card {
+  background: var(--color-layer);
+  border-radius: var(--r-card);
+  padding: var(--sp-16);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-8);
+  min-height: 120px;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-entry);
+}
+.card:hover { background: var(--color-layer-alt); }
+.card__head { display: flex; align-items: center; gap: var(--sp-8); }
+.card__dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+.card__dot[data-state="working"]    { background: var(--color-state-working); }
+.card__dot[data-state="waiting"]    { background: var(--color-state-waiting); }
+.card__dot[data-state="permission"] { background: var(--color-state-permission); }
+.card__dot[data-state="idle"]       { background: transparent; box-shadow: inset 0 0 0 1px var(--color-text-tertiary); }
+.card__title {
+  font-size: var(--type-subtitle-size);
+  font-weight: 380;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.card__open {
+  font-family: var(--font-small);
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+  opacity: 0;
+  white-space: nowrap;
+  transition: opacity var(--dur-fast) var(--ease-entry);
+}
+.card:hover .card__open { opacity: 1; color: var(--color-text-secondary); }
+.card__note {
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--color-text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.card__note--idle { color: var(--color-text-tertiary); }
+.card__foot { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: auto; }
+.card__activity { font-family: var(--font-small); font-size: 11px; color: var(--color-text-tertiary); }
+.chip {
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  background: var(--color-subtle-secondary);
+  padding: 1px 6px;
+  border-radius: 8px;
+  white-space: nowrap;
+}
+.chip--commits { color: var(--color-success); background: rgba(108, 203, 95, 0.12); }
+.chip--alert { color: var(--color-caution); }
+
+/* Waiting/permission-card body: peek at the agent's ask, then reply or open. */
+.card__wait { display: flex; flex-direction: column; gap: var(--sp-8); }
+.card__peek {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  background: rgba(0, 0, 0, 0.28);
+  border-radius: var(--r-input);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.card__peek-line {
+  color: var(--color-text-tertiary);
+  white-space: pre-wrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.card__peek-line--q { color: var(--color-text-primary); }
+.card__peek--collapsed .card__peek-line { display: none; }
+.card__peek--collapsed .card__peek-line:nth-last-child(-n + 2) { display: -webkit-box; }
+.card__peek-more {
+  align-self: flex-start;
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-accent);
+  padding: 0;
+  background: none;
+}
+.card__peek-more:hover { color: var(--color-accent-strong); }
+.card__openbtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 30px;
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--r-input);
+  color: var(--color-text-secondary);
+  background: var(--color-subtle-secondary);
+  font-family: var(--font-small);
+  font-size: 12px;
+}
+.card__openbtn:hover { color: var(--color-text-primary); background: var(--color-subtle-tertiary); }
+.card__reply { display: flex; gap: 6px; }
+.card__reply-input {
+  flex: 1;
+  height: 30px;
+  padding: 0 var(--sp-8);
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--r-input);
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 13px;
+}
+.card__reply-input::placeholder { color: var(--color-text-disabled); }
+.card__reply-input:focus { outline: none; border-color: var(--color-accent-soft); }
+.card__reply-send {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--r-input);
+  color: var(--color-text-secondary);
+  background: var(--color-subtle-secondary);
+}
+.card__reply-send:hover { color: var(--color-text-primary); background: var(--color-subtle-tertiary); }
+.card--empty {
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: var(--color-text-tertiary);
+  min-height: 96px;
+  background: transparent;
+  border: 1px dashed var(--color-stroke);
+  cursor: default;
+}
+.card--empty:hover { background: transparent; }

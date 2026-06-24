@@ -7,6 +7,7 @@ import "./style.css";
 import { onMessage, send, type StateMessage } from "./bridge.js";
 import { Sidebar } from "./sidebar.js";
 import { Workspace } from "./workspace.js";
+import { Dashboard } from "./dashboard.js";
 import { installShortcutHint } from "./shortcut-hint.js";
 import { Toast } from "./toast.js";
 import { openSettings, applySettingsData } from "./settings.js";
@@ -17,13 +18,24 @@ const $ = <T extends HTMLElement>(id: string): T => {
   return el as T;
 };
 
-const sidebar = new Sidebar($("session-list"), $("new-session-button"));
+const sidebar = new Sidebar($("sidebar-scroll"), $("new-session-button"));
 const workspace = new Workspace($("workspace"));
+const dashboard = new Dashboard($("dashboard"), $("dash-badge"));
 const toast = new Toast($("toast"));
 const statusEl = $("status-text");
 installShortcutHint($("shortcut-hint"));
 
 $("settings-button").addEventListener("click", () => openSettings());
+
+// Dashboard: open via the ▦ sidebar button or Ctrl+Shift+A; Esc closes it.
+$("open-dashboard").addEventListener("click", () => dashboard.toggle());
+window.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape" && dashboard.isOpen()) {
+    dashboard.hide();
+    ev.preventDefault();
+    ev.stopPropagation();
+  }
+}, /* useCapture */ true);
 
 // Sidebar collapse. The toggle button lives in the WPF title bar (see
 // MainWindow.xaml's TitleBar.Header) and reaches the webview via the
@@ -60,6 +72,7 @@ onMessage((msg) => {
       // per session alive across switches (preserving terminal scrollback)
       // and disposes a stage only when its session drops out of this list.
       workspace.render(msg.sessions, msg.activeSessionId || null, msg.activePaneId || null);
+      dashboard.render(msg.sessions);
       const active = activeOf(msg);
       setStatus(active ? `${active.title}  ${active.shell}` : "no session");
       break;
@@ -158,6 +171,10 @@ window.addEventListener("keydown", (ev) => {
   if (!ev.ctrlKey || !ev.shiftKey) return;
   const active = workspace.getActivePaneId();
   switch (ev.code) {
+    case "KeyA":
+      dashboard.toggle();
+      ev.preventDefault(); ev.stopPropagation();
+      break;
     case "KeyT":
       send({ type: "session.new" });
       ev.preventDefault(); ev.stopPropagation();
