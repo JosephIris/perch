@@ -22,6 +22,22 @@ const TIPS: Tip[] = [
   { chips: ["Ctrl", "Shift", "T"], text: "Open a new session. Ctrl + Shift + A is the dashboard; Ctrl + B toggles the sidebar." },
 ];
 
+interface StateTip {
+  /** Matches data-state so the dot picks up --color-state-* from tokens. */
+  state: string;
+  word: string;
+  text: string;
+}
+
+// The status dot on each pane header / sidebar row. Ordered calm → loud so the
+// reader builds the mental model from "nothing to do" up to "blocked on me".
+const STATES: StateTip[] = [
+  { state: "working", word: "Working", text: "The agent is thinking or running a tool — nothing for you to do yet." },
+  { state: "done", word: "Done", text: "The turn finished. The agent is ready for your next task — your move, but no rush." },
+  { state: "waiting", word: "Waiting", text: "A finished turn you haven't picked up — the agent has been waiting on your feedback for a while." },
+  { state: "permission", word: "Permission", text: "The agent is blocked: it needs you to approve something before it can continue." },
+];
+
 /** Show the welcome lightbox. No-op if it's already open. */
 export function showOnboarding(): void {
   if (overlay) return;
@@ -69,6 +85,38 @@ export function showOnboarding(): void {
     list.appendChild(li);
   }
 
+  // Status-color legend — teaches what the pane header / sidebar dot colors
+  // mean. Built from the same data-state attribute the live dots use, so the
+  // swatches here always match the real thing.
+  const legend = document.createElement("div");
+  legend.className = "onboarding-legend";
+  const legendTitle = document.createElement("div");
+  legendTitle.className = "onboarding-legend__title";
+  legendTitle.textContent = "What the pane status dots mean";
+  legend.appendChild(legendTitle);
+  for (const st of STATES) {
+    const row = document.createElement("div");
+    row.className = "onboarding-item";
+
+    const tag = document.createElement("span");
+    tag.className = "onboarding-legend__tag";
+    const dot = document.createElement("span");
+    dot.className = "onboarding-legend__dot";
+    dot.dataset.state = st.state;
+    const word = document.createElement("span");
+    word.className = "onboarding-legend__word";
+    word.dataset.state = st.state;
+    word.textContent = st.word;
+    tag.append(dot, word);
+
+    const text = document.createElement("span");
+    text.className = "onboarding-item__text";
+    text.textContent = st.text;
+
+    row.append(tag, text);
+    legend.appendChild(row);
+  }
+
   const footer = document.createElement("div");
   footer.className = "onboarding-card__footer";
 
@@ -83,13 +131,16 @@ export function showOnboarding(): void {
   cta.addEventListener("click", () => dismiss());
 
   footer.append(note, cta);
-  card.append(title, sub, list, footer);
+  card.append(title, sub, list, legend, footer);
   ov.appendChild(card);
   document.body.appendChild(ov);
   overlay = ov;
 
   document.addEventListener("keydown", onKeyDown, true);
-  requestAnimationFrame(() => cta.focus());
+  // preventScroll: keep keyboard focus on the CTA (Enter dismisses) without the
+  // overlay auto-scrolling to the bottom, so the lightbox opens at the top
+  // showing the welcome + first tips.
+  requestAnimationFrame(() => cta.focus({ preventScroll: true }));
 }
 
 function dismiss(): void {

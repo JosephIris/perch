@@ -2,9 +2,12 @@
 // the chrome is small and we want the DOM to mirror the host state shape
 // exactly. Reconciles diff-free: clear + rebuild on every state push.
 //
-// The list is split into two sections driven purely by derived agent state:
+// The list is split into sections driven purely by derived agent state:
 //   - "Needs you" : sessions that are waiting (your feedback) or blocked on a
 //                   permission. Each row also shows the agent's note (its ask).
+//   - "Ready"     : sessions whose agent finished its turn (green "done") and
+//                   is waiting for the NEXT task — your move, but not blocked.
+//                   Calm, single-line rows, no alarming note.
 //   - "Projects"  : everything else (working / idle), single-line rows.
 // Each row is a framed card (see .session-item in style.css) — perch-style
 // tabs-as-cards. Selection still reads via fill, not an accent stripe.
@@ -27,11 +30,13 @@ export class Sidebar {
 
   render(sessions: SessionView[], activeId: string) {
     // Partition by derived state. waiting (feedback) + permission both want
-    // your attention; working/idle are just the map. Order within each section
+    // your attention (Needs you); done is "finished, your move" (Ready);
+    // working/idle are just the map (Projects). Order within each section
     // follows the host's session order (stable) — no resort, so rows don't jump.
     const needs = sessions.filter(
       (s) => s.agentState === "waiting" || s.agentState === "permission"
     );
+    const ready = sessions.filter((s) => s.agentState === "done");
     const rest = sessions.filter(
       (s) => s.agentState === "working" || s.agentState === "idle"
     );
@@ -44,6 +49,15 @@ export class Sidebar {
       list.className = "session-list";
       for (const s of needs)
         list.appendChild(this.renderItem(s, s.id === activeId, true));
+      frag.appendChild(list);
+    }
+
+    if (ready.length) {
+      frag.appendChild(this.sectionLabel("Ready", ready.length));
+      const list = document.createElement("div");
+      list.className = "session-list";
+      for (const s of ready)
+        list.appendChild(this.renderItem(s, s.id === activeId, false));
       frag.appendChild(list);
     }
 

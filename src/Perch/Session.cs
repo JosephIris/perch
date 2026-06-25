@@ -74,18 +74,21 @@ internal sealed class Session : INotifyPropertyChanged
     [JsonIgnore] public string AgentStateText => _agentState switch
     {
         Perch.AgentState.Working    => "working",
+        Perch.AgentState.Done       => "done",
         Perch.AgentState.Waiting    => "waiting",
         Perch.AgentState.Permission => "permission",
         _                             => "",
     };
 
     /// Theme-brush resource key for the state pill background. Working uses
-    /// the theme accent (it's the "in progress" affordance), Waiting uses
-    /// caution (your feedback wanted), Permission uses critical (agent is
-    /// blocked on you — the loudest signal).
+    /// the theme accent (it's the "in progress" affordance), Done uses success
+    /// (turn finished, your move — calm green), Waiting uses caution (your
+    /// feedback wanted), Permission uses critical (agent is blocked on you —
+    /// the loudest signal).
     [JsonIgnore] public string AgentStateBrushKey => _agentState switch
     {
         Perch.AgentState.Working    => "AccentFillColorDefaultBrush",
+        Perch.AgentState.Done       => "SystemFillColorSuccessBrush",
         Perch.AgentState.Waiting    => "SystemFillColorCautionBrush",
         Perch.AgentState.Permission => "SystemFillColorCriticalBrush",
         _                             => "SubtleFillColorTertiaryBrush",
@@ -273,6 +276,12 @@ internal sealed class PaneNode
     // for the row indicator.
 
     [JsonIgnore] public AgentState AgentState { get; set; } = AgentState.Idle;
+    /// True when the CURRENT AgentState was set by the idle watchdog (output
+    /// silence) rather than an authoritative agent hook. Lets the watchdog
+    /// re-promote its own Working→Done guess back to Working when output
+    /// resumes, WITHOUT ever overriding a real Stop-hook "done". Any hook that
+    /// sets state clears this back to false.
+    [JsonIgnore] public bool StateInferred { get; set; }
     /// Which agent is running in this pane: "claude" (Claude Code), "codex",
     /// or "" (plain shell / unknown). Set from the agent's session-start hook
     /// (the claude.cmd wrapper makes "claude" definitive); cleared on session
@@ -300,11 +309,17 @@ internal enum SplitOrientation { Horizontal, Vertical }
 
 // Idle      → no agent activity (hollow dot).
 // Working   → agent is running / thinking (blue).
-// Waiting   → agent finished its turn or nudged for input; waiting on YOUR
-//             feedback (yellow). Maps from Claude's Stop + idle Notification.
+// Done      → agent finished its turn; the ball is in your court but it isn't
+//             BLOCKED — "give me the next task" (green, calm, no pulse). Maps
+//             from Claude's Stop hook, and is what the idle watchdog demotes a
+//             silent Working pane to when a Stop is missed.
+// Waiting   → agent is actively waiting on YOUR feedback — the 60s idle nudge
+//             after you ignore a finished turn (yellow, gentle pulse). Maps
+//             from Claude's idle Notification. Louder than Done, quieter than
+//             Permission.
 // Permission→ agent is BLOCKED on a permission prompt and can't proceed
 //             without you (red, louder). Maps from a permission Notification.
-internal enum AgentState { Idle, Working, Waiting, Permission }
+internal enum AgentState { Idle, Working, Done, Waiting, Permission }
 
 /// Severity for sidebar notification pills. Previously lived in OscParser.cs
 /// alongside the OSC 9 wire parser; the webview rewrite parses OSC sequences

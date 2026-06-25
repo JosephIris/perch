@@ -106,8 +106,9 @@ internal static class HookHandler
                 //   1. a permission request (agent is BLOCKED, can't proceed)
                 //   2. an idle nudge ("waiting for your input" after 60s)
                 // We split them: a permission prompt is the loud red state,
-                // an idle nudge is the same yellow "waiting for feedback" as
-                // a finished turn. Detect by the message text.
+                // an idle nudge is the yellow "waiting" escalation of a turn
+                // that finished (green "done") and has now sat ignored for 60s.
+                // Detect by the message text.
                 var msg = StringFrom(root, "message") ?? "claude needs attention";
                 var isPermission = msg.IndexOf("permission", StringComparison.OrdinalIgnoreCase) >= 0;
                 Send(pipeName, new { type = "notify", level = "warn", text = msg });
@@ -115,10 +116,13 @@ internal static class HookHandler
                 break;
 
             case "stop":
-                // Turn complete — the agent is now waiting on YOUR feedback.
-                // Yellow "waiting", not a green "done": after Stop the ball is
-                // in the user's court, so it reads as an attention state.
-                Send(pipeName, new { type = "status", state = "waiting", detail = (string?)null });
+                // Turn complete — green "done", not yellow "waiting". The ball
+                // is in your court but the agent is NOT blocked: it's "ready for
+                // the next task", a calm state. If you ignore it, Claude's 60s
+                // idle Notification escalates it to "waiting" (yellow) — see the
+                // notification case. Splitting the two is what lets the UI tell
+                // "finished, no rush" apart from "actively waiting on you".
+                Send(pipeName, new { type = "status", state = "done", detail = (string?)null });
                 break;
 
             case "subagent-stop":
