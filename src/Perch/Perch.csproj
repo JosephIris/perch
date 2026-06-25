@@ -60,14 +60,14 @@
        inject Claude Code's hooks settings JSON. -->
   <Target Name="BuildPerchCli" AfterTargets="Build">
     <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\..\tools\perch-cli\perch-cli.csproj&quot; -c $(Configuration) -r win-x64 --self-contained true -p:PublishSingleFile=true -p:InvariantGlobalization=true -o &quot;$(OutDir)tools&quot; --nologo -v q" />
-    <Copy SourceFiles="$(MSBuildThisFileDirectory)..\..\tools\perch-cli\claude.cmd" DestinationFolder="$(OutDir)tools" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)..\..\tools\perch-cli\claude.cmd;$(MSBuildThisFileDirectory)..\..\tools\perch-cli\codex.cmd" DestinationFolder="$(OutDir)tools" SkipUnchangedFiles="true" />
   </Target>
 
   <!-- `dotnet publish` ignores tools/ from BuildPerchCli's OutDir, so we
        republish into PublishDir/tools for the installer to pick up. -->
   <Target Name="PublishPerchCli" AfterTargets="Publish">
     <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\..\tools\perch-cli\perch-cli.csproj&quot; -c $(Configuration) -r win-x64 --self-contained true -p:PublishSingleFile=true -p:InvariantGlobalization=true -o &quot;$(PublishDir)tools&quot; --nologo -v q" />
-    <Copy SourceFiles="$(MSBuildThisFileDirectory)..\..\tools\perch-cli\claude.cmd" DestinationFolder="$(PublishDir)tools" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)..\..\tools\perch-cli\claude.cmd;$(MSBuildThisFileDirectory)..\..\tools\perch-cli\codex.cmd" DestinationFolder="$(PublishDir)tools" SkipUnchangedFiles="true" />
   </Target>
 
 </Project>

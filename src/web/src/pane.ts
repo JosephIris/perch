@@ -11,7 +11,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { b64ToBytes, bytesToB64, send } from "./bridge.js";
 import type { PaneTreeView } from "./bridge.js";
 import { showLinkMenu } from "./link-menu.js";
-import { buildPaneHeader, applyChips } from "./pane-header.js";
+import { buildPaneHeader, applyChips, applyAgentBadge } from "./pane-header.js";
 import { attachTooltip } from "./tooltip.js";
 
 // URL regex — same as @xterm/addon-web-links's strictUrlRegex, copied so
@@ -43,6 +43,7 @@ export class Pane {
   private readonly colorDotEl: HTMLElement;
   private readonly branchEl: HTMLElement;
   private readonly commitsEl: HTMLElement;
+  private readonly agentBadgeEl: HTMLElement;
   private readonly termHost: HTMLElement;
   private readonly term: Terminal;
   private readonly fit: FitAddon;
@@ -77,6 +78,7 @@ export class Pane {
     this.colorDotEl   = header.colorDotEl;
     this.branchEl     = header.branchEl;
     this.commitsEl    = header.commitsEl;
+    this.agentBadgeEl = header.agentBadgeEl;
     this.nameEl.textContent = name;
     // Custom hover tooltip on the name: the full first-prompt the label was
     // cut from, or a rename hint when there's no prompt behind the name.
@@ -188,15 +190,31 @@ export class Pane {
       ev.preventDefault();
       this.handleRightClick();
     });
+
+    // Copy-on-select. Whatever the user selects is copied to the clipboard on
+    // mouse-up. This is the fix for "copy doesn't work under Claude Code":
+    // when a TUI turns on application mouse reporting, xterm hands the drag to
+    // the app and disables its own selection — UNLESS the user holds Shift,
+    // which forces a local selection (xterm built-in). Either way, on mouse-up
+    // we copy whatever got selected. The setTimeout lets xterm finalize the
+    // selection first and still runs inside the click's transient-activation
+    // window, so navigator.clipboard.writeText is permitted. The highlight is
+    // left in place (we don't clear it), matching native terminals.
+    this.termHost.addEventListener("mouseup", (ev) => {
+      if (ev.button !== 0) return;
+      setTimeout(() => {
+        if (!this.term.hasSelection()) return;
+        const text = this.term.getSelection();
+        if (text) void copyText(text);
+      }, 0);
+    });
   }
 
   private async handleRightClick() {
+    // Windows Terminal style: copy if there's a selection, else paste.
     if (this.term.hasSelection()) {
       const text = this.term.getSelection();
-      if (text) {
-        try { await navigator.clipboard.writeText(text); }
-        catch (err) { console.error("[pane] clipboard write failed:", err); }
-      }
+      if (text) await copyText(text);
       this.term.clearSelection();
       return;
     }
@@ -326,6 +344,7 @@ export class Pane {
     // [data-state="waiting"] rule in style.css.
     this.element.dataset.state = leaf.agentState;
     applyChips(this.branchEl, this.commitsEl, leaf, this.isActive);
+    applyAgentBadge(this.agentBadgeEl, leaf.agentType);
   }
 
   /** Bump the terminal font size by `delta` px, clamped to [9, 32].
@@ -397,6 +416,32 @@ export class Pane {
 function clampFontSize(n: number): number {
   if (!Number.isFinite(n)) return DEFAULT_FONT_SIZE;
   return Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, Math.round(n)));
+}
+
+/** Write text to the clipboard, preferring the async Clipboard API (granted
+ *  without a prompt for the perch.local virtual host) and falling back to a
+ *  hidden-textarea execCommand("copy") if it's rejected — belt and braces so
+ *  copy works even when the async API is unavailable in a given WebView2
+ *  build. */
+async function copyText(text: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return;
+  } catch { /* fall through to the legacy path */ }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.top = "-9999px";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    document.execCommand("copy");
+    ta.remove();
+  } catch (err) {
+    console.error("[pane] copy failed:", err);
+  }
 }
 
 // ---- OSC 7 parser ----------------------------------------------------------

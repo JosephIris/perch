@@ -58,6 +58,10 @@ internal static class HookHandler
         switch (evt)
         {
             case "session-start":
+                // Tell the host this pane is running Claude Code so its header
+                // shows a "CC" badge. This wrapper only ever runs for `claude`,
+                // so the tool name is definitive.
+                Send(pipeName, new { type = "agent", name = "claude" });
                 Send(pipeName, new { type = "status", state = "working", detail = "claude started" });
                 // Re-arm pane auto-naming so the next first prompt re-titles
                 // the pane to the new task — that's what makes a fresh launch
@@ -79,6 +83,8 @@ internal static class HookHandler
                 // Clear the baseline so the count doesn't keep ticking after
                 // the cc session ends.
                 Send(pipeName, new { type = "git.baseline", sha = "" });
+                // Drop the agent badge — the pane is back to a plain shell.
+                Send(pipeName, new { type = "agent", name = "" });
                 break;
 
             case "prompt-submit":

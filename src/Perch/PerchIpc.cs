@@ -29,6 +29,7 @@ internal sealed class PerchIpcServer : IDisposable
     public event Action<GitBaselineMessage>? OnGitBaseline;
     public event Action<TitleMessage>? OnTitle;
     public event Action<NameResetMessage>? OnNameReset;
+    public event Action<AgentMessage>? OnAgent;
 
     private readonly CancellationTokenSource _cts = new();
     private readonly Dispatcher _dispatcher;
@@ -141,6 +142,10 @@ internal sealed class PerchIpcServer : IDisposable
                     var nrm = JsonSerializer.Deserialize<NameResetMessage>(json, IpcJson.Options);
                     if (nrm != null) _dispatcher.BeginInvoke(() => OnNameReset?.Invoke(nrm));
                     break;
+                case "agent":
+                    var am = JsonSerializer.Deserialize<AgentMessage>(json, IpcJson.Options);
+                    if (am != null) _dispatcher.BeginInvoke(() => OnAgent?.Invoke(am));
+                    break;
             }
         }
         catch (JsonException ex) { Log.Error("PerchIpc.Dispatch.Json", ex); }
@@ -213,3 +218,9 @@ internal sealed record TitleMessage(
 /// skips the reset on "resume" so resumed sessions keep their label.
 internal sealed record NameResetMessage(
     [property: JsonPropertyName("source")] string? Source);
+
+/// Sent by the cc HookHandler on Claude's session-start (name = "claude") and
+/// cleared on session-end (name = ""). Tells the host which agent runs in the
+/// pane so the header can show a "CC" badge. A plain shell never sends this.
+internal sealed record AgentMessage(
+    [property: JsonPropertyName("name")] string? Name);

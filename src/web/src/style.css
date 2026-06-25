@@ -488,11 +488,10 @@ ul { list-style: none; padding: 0; margin: 0; }
   display: flex;
   min-height: 0;
   min-width: 0;
-  /* Real gap between split children so each pane keeps its rounded
-   * edges. Mica / sidebar background shows through the gap. Previously
-   * this was a 1px stroke pretending to be a divider — switching to a
-   * real gap makes splits feel like discrete cards. */
-  gap: var(--sp-8);
+  /* Spacing between children is provided by .split__gutter elements (a real
+   * grabbable handle in the gap), NOT a `gap` property — that lets the user
+   * drag the boundary to resize. The gutter is transparent so Mica / sidebar
+   * still shows through, keeping the "discrete cards" feel. */
   background: transparent;
 }
 .split--h { flex-direction: column; }
@@ -500,6 +499,56 @@ ul { list-style: none; padding: 0; margin: 0; }
 .split > .pane,
 .split > .split {
   flex: 1 1 0;
+}
+
+/* --- Resize gutters ------------------------------------------------------
+ * One sits between each adjacent pair of split children, occupying the 8px
+ * gap. The full strip is the hit target (col/row-resize cursor); a short
+ * 2px center line fades in on hover / during drag, Windows-Terminal style.
+ * Transparent background keeps the Mica bleed-through. */
+.split__gutter {
+  flex: 0 0 var(--sp-8);
+  position: relative;
+  z-index: 2;
+  background: transparent;
+  touch-action: none;        /* pointer events drive the drag, not scrolling */
+}
+.split__gutter--v { cursor: col-resize; }   /* side-by-side split: drag X */
+.split__gutter--h { cursor: row-resize; }   /* stacked split:     drag Y */
+.split__gutter::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  background: transparent;
+  border-radius: 999px;
+  transition: background var(--dur-fast) var(--ease-entry);
+}
+.split__gutter--v::after { width: 2px; height: 28px; }
+.split__gutter--h::after { height: 2px; width: 28px; }
+.split__gutter:hover::after,
+.split__gutter--dragging::after {
+  background: var(--color-stroke-strong);
+}
+
+/* --- Drag-to-rearrange --------------------------------------------------
+ * The source pane dims while its header is being dragged; a single fixed
+ * overlay highlights the drop zone (half-pane for an edge, full for center
+ * swap). pointer-events:none so it never eats the drop. */
+.pane--dragging { opacity: 0.45; }
+.drop-overlay {
+  position: fixed;
+  z-index: 9999;
+  pointer-events: none;
+  background: var(--color-accent-soft);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--r-card);
+  box-sizing: border-box;
+  transition:
+    left   80ms var(--ease-entry),
+    top    80ms var(--ease-entry),
+    width  80ms var(--ease-entry),
+    height 80ms var(--ease-entry);
 }
 
 .pane {
@@ -729,6 +778,26 @@ ul { list-style: none; padding: 0; margin: 0; }
   /* Green-tinted because it's a positive metric — agent landed work. */
   color: var(--color-success);
   background: rgba(108, 203, 95, 0.12);
+}
+
+/* Agent badge — "CC" (Claude Code) / "CX" (codex). Compact tag right after
+ * the pane name so you can tell at a glance which panes run an agent vs a
+ * plain shell. Accent-tinted for Claude. Hidden (display:none) for shells. */
+.pane__agent-badge {
+  font-family: var(--font-small);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  color: var(--color-text-secondary);
+  background: var(--color-subtle-tertiary);
+  padding: 1px 5px;
+  border-radius: var(--r-input);
+  line-height: 1.4;
+  flex: 0 0 auto;
+}
+.pane__agent-badge[data-agent="claude"] {
+  color: var(--color-accent);
+  background: var(--color-accent-faint);
 }
 
 .pane__state-label {
@@ -1112,6 +1181,107 @@ ul { list-style: none; padding: 0; margin: 0; }
  * sanctioned shadow surfaces (flyouts + dialogs), so we use a soft shadow
  * for elevation and skip the border-glow. Rows follow the CardControl
  * pattern: text block left, control right. */
+/* --- Onboarding lightbox -------------------------------------------------
+ * First-launch welcome. Same modal family as the settings dialog (frosted
+ * card on a dimmed backdrop, reusing the settings fade/rise keyframes); a
+ * touch higher z so it sits above everything, and a tip list instead of
+ * controls. */
+.onboarding-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  animation: settings-fade-in var(--dur-normal) var(--ease-entry);
+}
+.onboarding-overlay--closing {
+  animation: settings-fade-out var(--dur-fast) var(--ease-exit);
+}
+.onboarding-card {
+  width: 560px;
+  max-width: calc(100vw - var(--sp-48));
+  max-height: calc(100vh - var(--sp-48));
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  padding: var(--sp-32);
+  border-radius: var(--r-window);
+  background: rgba(32, 32, 32, 0.98);
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  animation: settings-rise var(--dur-normal) var(--ease-entry);
+}
+.onboarding-card__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--type-large-size);
+  font-weight: 600;
+  line-height: var(--type-title-line);
+  color: var(--color-text-primary);
+}
+.onboarding-card__sub {
+  margin: var(--sp-4) 0 var(--sp-24);
+  font-family: var(--font-text);
+  font-size: var(--type-body-size);
+  color: var(--color-text-secondary);
+}
+.onboarding-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-16);
+}
+.onboarding-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-16);
+}
+.onboarding-chips {
+  flex: 0 0 140px;
+  display: flex;
+  flex-wrap: nowrap;        /* keep a chord's keys on one line */
+  justify-content: flex-end;
+  gap: var(--sp-4);
+}
+.onboarding-item__text {
+  flex: 1 1 auto;
+  font-family: var(--font-text);
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line);
+  color: var(--color-text-secondary);
+}
+.onboarding-kbd {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  flex: 0 0 auto;          /* never shrink in the nowrap chip row */
+  min-width: 18px;
+  height: 20px;
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-input);
+  background: var(--color-subtle-tertiary);
+  border: 1px solid var(--color-stroke);
+  color: var(--color-text-primary);
+}
+.onboarding-card__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-16);
+  margin-top: var(--sp-32);
+}
+.onboarding-card__note {
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+}
+
 .settings-overlay {
   position: fixed;
   inset: 0;
