@@ -124,6 +124,13 @@ internal static class ClaudeWrapper
                 ["SessionEnd"]        = new[] { Hook("session-end", timeoutSec: 1) },
                 ["Notification"]      = new[] { Hook("notification") },
                 ["UserPromptSubmit"]  = new[] { Hook("prompt-submit") },
+                // PostToolUse fires right after a tool executes — the only
+                // signal that arrives AFTER a permission prompt is answered
+                // (approving isn't a UserPromptSubmit). Without it a pane sticks
+                // on red "permission" until the turn's Stop. async so it never
+                // sits on the agent's critical path; the host coalesces the
+                // resulting working→working firehose (see OnAgentStatus).
+                ["PostToolUse"]       = new[] { Hook("post-tool-use", async: true) },
             },
         };
 

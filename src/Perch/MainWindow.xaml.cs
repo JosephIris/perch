@@ -401,13 +401,23 @@ public partial class MainWindow : FluentWindow
         var pane = FindPane(sess, paneId);
         if (pane == null) return;
         var prev = pane.AgentState;
-        pane.AgentState = ParseAgentState(msg.State);
+        var newState  = ParseAgentState(msg.State);
+        var newDetail = msg.Detail ?? "";
+        // Coalesce no-op repeats. PostToolUse fires once per tool — many/sec
+        // during agentic work — and almost all are working→working with no
+        // detail change. If the authoritative state and detail are unchanged
+        // (and the pane isn't a watchdog guess we'd want to confirm), there's
+        // nothing to repaint and no commit count to refresh, so bail before the
+        // git + PushState cost. The real permission→working edge still passes.
+        if (newState == prev && newDetail == pane.ActivityDetail && !pane.StateInferred)
+            return;
+        pane.AgentState = newState;
         // Authoritative: an agent hook (Stop, prompt-submit, notification…)
         // is ground truth, so clear the watchdog's "inferred" mark. This is
         // what stops a real Stop-hook "done" from being re-promoted to
         // "working" by later background output.
         pane.StateInferred = false;
-        pane.ActivityDetail = msg.Detail ?? "";
+        pane.ActivityDetail = newDetail;
         // Attention nudge: any transition INTO an attention state (waiting
         // for feedback, or blocked on permission) flashes the taskbar (only
         // when our window isn't already foreground). One place to raise the

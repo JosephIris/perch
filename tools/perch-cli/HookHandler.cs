@@ -138,6 +138,17 @@ internal static class HookHandler
                     Send(pipeName, new { type = "status", state = "working", detail = $"using {tool}" });
                 break;
 
+            case "post-tool-use":
+                // A tool just finished → the agent is actively working again.
+                // This is the ONLY hook that fires after a permission prompt is
+                // answered (approving isn't a UserPromptSubmit, and PreToolUse
+                // fires before the prompt). It's what unsticks a pane from the
+                // loud "permission" state before the turn's terminal Stop. No
+                // detail — the host coalesces unchanged working→working pushes,
+                // so this firehose is cheap (see OnAgentStatus).
+                Send(pipeName, new { type = "status", state = "working", detail = (string?)null });
+                break;
+
             default:
                 // Unknown event — keep the hook fast and silent.
                 break;
