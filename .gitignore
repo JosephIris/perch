@@ -40,7 +40,7 @@ Thumbs.db
 *.local.json
 
 # Web bundle build artifacts (regenerable from src/web/)
-src/CmuxWin/wwwroot/
+src/Perch/wwwroot/
 
 # Node side
 src/web/node_modules/

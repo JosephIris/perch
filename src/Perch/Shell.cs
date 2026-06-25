@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 
-namespace CmuxWin;
+namespace Perch;
 
 internal static class Shell
 {
@@ -25,7 +25,7 @@ internal static class Shell
         => BuildStartupCommandLine(shellCommandLine, cwd, paneId: null);
 
     /// Same as <see cref="WithStartupCwd"/>, plus injection of the per-pane
-    /// IPC env vars (<c>CMUX_PIPE</c>, <c>CMUX_PANE_ID</c>). EasyTerminalControl
+    /// IPC env vars (<c>PERCH_PIPE</c>, <c>PERCH_PANE_ID</c>). EasyTerminalControl
     /// doesn't expose a child-env hook, so we splice the assignments into the
     /// shell's own startup syntax. paneId=null skips the IPC env (used by
     /// any callers that don't need it).
@@ -48,7 +48,7 @@ internal static class Shell
         var quotedExe = exe.Contains(' ') ? $"\"{exe}\"" : exe;
         var quotedCwd = hasCwd && cwd!.Contains(' ') ? $"\"{cwd}\"" : cwd ?? "";
 
-        var pipePath = paneId is Guid pid ? $@"\\.\pipe\cmux\{pid:N}" : null;
+        var pipePath = paneId is Guid pid ? $@"\\.\pipe\perch\{pid:N}" : null;
         var paneIdStr = paneId?.ToString("N");
 
         switch (leaf)
@@ -57,7 +57,7 @@ internal static class Shell
             case "powershell.exe":
             {
                 // Weave env + cwd + any user-supplied args (e.g. -File foo.ps1
-                // from `cmux open --cmd`) into a single -Command, since pwsh
+                // from `perch open --cmd`) into a single -Command, since pwsh
                 // only honors one. -File or -Command in rest is turned into
                 // an inline invocation; bare flags like -NoLogo are dropped
                 // (caller can rely on our -NoExit). Empty rest matches the
@@ -65,19 +65,19 @@ internal static class Shell
                 var sb = new System.Text.StringBuilder();
                 if (pipePath != null)
                 {
-                    sb.Append("$env:CMUX_PIPE='").Append(EscapePs(pipePath)).Append("'; ");
-                    sb.Append("$env:CMUX_PANE_ID='").Append(EscapePs(paneIdStr!)).Append("'; ");
+                    sb.Append("$env:PERCH_PIPE='").Append(EscapePs(pipePath)).Append("'; ");
+                    sb.Append("$env:PERCH_PANE_ID='").Append(EscapePs(paneIdStr!)).Append("'; ");
                     // OSC 7 prompt hook — wraps the existing prompt function so
                     // every prompt redraw also emits ESC]7;file:///<cwd>BEL.
                     // The host's xterm OSC parser sees this and forwards the
                     // cwd to MainWindow which runs git rev-parse to fill the
-                    // branch chip without the agent having to call cmux meta.
+                    // branch chip without the agent having to call perch meta.
                     // PowerShell-specific — cmd / WSL get their own hooks later.
-                    sb.Append("$function:__cmuxOld = $function:prompt; ");
+                    sb.Append("$function:__perchOld = $function:prompt; ");
                     sb.Append("function global:prompt { ");
                     sb.Append("  $p = (Get-Location).ProviderPath; ");
                     sb.Append("  if ($p) { [Console]::Write([char]27 + ']7;file:///' + ($p -replace '\\\\','/') + [char]7) }; ");
-                    sb.Append("  & $function:__cmuxOld ");
+                    sb.Append("  & $function:__perchOld ");
                     sb.Append("}; ");
                 }
                 if (hasCwd)
@@ -101,8 +101,8 @@ internal static class Shell
                 var parts = new System.Collections.Generic.List<string>();
                 if (pipePath != null)
                 {
-                    parts.Add($"set CMUX_PIPE={pipePath}");
-                    parts.Add($"set CMUX_PANE_ID={paneIdStr}");
+                    parts.Add($"set PERCH_PIPE={pipePath}");
+                    parts.Add($"set PERCH_PANE_ID={paneIdStr}");
                 }
                 if (hasCwd) parts.Add($"cd /D \"{cwd}\"");
                 if (!string.IsNullOrEmpty(rest)) parts.Add(rest);
@@ -218,7 +218,7 @@ internal static class Shell
     /// spans. Strips surrounding double quotes from each token. Good enough
     /// for the PowerShell args we care about; we don't need to handle backtick
     /// escapes or single quotes here because Session.Shell is set by us or by
-    /// an agent calling `cmux open --cmd`.
+    /// an agent calling `perch open --cmd`.
     private static System.Collections.Generic.List<string> TokenizeCommandLine(string s)
     {
         var result = new System.Collections.Generic.List<string>();

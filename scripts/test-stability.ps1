@@ -3,7 +3,7 @@
 # Drives the app through a long randomized sequence of NORMAL-USAGE
 # operations -- create/switch/close sessions, split/close panes, type into
 # panes, open URL (WebView2) panes, open/close settings, resize the window
-# -- entirely through the control pipe (CMUX_ENABLE_TEST_IPC=1). The goal
+# -- entirely through the control pipe (PERCH_ENABLE_TEST_IPC=1). The goal
 # is to surface crashes that creep out of lifecycle races (ConPty teardown,
 # WebView2 child create/dispose, close-to-empty then re-create, etc.).
 #
@@ -12,7 +12,7 @@
 #                              (closing the last session just empties the
 #                              workspace), so any exit is a crash.
 #   2. Windows Error Reporting -- .NET Runtime / Application Error events
-#                              mentioning CmuxWin since launch.
+#                              mentioning Perch since launch.
 #   3. control-pipe hang     -- if an op stops getting through, the UI
 #                              thread is wedged.
 #
@@ -47,23 +47,23 @@ $ErrorActionPreference = 'Continue'
 
 $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
 $repoRoot  = Resolve-Path (Join-Path $scriptDir '..')
-if (-not $ExePath)  { $ExePath  = Join-Path $repoRoot 'src\CmuxWin\bin\Debug\net8.0-windows\win10-x64\CmuxWin.exe' }
-if (-not $ToolsDir) { $ToolsDir = Join-Path $repoRoot 'src\CmuxWin\bin\Debug\net8.0-windows\win10-x64\tools' }
-$CmuxExe = Join-Path $ToolsDir 'cmux.exe'
+if (-not $ExePath)  { $ExePath  = Join-Path $repoRoot 'src\Perch\bin\Debug\net8.0-windows\win10-x64\Perch.exe' }
+if (-not $ToolsDir) { $ToolsDir = Join-Path $repoRoot 'src\Perch\bin\Debug\net8.0-windows\win10-x64\tools' }
+$PerchExe = Join-Path $ToolsDir 'perch.exe'
 
-if (-not (Test-Path $ExePath))  { throw "CmuxWin.exe not found at $ExePath. Build first." }
-if (-not (Test-Path $CmuxExe))  { throw "cmux.exe not found at $CmuxExe. Build first." }
+if (-not (Test-Path $ExePath))  { throw "Perch.exe not found at $ExePath. Build first." }
+if (-not (Test-Path $PerchExe))  { throw "perch.exe not found at $PerchExe. Build first." }
 
-$SessionsPath = Join-Path $env:APPDATA 'cmux-win\sessions.json'
-$SettingsPath = Join-Path $env:APPDATA 'cmux-win\settings.json'
-$ErrorsPath   = Join-Path $env:APPDATA 'cmux-win\errors.log'
+$SessionsPath = Join-Path $env:APPDATA 'perch\sessions.json'
+$SettingsPath = Join-Path $env:APPDATA 'perch\settings.json'
+$ErrorsPath   = Join-Path $env:APPDATA 'perch\errors.log'
 
 # --- Win32 for off-screen parking + resize -------------------------------
-if (-not ('Cmux.Win' -as [type])) {
+if (-not ('Perch.Win' -as [type])) {
     Add-Type @'
 using System;
 using System.Runtime.InteropServices;
-namespace Cmux {
+namespace Perch {
   public static class Win {
     [DllImport("user32.dll")] public static extern bool SetWindowPos(
       IntPtr hWnd, IntPtr after, int X, int Y, int cx, int cy, uint flags);
@@ -77,41 +77,41 @@ namespace Cmux {
 function Move-Window {
     param([System.Diagnostics.Process]$P, [int]$X, [int]$Y, [int]$W, [int]$H)
     if ($P.MainWindowHandle -eq [IntPtr]::Zero) { return }
-    [Cmux.Win]::SetWindowPos($P.MainWindowHandle, [IntPtr]::Zero, $X, $Y, $W, $H,
-        ([Cmux.Win]::SWP_NOZORDER -bor [Cmux.Win]::SWP_NOACTIVATE)) | Out-Null
+    [Perch.Win]::SetWindowPos($P.MainWindowHandle, [IntPtr]::Zero, $X, $Y, $W, $H,
+        ([Perch.Win]::SWP_NOZORDER -bor [Perch.Win]::SWP_NOACTIVATE)) | Out-Null
 }
 
-function Stop-CmuxWin {
-    Get-Process -Name CmuxWin -EA SilentlyContinue |
+function Stop-Perch {
+    Get-Process -Name Perch -EA SilentlyContinue |
         Where-Object { $_.Path -like '*\bin\Debug\*' } |
         Stop-Process -Force -EA SilentlyContinue
     Start-Sleep -Milliseconds 400
 }
 
-function Reset-CmuxState {
+function Reset-PerchState {
     Remove-Item $SessionsPath -Force -EA SilentlyContinue
     Remove-Item $SettingsPath -Force -EA SilentlyContinue
     Remove-Item $ErrorsPath   -Force -EA SilentlyContinue
 }
 
-function Start-CmuxForTest {
-    $env:CMUX_ENABLE_TEST_IPC = '1'
+function Start-PerchForTest {
+    $env:PERCH_ENABLE_TEST_IPC = '1'
     $p = Start-Process -PassThru -FilePath $ExePath
     $deadline = (Get-Date).AddSeconds(15)
     while ((Get-Date) -lt $deadline) {
         $p.Refresh()
-        if ($p.HasExited) { throw "CmuxWin exited early with $($p.ExitCode)" }
+        if ($p.HasExited) { throw "Perch exited early with $($p.ExitCode)" }
         if ($p.MainWindowHandle -ne 0) { return $p }
         Start-Sleep -Milliseconds 200
     }
-    throw "CmuxWin main window never appeared"
+    throw "Perch main window never appeared"
 }
 
 function Wait-ForControlPipe {
     param([int]$TimeoutSec = 8)
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
-        if (Test-Path '\\.\pipe\cmux\control') { return $true }
+        if (Test-Path '\\.\pipe\perch\control') { return $true }
         Start-Sleep -Milliseconds 100
     }
     return $false
@@ -123,7 +123,7 @@ function Send-Verb {
     param([string]$Verb, [hashtable]$Flags = @{})
     $argList = @('test', $Verb)
     foreach ($k in $Flags.Keys) { $argList += "--$k"; $argList += [string]$Flags[$k] }
-    & $CmuxExe @argList *> $null
+    & $PerchExe @argList *> $null
     return ($LASTEXITCODE -eq 0)
 }
 
@@ -144,7 +144,7 @@ function Get-WerSince {
         LogName='Application'
         ProviderName='.NET Runtime','Application Error','Windows Error Reporting'
         StartTime=$Start
-    } -EA SilentlyContinue | Where-Object { $_.Message -match 'CmuxWin' })
+    } -EA SilentlyContinue | Where-Object { $_.Message -match 'Perch' })
 }
 
 # --- Weighted operation table --------------------------------------------
@@ -190,9 +190,9 @@ $typeSamples = @(
 # ==========================================================================
 Write-Host ""
 Write-Host "==== Stability monkey: $Iterations ops, seed $Seed ===="
-Stop-CmuxWin; Reset-CmuxState
+Stop-Perch; Reset-PerchState
 $startTime = Get-Date
-$proc = Start-CmuxForTest
+$proc = Start-PerchForTest
 if (-not (Wait-ForControlPipe)) { throw "control pipe never appeared" }
 if ($Visible) {
     Move-Window -P $proc -X 80 -Y 80 -W 1280 -H 820

@@ -5,7 +5,7 @@ using System.Text;
 using System.Threading.Tasks;
 using Microsoft.Web.WebView2.Core;
 
-namespace CmuxWin;
+namespace Perch;
 
 /// Hosts a single WebView2 instance as a direct Win32 child of the main
 /// window — no WPF Window wrapper in between. Replaces the old

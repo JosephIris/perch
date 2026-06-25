@@ -1,8 +1,8 @@
-<Application x:Class="CmuxWin.App"
+<Application x:Class="Perch.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
-             xmlns:local="clr-namespace:CmuxWin"
+             xmlns:local="clr-namespace:Perch"
              StartupUri="MainWindow.xaml">
     <!-- Mica + window-chrome theming still come from WPF-UI; all content
          theming lives in the webview's CSS. -->

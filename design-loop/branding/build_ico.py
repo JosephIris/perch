@@ -10,7 +10,7 @@ from PIL import Image, ImageDraw
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(ROOT, "..", ".."))
-APP_ICO = os.path.join(REPO, "src", "CmuxWin", "Assets", "cmux.ico")  # referenced by the app today
+APP_ICO = os.path.join(REPO, "src", "Perch", "Assets", "perch.ico")  # referenced by the app
 NAMED_ICO = os.path.join(ROOT, "perch.ico")
 PREVIEW = os.path.join(ROOT, "perch-icon-256.png")
 

@@ -8,11 +8,11 @@ using System.Threading.Tasks;
 using Microsoft.Web.WebView2.Core;
 using Wpf.Ui.Controls;
 
-namespace CmuxWin;
+namespace Perch;
 
 public partial class MainWindow : FluentWindow
 {
-    private const string VirtualHost = "cmux.local";
+    private const string VirtualHost = "perch.local";
 
     private readonly string _webRoot;
     private readonly Settings _settings;
@@ -24,10 +24,10 @@ public partial class MainWindow : FluentWindow
     // closes.
     private readonly Dictionary<Guid, ConPty> _ptys = new();
 
-    // Per-pane named-pipe server listening on \\.\pipe\cmux\<paneId>.
-    // Agents inside the pane talk to us via the cmux CLI ("cmux status
+    // Per-pane named-pipe server listening on \\.\pipe\perch\<paneId>.
+    // Agents inside the pane talk to us via the perch CLI ("perch status
     // working") which dials this pipe. Lifecycle mirrors _ptys exactly.
-    private readonly Dictionary<Guid, CmuxIpcServer> _paneIpc = new();
+    private readonly Dictionary<Guid, PerchIpcServer> _paneIpc = new();
 
     // Bytes-received-since-launch per pane id. Surface for `pty.snapshot`
     // and the test harness; the page doesn't see this.
@@ -42,7 +42,7 @@ public partial class MainWindow : FluentWindow
         _settings = Settings.Load();
         _store = SessionStore.Load();
         EnsurePaneNames();
-        // Persist immediately on first launch so external tools (the cmux
+        // Persist immediately on first launch so external tools (the perch
         // CLI, test harnesses) can read pane ids and pipe paths from disk
         // before the user does anything.
         _store.Save();
@@ -86,7 +86,7 @@ public partial class MainWindow : FluentWindow
 
     private void EnsurePaneNames()
     {
-        // PaneNode.Name doubles as the human-readable address for `cmux
+        // PaneNode.Name doubles as the human-readable address for `perch
         // focus/send/open`. Auto-assign pane-N for leaves missing a name.
         foreach (var s in _store.Sessions) AutoName(s.Root);
     }
@@ -115,10 +115,10 @@ public partial class MainWindow : FluentWindow
         {
             var userDataFolder = Path.Combine(
                 AppPaths.DataRoot,
-                "cmux-win", "WebView2");
+                "perch", "WebView2");
             Directory.CreateDirectory(userDataFolder);
 
-            // In test mode (CMUX_ENABLE_TEST_IPC) disable Chromium's
+            // In test mode (PERCH_ENABLE_TEST_IPC) disable Chromium's
             // background/occlusion throttling. Harnesses park the window
             // off-screen so churn stays off the user's display; without these
             // flags Chromium would throttle rAF/timers (and pause rendering on
@@ -281,7 +281,7 @@ public partial class MainWindow : FluentWindow
             var cwd = !string.IsNullOrWhiteSpace(sess.Cwd) && Directory.Exists(sess.Cwd)
                 ? sess.Cwd
                 : _settings.ResolveDefaultCwd();
-            // Shell.BuildStartupCommandLine injects CMUX_PIPE / CMUX_PANE_ID
+            // Shell.BuildStartupCommandLine injects PERCH_PIPE / PERCH_PANE_ID
             // env vars per-pane so agents inside the shell can call back
             // into our IPC layer (stage 4 reactivates that pipe).
             var startCmd = Shell.BuildStartupCommandLine(baseShell, cwd, pane.Id);
@@ -303,10 +303,10 @@ public partial class MainWindow : FluentWindow
             };
             _ptys[paneId] = pty;
 
-            // Agent IPC: per-pane named pipe \\.\pipe\cmux\<paneId>. The
-            // pane's shell inherits CMUX_PIPE pointing here, so `cmux
+            // Agent IPC: per-pane named pipe \\.\pipe\perch\<paneId>. The
+            // pane's shell inherits PERCH_PIPE pointing here, so `perch
             // status working` from inside the shell lands at OnStatus.
-            var ipc = new CmuxIpcServer(paneId, Dispatcher);
+            var ipc = new PerchIpcServer(paneId, Dispatcher);
             ipc.OnStatus += msg => OnAgentStatus(sess, paneId, msg);
             ipc.OnNotify += msg => OnAgentNotify(sess, paneId, msg);
             ipc.OnMeta   += msg => OnAgentMeta(sess, paneId, msg);
@@ -334,7 +334,7 @@ public partial class MainWindow : FluentWindow
         lock (_ptyBytesReceived) _ptyBytesReceived.Remove(paneId);
     }
 
-    // ---- Agent IPC handlers (cmux status / notify / meta) ----------------
+    // ---- Agent IPC handlers (perch status / notify / meta) ----------------
 
     private static AgentState ParseAgentState(string? s) => s switch
     {
@@ -373,7 +373,7 @@ public partial class MainWindow : FluentWindow
         // for feedback, or blocked on permission) flashes the taskbar (only
         // when our window isn't already foreground). One place to raise the
         // signal so it works for both Claude-via-hooks and any other agent
-        // calling `cmux status waiting|permission` directly.
+        // calling `perch status waiting|permission` directly.
         static bool IsAttention(AgentState st) =>
             st is AgentState.Waiting or AgentState.Permission;
         if (!IsAttention(prev) && IsAttention(pane.AgentState))
@@ -1326,7 +1326,7 @@ public partial class MainWindow : FluentWindow
                 }
                 break;
             case "prefs.set":
-                // Mirror the page → host wire: cmux test passes flags as
+                // Mirror the page → host wire: perch test passes flags as
                 // strings, so parse fontSize defensively. OnPrefsSet then
                 // does its own clamp + save.
                 {
@@ -1359,7 +1359,7 @@ public partial class MainWindow : FluentWindow
                 break;
             case "settings.save":
                 // Mirror the page → host settings.save wire so the harness
-                // can exercise persistence without DOM interaction. cmux
+                // can exercise persistence without DOM interaction. perch
                 // test passes flags as strings; OnSettingsSave reads the
                 // same property names. fontSize comes through as a string,
                 // so re-wrap it as a number for OnSettingsSave's TryGetInt32.
@@ -1381,7 +1381,7 @@ public partial class MainWindow : FluentWindow
                 // the latency on return (OnRenderPong). The test fires these
                 // while two panes flood to measure renderer responsiveness.
                 {
-                    // `cmux test` sends flag values as strings; a raw pipe
+                    // `perch test` sends flag values as strings; a raw pipe
                     // client may send a JSON number. Accept either.
                     var id = 0;
                     if (root.TryGetProperty("id", out var ie))
@@ -1449,7 +1449,7 @@ public partial class MainWindow : FluentWindow
     }
 
     private static string BootstrapHtml(string expected) => $@"<!doctype html>
-<html><head><meta charset='utf-8'><title>cmux</title>
+<html><head><meta charset='utf-8'><title>perch</title>
 <style>
   html, body {{ height: 100%; margin: 0;
     font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;

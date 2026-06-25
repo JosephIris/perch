@@ -44,7 +44,7 @@ jobs:
           # No package-lock cache key here -- esbuild + xterm.js pin
           # cleanly so npm ci is fast enough without it.
 
-      # The CmuxWin csproj's BundleWeb target shells out to `npm run build`
+      # The Perch csproj's BundleWeb target shells out to `npm run build`
       # before C# compilation; that needs node_modules in place.
       - name: Install web deps
         working-directory: src/web
@@ -62,25 +62,25 @@ jobs:
         run: npm run build
 
       - name: Restore
-        run: dotnet restore src/CmuxWin/CmuxWin.csproj
+        run: dotnet restore src/Perch/Perch.csproj
 
       - name: Publish self-contained single-file
         run: |
-          dotnet publish src/CmuxWin/CmuxWin.csproj `
+          dotnet publish src/Perch/Perch.csproj `
             -c Release `
             -r win-x64 `
             --self-contained `
             -p:PublishSingleFile=true `
             -p:IncludeNativeLibrariesForSelfExtract=true `
             -p:EnableCompressionInSingleFile=true `
-            -o publish/cmux-win
+            -o publish/perch
 
       # Bundle the WebView2 Runtime evergreen bootstrapper into the
       # installer. Win11 has WebView2 preinstalled; older Win10 may not,
       # and without it the app shows a blank webview. The bootstrapper
       # itself is small (~150KB) and silently no-ops when the runtime is
       # already present. The installer only runs it on machines that
-      # need it (see NeedsWebView2 in cmux.iss).
+      # need it (see NeedsWebView2 in perch.iss).
       - name: Download WebView2 Runtime bootstrapper
         shell: pwsh
         run: |
@@ -97,7 +97,7 @@ jobs:
         run: |
           $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { throw "Inno Setup not found at $iscc" }
-          & $iscc installer/cmux.iss /DAppVersion=$env:APP_VERSION
+          & $iscc installer/perch.iss /DAppVersion=$env:APP_VERSION
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed: $LASTEXITCODE" }
           Get-ChildItem publish/installer
 
@@ -117,8 +117,8 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: cmux-Setup-${{ env.APP_VERSION }}
-          path: publish/installer/cmux-Setup-*.exe
+          name: Perch-Setup-${{ env.APP_VERSION }}
+          path: publish/installer/Perch-Setup-*.exe
           if-no-files-found: error
           retention-days: 5
 
@@ -127,8 +127,8 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: cmux-portable-${{ env.APP_VERSION }}
-          path: publish/cmux-win/CmuxWin.exe
+          name: perch-portable-${{ env.APP_VERSION }}
+          path: publish/perch/Perch.exe
           if-no-files-found: error
           retention-days: 5
 
@@ -140,9 +140,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # Rename portable exe to include version so the release asset is descriptive.
-          $portable = "publish/cmux-win/CmuxWin-$env:APP_VERSION.exe"
-          Copy-Item "publish/cmux-win/CmuxWin.exe" $portable
-          $installer = "publish/installer/cmux-Setup-$env:APP_VERSION.exe"
+          $portable = "publish/perch/Perch-$env:APP_VERSION.exe"
+          Copy-Item "publish/perch/Perch.exe" $portable
+          $installer = "publish/installer/Perch-Setup-$env:APP_VERSION.exe"
 
           $notes = @"
           ## Perch $env:GITHUB_REF_NAME
@@ -150,8 +150,8 @@ jobs:
           A power tool for non-power users. Self-contained - no .NET install needed.
 
           **Downloads**
-          - ``cmux-Setup-$env:APP_VERSION.exe`` — installer (Start menu + uninstaller)
-          - ``CmuxWin-$env:APP_VERSION.exe`` — portable single-file
+          - ``Perch-Setup-$env:APP_VERSION.exe`` — installer (Start menu + uninstaller)
+          - ``Perch-$env:APP_VERSION.exe`` — portable single-file
           "@
 
           gh release create $env:GITHUB_REF_NAME `

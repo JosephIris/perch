@@ -1,7 +1,7 @@
 using System;
 using System.Runtime.InteropServices;
 
-namespace CmuxWin;
+namespace Perch;
 
 /// Anchors all child processes (shell, conhost, OpenConsole, etc.) to a job
 /// object so they die when we die — including hard kills via Task Manager.

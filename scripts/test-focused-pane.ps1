@@ -1,21 +1,21 @@
 # Focused-pane-wins test.
 #
-# Two sessions are created (main + a `cmux open`-spawned one). After the
+# Two sessions are created (main + a `perch open`-spawned one). After the
 # open call, the newly-spawned session becomes active. We then push state
 # from BOTH panes' pipes:
 #   * Push A from the BACKGROUND pane (no longer active) → should be IGNORED
 #   * Push B from the ACTIVE pane → should LAND on the sidebar
 #
-# We verify by reading the log (both pushes get a CmuxIpc.recv line because
+# We verify by reading the log (both pushes get a PerchIpc.recv line because
 # the gate happens on the UI side, not at dispatch) and by screenshot
 # (active session's row should only show push B's state, not A's).
 
 [CmdletBinding()]
 param(
-    [string]$ExePath  = "$PSScriptRoot\..\src\CmuxWin\bin\Debug\net8.0-windows\win10-x64\CmuxWin.exe",
-    [string]$CliPath  = "$PSScriptRoot\..\src\CmuxWin\bin\Debug\net8.0-windows\win10-x64\tools\cmux.exe",
-    [string]$LogPath  = "$env:APPDATA\cmux-win\errors.log",
-    [string]$ShotPath = 'C:\tmp\cmux-focused-pane.png'
+    [string]$ExePath  = "$PSScriptRoot\..\src\Perch\bin\Debug\net8.0-windows\win10-x64\Perch.exe",
+    [string]$CliPath  = "$PSScriptRoot\..\src\Perch\bin\Debug\net8.0-windows\win10-x64\tools\perch.exe",
+    [string]$LogPath  = "$env:APPDATA\perch\errors.log",
+    [string]$ShotPath = 'C:\tmp\perch-focused-pane.png'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -26,28 +26,28 @@ function Invoke-Cli {
     foreach ($a in $CliArgs) { $psi.ArgumentList.Add($a) }
     $psi.UseShellExecute = $false
     $psi.RedirectStandardError = $true
-    $psi.EnvironmentVariables['CMUX_PIPE'] = $PipePath
+    $psi.EnvironmentVariables['PERCH_PIPE'] = $PipePath
     $proc = [System.Diagnostics.Process]::Start($psi)
-    if (-not $proc.WaitForExit(3000)) { $proc.Kill(); throw "cmux $($CliArgs -join ' ') hung" }
+    if (-not $proc.WaitForExit(3000)) { $proc.Kill(); throw "perch $($CliArgs -join ' ') hung" }
     $err = $proc.StandardError.ReadToEnd()
-    if ($proc.ExitCode -ne 0) { throw "cmux $($CliArgs -join ' ') exited $($proc.ExitCode): $err" }
+    if ($proc.ExitCode -ne 0) { throw "perch $($CliArgs -join ' ') exited $($proc.ExitCode): $err" }
 }
 
 # Fresh state.
 if (Test-Path $LogPath) { Remove-Item $LogPath -Force }
-$sp = "$env:APPDATA\cmux-win\sessions.json"
+$sp = "$env:APPDATA\perch\sessions.json"
 if (Test-Path $sp) { Remove-Item $sp -Force }
-Get-Process -Name CmuxWin -EA SilentlyContinue | Where-Object { $_.Path -like '*Debug*' } | Stop-Process -Force
+Get-Process -Name Perch -EA SilentlyContinue | Where-Object { $_.Path -like '*Debug*' } | Stop-Process -Force
 Start-Sleep -Milliseconds 500
 
 $p = Start-Process -PassThru -FilePath $ExePath
 Start-Sleep -Seconds 5
-if ($p.HasExited) { throw "CmuxWin exited $($p.ExitCode)" }
+if ($p.HasExited) { throw "Perch exited $($p.ExitCode)" }
 
 # Main pane is currently active.
 $sessions = Get-Content $sp -Raw | ConvertFrom-Json
 $mainPaneId = ($sessions.Sessions | Where-Object { $_.Title -eq 'main' }).Root.Id -replace '-', ''
-$mainPipe = "\\.\pipe\cmux\$mainPaneId"
+$mainPipe = "\\.\pipe\perch\$mainPaneId"
 Write-Host "main pipe: $mainPipe"
 
 # Spawn a second session and let it become active.
@@ -56,7 +56,7 @@ Start-Sleep -Milliseconds 1500
 $sessions = Get-Content $sp -Raw | ConvertFrom-Json
 $secondary = $sessions.Sessions | Where-Object { $_.Title -eq 'secondary' } | Select-Object -First 1
 $secondaryPaneId = $secondary.Root.Id -replace '-', ''
-$secondaryPipe = "\\.\pipe\cmux\$secondaryPaneId"
+$secondaryPipe = "\\.\pipe\perch\$secondaryPaneId"
 Write-Host "secondary pipe: $secondaryPipe  (this one is now active)"
 Start-Sleep -Milliseconds 1500
 
@@ -76,7 +76,7 @@ Write-Host "Screenshot: $ShotPath"
 $lines = if (Test-Path $LogPath) { Get-Content $LogPath } else { @() }
 Write-Host ""
 Write-Host "=== Log (filtered) ==="
-$lines | Where-Object { $_ -match 'CmuxIpc|ERROR' } | ForEach-Object { Write-Host "  $_" }
+$lines | Where-Object { $_ -match 'PerchIpc|ERROR' } | ForEach-Object { Write-Host "  $_" }
 Stop-Process -Id $p.Id -EA SilentlyContinue
 
 # All four pushes should hit the log (gate runs after dispatch).

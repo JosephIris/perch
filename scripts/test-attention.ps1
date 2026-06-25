@@ -3,10 +3,10 @@
 Integration smoke test for the attention center (sidebar Needs-you / Projects
 partition + framed rows, and the dashboard surface).
 
-Launches the Debug build in an ISOLATED data dir via CMUX_DATA_DIR. This is
-essential: a normally-installed or already-running cmux shares
-%APPDATA%\cmux-win, which means the same sessions.json, the same
-machine-global pipe names (\\.\pipe\cmux\<paneId>), and the same errors.log.
+Launches the Debug build in an ISOLATED data dir via PERCH_DATA_DIR. This is
+essential: a normally-installed or already-running perch shares
+%APPDATA%\perch, which means the same sessions.json, the same
+machine-global pipe names (\\.\pipe\perch\<paneId>), and the same errors.log.
 Without isolation, the state pushes below land nondeterministically in the
 OTHER process and the assertions flake.
 
@@ -20,23 +20,23 @@ host errors. Throws (non-zero exit) on any failure.
 #>
 [CmdletBinding()]
 param(
-  [string]$Exe     = "$PSScriptRoot\..\src\CmuxWin\bin\Debug\net8.0-windows\win10-x64\CmuxWin.exe",
+  [string]$Exe     = "$PSScriptRoot\..\src\Perch\bin\Debug\net8.0-windows\win10-x64\Perch.exe",
   # Unique dir per run under C:\tmp: a reused dir keeps a WebView2 profile whose
   # lingering child processes lock files and stall the next cold init. (Use
   # C:\tmp, not %TEMP% — WebView2 user-data init under %LOCALAPPDATA%\Temp can
   # stall on a fresh profile.)
-  [string]$DataDir = (Join-Path 'C:\tmp' "cmux-attn-test-$(Get-Random)"),
-  [string]$ShotPath = 'C:\tmp\cmux-attn-sidebar.png'
+  [string]$DataDir = (Join-Path 'C:\tmp' "perch-attn-test-$(Get-Random)"),
+  [string]$ShotPath = 'C:\tmp\perch-attn-sidebar.png'
 )
 $ErrorActionPreference = 'Stop'
-# AppPaths.DataRoot = CMUX_DATA_DIR verbatim, but all data lives under
-# <DataRoot>\cmux-win\ (session store, errors.log, WebView2 profile).
-$AppDir = Join-Path $DataDir 'cmux-win'
+# AppPaths.DataRoot = PERCH_DATA_DIR verbatim, but all data lives under
+# <DataRoot>\perch\ (session store, errors.log, WebView2 profile).
+$AppDir = Join-Path $DataDir 'perch'
 $Log = Join-Path $AppDir 'errors.log'
 
 # One JSON line per pipe connection. Spaced out so each connection is cleanly
 # accepted+drained before the next (the per-pane IPC server accepts one
-# connection at a time; the real cmux CLI / Claude hooks are naturally spaced).
+# connection at a time; the real perch CLI / Claude hooks are naturally spaced).
 function Send-Pipe([string]$name, [string]$json) {
   $c = New-Object System.IO.Pipes.NamedPipeClientStream('.', $name, [System.IO.Pipes.PipeDirection]::Out)
   $c.Connect(2500)
@@ -44,24 +44,24 @@ function Send-Pipe([string]$name, [string]$json) {
   $w.WriteLine($json); $w.Flush(); $w.Dispose(); $c.Dispose()
   Start-Sleep -Milliseconds 500
 }
-function Ctl($obj) { Send-Pipe 'cmux\control' ($obj | ConvertTo-Json -Compress) }
+function Ctl($obj) { Send-Pipe 'perch\control' ($obj | ConvertTo-Json -Compress) }
 function First-Leaf($node) {
   if (-not $node.Children -or $node.Children.Count -eq 0) { return $node.Id }
   return First-Leaf $node.Children[0]
 }
 
-if (-not (Test-Path $Exe)) { throw "Debug build not found at $Exe -- run: dotnet build src/CmuxWin -c Debug" }
+if (-not (Test-Path $Exe)) { throw "Debug build not found at $Exe -- run: dotnet build src/Perch -c Debug" }
 
 # --- isolated, clean launch ------------------------------------------------
 if (Test-Path $DataDir) { Remove-Item $DataDir -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
-$env:CMUX_DATA_DIR = $DataDir          # isolate sessions.json / pipes / log
-$env:CMUX_ENABLE_TEST_IPC = '1'        # enable the \\.\pipe\cmux\control verb pipe
+$env:PERCH_DATA_DIR = $DataDir          # isolate sessions.json / pipes / log
+$env:PERCH_ENABLE_TEST_IPC = '1'        # enable the \\.\pipe\perch\control verb pipe
 # Kill ONLY our dev/Debug build. The guard excludes any installed copy
-# (e.g. %APPDATA%\cmux\CmuxWin.exe) so a running production cmux is never
+# (e.g. %APPDATA%\perch\Perch.exe) so a running production perch is never
 # touched, and we never kill msedgewebview2 (shared with other apps).
-Get-Process -Name CmuxWin -EA SilentlyContinue |
-  Where-Object { $_.Path -like '*Debug*' -and $_.Path -notlike '*Roaming\cmux\*' } |
+Get-Process -Name Perch -EA SilentlyContinue |
+  Where-Object { $_.Path -like '*Debug*' -and $_.Path -notlike '*Roaming\perch\*' } |
   Stop-Process -Force
 Start-Sleep -Milliseconds 600
 
@@ -73,7 +73,7 @@ try {
   $sj = Join-Path $AppDir 'sessions.json'
   $deadline = (Get-Date).AddSeconds(45)
   while (-not (Test-Path $sj) -and (Get-Date) -lt $deadline) {
-    if ($p.HasExited) { throw "CmuxWin exited early ($($p.ExitCode))" }
+    if ($p.HasExited) { throw "Perch exited early ($($p.ExitCode))" }
     Start-Sleep -Milliseconds 500
   }
   if (-not (Test-Path $sj)) { throw "app never wrote sessions.json (WebView2 init too slow?)" }
@@ -95,12 +95,12 @@ try {
   # S0 -> waiting (feedback); S1 -> permission (blocked on you); rest stay idle.
   # Both land in the "Needs you" section.
   $l0 = (First-Leaf $sessions[0].Root) -replace '-', ''
-  Send-Pipe "cmux\$l0" '{"type":"status","state":"waiting"}'
-  Send-Pipe "cmux\$l0" '{"type":"notify","level":"warn","text":"Approve the deploy to main, or open a PR first?"}'
+  Send-Pipe "perch\$l0" '{"type":"status","state":"waiting"}'
+  Send-Pipe "perch\$l0" '{"type":"notify","level":"warn","text":"Approve the deploy to main, or open a PR first?"}'
 
   $l1 = (First-Leaf $sessions[1].Root) -replace '-', ''
-  Send-Pipe "cmux\$l1" '{"type":"status","state":"permission"}'
-  Send-Pipe "cmux\$l1" '{"type":"notify","level":"error","text":"Needs your permission to run: git push"}'
+  Send-Pipe "perch\$l1" '{"type":"status","state":"permission"}'
+  Send-Pipe "perch\$l1" '{"type":"notify","level":"error","text":"Needs your permission to run: git push"}'
 
   # Make the waiting session active, then capture the sidebar for review.
   Ctl @{ verb = 'session.select'; id = $sessions[0].Id }
@@ -115,8 +115,8 @@ finally {
 
 # --- assertions ------------------------------------------------------------
 $lines    = if (Test-Path $Log) { Get-Content $Log } else { @() }
-$statusEv = @($lines | Where-Object { $_ -match 'CmuxIpc\.recv.*type=status' })
-$notifyEv = @($lines | Where-Object { $_ -match 'CmuxIpc\.recv.*type=notify' })
+$statusEv = @($lines | Where-Object { $_ -match 'PerchIpc\.recv.*type=status' })
+$notifyEv = @($lines | Where-Object { $_ -match 'PerchIpc\.recv.*type=notify' })
 $errors   = @($lines | Where-Object { $_ -match 'ERROR' })
 
 Write-Host ""

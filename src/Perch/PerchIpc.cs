@@ -7,18 +7,18 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Threading;
 
-namespace CmuxWin;
+namespace Perch;
 
-/// Per-pane named-pipe server. Listens on \\.\pipe\cmux\<paneId>, accepts one
+/// Per-pane named-pipe server. Listens on \\.\pipe\perch\<paneId>, accepts one
 /// connection at a time, reads line-delimited JSON from the client, and raises
 /// strongly-typed events on the UI dispatcher.
 ///
-/// Mirrors cmux for macOS's per-workspace socket: agents inside the pane talk
-/// to the host via the tiny `cmux` CLI, no escape-code parsing required.
-internal sealed class CmuxIpcServer : IDisposable
+/// Mirrors perch for macOS's per-workspace socket: agents inside the pane talk
+/// to the host via the tiny `perch` CLI, no escape-code parsing required.
+internal sealed class PerchIpcServer : IDisposable
 {
     public Guid PaneId { get; }
-    public string PipePath => $@"\\.\pipe\cmux\{PaneId:N}";
+    public string PipePath => $@"\\.\pipe\perch\{PaneId:N}";
 
     public event Action<NotifyMessage>? OnNotify;
     public event Action<StatusMessage>? OnStatus;
@@ -35,7 +35,7 @@ internal sealed class CmuxIpcServer : IDisposable
     private Task? _acceptLoop;
     private bool _disposed;
 
-    public CmuxIpcServer(Guid paneId, Dispatcher dispatcher)
+    public PerchIpcServer(Guid paneId, Dispatcher dispatcher)
     {
         PaneId = paneId;
         _dispatcher = dispatcher;
@@ -52,7 +52,7 @@ internal sealed class CmuxIpcServer : IDisposable
         // One connection at a time is plenty — the CLI does write-and-exit
         // and we want serialization for free. PipeOptions.Asynchronous so we
         // can cancel WaitForConnectionAsync on dispose.
-        var pipeName = $@"cmux\{PaneId:N}";
+        var pipeName = $@"perch\{PaneId:N}";
         while (!ct.IsCancellationRequested)
         {
             NamedPipeServerStream? server = null;
@@ -71,7 +71,7 @@ internal sealed class CmuxIpcServer : IDisposable
             catch (OperationCanceledException) { break; }
             catch (Exception ex)
             {
-                Log.Error($"CmuxIpc.AcceptLoop pane={PaneId}", ex);
+                Log.Error($"PerchIpc.AcceptLoop pane={PaneId}", ex);
                 // Back off so a misbehaving client can't spin us.
                 try { await Task.Delay(250, ct).ConfigureAwait(false); }
                 catch (OperationCanceledException) { break; }
@@ -102,7 +102,7 @@ internal sealed class CmuxIpcServer : IDisposable
             using var doc = JsonDocument.Parse(json);
             if (!doc.RootElement.TryGetProperty("type", out var typeEl)) return;
             var type = typeEl.GetString();
-            Log.Info($"CmuxIpc.recv pane={PaneId:N} type={type}");
+            Log.Info($"PerchIpc.recv pane={PaneId:N} type={type}");
             switch (type)
             {
                 case "notify":
@@ -143,8 +143,8 @@ internal sealed class CmuxIpcServer : IDisposable
                     break;
             }
         }
-        catch (JsonException ex) { Log.Error("CmuxIpc.Dispatch.Json", ex); }
-        catch (Exception ex) { Log.Error("CmuxIpc.Dispatch", ex); }
+        catch (JsonException ex) { Log.Error("PerchIpc.Dispatch.Json", ex); }
+        catch (Exception ex) { Log.Error("PerchIpc.Dispatch", ex); }
     }
 
     public void Dispose()

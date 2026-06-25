@@ -3,13 +3,13 @@ using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
 
-namespace CmuxCli;
+namespace PerchCli;
 
-// Intercepts `claude` invocations inside a cmux pane and injects Claude Code's
+// Intercepts `claude` invocations inside a perch pane and injects Claude Code's
 // inline --settings flag with a HOOKS_JSON that routes every hook event back
-// to us. Modeled on cmux-mac's Resources/bin/claude wrapper.
+// to us. Modeled on perch-mac's Resources/bin/claude wrapper.
 //
-// Outside a cmux pane (CMUX_PIPE unset), we transparently pass through to the
+// Outside a perch pane (PERCH_PIPE unset), we transparently pass through to the
 // real claude binary so the user's PATH still works as expected.
 internal static class ClaudeWrapper
 {
@@ -21,15 +21,15 @@ internal static class ClaudeWrapper
         var realClaude = FindRealClaude();
         if (realClaude == null)
         {
-            Console.Error.WriteLine("cmux wrap-claude: real `claude` binary not found on PATH (skipping cmux's tools dir)");
+            Console.Error.WriteLine("perch wrap-claude: real `claude` binary not found on PATH (skipping perch's tools dir)");
             return 127;
         }
 
-        // Outside cmux: passthrough. Inside cmux: inject --settings.
+        // Outside perch: passthrough. Inside perch: inject --settings.
         // The user's own ~/.claude/settings.json is preserved — Claude Code
         // merges --settings additively.
-        var pipePath = Environment.GetEnvironmentVariable("CMUX_PIPE");
-        var inCmux = !string.IsNullOrEmpty(pipePath);
+        var pipePath = Environment.GetEnvironmentVariable("PERCH_PIPE");
+        var inPerch = !string.IsNullOrEmpty(pipePath);
 
         var psi = new ProcessStartInfo(realClaude)
         {
@@ -38,7 +38,7 @@ internal static class ClaudeWrapper
             // real TTY/PTY. Critical for claude's interactive UI.
         };
 
-        if (inCmux)
+        if (inPerch)
         {
             // Write hooks JSON to a file and pass the path. Passing the JSON
             // literally fails when real claude is a .cmd shim (the npm-installed
@@ -60,7 +60,7 @@ internal static class ClaudeWrapper
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"cmux wrap-claude: failed to exec {realClaude}: {ex.Message}");
+            Console.Error.WriteLine($"perch wrap-claude: failed to exec {realClaude}: {ex.Message}");
             return 1;
         }
     }
@@ -98,26 +98,26 @@ internal static class ClaudeWrapper
     /// to clean these up (they're small, %TEMP% is the OS's responsibility).
     private static string WriteHooksFile()
     {
-        var paneId = Environment.GetEnvironmentVariable("CMUX_PANE_ID");
+        var paneId = Environment.GetEnvironmentVariable("PERCH_PANE_ID");
         var safeName = string.IsNullOrEmpty(paneId)
-            ? $"cmux-claude-hooks-{Process.GetCurrentProcess().Id}.json"
-            : $"cmux-claude-hooks-{paneId}.json";
+            ? $"perch-claude-hooks-{Process.GetCurrentProcess().Id}.json"
+            : $"perch-claude-hooks-{paneId}.json";
         var path = Path.Combine(Path.GetTempPath(), safeName);
         File.WriteAllText(path, BuildHooksJson());
         return path;
     }
 
-    /// Builds Claude Code's --settings payload, identical in shape to cmux-mac's
+    /// Builds Claude Code's --settings payload, identical in shape to perch-mac's
     /// wrapper. Every hook calls back into our CLI's `hooks claude <event>`
     /// subcommand, which reads the hook payload on stdin and routes it to IPC.
     private static string BuildHooksJson()
     {
         // Use our own absolute path so the spawned hook process resolves us
         // even if PATH has been mutated mid-session.
-        var self = Environment.ProcessPath ?? "cmux.exe";
+        var self = Environment.ProcessPath ?? "perch.exe";
 
         // Helper to keep the JSON structure readable. Each event maps to a
-        // single hook entry calling our subcommand. timeout matches cmux-mac's
+        // single hook entry calling our subcommand. timeout matches perch-mac's
         // values where they were specific; otherwise a 10s default.
         object Hook(string eventName, int timeoutSec = 10, bool async = false)
         {

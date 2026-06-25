@@ -5,36 +5,36 @@
 #
 # IMPORTANT — keystroke-free.
 # An earlier version of this script drove the app with [SendKeys]::SendWait.
-# That sends keys to whatever has the foreground; the moment cmux lost focus
+# That sends keys to whatever has the foreground; the moment perch lost focus
 # (which happens on every split/redraw) the Ctrl+Shift+W shortcuts spilled
 # into the user's Chrome and tore down browser windows. We no longer touch
 # the input layer. Instead the app exposes a control pipe (ControlIpcServer)
-# which the test harness drives via `cmux.exe test <verb>`. The pipe is only
-# active when CMUX_ENABLE_TEST_IPC=1 in the launching process. You can keep
+# which the test harness drives via `perch.exe test <verb>`. The pipe is only
+# active when PERCH_ENABLE_TEST_IPC=1 in the launching process. You can keep
 # using the machine normally while this runs.
 
 [CmdletBinding()]
 param(
-    [string]$ExePath  = "$PSScriptRoot\..\src\CmuxWin\bin\Debug\net8.0-windows\win10-x64\CmuxWin.exe",
-    [string]$ToolsDir = "$PSScriptRoot\..\src\CmuxWin\bin\Debug\net8.0-windows\win10-x64\tools",
+    [string]$ExePath  = "$PSScriptRoot\..\src\Perch\bin\Debug\net8.0-windows\win10-x64\Perch.exe",
+    [string]$ToolsDir = "$PSScriptRoot\..\src\Perch\bin\Debug\net8.0-windows\win10-x64\tools",
     [int]   $StressIterations = 10,
     [switch]$KeepVisible
 )
 
 $ErrorActionPreference = 'Continue'
 
-if (-not (Test-Path $ExePath))  { throw "CmuxWin.exe not found at $ExePath. Build first." }
+if (-not (Test-Path $ExePath))  { throw "Perch.exe not found at $ExePath. Build first." }
 if (-not (Test-Path $ToolsDir)) { throw "tools/ missing at $ToolsDir." }
-$CmuxExe = Join-Path $ToolsDir 'cmux.exe'
-if (-not (Test-Path $CmuxExe)) { throw "cmux.exe missing at $CmuxExe." }
+$PerchExe = Join-Path $ToolsDir 'perch.exe'
+if (-not (Test-Path $PerchExe)) { throw "perch.exe missing at $PerchExe." }
 
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
 
-if (-not ('Cmux.WinShow' -as [type])) {
+if (-not ('Perch.WinShow' -as [type])) {
     Add-Type @'
 using System;
 using System.Runtime.InteropServices;
-namespace Cmux {
+namespace Perch {
   public static class WinShow {
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);
     public const int SW_MINIMIZE = 6, SW_RESTORE = 9;
@@ -43,64 +43,64 @@ namespace Cmux {
 '@
 }
 
-function Hide-CmuxWindow {
+function Hide-Perchdow {
     param([System.Diagnostics.Process]$P)
     if ($KeepVisible) { return }
     if ($P.MainWindowHandle -ne [IntPtr]::Zero) {
-        [Cmux.WinShow]::ShowWindow($P.MainWindowHandle, [Cmux.WinShow]::SW_MINIMIZE) | Out-Null
+        [Perch.WinShow]::ShowWindow($P.MainWindowHandle, [Perch.WinShow]::SW_MINIMIZE) | Out-Null
     }
 }
 
 # --- helpers --------------------------------------------------------------
 
-function Stop-CmuxWin {
-    Get-Process -Name CmuxWin -EA SilentlyContinue |
+function Stop-Perch {
+    Get-Process -Name Perch -EA SilentlyContinue |
         Where-Object { $_.Path -like '*\bin\Debug\*' } |
         Stop-Process -Force -EA SilentlyContinue
     Start-Sleep -Milliseconds 400
 }
 
-function Reset-CmuxState {
-    Remove-Item "$env:APPDATA\cmux-win\sessions.json" -Force -EA SilentlyContinue
-    Remove-Item "$env:APPDATA\cmux-win\errors.log"    -Force -EA SilentlyContinue
+function Reset-PerchState {
+    Remove-Item "$env:APPDATA\perch\sessions.json" -Force -EA SilentlyContinue
+    Remove-Item "$env:APPDATA\perch\errors.log"    -Force -EA SilentlyContinue
 }
 
-function Start-CmuxForTest {
-    # CMUX_ENABLE_TEST_IPC must be in the LAUNCHED process's env, not just
+function Start-PerchForTest {
+    # PERCH_ENABLE_TEST_IPC must be in the LAUNCHED process's env, not just
     # ours — Start-Process inherits the current shell's env by default.
-    $env:CMUX_ENABLE_TEST_IPC = '1'
+    $env:PERCH_ENABLE_TEST_IPC = '1'
     $p = Start-Process -PassThru -FilePath $ExePath
     # Wait for the main window to appear; we don't care if it's focused.
     $deadline = (Get-Date).AddSeconds(15)
     while ((Get-Date) -lt $deadline) {
         $p.Refresh()
-        if ($p.HasExited) { throw "CmuxWin exited early with $($p.ExitCode)" }
+        if ($p.HasExited) { throw "Perch exited early with $($p.ExitCode)" }
         if ($p.MainWindowHandle -ne 0) { return $p }
         Start-Sleep -Milliseconds 200
     }
-    throw "CmuxWin main window never appeared"
+    throw "Perch main window never appeared"
 }
 
 function Wait-ForControlPipe {
     param([int]$TimeoutSec = 5)
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
-        if (Test-Path '\\.\pipe\cmux\control') { return $true }
+        if (Test-Path '\\.\pipe\perch\control') { return $true }
         Start-Sleep -Milliseconds 100
     }
     return $false
 }
 
-function Invoke-CmuxTest {
+function Invoke-PerchTest {
     param([string]$Verb)
     # Stderr → stdout join so PowerShell surfaces error text. Exit 0 = success.
-    $stderr = & $CmuxExe test $Verb 2>&1
+    $stderr = & $PerchExe test $Verb 2>&1
     if ($LASTEXITCODE -ne 0) {
-        throw "cmux test $Verb exited $LASTEXITCODE`: $stderr"
+        throw "perch test $Verb exited $LASTEXITCODE`: $stderr"
     }
 }
 
-function Get-CmuxAutomationRoot {
+function Get-PerchAutomationRoot {
     param([Parameter(Mandatory)][int]$ProcId)
     $cond = New-Object System.Windows.Automation.PropertyCondition(
         [System.Windows.Automation.AutomationElement]::ProcessIdProperty, $ProcId)
@@ -126,7 +126,7 @@ Write-Host ""
 Write-Host "==== Test 1: Claude Code hooks pipeline ===="
 $hooksOk = $false
 try {
-    Stop-CmuxWin; Reset-CmuxState
+    Stop-Perch; Reset-PerchState
     & "$PSScriptRoot\test-claude-hooks.ps1" -ExePath $ExePath -ToolsDir $ToolsDir
     $hooksOk = ($LASTEXITCODE -eq 0 -or $null -eq $LASTEXITCODE)
 } catch {
@@ -143,19 +143,19 @@ $xClickOk = $false
 $xDetail = ''
 $p = $null
 try {
-    Stop-CmuxWin; Reset-CmuxState
-    $p = Start-CmuxForTest
-    if (-not (Wait-ForControlPipe)) { throw "control pipe never appeared (CMUX_ENABLE_TEST_IPC not honored?)" }
-    Hide-CmuxWindow -P $p
+    Stop-Perch; Reset-PerchState
+    $p = Start-PerchForTest
+    if (-not (Wait-ForControlPipe)) { throw "control pipe never appeared (PERCH_ENABLE_TEST_IPC not honored?)" }
+    Hide-Perchdow -P $p
 
     # Drive 2 splits via the control pipe → 3 panes total. Even minimized,
     # WPF processes the dispatcher actions and updates the visual tree (UIA
     # still sees the buttons), so we don't need to restore the window.
-    Invoke-CmuxTest 'split-right'; Start-Sleep -Milliseconds 200
-    Invoke-CmuxTest 'split-right'; Start-Sleep -Milliseconds 200
+    Invoke-PerchTest 'split-right'; Start-Sleep -Milliseconds 200
+    Invoke-PerchTest 'split-right'; Start-Sleep -Milliseconds 200
 
-    $win = Get-CmuxAutomationRoot -ProcId $p.Id
-    if (-not $win) { throw "cmux window not visible to UIA" }
+    $win = Get-PerchAutomationRoot -ProcId $p.Id
+    if (-not $win) { throw "perch window not visible to UIA" }
     $before = Find-ClosePaneButtons -Window $win
     Write-Host "  $($before.Count) 'Close pane' buttons before UIA Invoke"
     if ($before.Count -lt 2) {
@@ -196,19 +196,19 @@ $stressDetail = ''
 $startTime = Get-Date
 $p = $null
 try {
-    Stop-CmuxWin; Reset-CmuxState
-    $p = Start-CmuxForTest
+    Stop-Perch; Reset-PerchState
+    $p = Start-PerchForTest
     if (-not (Wait-ForControlPipe)) { throw "control pipe never appeared" }
-    Hide-CmuxWindow -P $p
+    Hide-Perchdow -P $p
 
     $iter = 0
     while ($iter -lt $StressIterations) {
         $p.Refresh()
         if ($p.HasExited) { break }
-        Invoke-CmuxTest 'split-right';       Start-Sleep -Milliseconds 80
-        Invoke-CmuxTest 'split-down';        Start-Sleep -Milliseconds 80
-        Invoke-CmuxTest 'close-active-pane'; Start-Sleep -Milliseconds 80
-        Invoke-CmuxTest 'close-active-pane'; Start-Sleep -Milliseconds 80
+        Invoke-PerchTest 'split-right';       Start-Sleep -Milliseconds 80
+        Invoke-PerchTest 'split-down';        Start-Sleep -Milliseconds 80
+        Invoke-PerchTest 'close-active-pane'; Start-Sleep -Milliseconds 80
+        Invoke-PerchTest 'close-active-pane'; Start-Sleep -Milliseconds 80
         $iter++
     }
 
@@ -222,7 +222,7 @@ try {
         LogName='Application'
         ProviderName='.NET Runtime','Application Error'
         StartTime=$startTime
-    } -EA SilentlyContinue | Where-Object { $_.Message -match 'CmuxWin' })
+    } -EA SilentlyContinue | Where-Object { $_.Message -match 'Perch' })
 
     $stressOk = (-not $crashed) -and ($wer.Count -eq 0)
     $stressDetail = "iter=$iter crashed=$crashed exitCode=$exitCode wer=$($wer.Count)"

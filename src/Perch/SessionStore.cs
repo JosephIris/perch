@@ -7,7 +7,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 
-namespace CmuxWin;
+namespace Perch;
 
 internal sealed class SessionStore
 {
@@ -16,7 +16,7 @@ internal sealed class SessionStore
 
     private static string StorePath => Path.Combine(
         AppPaths.DataRoot,
-        "cmux-win",
+        "perch",
         "sessions.json");
 
     public static SessionStore Load()

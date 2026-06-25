@@ -2,7 +2,7 @@ using System;
 using System.Linq;
 using System.Threading.Tasks;
 
-namespace CmuxWin;
+namespace Perch;
 
 public partial class App : System.Windows.Application
 {
@@ -45,10 +45,10 @@ public partial class App : System.Windows.Application
         // ungraceful exits.
         JobObjectGuard.AssignSelfToKillOnCloseJob();
 
-        // Make `cmux` resolvable inside spawned panes. ConPTY children inherit
+        // Make `perch` resolvable inside spawned panes. ConPTY children inherit
         // our process env, so prepending PATH here propagates to every pane
         // shell without any per-shell flag plumbing.
-        // The build target drops cmux.exe into <app>/tools/.
+        // The build target drops perch.exe into <app>/tools/.
         try
         {
             var appDir = System.AppContext.BaseDirectory;
@@ -60,7 +60,7 @@ public partial class App : System.Windows.Application
                     Environment.SetEnvironmentVariable("PATH", toolsDir + ";" + current);
             }
         }
-        catch (Exception ex) { Log.Error("PATH.cmuxTools", ex); }
+        catch (Exception ex) { Log.Error("PATH.perchTools", ex); }
 
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
             Log.Error("AppDomain.UnhandledException", e.ExceptionObject as Exception);

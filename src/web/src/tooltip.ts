@@ -18,7 +18,7 @@ let currentAnchor: HTMLElement | null = null;
 function ensureTip(): HTMLElement {
   if (tip) return tip;
   const el = document.createElement("div");
-  el.className = "cmux-tooltip";
+  el.className = "perch-tooltip";
   el.setAttribute("role", "tooltip");
   document.body.appendChild(el);
   tip = el;
@@ -28,7 +28,7 @@ function ensureTip(): HTMLElement {
 function hide() {
   if (showTimer) { clearTimeout(showTimer); showTimer = 0; }
   currentAnchor = null;
-  if (tip) tip.classList.remove("cmux-tooltip--visible");
+  if (tip) tip.classList.remove("perch-tooltip--visible");
 }
 
 function showFor(anchor: HTMLElement, text: string) {
@@ -37,7 +37,7 @@ function showFor(anchor: HTMLElement, text: string) {
   // Measure off-screen first, then place. Anchor below the element, left-
   // aligned; flip above if it would run past the viewport bottom, and clamp
   // horizontally so a long tooltip never spills off the right edge.
-  el.classList.add("cmux-tooltip--visible");
+  el.classList.add("perch-tooltip--visible");
   const a = anchor.getBoundingClientRect();
   const t = el.getBoundingClientRect();
   const margin = 8;

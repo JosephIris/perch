@@ -1,9 +1,9 @@
 {
-  "name": "cmux-web",
+  "name": "perch-web",
   "version": "0.0.1",
   "private": true,
   "type": "module",
-  "description": "WebView2-hosted chrome + xterm.js renderer for cmux",
+  "description": "WebView2-hosted chrome + xterm.js renderer for perch",
   "scripts": {
     "build": "node esbuild.config.mjs",
     "watch": "node esbuild.config.mjs --watch",

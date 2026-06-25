@@ -6,7 +6,7 @@
 #       data-state attribute set in built bundle)
 #
 # Keystroke-free, by the same rule the other harness scripts follow: the
-# app is driven entirely via the control IPC pipe (CMUX_ENABLE_TEST_IPC=1)
+# app is driven entirely via the control IPC pipe (PERCH_ENABLE_TEST_IPC=1)
 # and we minimize the window so any churn stays off your screen.
 
 [CmdletBinding()]
@@ -21,22 +21,22 @@ param(
 # back to the script's own location.
 $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
 $repoRoot  = Resolve-Path (Join-Path $scriptDir '..')
-if (-not $ExePath)  { $ExePath  = Join-Path $repoRoot 'src\CmuxWin\bin\Debug\net8.0-windows\win10-x64\CmuxWin.exe' }
-if (-not $ToolsDir) { $ToolsDir = Join-Path $repoRoot 'src\CmuxWin\bin\Debug\net8.0-windows\win10-x64\tools' }
-if (-not $WebRoot)  { $WebRoot  = Join-Path $repoRoot 'src\CmuxWin\wwwroot' }
+if (-not $ExePath)  { $ExePath  = Join-Path $repoRoot 'src\Perch\bin\Debug\net8.0-windows\win10-x64\Perch.exe' }
+if (-not $ToolsDir) { $ToolsDir = Join-Path $repoRoot 'src\Perch\bin\Debug\net8.0-windows\win10-x64\tools' }
+if (-not $WebRoot)  { $WebRoot  = Join-Path $repoRoot 'src\Perch\wwwroot' }
 
 $ErrorActionPreference = 'Continue'
 
-if (-not (Test-Path $ExePath))  { throw "CmuxWin.exe not found at $ExePath. Build first." }
+if (-not (Test-Path $ExePath))  { throw "Perch.exe not found at $ExePath. Build first." }
 if (-not (Test-Path $ToolsDir)) { throw "tools/ missing at $ToolsDir." }
-$CmuxExe = Join-Path $ToolsDir 'cmux.exe'
-if (-not (Test-Path $CmuxExe)) { throw "cmux.exe missing at $CmuxExe." }
+$PerchExe = Join-Path $ToolsDir 'perch.exe'
+if (-not (Test-Path $PerchExe)) { throw "perch.exe missing at $PerchExe." }
 
-if (-not ('Cmux.WinShow' -as [type])) {
+if (-not ('Perch.WinShow' -as [type])) {
     Add-Type @'
 using System;
 using System.Runtime.InteropServices;
-namespace Cmux {
+namespace Perch {
   public static class WinShow {
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);
     public const int SW_MINIMIZE = 6;
@@ -45,49 +45,49 @@ namespace Cmux {
 '@
 }
 
-$SettingsPath = Join-Path $env:APPDATA 'cmux-win\settings.json'
-$SessionsPath = Join-Path $env:APPDATA 'cmux-win\sessions.json'
-$ErrorsPath   = Join-Path $env:APPDATA 'cmux-win\errors.log'
+$SettingsPath = Join-Path $env:APPDATA 'perch\settings.json'
+$SessionsPath = Join-Path $env:APPDATA 'perch\sessions.json'
+$ErrorsPath   = Join-Path $env:APPDATA 'perch\errors.log'
 
-function Stop-CmuxWin {
-    Get-Process -Name CmuxWin -EA SilentlyContinue |
+function Stop-Perch {
+    Get-Process -Name Perch -EA SilentlyContinue |
         Where-Object { $_.Path -like '*\bin\Debug\*' } |
         Stop-Process -Force -EA SilentlyContinue
     Start-Sleep -Milliseconds 400
 }
 
-function Reset-CmuxState {
+function Reset-PerchState {
     Remove-Item $SessionsPath -Force -EA SilentlyContinue
     Remove-Item $SettingsPath -Force -EA SilentlyContinue
     Remove-Item $ErrorsPath   -Force -EA SilentlyContinue
 }
 
-function Hide-CmuxWindow {
+function Hide-Perchdow {
     param([System.Diagnostics.Process]$P)
     if ($KeepVisible) { return }
     if ($P.MainWindowHandle -ne [IntPtr]::Zero) {
-        [Cmux.WinShow]::ShowWindow($P.MainWindowHandle, [Cmux.WinShow]::SW_MINIMIZE) | Out-Null
+        [Perch.WinShow]::ShowWindow($P.MainWindowHandle, [Perch.WinShow]::SW_MINIMIZE) | Out-Null
     }
 }
 
-function Start-CmuxForTest {
-    $env:CMUX_ENABLE_TEST_IPC = '1'
+function Start-PerchForTest {
+    $env:PERCH_ENABLE_TEST_IPC = '1'
     $p = Start-Process -PassThru -FilePath $ExePath
     $deadline = (Get-Date).AddSeconds(15)
     while ((Get-Date) -lt $deadline) {
         $p.Refresh()
-        if ($p.HasExited) { throw "CmuxWin exited early with $($p.ExitCode)" }
+        if ($p.HasExited) { throw "Perch exited early with $($p.ExitCode)" }
         if ($p.MainWindowHandle -ne 0) { return $p }
         Start-Sleep -Milliseconds 200
     }
-    throw "CmuxWin main window never appeared"
+    throw "Perch main window never appeared"
 }
 
 function Wait-ForControlPipe {
     param([int]$TimeoutSec = 5)
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
-        if (Test-Path '\\.\pipe\cmux\control') { return $true }
+        if (Test-Path '\\.\pipe\perch\control') { return $true }
         Start-Sleep -Milliseconds 100
     }
     return $false
@@ -95,29 +95,29 @@ function Wait-ForControlPipe {
 
 function Wait-ForPanePipe {
     param([string]$PaneId, [int]$TimeoutSec = 10)
-    # CmuxIpcServer pipe name is `cmux\{Guid:N}` — no dashes — while
+    # PerchIpcServer pipe name is `perch\{Guid:N}` — no dashes — while
     # sessions.json stores the GUID with dashes. Normalize.
     $bare = $PaneId -replace '-', ''
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
-        if (Test-Path "\\.\pipe\cmux\$bare") { return $true }
+        if (Test-Path "\\.\pipe\perch\$bare") { return $true }
         Start-Sleep -Milliseconds 200
     }
     return $false
 }
 
-function Invoke-CmuxTest {
+function Invoke-PerchTest {
     param([Parameter(Mandatory)][string]$Verb, [hashtable]$Flags = @{})
     $argList = @('test', $Verb)
     foreach ($k in $Flags.Keys) { $argList += "--$k"; $argList += [string]$Flags[$k] }
-    $stderr = & $CmuxExe @argList 2>&1
-    if ($LASTEXITCODE -ne 0) { throw ("cmux test {0} exited {1}: {2}" -f $Verb, $LASTEXITCODE, $stderr) }
+    $stderr = & $PerchExe @argList 2>&1
+    if ($LASTEXITCODE -ne 0) { throw ("perch test {0} exited {1}: {2}" -f $Verb, $LASTEXITCODE, $stderr) }
 }
 
 function Send-PaneIpc {
     param([Parameter(Mandatory)][string]$PaneId, [Parameter(Mandatory)]$Payload)
     $bare = $PaneId -replace '-', ''
-    $pipeName = "cmux\$bare"
+    $pipeName = "perch\$bare"
     $client = New-Object System.IO.Pipes.NamedPipeClientStream(
         '.', $pipeName, [System.IO.Pipes.PipeDirection]::Out)
     try {
@@ -144,7 +144,7 @@ function Get-StateDump {
     $beforeCount = if (Test-Path $ErrorsPath) {
         (Select-String -Path $ErrorsPath -Pattern 'STATE_DUMP' -SimpleMatch -EA SilentlyContinue).Count
     } else { 0 }
-    Invoke-CmuxTest 'state.dump'
+    Invoke-PerchTest 'state.dump'
     $deadline = (Get-Date).AddSeconds($RetrySec)
     while ((Get-Date) -lt $deadline) {
         $now = if (Test-Path $ErrorsPath) {
@@ -298,12 +298,12 @@ $fontOk = $false
 $fontDetail = ''
 $p = $null
 try {
-    Stop-CmuxWin; Reset-CmuxState
-    $p = Start-CmuxForTest
+    Stop-Perch; Reset-PerchState
+    $p = Start-PerchForTest
     if (-not (Wait-ForControlPipe)) { throw "control pipe never appeared" }
-    Hide-CmuxWindow -P $p
+    Hide-Perchdow -P $p
 
-    Invoke-CmuxTest 'prefs.set' @{ fontSize = 19 }
+    Invoke-PerchTest 'prefs.set' @{ fontSize = 19 }
     Start-Sleep -Milliseconds 400
 
     if (-not (Test-Path $SettingsPath)) { throw "settings.json never written" }
@@ -314,9 +314,9 @@ try {
     Stop-Process -Id $p.Id -Force -EA SilentlyContinue
     Start-Sleep -Milliseconds 600
 
-    $p = Start-CmuxForTest
+    $p = Start-PerchForTest
     if (-not (Wait-ForControlPipe)) { throw "control pipe never appeared on relaunch" }
-    Hide-CmuxWindow -P $p
+    Hide-Perchdow -P $p
 
     $dump = Get-StateDump
     if (-not $dump) { throw "state.dump never wrote to errors.log on relaunch" }
@@ -339,10 +339,10 @@ $waitOk = $false
 $waitDetail = ''
 $p = $null
 try {
-    Stop-CmuxWin; Reset-CmuxState
-    $p = Start-CmuxForTest
+    Stop-Perch; Reset-PerchState
+    $p = Start-PerchForTest
     if (-not (Wait-ForControlPipe)) { throw "control pipe never appeared" }
-    Hide-CmuxWindow -P $p
+    Hide-Perchdow -P $p
 
     $paneId = $null
     $deadline = (Get-Date).AddSeconds(10)
@@ -367,7 +367,7 @@ try {
     }
     $waitDetail = "after status=waiting: '$($pane1.agentState)'"
 
-    Invoke-CmuxTest 'pane.simulate-input' @{ text = 'y' }
+    Invoke-PerchTest 'pane.simulate-input' @{ text = 'y' }
     Start-Sleep -Milliseconds 300
 
     $dump2 = Get-StateDump
@@ -406,13 +406,13 @@ $settingsSaveOk = $false
 $settingsDetail = ''
 $p = $null
 try {
-    Stop-CmuxWin; Reset-CmuxState
-    $p = Start-CmuxForTest
+    Stop-Perch; Reset-PerchState
+    $p = Start-PerchForTest
     if (-not (Wait-ForControlPipe)) { throw "control pipe never appeared" }
-    Hide-CmuxWindow -P $p
+    Hide-Perchdow -P $p
 
     $testCwd = $env:TEMP
-    Invoke-CmuxTest 'settings.save' @{ defaultShell = 'cmd.exe'; defaultCwd = $testCwd; fontSize = 17 }
+    Invoke-PerchTest 'settings.save' @{ defaultShell = 'cmd.exe'; defaultCwd = $testCwd; fontSize = 17 }
     Start-Sleep -Milliseconds 400
 
     if (-not (Test-Path $SettingsPath)) { throw "settings.json never written" }

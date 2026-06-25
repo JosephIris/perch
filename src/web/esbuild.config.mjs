@@ -1,5 +1,5 @@
-// Bundle the cmux webview content into src/CmuxWin/wwwroot/. WebView2's
-// virtual-host mapping serves this directory under https://cmux.local/.
+// Bundle the perch webview content into src/Perch/wwwroot/. WebView2's
+// virtual-host mapping serves this directory under https://perch.local/.
 //
 // `node esbuild.config.mjs`           — one-shot build
 // `node esbuild.config.mjs --watch`   — incremental rebuild on file change
@@ -10,7 +10,7 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const outDir = resolve(here, "../CmuxWin/wwwroot");
+const outDir = resolve(here, "../Perch/wwwroot");
 const watch = process.argv.includes("--watch");
 
 async function copyStatics() {
@@ -26,7 +26,7 @@ async function copyStatics() {
   // Bundled humanist webfont (Inter Variable). Lives in src/web/fonts/ in
   // source, copied to wwwroot/fonts/ on every build. Referenced from
   // tokens.css via @font-face. WebView2 serves wwwroot/ under
-  // https://cmux.local/, so the runtime URL is /fonts/InterVariable.woff2.
+  // https://perch.local/, so the runtime URL is /fonts/InterVariable.woff2.
   await cp(resolve(here, "fonts"), resolve(outDir, "fonts"), {
     recursive: true,
   });

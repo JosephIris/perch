@@ -67,7 +67,7 @@ export class Pane {
 
     // Per-pane header — color dot · name (double-click to rename) · state
     // dot + state word · close. The color dot is the persistent feature
-    // tag the user assigns; the state dot reflects whatever cmux status
+    // tag the user assigns; the state dot reflects whatever perch status
     // last reported for THIS pane (not the whole session).
     const header = buildPaneHeader(paneId);
     this.element.appendChild(header.root);
@@ -161,7 +161,7 @@ export class Pane {
     // OSC 7 (cwd notification, file://hostname/path). PowerShell's prompt
     // hook injected by Shell.cs emits this on every prompt redraw. Forward
     // to the host so it can run git rev-parse and auto-fill the branch
-    // chip without the agent having to call `cmux meta --branch`.
+    // chip without the agent having to call `perch meta --branch`.
     this.term.parser.registerOscHandler(7, (data) => {
       const cwd = parseOsc7Cwd(data);
       if (cwd) send({ type: "pane.cwd", paneId: this.paneId, cwd });
@@ -183,7 +183,7 @@ export class Pane {
 
     // Windows Terminal-style right-click: copy if there's a selection,
     // otherwise paste the clipboard. WebView2 grants navigator.clipboard
-    // access for the cmux.local virtual host without prompting.
+    // access for the perch.local virtual host without prompting.
     this.termHost.addEventListener("contextmenu", (ev) => {
       ev.preventDefault();
       this.handleRightClick();

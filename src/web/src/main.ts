@@ -272,4 +272,4 @@ document.fonts.ready.then(() => {
 });
 
 // lastState is kept for debugging; surface it for devtools poking.
-(window as unknown as { __cmux: unknown }).__cmux = { get state() { return lastState; } };
+(window as unknown as { __perch: unknown }).__perch = { get state() { return lastState; } };

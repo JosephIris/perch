@@ -10,7 +10,7 @@ After a restart **or crash**, a pane that was running a Claude Code session
 reopens straight into that conversation via `claude --resume <id>`, so the
 agent's context continues instead of dropping the user at a blank shell.
 
-This is the agent half of upstream cmux's "Reopen Previous Session". Upstream
+This is the agent half of upstream perch's "Reopen Previous Session". Upstream
 restores layout + cwd + scrollback (best-effort) + browser state, and—for
 supported agents—resumes the agent session "when hooks have saved a native
 session ID." We already restore the **layout half**; this adds the **agent
@@ -24,9 +24,9 @@ half** for Claude Code.
   and `SessionStore.Load()` restores on startup. A hard crash loses at most
   the last unsaved structural change.
 - **The wrapper + hook pipeline.** `claude` in a pane resolves to
-  `tools/claude.cmd` → `cmux.exe wrap-claude` (`ClaudeWrapper.cs`), which
+  `tools/claude.cmd` → `perch.exe wrap-claude` (`ClaudeWrapper.cs`), which
   injects `--settings` hooks and execs the real `claude`. Hooks call back
-  `cmux hooks claude <event>` → `HookHandler.cs` → per-pane pipe → host.
+  `perch hooks claude <event>` → `HookHandler.cs` → per-pane pipe → host.
   `SessionStart` already fires here today (we use it for the git baseline).
 
 ## What's missing
@@ -49,7 +49,7 @@ IPC message:
 { "type": "session", "id": "<uuid>" }
 ```
 
-`CmuxIpc.cs`: add `SessionMessage(Id)` + a `"session"` dispatch case + an
+`PerchIpc.cs`: add `SessionMessage(Id)` + a `"session"` dispatch case + an
 `OnSession` event — mirror the existing `git.baseline` plumbing exactly.
 
 `MainWindow.OnAgentSession(sess, paneId, msg)`: set
@@ -114,12 +114,12 @@ with the setting defaulting true and wire the UI in a follow-up.
 
 | File | Change |
 |---|---|
-| `tools/cmux-cli/HookHandler.cs` | extract `session_id` on `session-start`, send `{type:"session",id}` |
-| `src/CmuxWin/CmuxIpc.cs` | `SessionMessage` record + dispatch + `OnSession` |
-| `src/CmuxWin/Session.cs` | `PaneNode.ClaudeSessionId` (persisted) |
-| `src/CmuxWin/MainWindow.xaml.cs` | `OnAgentSession` handler; wire `OnSession`; `SpawnPty` resume injection + `_resumeAttempted` guard |
-| `src/CmuxWin/Shell.cs` | optional `initialCommand` param + pwsh/cmd injection |
-| `src/CmuxWin/Settings.cs` (+ dialog) | `ResumeAgentsOnLaunch` toggle |
+| `tools/perch-cli/HookHandler.cs` | extract `session_id` on `session-start`, send `{type:"session",id}` |
+| `src/Perch/PerchIpc.cs` | `SessionMessage` record + dispatch + `OnSession` |
+| `src/Perch/Session.cs` | `PaneNode.ClaudeSessionId` (persisted) |
+| `src/Perch/MainWindow.xaml.cs` | `OnAgentSession` handler; wire `OnSession`; `SpawnPty` resume injection + `_resumeAttempted` guard |
+| `src/Perch/Shell.cs` | optional `initialCommand` param + pwsh/cmd injection |
+| `src/Perch/Settings.cs` (+ dialog) | `ResumeAgentsOnLaunch` toggle |
 
 ## Out of scope (separate parity items)
 

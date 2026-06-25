@@ -1,15 +1,15 @@
-# Live end-to-end test: launches CmuxWin, runs `cmux notify ...` inside the
+# Live end-to-end test: launches Perch, runs `perch notify ...` inside the
 # spawned pane, and verifies the host received it. Two checks:
-#   1. errors.log contains the dispatch line from CmuxIpc.Dispatch.
+#   1. errors.log contains the dispatch line from PerchIpc.Dispatch.
 #   2. Screenshot saved so we can eyeball the sidebar showing the notification.
 #
 # Adapted from scripts/test-features.ps1 — same HWND-finding pattern.
 
 [CmdletBinding()]
 param(
-    [string]$ExePath = "$PSScriptRoot\..\src\CmuxWin\bin\Debug\net8.0-windows\win10-x64\CmuxWin.exe",
-    [string]$LogPath = "$env:APPDATA\cmux-win\errors.log",
-    [string]$ShotPath = 'C:\tmp\cmux-ipc-live.png'
+    [string]$ExePath = "$PSScriptRoot\..\src\Perch\bin\Debug\net8.0-windows\win10-x64\Perch.exe",
+    [string]$LogPath = "$env:APPDATA\perch\errors.log",
+    [string]$ShotPath = 'C:\tmp\perch-ipc-live.png'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -74,13 +74,13 @@ function Send-Line($termHwnd, $line) {
 
 # --- Setup ---
 if (Test-Path $LogPath) { Remove-Item $LogPath -Force }
-Get-Process -Name CmuxWin -EA SilentlyContinue | Where-Object { $_.Path -like '*Debug*' } | Stop-Process -Force
+Get-Process -Name Perch -EA SilentlyContinue | Where-Object { $_.Path -like '*Debug*' } | Stop-Process -Force
 Start-Sleep -Milliseconds 500
 
 # --- Launch ---
 $p = Start-Process -PassThru -FilePath $ExePath
 Start-Sleep -Seconds 4
-if ($p.HasExited) { throw "CmuxWin exited code $($p.ExitCode)" }
+if ($p.HasExited) { throw "Perch exited code $($p.ExitCode)" }
 Write-Host "Launched pid=$($p.Id)"
 
 # --- Find terminal HWND ---
@@ -98,33 +98,33 @@ foreach ($t in $hwnds.Top) {
 }
 Start-Sleep -Milliseconds 300
 
-# --- Drive the test: invoke cmux.exe directly against the live pane's pipe ---
+# --- Drive the test: invoke perch.exe directly against the live pane's pipe ---
 #
 # WM_CHAR injection into PowerShell crashes PSReadLine on non-translatable
 # keys (anything outside 0..255 fails the ConsoleKey ctor), so we don't use
 # the shell. The thing we actually want to verify is that the host's IPC
 # server is listening on the pane's pipe and dispatches the message — that
 # only needs the pipe path, which we can derive from sessions.json.
-$sessionsJson = Get-Content "$env:APPDATA\cmux-win\sessions.json" -Raw | ConvertFrom-Json
+$sessionsJson = Get-Content "$env:APPDATA\perch\sessions.json" -Raw | ConvertFrom-Json
 $paneGuid = $sessionsJson.Sessions[0].Root.Id
 $paneId = $paneGuid -replace '-', ''
-$pipePath = "\\.\pipe\cmux\$paneId"
+$pipePath = "\\.\pipe\perch\$paneId"
 Write-Host "Pane pipe: $pipePath"
 
 $marker = "ipc-test-$([Guid]::NewGuid().ToString('N').Substring(0,8))"
-$cliExe = "$PSScriptRoot\..\src\CmuxWin\bin\Debug\net8.0-windows\win10-x64\tools\cmux.exe"
+$cliExe = "$PSScriptRoot\..\src\Perch\bin\Debug\net8.0-windows\win10-x64\tools\perch.exe"
 $psi = [System.Diagnostics.ProcessStartInfo]::new($cliExe)
 $psi.ArgumentList.Add('notify')
 $psi.ArgumentList.Add('--level'); $psi.ArgumentList.Add('success')
 $psi.ArgumentList.Add($marker)
 $psi.UseShellExecute = $false
 $psi.RedirectStandardError = $true
-$psi.EnvironmentVariables['CMUX_PIPE'] = $pipePath
+$psi.EnvironmentVariables['PERCH_PIPE'] = $pipePath
 $cliProc = [System.Diagnostics.Process]::Start($psi)
-if (-not $cliProc.WaitForExit(3000)) { $cliProc.Kill(); throw 'cmux.exe hung' }
+if (-not $cliProc.WaitForExit(3000)) { $cliProc.Kill(); throw 'perch.exe hung' }
 $cliErr = $cliProc.StandardError.ReadToEnd()
-if ($cliProc.ExitCode -ne 0) { throw "cmux.exe exited $($cliProc.ExitCode): $cliErr" }
-Write-Host "cmux.exe sent notify (marker=$marker)"
+if ($cliProc.ExitCode -ne 0) { throw "perch.exe exited $($cliProc.ExitCode): $cliErr" }
+Write-Host "perch.exe sent notify (marker=$marker)"
 Start-Sleep -Milliseconds 500  # let the dispatch land on the UI thread + log
 
 # --- Screenshot for eyeballing the sidebar ---
@@ -133,19 +133,19 @@ Write-Host "Screenshot: $ShotPath"
 
 # --- Verify the dispatch fired ---
 $logLines = if (Test-Path $LogPath) { Get-Content $LogPath } else { @() }
-$dispatched = $logLines | Where-Object { $_ -match 'CmuxIpc\.recv.*type=notify' }
+$dispatched = $logLines | Where-Object { $_ -match 'PerchIpc\.recv.*type=notify' }
 $errors = $logLines | Where-Object { $_ -match '^\[.*\] ERROR' }
 
 Write-Host ""
 Write-Host "=== Log lines (filtered) ==="
-$logLines | Where-Object { $_ -match 'CmuxIpc|ERROR' } | ForEach-Object { Write-Host "  $_" }
+$logLines | Where-Object { $_ -match 'PerchIpc|ERROR' } | ForEach-Object { Write-Host "  $_" }
 
 # --- Cleanup ---
 Stop-Process -Id $p.Id -EA SilentlyContinue
 
 # --- Assertions ---
 if (-not $dispatched) {
-    throw "FAIL: no 'CmuxIpc.recv type=notify' line in $LogPath"
+    throw "FAIL: no 'PerchIpc.recv type=notify' line in $LogPath"
 }
 if ($errors) {
     Write-Warning "Errors logged during run:"

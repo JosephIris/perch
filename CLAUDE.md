@@ -6,7 +6,7 @@ content (chrome + terminal panes) renders inside a single WebView2 hosting
 xterm.js and a hand-rolled HTML/CSS chrome.
 
 The WPF side is intentionally tiny: window lifetime, ConPTY processes, the
-existing IPC layer (CmuxIpc, ControlIpcServer, ClaudeWrapper, HookHandler),
+existing IPC layer (PerchIpc, ControlIpcServer, ClaudeWrapper, HookHandler),
 SessionStore, Settings. Everything visible to the user is HTML/CSS/JS.
 
 The previous WPF + Microsoft.Terminal.Wpf implementation is preserved at tag
@@ -18,8 +18,8 @@ Stack rules:
   The chrome is small enough that a framework adds more weight than it saves.
 - **xterm.js is the terminal renderer.** Use its WebGL addon for performance,
   WebLinks for hyperlinks, FitAddon for resizing, Unicode11Addon, SearchAddon.
-- **Build with esbuild.** Single bundle dropped into `src/CmuxWin/wwwroot/`,
-  served to WebView2 via a virtual host (`https://cmux.local/`).
+- **Build with esbuild.** Single bundle dropped into `src/Perch/wwwroot/`,
+  served to WebView2 via a virtual host (`https://perch.local/`).
 - **No CDN dependencies at runtime.** Everything ships bundled and offline.
 
 ## Target aesthetic
@@ -47,7 +47,7 @@ WPF host window — the webview body is transparent so Mica reads through.
 All spacing, type, color, and radius values MUST come from CSS variables
 defined in `src/web/src/tokens.css`. Never hardcode literals in component
 CSS. If a token doesn't exist for what you need, add it to tokens.css first,
-then consume it via `var(--cmux-...)`. Tokens to respect:
+then consume it via `var(--perch-...)`. Tokens to respect:
 
 - Spacing scale: 4, 8, 12, 16, 24, 32, 48 (no 5, 7, 13, 20)
 - Corner radius: 4 (inputs), 8 (cards/buttons), 12 (windows/dialogs)
@@ -174,7 +174,7 @@ regress them without a screenshot showing the new approach reads better.
   `TextFillColorTertiaryBrush`, `ControlStrokeColorDefaultBrush`, etc.
 - A hardcoded hex literal anywhere in views/controls is a bug.
 - Deliberate exception, narrowly documented in `Themes/Tokens.xaml`: the
-  toast surface (`Cmux.Toast.*`) is intentionally light gray + near-black
+  toast surface (`Perch.Toast.*`) is intentionally light gray + near-black
   in BOTH themes because it overlays the dark terminal area where the
   WPF-UI translucent surfaces had no contrast. If you add another exception,
   document the reason in the same place.
@@ -217,8 +217,8 @@ regress them without a screenshot showing the new approach reads better.
 ### Sidebar pattern
 
 - Each row: title + secondary label + optional trailing label. Pure data,
-  no live tail of the terminal buffer. Modeled after cmux for macOS's
-  `CmuxExtensionSidebarRenderRow`, but tuned toward the Claude desktop /
+  no live tail of the terminal buffer. Modeled after perch for macOS's
+  `PerchExtensionSidebarRenderRow`, but tuned toward the Claude desktop /
   Files-app feel: warmer, calmer, less Windows-Terminal-style density.
 - **Typography on the sidebar row:**
     - Title: 14px, **weight 500** (not 600). BodyStrong reads too

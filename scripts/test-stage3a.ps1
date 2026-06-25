@@ -17,63 +17,63 @@
 
 [CmdletBinding()]
 param(
-    [string]$ExePath  = "$PSScriptRoot\..\src\CmuxWin\bin\Debug\net8.0-windows\win10-x64\CmuxWin.exe",
-    [string]$ToolsDir = "$PSScriptRoot\..\src\CmuxWin\bin\Debug\net8.0-windows\win10-x64\tools",
+    [string]$ExePath  = "$PSScriptRoot\..\src\Perch\bin\Debug\net8.0-windows\win10-x64\Perch.exe",
+    [string]$ToolsDir = "$PSScriptRoot\..\src\Perch\bin\Debug\net8.0-windows\win10-x64\tools",
     [switch]$KeepVisible
 )
 
 $ErrorActionPreference = 'Continue'
-$LogPath = "$env:APPDATA\cmux-win\errors.log"
-$SessPath = "$env:APPDATA\cmux-win\sessions.json"
-$CmuxExe = Join-Path $ToolsDir 'cmux.exe'
+$LogPath = "$env:APPDATA\perch\errors.log"
+$SessPath = "$env:APPDATA\perch\sessions.json"
+$PerchExe = Join-Path $ToolsDir 'perch.exe'
 
-if (-not (Test-Path $ExePath))  { throw "CmuxWin.exe not found at $ExePath" }
-if (-not (Test-Path $CmuxExe))  { throw "cmux.exe missing at $CmuxExe" }
+if (-not (Test-Path $ExePath))  { throw "Perch.exe not found at $ExePath" }
+if (-not (Test-Path $PerchExe))  { throw "perch.exe missing at $PerchExe" }
 
-if (-not ('Cmux.WinShow3' -as [type])) {
+if (-not ('Perch.WinShow3' -as [type])) {
     Add-Type @'
 using System;
 using System.Runtime.InteropServices;
-namespace Cmux { public static class WinShow3 {
+namespace Perch { public static class WinShow3 {
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);
   public const int SW_MINIMIZE = 6;
 } }
 '@
 }
 
-function Stop-CmuxWin {
-    Get-Process -Name CmuxWin -EA SilentlyContinue |
+function Stop-Perch {
+    Get-Process -Name Perch -EA SilentlyContinue |
         Where-Object { $_.Path -like '*\bin\Debug\*' } |
         Stop-Process -Force -EA SilentlyContinue
     Start-Sleep -Milliseconds 400
 }
 
-function Launch-Cmux {
-    $env:CMUX_ENABLE_TEST_IPC = '1'
+function Launch-Perch {
+    $env:PERCH_ENABLE_TEST_IPC = '1'
     $p = Start-Process -PassThru -FilePath $ExePath
     $deadline = (Get-Date).AddSeconds(15)
     while ((Get-Date) -lt $deadline) {
         $p.Refresh()
-        if ($p.HasExited) { throw "cmux exited early code=$($p.ExitCode)" }
+        if ($p.HasExited) { throw "perch exited early code=$($p.ExitCode)" }
         if ($p.MainWindowHandle -ne [IntPtr]::Zero) { break }
         Start-Sleep -Milliseconds 200
     }
     if ($p.MainWindowHandle -eq [IntPtr]::Zero) { throw "main window never appeared" }
     if (-not $KeepVisible) {
-        [Cmux.WinShow3]::ShowWindow($p.MainWindowHandle, [Cmux.WinShow3]::SW_MINIMIZE) | Out-Null
+        [Perch.WinShow3]::ShowWindow($p.MainWindowHandle, [Perch.WinShow3]::SW_MINIMIZE) | Out-Null
     }
     return $p
 }
 
-function Invoke-CmuxTest {
+function Invoke-PerchTest {
     param([string]$Verb, [hashtable]$Fields)
     $cmdArgs = @('test', $Verb)
     if ($Fields) {
         foreach ($k in $Fields.Keys) { $cmdArgs += @("--$k", $Fields[$k]) }
     }
-    $out = & $CmuxExe @cmdArgs 2>&1
+    $out = & $PerchExe @cmdArgs 2>&1
     if ($LASTEXITCODE -ne 0) {
-        throw "cmux test $Verb exited $LASTEXITCODE`: $out"
+        throw "perch test $Verb exited $LASTEXITCODE`: $out"
     }
 }
 
@@ -102,13 +102,13 @@ function Get-Bytes-From-Last-Snapshot {
 }
 
 # --- Fresh start -----------------------------------------------------------
-Stop-CmuxWin
+Stop-Perch
 Remove-Item $LogPath, $SessPath -Force -EA SilentlyContinue
 
 # --- Phase 1: cold launch, verify state ------------------------------------
 Write-Host "Phase 1: cold launch"
-$p = Launch-Cmux
-Write-Host "  cmux pid=$($p.Id)"
+$p = Launch-Perch
+Write-Host "  perch pid=$($p.Id)"
 
 # Initial active pane should spawn within a couple of seconds.
 $spawn1 = Wait-For-Pattern -Pattern 'Pane\.spawn:\s*pane=([0-9a-f]+).*pid=\d+' -TimeoutSec 12
@@ -119,7 +119,7 @@ if (-not $spawn1) {
 Write-Host "  [+] initial pane spawned: $spawn1"
 
 Start-Sleep -Seconds 2
-Invoke-CmuxTest -Verb 'pty.snapshot'
+Invoke-PerchTest -Verb 'pty.snapshot'
 Start-Sleep -Milliseconds 200
 $bytes1 = Get-Bytes-From-Last-Snapshot
 if ($bytes1 -lt 50) {
@@ -132,7 +132,7 @@ Write-Host "  [+] initial pane produced $bytes1 bytes"
 Write-Host ""
 Write-Host "Phase 2: session.new"
 $spawnBefore = (Get-Content $LogPath -EA SilentlyContinue | Where-Object { $_ -match 'Pane\.spawn' }).Count
-Invoke-CmuxTest -Verb 'session.new'
+Invoke-PerchTest -Verb 'session.new'
 # Poll for a NEW Pane.spawn line. Wait-For-Pattern would match the phase-1
 # one immediately, so count instead.
 $spawnAfter = $spawnBefore
@@ -150,7 +150,7 @@ Write-Host "  [+] session.new spawned a fresh pane (spawn count: $spawnBefore ->
 # Snapshot now targets the NEW active session's pane (control pipe verbs
 # always act on the active session in stage 3a).
 Start-Sleep -Seconds 2
-Invoke-CmuxTest -Verb 'pty.snapshot'
+Invoke-PerchTest -Verb 'pty.snapshot'
 Start-Sleep -Milliseconds 200
 $bytes2 = Get-Bytes-From-Last-Snapshot
 if ($bytes2 -lt 50) {
@@ -179,7 +179,7 @@ Stop-Process -Id $p.Id -Force -EA SilentlyContinue
 Start-Sleep -Milliseconds 400
 Remove-Item $LogPath -Force -EA SilentlyContinue
 
-$p = Launch-Cmux
+$p = Launch-Perch
 Write-Host "  relaunch pid=$($p.Id)"
 
 # The active pane should respawn -- we should see at least one Pane.spawn.
@@ -203,7 +203,7 @@ if ($snap2.ActiveSessionId -ne $active1) {
 Write-Host ""
 Write-Host "Phase 5: session.select"
 $otherId = ($snap2.Sessions | Where-Object { $_.Id -ne $snap2.ActiveSessionId } | Select-Object -First 1).Id
-Invoke-CmuxTest -Verb 'session.select' -Fields @{ id = $otherId }
+Invoke-PerchTest -Verb 'session.select' -Fields @{ id = $otherId }
 Start-Sleep -Milliseconds 800
 $snap3 = Get-Content $SessPath -Raw | ConvertFrom-Json
 if ($snap3.ActiveSessionId -ne $otherId) {
@@ -215,7 +215,7 @@ Write-Host "  [+] active flipped to $otherId"
 # --- Phase 6: session.close ----------------------------------------------
 Write-Host ""
 Write-Host "Phase 6: session.close"
-Invoke-CmuxTest -Verb 'session.close' -Fields @{ id = $otherId }
+Invoke-PerchTest -Verb 'session.close' -Fields @{ id = $otherId }
 Start-Sleep -Milliseconds 800
 $snap4 = Get-Content $SessPath -Raw | ConvertFrom-Json
 $stillThere = $snap4.Sessions | Where-Object { $_.Id -eq $otherId }

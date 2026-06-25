@@ -33,13 +33,13 @@ No Chromium, no WebView2, no web tech.
 ## Build
 
 ```pwsh
-dotnet build src/CmuxWin -c Release
+dotnet build src/Perch -c Release
 ```
 
 Or run directly:
 
 ```pwsh
-dotnet run --project src/CmuxWin
+dotnet run --project src/Perch
 ```
 
 Requires .NET 8 SDK on Windows 10+.

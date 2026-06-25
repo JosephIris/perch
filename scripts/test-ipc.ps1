@@ -1,17 +1,17 @@
-# Headless end-to-end test of the cmux IPC plumbing.
+# Headless end-to-end test of the perch IPC plumbing.
 #
-# Stands up a NamedPipeServerStream that mimics what CmuxIpcServer does on
-# the host side, spawns cmux.exe with CMUX_PIPE pointing at that pipe, and
+# Stands up a NamedPipeServerStream that mimics what PerchIpcServer does on
+# the host side, spawns perch.exe with PERCH_PIPE pointing at that pipe, and
 # asserts the JSON payload that arrives matches the subcommand we ran.
 #
-# Run from anywhere; the script resolves cmux.exe relative to the repo.
+# Run from anywhere; the script resolves perch.exe relative to the repo.
 
 $ErrorActionPreference = 'Stop'
 
 $repo  = Split-Path $PSScriptRoot -Parent
-$cmux  = Join-Path $repo 'src\CmuxWin\bin\Debug\net8.0-windows\win10-x64\tools\cmux.exe'
-if (-not (Test-Path $cmux)) {
-    throw "cmux.exe not found at $cmux — build the host first (dotnet build src/CmuxWin)"
+$perch  = Join-Path $repo 'src\Perch\bin\Debug\net8.0-windows\win10-x64\tools\perch.exe'
+if (-not (Test-Path $perch)) {
+    throw "perch.exe not found at $perch — build the host first (dotnet build src/Perch)"
 }
 
 Add-Type -AssemblyName System.Core
@@ -19,7 +19,7 @@ Add-Type -AssemblyName System.Core
 function Invoke-Case {
     param([string]$Name, [string[]]$CliArgs, [scriptblock]$Assert)
 
-    $pipeName = "cmux\test-$([Guid]::NewGuid().ToString('N'))"
+    $pipeName = "perch\test-$([Guid]::NewGuid().ToString('N'))"
     $pipePath = "\\.\pipe\$pipeName"
 
     # Stand up the server FIRST so the CLI's Connect() succeeds immediately
@@ -34,23 +34,23 @@ function Invoke-Case {
     $acceptTask = $server.WaitForConnectionAsync()
 
     try {
-        $psi = [System.Diagnostics.ProcessStartInfo]::new($cmux)
+        $psi = [System.Diagnostics.ProcessStartInfo]::new($perch)
         foreach ($a in $CliArgs) { $psi.ArgumentList.Add($a) }
         $psi.RedirectStandardError = $true
         $psi.RedirectStandardOutput = $true
         $psi.UseShellExecute = $false
-        $psi.EnvironmentVariables['CMUX_PIPE'] = $pipePath
-        $psi.EnvironmentVariables['CMUX_PANE_ID'] = 'deadbeef'
+        $psi.EnvironmentVariables['PERCH_PIPE'] = $pipePath
+        $psi.EnvironmentVariables['PERCH_PANE_ID'] = 'deadbeef'
         $proc = [System.Diagnostics.Process]::Start($psi)
 
         if (-not $acceptTask.Wait(4000)) { throw "[$Name] server never accepted" }
         $reader = [System.IO.StreamReader]::new($server)
         $line = $reader.ReadLine()
 
-        if (-not $proc.WaitForExit(3000)) { $proc.Kill(); throw "[$Name] cmux didn't exit" }
+        if (-not $proc.WaitForExit(3000)) { $proc.Kill(); throw "[$Name] perch didn't exit" }
         $stderr = $proc.StandardError.ReadToEnd()
         if ($proc.ExitCode -ne 0) {
-            throw "[$Name] cmux.exe exited $($proc.ExitCode): $stderr"
+            throw "[$Name] perch.exe exited $($proc.ExitCode): $stderr"
         }
         if (-not $line) { throw "[$Name] no line received" }
 
@@ -63,7 +63,7 @@ function Invoke-Case {
     }
 }
 
-Write-Host "Running cmux IPC tests..."
+Write-Host "Running perch IPC tests..."
 
 Invoke-Case -Name 'notify (no level)' `
             -CliArgs @('notify', 'hello world') `
@@ -101,12 +101,12 @@ Invoke-Case -Name 'meta with branch+port' `
     if ($o.ports.Count -ne 1 -or $o.ports[0] -ne 3000) { throw "ports=$($o.ports -join ',')" }
 }
 
-# Smoke: no CMUX_PIPE -> silent no-op, exit 0, prints nothing.
-$env:CMUX_PIPE = $null
-$noop = & $cmux notify "should be silent" 2>&1
+# Smoke: no PERCH_PIPE -> silent no-op, exit 0, prints nothing.
+$env:PERCH_PIPE = $null
+$noop = & $perch notify "should be silent" 2>&1
 $noopExit = $LASTEXITCODE
 if ($noopExit -ne 0) { throw "no-op: expected exit 0, got $noopExit" }
 if ($noop) { throw "no-op: expected no output, got: $noop" }
-Write-Host "  OK   no-op when CMUX_PIPE is unset"
+Write-Host "  OK   no-op when PERCH_PIPE is unset"
 
-Write-Host "All cmux IPC tests passed."
+Write-Host "All perch IPC tests passed."

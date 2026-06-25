@@ -1,5 +1,5 @@
 /* Design tokens — the CSS-variable mirror of what used to live in
- * Themes/Tokens.xaml. Every component reaches for var(--cmux-...). Never
+ * Themes/Tokens.xaml. Every component reaches for var(--perch-...). Never
  * literal hexes / pixel-counts in component CSS. If you need a value that
  * isn't in here, add it here first.
  *

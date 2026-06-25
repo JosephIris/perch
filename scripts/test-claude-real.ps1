@@ -2,12 +2,12 @@
 #   * Our claude.cmd wrapper resolves real claude on PATH (skipping itself)
 #   * Real claude reads --settings <file> and honors the hooks JSON we inject
 #   * SessionStart hook actually fires on claude startup and routes back to
-#     the live cmux app's IPC layer
+#     the live perch app's IPC layer
 #
-# Strategy: spawn a new cmux pane whose shell command IS `claude` (interactive
+# Strategy: spawn a new perch pane whose shell command IS `claude` (interactive
 # mode). The wrapper finds real claude, injects --settings, real claude boots
-# its TUI and fires SessionStart, our `cmux hooks claude session-start` hook
-# runs inside the same pane (CMUX_PIPE inherited), and the host's CmuxIpc
+# its TUI and fires SessionStart, our `perch hooks claude session-start` hook
+# runs inside the same pane (PERCH_PIPE inherited), and the host's PerchIpc
 # server logs the resulting `status` dispatch. We then read errors.log and
 # count status events whose timestamp falls AFTER the spawn moment.
 #
@@ -18,20 +18,20 @@
 
 [CmdletBinding()]
 param(
-    [string]$ExePath  = "$PSScriptRoot\..\src\CmuxWin\bin\Debug\net8.0-windows\win10-x64\CmuxWin.exe",
-    [string]$ToolsDir = "$PSScriptRoot\..\src\CmuxWin\bin\Debug\net8.0-windows\win10-x64\tools",
+    [string]$ExePath  = "$PSScriptRoot\..\src\Perch\bin\Debug\net8.0-windows\win10-x64\Perch.exe",
+    [string]$ToolsDir = "$PSScriptRoot\..\src\Perch\bin\Debug\net8.0-windows\win10-x64\tools",
     [int]   $WaitSeconds = 15,
     [switch]$KeepVisible
 )
 
 $ErrorActionPreference = 'Continue'
-$CmuxExe = Join-Path $ToolsDir 'cmux.exe'
-$LogPath = "$env:APPDATA\cmux-win\errors.log"
+$PerchExe = Join-Path $ToolsDir 'perch.exe'
+$LogPath = "$env:APPDATA\perch\errors.log"
 
-if (-not (Test-Path $ExePath))  { throw "CmuxWin.exe not found at $ExePath" }
-if (-not (Test-Path $CmuxExe))  { throw "cmux.exe missing at $CmuxExe" }
+if (-not (Test-Path $ExePath))  { throw "Perch.exe not found at $ExePath" }
+if (-not (Test-Path $PerchExe))  { throw "perch.exe missing at $PerchExe" }
 
-# --- Resolve real claude, skipping any cmux-staged wrapper -------------------
+# --- Resolve real claude, skipping any perch-staged wrapper -------------------
 $realClaude = $null
 foreach ($dir in ($env:PATH -split ';')) {
     if ([string]::IsNullOrWhiteSpace($dir)) { continue }
@@ -50,45 +50,45 @@ if (-not $realClaude) {
     exit 0
 }
 Write-Host "Real claude:   $realClaude"
-Write-Host "Cmux exe:      $ExePath"
-Write-Host "Cmux CLI:      $CmuxExe"
+Write-Host "Perch exe:      $ExePath"
+Write-Host "Perch CLI:      $PerchExe"
 
 # --- Reset state -------------------------------------------------------------
-Get-Process -Name CmuxWin -EA SilentlyContinue |
+Get-Process -Name Perch -EA SilentlyContinue |
     Where-Object { $_.Path -like '*\bin\Debug\*' } |
     Stop-Process -Force -EA SilentlyContinue
 Start-Sleep -Milliseconds 400
-Remove-Item "$env:APPDATA\cmux-win\sessions.json" -Force -EA SilentlyContinue
+Remove-Item "$env:APPDATA\perch\sessions.json" -Force -EA SilentlyContinue
 Remove-Item $LogPath -Force -EA SilentlyContinue
 
 # --- Launch with test IPC enabled -------------------------------------------
-$env:CMUX_ENABLE_TEST_IPC = '1'
+$env:PERCH_ENABLE_TEST_IPC = '1'
 $p = Start-Process -PassThru -FilePath $ExePath
 $deadline = (Get-Date).AddSeconds(15)
 while ((Get-Date) -lt $deadline) {
     $p.Refresh()
-    if ($p.HasExited) { throw "CmuxWin exited early $($p.ExitCode)" }
+    if ($p.HasExited) { throw "Perch exited early $($p.ExitCode)" }
     if ($p.MainWindowHandle -ne [IntPtr]::Zero) { break }
     Start-Sleep -Milliseconds 200
 }
 if ($p.MainWindowHandle -eq [IntPtr]::Zero) { throw "main window never appeared" }
-Write-Host "Launched cmux pid=$($p.Id)"
+Write-Host "Launched perch pid=$($p.Id)"
 
 if (-not $KeepVisible) {
-    if (-not ('Cmux.W2' -as [type])) {
+    if (-not ('Perch.W2' -as [type])) {
         Add-Type @'
 using System;
 using System.Runtime.InteropServices;
-namespace Cmux { public static class W2 {
+namespace Perch { public static class W2 {
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);
 } }
 '@
     }
-    [Cmux.W2]::ShowWindow($p.MainWindowHandle, 6) | Out-Null   # SW_MINIMIZE
+    [Perch.W2]::ShowWindow($p.MainWindowHandle, 6) | Out-Null   # SW_MINIMIZE
 }
 
 # Wait for sessions.json + origin pane IPC server to spin up.
-$sessionsPath = "$env:APPDATA\cmux-win\sessions.json"
+$sessionsPath = "$env:APPDATA\perch\sessions.json"
 $deadline = (Get-Date).AddSeconds(10)
 while ((Get-Date) -lt $deadline) {
     if (Test-Path $sessionsPath) {
@@ -101,10 +101,10 @@ $sessions = Get-Content $sessionsPath -Raw | ConvertFrom-Json
 $active = $sessions.Sessions | Where-Object { $_.Id -eq $sessions.ActiveSessionId } | Select-Object -First 1
 if (-not $active) { throw "no active session in sessions.json" }
 $originPaneId = $active.Root.Id -replace '-', ''
-$originPipe = "\\.\pipe\cmux\$originPaneId"
+$originPipe = "\\.\pipe\perch\$originPaneId"
 Write-Host "Origin pipe:   $originPipe"
 
-# Wait for the per-pane IPC pipe -- `cmux open` from outside connects to this.
+# Wait for the per-pane IPC pipe -- `perch open` from outside connects to this.
 $deadline = (Get-Date).AddSeconds(5)
 while ((Get-Date) -lt $deadline) {
     if (Test-Path $originPipe) { break }
@@ -112,26 +112,26 @@ while ((Get-Date) -lt $deadline) {
 }
 
 # --- Drive `claude` inside the default pane ---------------------------------
-# The default pane's shell already has CMUX_PIPE in its env (the shell
+# The default pane's shell already has PERCH_PIPE in its env (the shell
 # startup wrapper injects it for pwsh/cmd/wsl). Sending "claude\r" into the
 # pane's PTY is the same thing the user does manually: pwsh resolves
 # `claude` via PATH, our tools/claude.cmd wrapper wins (PATH-prepended at
 # app launch), the wrapper finds real claude and execs it with --settings.
 #
-# We use `cmux send` over the origin pane's IPC pipe to push bytes verbatim
+# We use `perch send` over the origin pane's IPC pipe to push bytes verbatim
 # into the PTY -- no keystroke synthesis, no foreground dependency.
 $kickoff = Get-Date
 Write-Host "Kickoff at $($kickoff.ToString('HH:mm:ss.fff'))"
 
-$psi = [System.Diagnostics.ProcessStartInfo]::new($CmuxExe)
+$psi = [System.Diagnostics.ProcessStartInfo]::new($PerchExe)
 $psi.Arguments = "send pane-1 claude`r"
 $psi.UseShellExecute = $false
 $psi.RedirectStandardError = $true
-$psi.EnvironmentVariables['CMUX_PIPE'] = $originPipe
+$psi.EnvironmentVariables['PERCH_PIPE'] = $originPipe
 $proc = [System.Diagnostics.Process]::Start($psi)
-if (-not $proc.WaitForExit(5000)) { $proc.Kill(); throw "cmux send hung" }
+if (-not $proc.WaitForExit(5000)) { $proc.Kill(); throw "perch send hung" }
 $sendErr = $proc.StandardError.ReadToEnd()
-if ($proc.ExitCode -ne 0) { throw "cmux send exited $($proc.ExitCode): $sendErr" }
+if ($proc.ExitCode -ne 0) { throw "perch send exited $($proc.ExitCode): $sendErr" }
 Write-Host "  -> 'claude\r' written into pane-1's PTY"
 
 # claude takes a few seconds to boot the TUI and fire SessionStart.
@@ -150,10 +150,10 @@ function After-Kickoff([string]$line) {
 }
 
 $afterKickoff = $lines | Where-Object { After-Kickoff $_ }
-$ipcLines = $afterKickoff | Where-Object { $_ -match 'CmuxIpc\.recv|ERROR' }
+$ipcLines = $afterKickoff | Where-Object { $_ -match 'PerchIpc\.recv|ERROR' }
 
 Write-Host ""
-Write-Host "=== Log lines after kickoff (CmuxIpc + errors) ==="
+Write-Host "=== Log lines after kickoff (PerchIpc + errors) ==="
 if ($ipcLines.Count -eq 0) { Write-Host "  (none)" }
 else { $ipcLines | ForEach-Object { Write-Host "  $_" } }
 

@@ -1,4 +1,4 @@
-# cmux-win design bible
+# perch design bible
 
 This is the long-form companion to `CLAUDE.md`. CLAUDE.md is the
 **constitution** — short, rule-shaped, "what we do and don't do." This
@@ -25,7 +25,7 @@ The dominant fill color of a region (sidebar, panel, dialog).
 - **Opaque** — a flat painted color. VS Code, Claude desktop, Slack.
   Predictable, calm, no wallpaper interaction.
 
-cmux-win uses **opaque** for both the sidebar and the workspace pane,
+perch uses **opaque** for both the sidebar and the workspace pane,
 with a deliberate **tonal stagger** between them:
 
 - Sidebar (`--color-sidebar-surface: #181818`) is the **recessed** tone
@@ -73,7 +73,7 @@ How tight rows pack vertically. Three usable settings:
 - **Roomy** — 12px / 12px. Win11 Settings, Files app. Right when each
   row is conceptually a whole section (e.g. a settings card).
 
-cmux-win sidebar is **tight**. The pane header and toast use medium.
+perch sidebar is **tight**. The pane header and toast use medium.
 
 ### Selection / hover / focus
 
@@ -183,7 +183,7 @@ decisions so we don't relitigate them.
 │  ○ alt · wsl     │
 │  ...             │
 │                  │
-│  ▣ cmux          │ identity / footer
+│  ▣ perch          │ identity / footer
 │    main pwsh     │
 └──────────────────┘
 ```
@@ -224,7 +224,7 @@ in the same color tier.
 - **Don't bold the title.** Inter at weight 380 is the choice; anything
   ≥500 reads as a heading, not a list item.
 - **Don't put live terminal output in the row.** Notifications and
-  status come from agent IPC (`cmux notify`/`cmux status`), not from
+  status come from agent IPC (`perch notify`/`perch status`), not from
   scraping the terminal buffer. See `docs/NOTIFICATIONS.md`.
 - **Don't show the close `✕` permanently.** Hover-or-active reveal only.
 
@@ -244,7 +244,7 @@ Each interactive surface should answer all three states. Reference table:
 | `icon-button` (sidebar toggle) | `--color-subtle-secondary` + text-primary | n/a | inherits browser outline |
 | Pane | n/a | 1px `--color-accent-soft` border | n/a (selected == focused, conceptually) |
 
-The "selection-via-fill-only" pattern is the cmux-win signature. If you
+The "selection-via-fill-only" pattern is the perch signature. If you
 ever feel tempted to add an accent stripe to the session row, look at
 the Claude desktop reference in `design-loop/references/claude-desktop.png`
 first.
@@ -383,9 +383,9 @@ The bible doesn't substitute for looking at the running window. Use this
 loop when iterating on a chrome change:
 
 1. `npm --prefix src/web run build` — rebuild the web bundle.
-2. `dotnet build src/CmuxWin -c Debug` — copy bundle into bin output.
+2. `dotnet build src/Perch -c Debug` — copy bundle into bin output.
 3. Launch the exe directly (
-   `src/CmuxWin/bin/Debug/net8.0-windows/win10-x64/CmuxWin.exe`).
+   `src/Perch/bin/Debug/net8.0-windows/win10-x64/Perch.exe`).
 4. Wait ~3s for WebView2 to load, then run `scripts/screenshot.ps1`.
    It captures via `PrintWindow PW_RENDERFULLCONTENT`, so the WebView2
    contents come through (Mica does NOT — see below).
@@ -430,7 +430,7 @@ Today:
 | Global / shell styles | `src/web/src/style.css` |
 | Sidebar markup | `src/web/index.html`, `src/web/src/sidebar.ts` |
 | Workspace / pane | `src/web/src/workspace.ts`, `pane.ts` |
-| WPF host (Mica, title bar) | `src/CmuxWin/MainWindow.xaml(.cs)` |
+| WPF host (Mica, title bar) | `src/Perch/MainWindow.xaml(.cs)` |
 | Notification / toast surfaces | `docs/NOTIFICATIONS.md`, `src/web/src/toast.ts` |
 | Renderer trade-offs | `docs/RENDERER_NOTES.md` |
-| Parity vs upstream cmux | `docs/PARITY.md` |
+| Parity vs upstream perch | `docs/PARITY.md` |

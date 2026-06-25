@@ -17,7 +17,7 @@
 #        the ping is serviced on the SAME main-thread queue as keystrokes)
 #   We run the identical scenario twice:
 #     - FIXED  : flow control on  -> backlog stays bounded, pings stay fast
-#     - BROKEN : CMUX_DISABLE_FLOW_CONTROL=1 -> backlog explodes to many MB
+#     - BROKEN : PERCH_DISABLE_FLOW_CONTROL=1 -> backlog explodes to many MB
 #   The test passes only if the fixed run meets the responsiveness bars AND the
 #   broken run demonstrably falls far behind. If someone deletes the gate, the
 #   fixed run regresses to the broken numbers and this fails.
@@ -38,21 +38,21 @@ param(
 
 $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
 $repoRoot  = Resolve-Path (Join-Path $scriptDir '..')
-if (-not $ExePath)  { $ExePath  = Join-Path $repoRoot 'src\CmuxWin\bin\Debug\net8.0-windows\win10-x64\CmuxWin.exe' }
-if (-not $ToolsDir) { $ToolsDir = Join-Path $repoRoot 'src\CmuxWin\bin\Debug\net8.0-windows\win10-x64\tools' }
+if (-not $ExePath)  { $ExePath  = Join-Path $repoRoot 'src\Perch\bin\Debug\net8.0-windows\win10-x64\Perch.exe' }
+if (-not $ToolsDir) { $ToolsDir = Join-Path $repoRoot 'src\Perch\bin\Debug\net8.0-windows\win10-x64\tools' }
 
 $ErrorActionPreference = 'Continue'
-if (-not (Test-Path $ExePath)) { throw "CmuxWin.exe not found at $ExePath. Build first." }
+if (-not (Test-Path $ExePath)) { throw "Perch.exe not found at $ExePath. Build first." }
 
-$SessionsPath = Join-Path $env:APPDATA 'cmux-win\sessions.json'
-$SettingsPath = Join-Path $env:APPDATA 'cmux-win\settings.json'
-$ErrorsPath   = Join-Path $env:APPDATA 'cmux-win\errors.log'
+$SessionsPath = Join-Path $env:APPDATA 'perch\sessions.json'
+$SettingsPath = Join-Path $env:APPDATA 'perch\settings.json'
+$ErrorsPath   = Join-Path $env:APPDATA 'perch\errors.log'
 
-if (-not ('Cmux.Win' -as [type])) {
+if (-not ('Perch.Win' -as [type])) {
     Add-Type @'
 using System;
 using System.Runtime.InteropServices;
-namespace Cmux {
+namespace Perch {
   public static class Win {
     [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
     public const uint SWP_NOSIZE = 0x0001;
@@ -63,29 +63,29 @@ namespace Cmux {
 '@
 }
 
-function Stop-CmuxWin {
-    Get-Process -Name CmuxWin -EA SilentlyContinue |
+function Stop-Perch {
+    Get-Process -Name Perch -EA SilentlyContinue |
         Where-Object { $_.Path -like '*\bin\Debug\*' } |
         Stop-Process -Force -EA SilentlyContinue
     Start-Sleep -Milliseconds 400
 }
 
-function Reset-CmuxState {
+function Reset-PerchState {
     Remove-Item $SessionsPath -Force -EA SilentlyContinue
     Remove-Item $SettingsPath -Force -EA SilentlyContinue
     Remove-Item $ErrorsPath   -Force -EA SilentlyContinue
 }
 
-function Start-CmuxForTest {
+function Start-PerchForTest {
     param([bool]$FlowControl)
-    $env:CMUX_ENABLE_TEST_IPC = '1'
-    if ($FlowControl) { Remove-Item Env:\CMUX_DISABLE_FLOW_CONTROL -EA SilentlyContinue }
-    else              { $env:CMUX_DISABLE_FLOW_CONTROL = '1' }
+    $env:PERCH_ENABLE_TEST_IPC = '1'
+    if ($FlowControl) { Remove-Item Env:\PERCH_DISABLE_FLOW_CONTROL -EA SilentlyContinue }
+    else              { $env:PERCH_DISABLE_FLOW_CONTROL = '1' }
     $p = Start-Process -PassThru -FilePath $ExePath
     $deadline = (Get-Date).AddSeconds(15)
     while ((Get-Date) -lt $deadline) {
         $p.Refresh()
-        if ($p.HasExited) { throw "CmuxWin exited early with $($p.ExitCode)" }
+        if ($p.HasExited) { throw "Perch exited early with $($p.ExitCode)" }
         if ($p.MainWindowHandle -ne 0) {
             # Leave the window where it opens. We do NOT minimize or park it at
             # the -32000 sentinel (that reads as occluded and Chromium stops
@@ -97,14 +97,14 @@ function Start-CmuxForTest {
         }
         Start-Sleep -Milliseconds 200
     }
-    throw "CmuxWin main window never appeared"
+    throw "Perch main window never appeared"
 }
 
 function Wait-ForControlPipe {
     param([int]$TimeoutSec = 8)
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
-        if (Test-Path '\\.\pipe\cmux\control') { return $true }
+        if (Test-Path '\\.\pipe\perch\control') { return $true }
         Start-Sleep -Milliseconds 100
     }
     return $false
@@ -115,7 +115,7 @@ function Wait-ForPanePipe {
     $bare = $PaneId -replace '-', ''
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
-        if (Test-Path "\\.\pipe\cmux\$bare") { return $true }
+        if (Test-Path "\\.\pipe\perch\$bare") { return $true }
         Start-Sleep -Milliseconds 150
     }
     return $false
@@ -123,7 +123,7 @@ function Wait-ForPanePipe {
 
 function Send-Control {
     param([Parameter(Mandatory)][hashtable]$Payload)
-    $client = New-Object System.IO.Pipes.NamedPipeClientStream('.', 'cmux\control', [System.IO.Pipes.PipeDirection]::Out)
+    $client = New-Object System.IO.Pipes.NamedPipeClientStream('.', 'perch\control', [System.IO.Pipes.PipeDirection]::Out)
     try {
         $client.Connect(2000)
         $json = ($Payload | ConvertTo-Json -Compress) + "`n"
@@ -196,9 +196,9 @@ function Invoke-FloodScenario {
     Write-Host "==== Scenario: $label ===="
     $p = $null
     try {
-        Stop-CmuxWin
-        Reset-CmuxState
-        $p = Start-CmuxForTest -FlowControl $FlowControl
+        Stop-Perch
+        Reset-PerchState
+        $p = Start-PerchForTest -FlowControl $FlowControl
         if (-not (Wait-ForControlPipe)) { throw "control pipe never appeared" }
 
         # Pane 1 = the session's root leaf. Wait for its PTY, then flood it.
@@ -262,7 +262,7 @@ function Invoke-FloodScenario {
 }
 
 # ==========================================================================
-Write-Host "cmux multi-pane flow-control regression test"
+Write-Host "perch multi-pane flow-control regression test"
 Write-Host ("flood=~{0} MB/pane x2   pings={1}@{2}ms" -f [int]($FloodChunks * 60 / 1024), $PingCount, $PingIntervalMs)
 
 $fixed  = Invoke-FloodScenario -FlowControl $true

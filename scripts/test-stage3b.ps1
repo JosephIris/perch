@@ -14,60 +14,60 @@
 
 [CmdletBinding()]
 param(
-    [string]$ExePath  = "$PSScriptRoot\..\src\CmuxWin\bin\Debug\net8.0-windows\win10-x64\CmuxWin.exe",
-    [string]$ToolsDir = "$PSScriptRoot\..\src\CmuxWin\bin\Debug\net8.0-windows\win10-x64\tools",
+    [string]$ExePath  = "$PSScriptRoot\..\src\Perch\bin\Debug\net8.0-windows\win10-x64\Perch.exe",
+    [string]$ToolsDir = "$PSScriptRoot\..\src\Perch\bin\Debug\net8.0-windows\win10-x64\tools",
     [switch]$KeepVisible
 )
 
 $ErrorActionPreference = 'Continue'
-$LogPath  = "$env:APPDATA\cmux-win\errors.log"
-$SessPath = "$env:APPDATA\cmux-win\sessions.json"
-$CmuxExe  = Join-Path $ToolsDir 'cmux.exe'
+$LogPath  = "$env:APPDATA\perch\errors.log"
+$SessPath = "$env:APPDATA\perch\sessions.json"
+$PerchExe  = Join-Path $ToolsDir 'perch.exe'
 
-if (-not (Test-Path $ExePath))  { throw "CmuxWin.exe not found at $ExePath" }
-if (-not (Test-Path $CmuxExe))  { throw "cmux.exe missing at $CmuxExe" }
+if (-not (Test-Path $ExePath))  { throw "Perch.exe not found at $ExePath" }
+if (-not (Test-Path $PerchExe))  { throw "perch.exe missing at $PerchExe" }
 
-if (-not ('Cmux.WinShow3b' -as [type])) {
+if (-not ('Perch.WinShow3b' -as [type])) {
     Add-Type @'
 using System;
 using System.Runtime.InteropServices;
-namespace Cmux { public static class WinShow3b {
+namespace Perch { public static class WinShow3b {
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);
   public const int SW_MINIMIZE = 6;
 } }
 '@
 }
 
-function Stop-CmuxWin {
-    Get-Process -Name CmuxWin -EA SilentlyContinue |
+function Stop-Perch {
+    Get-Process -Name Perch -EA SilentlyContinue |
         Where-Object { $_.Path -like '*\bin\Debug\*' } |
         Stop-Process -Force -EA SilentlyContinue
     Start-Sleep -Milliseconds 400
 }
 
-function Launch-Cmux {
-    $env:CMUX_ENABLE_TEST_IPC = '1'
+function Launch-Perch {
+    $env:PERCH_ENABLE_TEST_IPC = '1'
     $p = Start-Process -PassThru -FilePath $ExePath
     $deadline = (Get-Date).AddSeconds(15)
     while ((Get-Date) -lt $deadline) {
         $p.Refresh()
-        if ($p.HasExited) { throw "cmux exited early code=$($p.ExitCode)" }
+        if ($p.HasExited) { throw "perch exited early code=$($p.ExitCode)" }
         if ($p.MainWindowHandle -ne [IntPtr]::Zero) { break }
         Start-Sleep -Milliseconds 200
     }
     if ($p.MainWindowHandle -eq [IntPtr]::Zero) { throw "main window never appeared" }
     if (-not $KeepVisible) {
-        [Cmux.WinShow3b]::ShowWindow($p.MainWindowHandle, [Cmux.WinShow3b]::SW_MINIMIZE) | Out-Null
+        [Perch.WinShow3b]::ShowWindow($p.MainWindowHandle, [Perch.WinShow3b]::SW_MINIMIZE) | Out-Null
     }
     return $p
 }
 
-function Invoke-CmuxTest {
+function Invoke-PerchTest {
     param([string]$Verb, [hashtable]$Fields)
     $cmdArgs = @('test', $Verb)
     if ($Fields) { foreach ($k in $Fields.Keys) { $cmdArgs += @("--$k", $Fields[$k]) } }
-    $out = & $CmuxExe @cmdArgs 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "cmux test $Verb exited $LASTEXITCODE`: $out" }
+    $out = & $PerchExe @cmdArgs 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "perch test $Verb exited $LASTEXITCODE`: $out" }
 }
 
 function Spawn-Count {
@@ -97,13 +97,13 @@ function Count-Leaves {
 }
 
 # --- Fresh start -----------------------------------------------------------
-Stop-CmuxWin
+Stop-Perch
 Remove-Item $LogPath, $SessPath -Force -EA SilentlyContinue
 
 # --- Phase 1: cold launch, initial single-leaf session --------------------
 Write-Host "Phase 1: cold launch"
-$p = Launch-Cmux
-Write-Host "  cmux pid=$($p.Id)"
+$p = Launch-Perch
+Write-Host "  perch pid=$($p.Id)"
 
 # Wait for the initial Pane.spawn (single leaf).
 $deadline = (Get-Date).AddSeconds(12)
@@ -124,7 +124,7 @@ if ((Count-Leaves -Node $root1) -ne 1) {
 Write-Host ""
 Write-Host "Phase 2: pane.split-active dir=right"
 $before2 = Spawn-Count
-Invoke-CmuxTest -Verb 'pane.split-active' -Fields @{ dir = 'right' }
+Invoke-PerchTest -Verb 'pane.split-active' -Fields @{ dir = 'right' }
 $after2 = Wait-For-Spawn-Increase -Before $before2
 if ($after2 -lt 0) {
     Stop-Process -Id $p.Id -Force -EA SilentlyContinue
@@ -148,7 +148,7 @@ Write-Host "  [+] tree shape: vertical split with 2 leaves"
 Write-Host ""
 Write-Host "Phase 3: pane.split-active dir=down"
 $before3 = Spawn-Count
-Invoke-CmuxTest -Verb 'pane.split-active' -Fields @{ dir = 'down' }
+Invoke-PerchTest -Verb 'pane.split-active' -Fields @{ dir = 'down' }
 $after3 = Wait-For-Spawn-Increase -Before $before3
 if ($after3 -lt 0) {
     Stop-Process -Id $p.Id -Force -EA SilentlyContinue
@@ -167,7 +167,7 @@ Write-Host "  [+] tree shape: 3 leaves under a vertical+horizontal hierarchy"
 # --- Phase 4: close active pane -> tree collapses --------------------------
 Write-Host ""
 Write-Host "Phase 4: pane.close-active"
-Invoke-CmuxTest -Verb 'pane.close-active'
+Invoke-PerchTest -Verb 'pane.close-active'
 Start-Sleep -Milliseconds 800
 $root4 = Get-Root
 $leaves4 = Count-Leaves -Node $root4
@@ -178,7 +178,7 @@ if ($leaves4 -ne 2) {
 Write-Host "  [+] tree collapsed to 2 leaves"
 
 # Close another -> back to 1 leaf, no more splits in the root.
-Invoke-CmuxTest -Verb 'pane.close-active'
+Invoke-PerchTest -Verb 'pane.close-active'
 Start-Sleep -Milliseconds 800
 $root5 = Get-Root
 $leaves5 = Count-Leaves -Node $root5

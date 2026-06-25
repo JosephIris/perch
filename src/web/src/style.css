@@ -271,7 +271,7 @@ ul { list-style: none; padding: 0; margin: 0; }
   box-sizing: border-box;
   gap: var(--sp-8);
   padding: 8px var(--sp-12);
-  /* Per-item frame (cmux tabs-as-cards). Constant 1px border = the frame;
+  /* Per-item frame (perch tabs-as-cards). Constant 1px border = the frame;
    * hover/selected deepen the fill, active strengthens the border. No accent
    * stripe — see CLAUDE.md "Selection / accent treatment". */
   border: 1px solid var(--color-stroke);
@@ -573,7 +573,7 @@ ul { list-style: none; padding: 0; margin: 0; }
 /* Pane header — color tag · name · state dot + word · close.
  *   - color tag: persistent feature-marker the user assigns
  *   - name: editable inline (double-click)
- *   - state: per-pane agent state from cmux status
+ *   - state: per-pane agent state from perch status
  *   - close: hover-only ✕
  * Caption-tier type, tertiary color, no chrome. The header is metadata,
  * not a tab — quiet so it doesn't compete with the terminal content. */
@@ -807,7 +807,7 @@ ul { list-style: none; padding: 0; margin: 0; }
  * 40-char label was cut from). Same acrylic family as the link menu / color
  * picker; caption-tier text, pre-wrap so long multi-line prompts read
  * naturally. Fades in via opacity — no layout shift, no native title. */
-.cmux-tooltip {
+.perch-tooltip {
   position: fixed;
   left: 0;
   top: 0;
@@ -830,7 +830,7 @@ ul { list-style: none; padding: 0; margin: 0; }
   opacity: 0;
   transition: opacity var(--dur-fast) var(--ease-entry);
 }
-.cmux-tooltip--visible { opacity: 1; }
+.perch-tooltip--visible { opacity: 1; }
 
 .link-menu {
   position: fixed;
@@ -899,7 +899,7 @@ ul { list-style: none; padding: 0; margin: 0; }
 
 /* --- Toast --------------------------------------------------------------
  * Brief acrylic banner near the bottom-center of the workspace when an
- * agent fires `cmux notify`. Click-through, auto-dismiss. */
+ * agent fires `perch notify`. Click-through, auto-dismiss. */
 .toast {
   position: fixed;
   left: 50%;
@@ -1018,7 +1018,7 @@ ul { list-style: none; padding: 0; margin: 0; }
 }
 
 /* --- Sidebar footer / identity ------------------------------------------
- * Static identity row at the bottom of the sidebar (cmux mark + label +
+ * Static identity row at the bottom of the sidebar (perch mark + label +
  * sub-label that doubles as the live status). Replaces the old
  * window-bottom status bar; the status text it carries lives at
  * #status-text exactly like before so main.ts's setStatus() still works. */
