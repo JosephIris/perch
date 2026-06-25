@@ -51,6 +51,17 @@ public partial class MainWindow : FluentWindow
 
     private ControlIpcServer? _control;
 
+    // Watches the OS clipboard so we can push its text to the page (see
+    // SyncClipboardToWeb), making right-click paste synchronous instead of a
+    // stall-prone navigator.clipboard.readText() in the webview.
+    private ClipboardWatcher? _clipWatch;
+
+    // Above this, we don't pre-cache clipboard text to the page — a giant
+    // cross-app copy would be ferried on every clipboard change for a paste
+    // that may never happen. The page falls back to readText() for the rare
+    // oversize case. UTF-16 chars; ~2 MB.
+    private const int MaxCachedClipboardChars = 1_000_000;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -83,6 +94,15 @@ public partial class MainWindow : FluentWindow
                 if (_urlPaneCtrl?.HasPanes == true)
                     try { Web.CoreWebView2?.PostWebMessageAsJson("{\"type\":\"ui.urlpane.relayout\"}"); } catch { }
             };
+            // Keep the page's clipboard cache fresh: on every clipboard change
+            // while we're foreground (covers copies made inside Perch) and on
+            // window activation (covers copies made in another app before
+            // switching back). The initial sync happens at page-ready.
+            _clipWatch = new ClipboardWatcher(this);
+            _clipWatch.ClipboardChanged += SyncClipboardToWeb;
+            _clipWatch.Attach();
+            Activated += (_, _) => SyncClipboardToWeb();
+
             if (ControlIpcServer.IsEnabled)
             {
                 _control = new ControlIpcServer(Dispatcher, OnControlVerb);
@@ -101,6 +121,7 @@ public partial class MainWindow : FluentWindow
         Closed += (_, _) =>
         {
             _idleWatchdog?.Stop();
+            _clipWatch?.Dispose();
             _control?.Dispose();
             foreach (var ipc in _paneIpc.Values) { try { ipc.Dispose(); } catch { } }
             _paneIpc.Clear();
@@ -262,6 +283,32 @@ public partial class MainWindow : FluentWindow
         // PowerShell its final size up front.
         EnsureActivePane();
         PushState();
+        // Seed the page's clipboard cache now that it can receive messages, so
+        // the first right-click paste is synchronous without waiting for a
+        // clipboard change or window re-activation.
+        SyncClipboardToWeb();
+    }
+
+    /// Read the OS clipboard and push its text to the page so right-click paste
+    /// reads it synchronously instead of awaiting navigator.clipboard.readText()
+    /// (see clipboard.ts). Always runs on the UI thread — the callers are the
+    /// clipboard-change hook, window Activated, and page-ready — where
+    /// System.Windows.Clipboard is usable. Oversize text is dropped to "" so a
+    /// huge cross-app copy isn't ferried on every clipboard change; the page
+    /// falls back to readText() for that rare case.
+    private void SyncClipboardToWeb()
+    {
+        string text;
+        try { text = System.Windows.Clipboard.GetText(); }
+        catch (Exception ex) { Log.Error("Clipboard.Read", ex); return; }
+        if (text.Length > MaxCachedClipboardChars) text = "";
+
+        try
+        {
+            var payload = JsonSerializer.Serialize(new { type = "clipboard.text", text });
+            Web.CoreWebView2?.PostWebMessageAsJson(payload);
+        }
+        catch (Exception ex) { Log.Error("Clipboard.Push", ex); }
     }
 
     /// Keep _activePaneId pointing at a real leaf in the active session.

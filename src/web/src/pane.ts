@@ -10,6 +10,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 
 import { b64ToBytes, bytesToB64, send } from "./bridge.js";
 import type { PaneTreeView } from "./bridge.js";
+import { cachedClipboardText, setCachedClipboardText } from "./clipboard.js";
 import { showLinkMenu } from "./link-menu.js";
 import { buildPaneHeader, applyChips, applyAgentBadge } from "./pane-header.js";
 import { attachTooltip } from "./tooltip.js";
@@ -183,6 +184,31 @@ export class Pane {
     this.element.addEventListener("focusin", () => this.notifyFocus());
     this.element.addEventListener("mousedown", () => this.notifyFocus());
 
+    // Reserve the right button for paste even when the app (Claude Code, vim,
+    // htop…) has mouse reporting on. Without this, xterm forwards the
+    // right-button press/release to the PTY as a mouse report; a TUI that
+    // implements its OWN right-click paste — Claude Code does — then pastes
+    // too, so the clipboard lands twice (the bug the logs pinned: a button
+    // report to CC immediately before our own contextmenu paste). Standard
+    // terminals (Windows Terminal, iTerm2) never forward the right button for
+    // this reason. Capture phase on termHost runs before xterm's own mouse
+    // listeners (which sit on descendant elements), and stopImmediatePropagation
+    // keeps the event from reaching them, so no report is sent. We deliberately
+    // do NOT preventDefault here: the browser still fires contextmenu, which is
+    // what drives the paste below. Left/middle buttons pass through untouched so
+    // the app keeps normal mouse interaction.
+    const reserveRightButton = (ev: MouseEvent) => {
+      if (ev.button !== 2) return;
+      ev.stopImmediatePropagation();
+      // Propagation stops here, so the usual mousedown→focus path won't run for
+      // a right-click; focus the pane explicitly so paste + subsequent typing
+      // land in this terminal.
+      this.term.focus();
+      this.notifyFocus();
+    };
+    this.termHost.addEventListener("mousedown", reserveRightButton, true);
+    this.termHost.addEventListener("mouseup", reserveRightButton, true);
+
     // Windows Terminal-style right-click: copy if there's a selection,
     // otherwise paste the clipboard. WebView2 grants navigator.clipboard
     // access for the perch.local virtual host without prompting.
@@ -210,6 +236,11 @@ export class Pane {
     });
   }
 
+  // Re-entrancy guard for the readText() fallback below — set while a read is
+  // in flight so a second right-click during the await can't queue a second
+  // paste. The primary (cache) path is synchronous and needs no guard.
+  private pasting = false;
+
   private async handleRightClick() {
     // Windows Terminal style: copy if there's a selection, else paste.
     if (this.term.hasSelection()) {
@@ -218,11 +249,24 @@ export class Pane {
       this.term.clearSelection();
       return;
     }
+    // Paste from the host-pushed cache synchronously. navigator.clipboard
+    // .readText() can stall in WebView2 long enough that the user right-clicks
+    // again thinking it didn't register, queuing a second read and pasting
+    // twice; reading the cache can't stall, so the double never starts.
+    const cached = cachedClipboardText();
+    if (cached) { this.term.paste(cached); return; }
+    // Fallback: cache empty (before the host's first push, or an oversize /
+    // non-text clipboard). Guard re-entrancy so a slow read here can't double
+    // either.
+    if (this.pasting) return;
+    this.pasting = true;
     try {
       const text = await navigator.clipboard.readText();
       if (text) this.term.paste(text);
     } catch (err) {
       console.error("[pane] clipboard read failed:", err);
+    } finally {
+      this.pasting = false;
     }
   }
 
@@ -424,6 +468,10 @@ function clampFontSize(n: number): number {
  *  copy works even when the async API is unavailable in a given WebView2
  *  build. */
 async function copyText(text: string): Promise<void> {
+  // Keep the paste cache correct for self-copies immediately, before the OS
+  // clipboard-change round-trip lands — otherwise right-clicking to paste what
+  // you just selected-copied could read the previous cache value.
+  setCachedClipboardText(text);
   try {
     await navigator.clipboard.writeText(text);
     return;

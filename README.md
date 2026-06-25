@@ -9,13 +9,21 @@ the missing Windows equivalent of [manaflow-ai/cmux](https://github.com/manaflow
 
 ## Stack
 
-- **WPF** (.NET 8) + [WPF-UI](https://github.com/lepoco/wpfui) for Win11 Fluent chrome
-- [`EasyWindowsTerminalControl`](https://github.com/mitchcapper/EasyWindowsTerminalControl) wrapping
-  the official `Microsoft.Terminal.Core` C++ renderer (same engine as Windows Terminal)
-- ConPTY via `CI.Microsoft.Windows.Console.ConPTY`
-- Mica backdrop, native window decorations, Job Object for child-process cleanup
+- **WPF** (.NET 8) — a thin [WPF-UI](https://github.com/lepoco/wpfui)
+  `FluentWindow` host: Win11 Mica backdrop, native window decorations, window
+  lifetime, ConPTY processes, and the agent IPC layer.
+- **WebView2 + [xterm.js](https://xtermjs.org)** render everything visible —
+  the terminal panes (xterm's WebGL renderer) and the chrome (sidebar, tab
+  strip, status bar, menus). The web bundle is served to WebView2 from an
+  in-process virtual host (`https://perch.local/`).
+- **Vanilla TypeScript + CSS**, bundled with
+  [esbuild](https://esbuild.github.io) into `src/Perch/wwwroot/` — no UI
+  framework, no CDN, fully offline.
+- **ConPTY** (Windows pseudo-console) per pane, with a Job Object for
+  child-process cleanup.
 
-No Chromium, no WebView2, no web tech.
+The previous all-WPF renderer (`Microsoft.Terminal.Wpf`) is preserved at tag
+`wpf-final` / branch `wpf-archive`.
 
 ## Features
 
