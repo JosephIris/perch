@@ -17,7 +17,7 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Determine version
         id: version
@@ -33,12 +33,12 @@ jobs:
           Write-Output "Building version $v"
 
       - name: Setup .NET 8
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '8.0.x'
 
       - name: Setup Node 20
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '20'
           # No package-lock cache key here -- esbuild + xterm.js pin
@@ -115,7 +115,7 @@ jobs:
       - name: Upload installer artifact
         if: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: Perch-Setup-${{ env.APP_VERSION }}
           path: publish/installer/Perch-Setup-*.exe
@@ -130,7 +130,7 @@ jobs:
       - name: Upload portable artifact
         if: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: perch-portable-${{ env.APP_VERSION }}
           path: publish/perch/**
