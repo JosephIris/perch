@@ -183,6 +183,13 @@ export type InMessage =
   | ToastMessage
   | SettingsDataMessage
   | { type: "host.error"; message: string }
+  /* Host-pushed cached clipboard text. The host reads the OS clipboard on
+   * change (while foreground), on window activation, and at page-ready, and
+   * ferries it here so right-click paste is synchronous — no async
+   * navigator.clipboard.readText() stall that the user re-clicks into a
+   * double paste. Empty when the clipboard holds no text or exceeds the
+   * host's size cap (the page falls back to readText for the oversize case). */
+  | { type: "clipboard.text"; text: string }
   /* UI commands the WPF host can issue to the webview (e.g. a chrome
    * button in the title bar telling the webview to flip a class). */
   | { type: "ui.sidebar.toggle" }
