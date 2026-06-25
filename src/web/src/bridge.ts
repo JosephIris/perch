@@ -34,6 +34,18 @@ export type OutMessage =
    * a terminal. Used by the URL action menu's "Open in pane right/down". */
   | { type: "pane.split"; paneId: string; dir: "right" | "down"; url?: string }
   | { type: "pane.close"; paneId: string }
+  /* Drag-resize of a split: new flex-grow weights for the addressed split's
+   * children, in order. `final` is false for throttled mid-drag updates and
+   * true (or omitted) on the final mouseup; the host only persists on final. */
+  | { type: "pane.resizeSplit"; splitId: string; weights: number[]; final?: boolean }
+  /* Drag-to-rearrange: move `src` pane next to `target` on the given edge
+   * ("left"/"right" → vertical split, "top"/"bottom" → horizontal split,
+   * "center" → swap the two panes). Within-session only. */
+  | { type: "pane.move"; src: string; target: string; edge: "left" | "right" | "top" | "bottom" | "center" }
+  /* Keyboard move: shift the active pane one slot within its parent split
+   * (Ctrl+Shift+arrows). left/right reorder a side-by-side split, up/down a
+   * stacked one; perpendicular / edge is a no-op host-side. */
+  | { type: "pane.moveDir"; paneId: string; dir: "left" | "right" | "up" | "down" }
   | { type: "session.new"; shell?: string }
   | { type: "session.select"; id: string }
   | { type: "session.rename"; id: string; title: string }
@@ -61,7 +73,10 @@ export type OutMessage =
    * partial update; the host only overwrites provided keys. defaultShell
    * is the shell COMMAND LINE (matching one of settings.data.shells[].cmd)
    * or "" for auto-detect. */
-  | { type: "settings.save"; defaultShell?: string; defaultCwd?: string; fontSize?: number };
+  | { type: "settings.save"; defaultShell?: string; defaultCwd?: string; fontSize?: number }
+  /* Page dismissed the onboarding lightbox → host marks it seen so it won't
+   * auto-open next launch. */
+  | { type: "onboarding.seen" };
 
 // ---- Incoming message shapes (host -> page) --------------------------------
 
@@ -82,6 +97,9 @@ export type PaneTreeView =
       /* Per-pane agent state — pane header surfaces this directly so
        * each pane's status is visible without going through the sidebar. */
       agentState: AgentStateName;
+      /* Which agent runs in this pane: "claude", "codex", or "" (shell).
+       * Drives the small agent badge in the pane header. */
+      agentType?: string;
       activityDetail: string;
       branch: string;
       ports: number[];
@@ -89,8 +107,19 @@ export type PaneTreeView =
       /* Commits made since the agent session's baseline. 0 when no
        * baseline is set. */
       commitCount: number;
+      /* Size weight inside the parent split (flex-grow). Defaults to 1. */
+      weight?: number;
     }
-  | { kind: "split"; orientation: "h" | "v"; children: PaneTreeView[] };
+  | {
+      kind: "split";
+      /* Stable id so pane.resizeSplit can address this split when a gutter
+       * is dragged. */
+      id: string;
+      orientation: "h" | "v";
+      children: PaneTreeView[];
+      /* This split's own size weight inside ITS parent split. */
+      weight?: number;
+    };
 
 export type SessionView = {
   id: string;
@@ -119,8 +148,9 @@ export type StateMessage = {
   sessions: SessionView[];
   /* User preferences ferried with every state push — cheap and means the
    * page never has to ask. fontSize is the default terminal cell size
-   * applied to new Panes; existing panes follow it too on every state. */
-  prefs: { fontSize: number };
+   * applied to new Panes; existing panes follow it too on every state.
+   * onboardingSeen gates the first-launch welcome lightbox. */
+  prefs: { fontSize: number; onboardingSeen?: boolean };
 };
 
 export type ToastMessage = {

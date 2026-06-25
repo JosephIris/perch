@@ -197,6 +197,9 @@ public partial class MainWindow : FluentWindow
                 case "render.pong":     OnRenderPong(root); break;
                 case "pane.split":      OnPaneSplit(root); break;
                 case "pane.close":      OnPaneClose(root); break;
+                case "pane.resizeSplit": OnPaneResizeSplit(root); break;
+                case "pane.move":       OnPaneMove(root); break;
+                case "pane.moveDir":    OnPaneMoveDir(root); break;
                 case "pane.rename":     OnPaneRename(root); break;
                 case "pane.recolor":    OnPaneRecolor(root); break;
                 case "pane.cwd":        OnPaneCwd(root); break;
@@ -211,6 +214,7 @@ public partial class MainWindow : FluentWindow
                 case "prefs.set":       OnPrefsSet(root); break;
                 case "settings.request": OnSettingsRequest(); break;
                 case "settings.save":    OnSettingsSave(root); break;
+                case "onboarding.seen":  OnOnboardingSeen(); break;
                 default:
                     Log.Info("Web.msg.unknown", $"type={type}");
                     break;
@@ -313,6 +317,7 @@ public partial class MainWindow : FluentWindow
             ipc.OnGitBaseline += msg => OnGitBaseline(sess, paneId, msg);
             ipc.OnTitle  += msg => OnAgentTitle(sess, paneId, msg);
             ipc.OnNameReset += msg => OnNameReset(sess, paneId, msg);
+            ipc.OnAgent  += msg => OnAgentType(sess, paneId, msg);
             ipc.Start();
             _paneIpc[paneId] = ipc;
 
@@ -411,6 +416,18 @@ public partial class MainWindow : FluentWindow
             pane.Name = name;
         }
         _store.Save();
+        PushState();
+    }
+
+    // Agent type for the pane (Claude Code / codex / shell). Sent by the
+    // agent's session-start hook; "" on session-end. Drives the header badge.
+    private void OnAgentType(Session sess, Guid paneId, AgentMessage msg)
+    {
+        var pane = FindPane(sess, paneId);
+        if (pane == null) return;
+        var next = msg.Name ?? "";
+        if (pane.AgentType == next) return;
+        pane.AgentType = next;
         PushState();
     }
 
@@ -563,25 +580,16 @@ public partial class MainWindow : FluentWindow
         try { pty.Write(Convert.FromBase64String(b64El.GetString() ?? "")); }
         catch (Exception ex) { Log.Error("Pane.In", ex); }
 
-        // Clear stale 'waiting' as soon as the user types: the most common
-        // case is Claude's "needs your permission" notification — the hook
-        // fires `status=waiting` on the prompt, but Claude doesn't always
-        // fire a follow-up status (`pre-tool-use` etc.) until the next tool
-        // call, so the waiting pill lingers after the user has clearly
-        // already responded. Any keystroke into the pane is unambiguous
-        // proof the user is no longer being waited on; flip to working and
-        // let the agent's next real status overwrite us. Working keeps the
-        // visual breadcrumb "something is running" instead of dropping to
-        // idle which would imply the agent is dormant.
-        var sess = OwningSession(id);
-        if (sess == null) return;
-        var pane = FindPane(sess, id);
-        if (pane != null && pane.AgentState is AgentState.Waiting or AgentState.Permission)
-        {
-            pane.AgentState = AgentState.Working;
-            pane.NotificationText = "";
-            PushState();
-        }
+        // Waiting / Permission are deliberately STICKY across keystrokes.
+        // These states mean "the agent needs you", and they must persist
+        // until the agent reports ACTUAL progress — a real `working` status
+        // from the prompt-submit / pre-tool-use hooks (OnAgentStatus). The
+        // old behavior flipped Waiting/Permission → Working on the first
+        // keypress, which meant a pane could lose its attention marker the
+        // instant you started typing (even an unrelated command), so a pane
+        // that still needed you would quietly drop off the radar and you'd
+        // miss it. Routine input/output no longer clears the attention state;
+        // only the agent's own next-turn signal does.
     }
 
     // The page acks each xterm write once it's drained; we shrink that
@@ -734,6 +742,16 @@ public partial class MainWindow : FluentWindow
             }
         }
         if (dirty) _settings.Save();
+    }
+
+    // Page dismissed the first-launch onboarding lightbox — remember it so we
+    // don't auto-open it again. The "Show welcome" button in Settings reopens
+    // it client-side without touching this flag, so it stays available.
+    private void OnOnboardingSeen()
+    {
+        if (_settings.OnboardingSeen) return;
+        _settings.OnboardingSeen = true;
+        _settings.Save();
     }
 
     // Page opened the settings dialog and wants current values + the list
@@ -1034,11 +1052,18 @@ public partial class MainWindow : FluentWindow
         if (node.IsLeaf)
         {
             if (node.Id != paneId) return null;
-            return new PaneNode
+            // The new wrapper takes the leaf's slot in the parent split, so it
+            // inherits the leaf's Weight; inside, the leaf and its new sibling
+            // split that slot evenly (both 1.0). When nothing's been resized
+            // every Weight is 1.0, so this is identical to the old behavior.
+            var wrapper = new PaneNode
             {
                 Split = dir,
+                Weight = node.Weight,
                 Children = new List<PaneNode> { node, newSibling },
             };
+            node.Weight = 1.0;
+            return wrapper;
         }
         for (int i = 0; i < node.Children.Count; i++)
         {
@@ -1080,6 +1105,191 @@ public partial class MainWindow : FluentWindow
         return node;
     }
 
+    // ---- Resize: rewrite a split's child weights -------------------------
+    //
+    // The web drives this when the user drags a split gutter. `splitId`
+    // addresses the split node; `weights` is the new flex-grow weight per
+    // child, in order. The web sends throttled intermediate updates during
+    // the drag (final:false) — we apply those in memory so a mid-drag DOM
+    // rebuild reads fresh weights, but we only flush to disk on the final
+    // (mouseup) message. No PushState: the web already applied the live
+    // layout, and treeSignature ignores Weight so a push would just re-
+    // confirm the same shape.
+    private void OnPaneResizeSplit(JsonElement root)
+    {
+        if (!TryGuid(root, "splitId", out var splitId)) return;
+        if (!root.TryGetProperty("weights", out var w) || w.ValueKind != JsonValueKind.Array)
+            return;
+        var weights = new List<double>();
+        foreach (var e in w.EnumerateArray())
+        {
+            double val = e.ValueKind == JsonValueKind.Number
+                ? e.GetDouble()
+                : (double.TryParse(e.GetString(), System.Globalization.CultureInfo.InvariantCulture, out var d) ? d : double.NaN);
+            if (double.IsNaN(val) || val <= 0) return;   // reject malformed payloads
+            weights.Add(val);
+        }
+
+        PaneNode? split = null;
+        foreach (var s in _store.Sessions)
+        {
+            var n = FindNode(s.Root, splitId);
+            if (n != null && !n.IsLeaf) { split = n; break; }
+        }
+        if (split == null || split.Children.Count != weights.Count) return;
+        for (int i = 0; i < weights.Count; i++) split.Children[i].Weight = weights[i];
+
+        bool final = !(root.TryGetProperty("final", out var f) && f.ValueKind == JsonValueKind.False);
+        if (final) _store.Save();
+    }
+
+    // ---- Move: relocate a pane within its session ------------------------
+    //
+    // The web drives this on a header drag-and-drop. `src` is the dragged
+    // leaf, `target` the pane it was dropped on, `edge` the drop zone:
+    //   left/right  → place src beside target in a Vertical split
+    //   top/bottom  → place src beside target in a Horizontal split
+    //   center      → swap src and target in place
+    // Within-session only (the drop targets are the active session's panes).
+    private void OnPaneMove(JsonElement root)
+    {
+        if (!TryGuid(root, "src", out var srcId)) return;
+        if (!TryGuid(root, "target", out var tgtId)) return;
+        if (srcId == tgtId) return;
+        var edge = root.TryGetProperty("edge", out var ee) ? ee.GetString() : null;
+        if (string.IsNullOrEmpty(edge)) return;
+
+        var sess = OwningSession(srcId);
+        if (sess == null || OwningSession(tgtId) != sess) return;
+
+        if (edge == "center")
+        {
+            if (!SwapNodes(sess.Root, srcId, tgtId)) return;
+        }
+        else
+        {
+            var srcNode = FindNode(sess.Root, srcId);
+            if (srcNode == null) return;
+            var orient = (edge == "left" || edge == "right")
+                ? SplitOrientation.Vertical
+                : SplitOrientation.Horizontal;
+            var before = edge == "left" || edge == "top";
+            // Detach src (collapsing any split it leaves single-childed). The
+            // target node survives — collapse only removes empty / one-child
+            // splits and target != src — so we can still find it afterward.
+            var detached = CloseAndCollapse(sess.Root, srcId);
+            if (detached == null) return;
+            srcNode.Weight = 1.0;     // join the target's slot evenly
+            var rep = InsertBesideImpl(detached, tgtId, srcNode, orient, before);
+            if (rep == null) return;  // target vanished (shouldn't happen)
+            sess.Root = rep;
+        }
+
+        AutoName(sess.Root);
+        _activePaneId = srcId;        // keep the moved pane focused
+        _store.Save();
+        PushState();
+    }
+
+    // Keyboard move (Ctrl+Shift+arrows): shift the active pane one slot within
+    // its DIRECT parent split. left/right act on a Vertical (side-by-side)
+    // split, up/down on a Horizontal (stacked) split; a perpendicular
+    // direction or an edge position is a no-op. Swaps the pane with its
+    // adjacent sibling (which may be a whole subtree), so the pane keeps its
+    // identity + state and its Weight travels with it.
+    private void OnPaneMoveDir(JsonElement root)
+    {
+        if (!TryGuid(root, "paneId", out var id)) return;
+        var dir = root.TryGetProperty("dir", out var dd) ? dd.GetString() : null;
+        if (string.IsNullOrEmpty(dir)) return;
+        var sess = OwningSession(id);
+        if (sess == null) return;
+        if (!FindParent(sess.Root, id, out var parent, out var idx)) return; // root leaf: nowhere to go
+        var wantVertical = dir is "left" or "right";
+        var parentIsVertical = parent.Split == SplitOrientation.Vertical;
+        if (wantVertical != parentIsVertical) return;   // direction is across this split's axis
+        var target = dir is "left" or "up" ? idx - 1 : idx + 1;
+        if (target < 0 || target >= parent.Children.Count) return; // already at the edge
+        (parent.Children[idx], parent.Children[target]) = (parent.Children[target], parent.Children[idx]);
+        _activePaneId = id;
+        _store.Save();
+        PushState();
+    }
+
+    // Find any node (leaf OR split) by id within a subtree.
+    private static PaneNode? FindNode(PaneNode node, Guid id)
+    {
+        if (node.Id == id) return node;
+        if (node.IsLeaf) return null;
+        foreach (var c in node.Children)
+        {
+            var f = FindNode(c, id);
+            if (f != null) return f;
+        }
+        return null;
+    }
+
+    // Find the split that directly contains `id` and the child's index.
+    private static bool FindParent(PaneNode node, Guid id, out PaneNode parent, out int index)
+    {
+        if (!node.IsLeaf)
+        {
+            for (int i = 0; i < node.Children.Count; i++)
+            {
+                if (node.Children[i].Id == id) { parent = node; index = i; return true; }
+                if (FindParent(node.Children[i], id, out parent, out index)) return true;
+            }
+        }
+        parent = null!;
+        index = -1;
+        return false;
+    }
+
+    // Swap two nodes' positions in the tree (each keeps its own Weight, so
+    // sizes travel with the panes). Reads both slots before writing so a
+    // shared-parent swap works too.
+    private static bool SwapNodes(PaneNode root, Guid a, Guid b)
+    {
+        if (!FindParent(root, a, out var pa, out var ia)) return false;
+        if (!FindParent(root, b, out var pb, out var ib)) return false;
+        (pa.Children[ia], pb.Children[ib]) = (pb.Children[ib], pa.Children[ia]);
+        return true;
+    }
+
+    // Insert `newNode` immediately before/after the target leaf, wrapping
+    // them in a split of `orient`. Mirrors SplitImpl's flat-split behavior:
+    // when the new split matches the parent's orientation, the parent absorbs
+    // the children directly instead of nesting. Returns the (possibly new)
+    // root, or null if target wasn't found.
+    private static PaneNode? InsertBesideImpl(PaneNode node, Guid targetId, PaneNode newNode, SplitOrientation orient, bool before)
+    {
+        if (node.IsLeaf)
+        {
+            if (node.Id != targetId) return null;
+            // The wrapper takes the target's slot; inside, target + newNode
+            // share it evenly (both 1.0). Default (all-1.0) trees stay even.
+            var wrapperWeight = node.Weight;
+            node.Weight = 1.0;
+            var children = before
+                ? new List<PaneNode> { newNode, node }
+                : new List<PaneNode> { node, newNode };
+            return new PaneNode { Split = orient, Weight = wrapperWeight, Children = children };
+        }
+        for (int i = 0; i < node.Children.Count; i++)
+        {
+            var rep = InsertBesideImpl(node.Children[i], targetId, newNode, orient, before);
+            if (rep == null) continue;
+            if (rep.Split == node.Split)
+            {
+                node.Children.RemoveAt(i);
+                node.Children.InsertRange(i, rep.Children);
+            }
+            else node.Children[i] = rep;
+            return node;
+        }
+        return null;
+    }
+
     private static IEnumerable<PaneNode> AllLeaves(PaneNode node)
     {
         if (node.IsLeaf) { yield return node; yield break; }
@@ -1102,7 +1312,7 @@ public partial class MainWindow : FluentWindow
                 // ints in JSON) and means the page never has to ask. Used
                 // by Workspace.applyPrefs to set the default size of new
                 // panes after a split.
-                prefs = new { fontSize = _settings.FontSize },
+                prefs = new { fontSize = _settings.FontSize, onboardingSeen = _settings.OnboardingSeen },
                 sessions = _store.Sessions.Select(s =>
                 {
                     // Aggregate per-pane state to the session row. Most-urgent
@@ -1156,6 +1366,9 @@ public partial class MainWindow : FluentWindow
             {
                 kind = "leaf",
                 paneId = node.Id.ToString("D"),
+                // Size weight within the parent split (flex-grow). See
+                // PaneNode.Weight. Applied by the web on each rebuild.
+                weight = node.Weight,
                 name = node.Name ?? "pane",
                 // Full first-prompt text for the header hover tooltip; the
                 // label above is a 40-char cut of it. Empty when the pane was
@@ -1167,6 +1380,9 @@ public partial class MainWindow : FluentWindow
                 // pane's agent status is visible at a glance, no clicking
                 // through the sidebar to figure out which one needs you.
                 agentState = StateToString(node.AgentState),
+                // Which agent runs here ("claude" / "codex" / "") — drives the
+                // small CC badge in the header.
+                agentType = node.AgentType,
                 activityDetail = node.ActivityDetail,
                 branch = node.Branch,
                 ports  = node.Ports,
@@ -1184,6 +1400,12 @@ public partial class MainWindow : FluentWindow
         return new
         {
             kind = "split",
+            // Stable id so pane.resizeSplit can address THIS split node when
+            // the user drags one of its gutters.
+            id = node.Id.ToString("D"),
+            // This split's own size weight inside its parent split (1.0 at the
+            // root, where it's ignored). Lets a nested split keep its share.
+            weight = node.Weight,
             orientation = node.Split == SplitOrientation.Horizontal ? "h" : "v",
             children = node.Children.Select(ProjectPane).ToArray(),
         };
@@ -1301,6 +1523,24 @@ public partial class MainWindow : FluentWindow
             // so we just forward the JsonElement through.
             case "pane.split":      OnPaneSplit(root); break;
             case "pane.close":      OnPaneClose(root); break;
+            case "pane.move":       OnPaneMove(root); break;
+            case "pane.move-dir":   OnPaneMoveDir(root); break;
+            case "pane.resize-split":
+                // Harness convenience: weights arrive as a comma-separated
+                // string ("--weights 1.5,0.5") since `perch test` flags are
+                // strings; rewrap as a JSON array for OnPaneResizeSplit.
+                {
+                    var splitId = root.TryGetProperty("splitId", out var si) ? si.GetString() : null;
+                    var wcsv    = root.TryGetProperty("weights", out var wv) ? wv.GetString() : null;
+                    if (!string.IsNullOrEmpty(splitId) && !string.IsNullOrEmpty(wcsv))
+                    {
+                        var arr = string.Join(",", wcsv.Split(',', StringSplitOptions.RemoveEmptyEntries));
+                        var fakeRoot = JsonDocument.Parse(
+                            $"{{\"splitId\":\"{splitId}\",\"weights\":[{arr}],\"final\":true}}").RootElement;
+                        OnPaneResizeSplit(fakeRoot);
+                    }
+                }
+                break;
             case "pane.split-active":
                 // Convenience for the harness: targets the active pane so
                 // the script doesn't have to look up its id from disk. An

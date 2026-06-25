@@ -65,32 +65,9 @@ internal static class ClaudeWrapper
         }
     }
 
-    /// Walks PATH, returns the first claude binary found that is NOT inside
-    /// the wrapper's own directory. Looks for claude.exe / claude.cmd /
-    /// claude.bat / bare claude (in that order — matches Windows resolution
-    /// and the typical npm-installed Claude Code shipping as a .cmd shim).
-    private static string? FindRealClaude()
-    {
-        var selfDir = Path.GetDirectoryName(Environment.ProcessPath) ?? "";
-        try { selfDir = Path.GetFullPath(selfDir); } catch { }
-
-        var path = Environment.GetEnvironmentVariable("PATH") ?? "";
-        foreach (var raw in path.Split(';', StringSplitOptions.RemoveEmptyEntries))
-        {
-            string dir;
-            try { dir = Path.GetFullPath(raw.Trim()); } catch { continue; }
-            if (string.Equals(dir, selfDir, StringComparison.OrdinalIgnoreCase)) continue;
-
-            // PATHEXT-ish order. .exe wins on Windows for `claude` lookup,
-            // but Claude Code's npm install ships .cmd, so we check both.
-            foreach (var ext in new[] { ".exe", ".cmd", ".bat", "" })
-            {
-                var candidate = Path.Combine(dir, "claude" + ext);
-                if (File.Exists(candidate)) return candidate;
-            }
-        }
-        return null;
-    }
+    /// The first claude binary on PATH that is NOT inside the wrapper's own
+    /// directory (so the claude.cmd shim doesn't resolve to itself).
+    private static string? FindRealClaude() => BinResolver.FindOnPathSkippingSelf("claude");
 
     /// Writes the hooks JSON to a per-pane temp file and returns the path.
     /// Idempotent: overwriting the same file each time the wrapper runs in

@@ -17,9 +17,11 @@ internal static class Program
     {
         if (args.Length == 0) { PrintUsage(); return 0; }
 
-        // wrap-claude must run even outside a perch pane — it pass-throughs to
-        // the real claude binary. Carve it out before the PERCH_PIPE no-op.
+        // wrap-claude / wrap-codex must run even outside a perch pane — they
+        // pass through to the real binary. Carve them out before the
+        // PERCH_PIPE no-op.
         if (args[0] == "wrap-claude") return ClaudeWrapper.Run(args);
+        if (args[0] == "wrap-codex")  return CodexWrapper.Run(args);
         if (args[0] is "-h" or "--help" or "help") return PrintUsageAndExit(0);
 
         // `perch test <verb>` targets the app-level control pipe directly and
@@ -49,6 +51,7 @@ internal static class Program
                 "focus"  => CmdFocus(pipeName, args),
                 "send"   => CmdSend(pipeName, args),
                 "open"   => CmdOpen(pipeName, args),
+                "agent"  => CmdAgent(pipeName, args),
                 "hooks"  => HookHandler.Run(pipeName, args),
                 _ => PrintUnknown(args[0]),
             };
@@ -151,6 +154,16 @@ internal static class Program
         return Send(pipeName, new { type = "open", name, cwd, cmd });
     }
 
+    private static int CmdAgent(string pipeName, string[] args)
+    {
+        // Usage: perch agent <name>   (no name / empty clears the badge)
+        // Tells the host which agent runs in this pane so the header shows a
+        // badge (e.g. "claude" → CC, "codex" → CX). Used by the codex.cmd
+        // wrapper to bracket a codex run; callable directly too.
+        var name = args.Length > 1 ? args[1] : "";
+        return Send(pipeName, new { type = "agent", name });
+    }
+
     private static int CmdTest(string[] args)
     {
         // Usage: perch test <verb> [--text S] [--id GUID] [--title S] [--shell S]
@@ -248,6 +261,7 @@ internal static class Program
         Console.WriteLine("  perch focus <pane-name|session:pane>");
         Console.WriteLine("  perch send <target> <input...>");
         Console.WriteLine("  perch open [--name X] [--cwd path] [--cmd command]");
+        Console.WriteLine("  perch agent <name>           (header badge; empty clears)");
         Console.WriteLine();
         Console.WriteLine("Outside a perch pane (no PERCH_PIPE set) every command is a silent no-op.");
     }

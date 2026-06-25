@@ -18,6 +18,12 @@ public sealed class Settings
     /// User-chosen default shell command line. Empty = auto-detect via Shell.DetectedShells().
     public string DefaultShell { get; set; } = "";
 
+    /// Whether the first-launch onboarding lightbox has been shown and
+    /// dismissed. False on a fresh install → the webview auto-opens the
+    /// welcome once; the "Show welcome" button in Settings reopens it anytime
+    /// (without clearing this).
+    public bool OnboardingSeen { get; set; } = false;
+
     /// Working directory used when a session has no recorded Cwd yet.
     /// Defaults to the user's profile directory so we never land in the install
     /// folder (Program Files / AppData). Resolved lazily so an empty stored

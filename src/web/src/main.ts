@@ -11,6 +11,7 @@ import { Dashboard } from "./dashboard.js";
 import { installShortcutHint } from "./shortcut-hint.js";
 import { Toast } from "./toast.js";
 import { openSettings, applySettingsData } from "./settings.js";
+import { showOnboarding } from "./onboarding.js";
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const el = document.getElementById(id);
@@ -52,6 +53,17 @@ function toggleSidebar() {
 
 let lastState: StateMessage | null = null;
 
+// Auto-open the welcome lightbox once per launch on a fresh install. The host
+// ferries `onboardingSeen` in every state push; we act on the first one only
+// (dismissing it persists the flag, so later pushes carry seen=true anyway —
+// the guard just avoids re-opening before that round-trip completes).
+let onboardingChecked = false;
+function maybeShowOnboarding(prefs?: { onboardingSeen?: boolean }) {
+  if (onboardingChecked) return;
+  onboardingChecked = true;
+  if (!prefs?.onboardingSeen) showOnboarding();
+}
+
 function setStatus(text: string) { statusEl.textContent = text; }
 
 function activeOf(s: StateMessage) {
@@ -67,6 +79,7 @@ onMessage((msg) => {
       // briefly flashing the default 13px and then resizing on the next
       // tick. msg.prefs is always present (host always populates it).
       if (msg.prefs) workspace.applyPrefs(msg.prefs);
+      maybeShowOnboarding(msg.prefs);
       sidebar.render(msg.sessions, msg.activeSessionId);
       // Pass the full session list + active id: the workspace keeps a stage
       // per session alive across switches (preserving terminal scrollback)
@@ -196,6 +209,21 @@ window.addEventListener("keydown", (ev) => {
         send({ type: "pane.close", paneId: active });
         ev.preventDefault(); ev.stopPropagation();
       }
+      break;
+    // Ctrl+Shift+arrows: move the active pane within its split. The host
+    // reorders it among its siblings (no-op if the direction is across the
+    // split's axis or the pane is already at the edge).
+    case "ArrowLeft":
+      if (active) { send({ type: "pane.moveDir", paneId: active, dir: "left" });  ev.preventDefault(); ev.stopPropagation(); }
+      break;
+    case "ArrowRight":
+      if (active) { send({ type: "pane.moveDir", paneId: active, dir: "right" }); ev.preventDefault(); ev.stopPropagation(); }
+      break;
+    case "ArrowUp":
+      if (active) { send({ type: "pane.moveDir", paneId: active, dir: "up" });    ev.preventDefault(); ev.stopPropagation(); }
+      break;
+    case "ArrowDown":
+      if (active) { send({ type: "pane.moveDir", paneId: active, dir: "down" });  ev.preventDefault(); ev.stopPropagation(); }
       break;
   }
 }, /* useCapture */ true);

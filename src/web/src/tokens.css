@@ -118,6 +118,9 @@
    * etc. Same hue as --color-accent but ~40% so it reads as "marked"
    * rather than "alarming". */
   --color-accent-soft:      rgba(118, 185, 237, 0.4);
+  /* Even fainter accent for tinted chip/badge backgrounds (e.g. the CC
+   * agent badge) — reads as "marked" without competing with text. */
+  --color-accent-faint:     rgba(118, 185, 237, 0.14);
 
   --color-success:          #6CCB5F;
   --color-caution:          #FCE100;

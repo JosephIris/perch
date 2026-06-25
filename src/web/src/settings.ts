@@ -16,6 +16,7 @@ import { send } from "./bridge.js";
 import type { SettingsDataMessage } from "./bridge.js";
 import { MIN_FONT_SIZE, MAX_FONT_SIZE, DEFAULT_FONT_SIZE } from "./pane.js";
 import { Dropdown } from "./dropdown.js";
+import { showOnboarding } from "./onboarding.js";
 
 let overlay: HTMLElement | null = null;
 let shellDropdown: Dropdown | null = null;
@@ -145,6 +146,24 @@ function buildSkeleton(): void {
       "Terminal font size",
       `Pixels. Also adjustable with Ctrl + and Ctrl − (${MIN_FONT_SIZE}–${MAX_FONT_SIZE}).`,
       fontInput,
+    ),
+  );
+
+  // Row 4 — replay the onboarding lightbox. Closes settings first so the
+  // welcome sits cleanly on the workspace, not stacked over the dialog.
+  const welcomeBtn = document.createElement("button");
+  welcomeBtn.type = "button";
+  welcomeBtn.className = "settings-btn settings-btn--subtle";
+  welcomeBtn.textContent = "Show welcome";
+  welcomeBtn.addEventListener("click", () => {
+    closeSettings();
+    showOnboarding();
+  });
+  body.appendChild(
+    makeRow(
+      "Welcome screen",
+      "Replay the quick getting-started tips.",
+      welcomeBtn,
     ),
   );
 

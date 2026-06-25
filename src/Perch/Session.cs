@@ -253,6 +253,17 @@ internal sealed class PaneNode
     /// "Pane tagging" section.
     public int ColorIndex { get; set; }
 
+    /// Relative size weight within the parent split. The web renders each
+    /// child with flex-grow == Weight and flex-basis 0, so a child's pixel
+    /// share equals Weight / (sum of siblings' Weights). Default 1.0 → even
+    /// sizing (identical to the pre-resize behavior). Dragging a split gutter
+    /// sends pane.resizeSplit, which rewrites the two adjacent children's
+    /// Weights. Persisted so a custom layout survives restart; applied by the
+    /// web on every DOM rebuild (treeSignature deliberately ignores it so a
+    /// pure weight change never forces a rebuild). Carried on both leaves and
+    /// split nodes — a split node's Weight is its share inside ITS parent.
+    public double Weight { get; set; } = 1.0;
+
     // ----- Per-pane transient state (set by perch notify/status/meta) ------
     // All JsonIgnore: these are pushed by the running agent each time it
     // takes a turn. Persisting would invite stale values across restarts.
@@ -262,6 +273,12 @@ internal sealed class PaneNode
     // for the row indicator.
 
     [JsonIgnore] public AgentState AgentState { get; set; } = AgentState.Idle;
+    /// Which agent is running in this pane: "claude" (Claude Code), "codex",
+    /// or "" (plain shell / unknown). Set from the agent's session-start hook
+    /// (the claude.cmd wrapper makes "claude" definitive); cleared on session
+    /// end. Transient — re-pushed by the agent each session. Surfaces as a
+    /// small badge in the pane header so you can tell CC panes from the rest.
+    [JsonIgnore] public string AgentType { get; set; } = "";
     [JsonIgnore] public string ActivityDetail { get; set; } = "";
     [JsonIgnore] public string NotificationText { get; set; } = "";
     [JsonIgnore] public NotificationLevel NotificationLevel { get; set; } = NotificationLevel.Info;

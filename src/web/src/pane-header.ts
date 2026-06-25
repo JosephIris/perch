@@ -25,6 +25,30 @@ export interface PaneHeader {
   commitsEl: HTMLElement;
   /** Chip for the auto-detected branch; hidden when empty. */
   branchEl: HTMLElement;
+  /** Small badge naming the agent in this pane (CC / CX); hidden for a
+   *  plain shell. */
+  agentBadgeEl: HTMLElement;
+}
+
+/** Set the agent-type badge: "CC" for Claude Code, "CX" for codex, hidden for
+ *  a plain shell or unknown. Kept in one place so Pane just forwards the
+ *  agentType string from each leaf view. */
+export function applyAgentBadge(el: HTMLElement, agentType: string | undefined) {
+  const map: Record<string, { label: string; title: string }> = {
+    claude: { label: "CC", title: "Claude Code" },
+    codex:  { label: "CX", title: "Codex" },
+  };
+  const m = agentType ? map[agentType] : undefined;
+  if (m) {
+    el.textContent = m.label;
+    el.title = m.title;
+    el.dataset.agent = agentType!;
+    el.style.display = "";
+  } else {
+    el.textContent = "";
+    el.removeAttribute("data-agent");
+    el.style.display = "none";
+  }
 }
 
 const COLOR_COUNT = 6;
@@ -66,6 +90,7 @@ export function buildPaneHeader(paneId: string): PaneHeader {
   const colorDotEl = document.createElement("button");
   colorDotEl.type = "button";
   colorDotEl.className = "pane__color";
+  colorDotEl.draggable = false;
   colorDotEl.title = "Change color tag";
   colorDotEl.setAttribute("aria-label", "Change color tag");
   colorDotEl.dataset.color = "0";
@@ -89,6 +114,15 @@ export function buildPaneHeader(paneId: string): PaneHeader {
     startInlineRename(paneId, nameEl);
   });
   root.appendChild(nameEl);
+
+  // Agent badge (CC / CX) — sits just after the name, hidden until the host
+  // reports an agentType for the pane.
+  const agentBadgeEl = document.createElement("span");
+  agentBadgeEl.className = "pane__agent-badge";
+  agentBadgeEl.style.display = "none";
+  // Not a drag handle — let the header own dragging.
+  agentBadgeEl.draggable = false;
+  root.appendChild(agentBadgeEl);
 
   // Branch chip (auto-detected from cwd via OSC 7 → git rev-parse) and
   // commit-count chip (cc-session baseline → git rev-list). Both empty by
@@ -115,6 +149,7 @@ export function buildPaneHeader(paneId: string): PaneHeader {
   const close = document.createElement("button");
   close.type = "button";
   close.className = "pane__close";
+  close.draggable = false;
   close.title = "Close pane";
   close.setAttribute("aria-label", "Close pane");
   close.textContent = "✕";
@@ -124,7 +159,7 @@ export function buildPaneHeader(paneId: string): PaneHeader {
   });
   root.appendChild(close);
 
-  return { root, colorDotEl, nameEl, stateDotEl, stateLabelEl, branchEl, commitsEl };
+  return { root, colorDotEl, nameEl, stateDotEl, stateLabelEl, branchEl, commitsEl, agentBadgeEl };
 }
 
 let openPicker: HTMLElement | null = null;
@@ -198,6 +233,7 @@ function startInlineRename(paneId: string, nameEl: HTMLElement) {
   input.className = "pane__name-input";
   input.value = original;
   input.spellcheck = false;
+  input.draggable = false;
 
   let committed = false;
   function commit() {

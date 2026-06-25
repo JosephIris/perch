@@ -15,11 +15,15 @@
 // them rebuild (page reload, no scrollback to lose) when the session returns.
 
 import type { PaneTreeView, SessionView } from "./bridge.js";
+import { send } from "./bridge.js";
 import { Pane, DEFAULT_FONT_SIZE } from "./pane.js";
 import { UrlPane } from "./url-pane.js";
 import { PANE_LEAVE_MS } from "./anim.js";
 
 type LeafPane = Pane | UrlPane;
+
+/** Drop zone within a target pane during a drag-to-rearrange. */
+type Edge = "left" | "right" | "top" | "bottom" | "center";
 
 /** One mounted session: its container DIV (hidden when inactive), the panes
  *  keyed by id (reused across renders to preserve terminal state), and the
@@ -54,8 +58,18 @@ export class Workspace {
   // user's saved size instead of the hardcoded default.
   private defaultFontSize: number = DEFAULT_FONT_SIZE;
 
+  // Drag-to-rearrange state. Set on a pane-header dragstart, cleared on
+  // dragend/drop. The shared drop overlay is a single fixed-position element
+  // that highlights where the dragged pane would land.
+  private draggingPaneId: string | null = null;
+  private readonly dropOverlay: HTMLElement;
+
   constructor(rootEl: HTMLElement) {
     this.root = rootEl;
+    this.dropOverlay = document.createElement("div");
+    this.dropOverlay.className = "drop-overlay";
+    this.dropOverlay.style.display = "none";
+    document.body.appendChild(this.dropOverlay);
   }
 
   /** Reconcile the workspace to the current set of sessions and the active
@@ -334,7 +348,10 @@ export class Workspace {
     for (const c of node.children) this.collectLeafIds(c, out);
   }
 
-  private renderTree(stage: Stage, node: PaneTreeView, host: HTMLElement) {
+  /** Render a subtree under `host` and return the top element for `node`
+   *  (the pane element for a leaf, the split container for a split) so the
+   *  caller can set its flex-grow weight. */
+  private renderTree(stage: Stage, node: PaneTreeView, host: HTMLElement): HTMLElement {
     if (node.kind === "leaf") {
       let pane = stage.panes.get(node.paneId);
       if (!pane) {
@@ -349,6 +366,8 @@ export class Workspace {
         // Push initial state so the freshly-created pane header reflects
         // whatever the host already knows.
         pane.applyLeafView(node);
+        // Make the pane a drag-to-rearrange source (header) + drop target.
+        this.wirePaneDnd(pane);
         // Fade in. The class triggers the @keyframes pane-enter animation
         // once; cleaned up via animationend.
         const el = pane.element;
@@ -373,11 +392,173 @@ export class Workspace {
         // up the same numerically, so kick a fresh fit.
         pane.forceRefit();
       }
-      return;
+      return pane.element;
     }
     const splitEl = document.createElement("div");
     splitEl.className = `split split--${node.orientation}`;
+    splitEl.dataset.splitId = node.id;
     host.appendChild(splitEl);
-    for (const child of node.children) this.renderTree(stage, child, splitEl);
+    // Lay out children with a draggable gutter between each adjacent pair.
+    // Each child's flex-grow comes from its weight (default 1 → even), so a
+    // resized layout is reapplied here on every rebuild; treeSignature omits
+    // weight, so a pure weight change never triggers a rebuild.
+    node.children.forEach((child, i) => {
+      if (i > 0) splitEl.appendChild(this.makeGutter(node.orientation));
+      const childEl = this.renderTree(stage, child, splitEl);
+      childEl.style.flexGrow = String(child.weight ?? 1);
+    });
+    return splitEl;
+  }
+
+  // ---- Resize: draggable split gutters ---------------------------------
+
+  /** A grab handle that lives in the gap between two split children. Dragging
+   *  it rewrites the flex-grow of the two adjacent siblings. */
+  private makeGutter(orientation: "h" | "v"): HTMLElement {
+    const g = document.createElement("div");
+    g.className = `split__gutter split__gutter--${orientation}`;
+    g.addEventListener("pointerdown", (ev) =>
+      this.beginGutterDrag(ev, g, orientation),
+    );
+    return g;
+  }
+
+  private beginGutterDrag(
+    ev: PointerEvent,
+    gutter: HTMLElement,
+    orientation: "h" | "v",
+  ) {
+    if (ev.button !== 0) return;
+    const prev = gutter.previousElementSibling as HTMLElement | null;
+    const next = gutter.nextElementSibling as HTMLElement | null;
+    const splitEl = gutter.parentElement;
+    if (!prev || !next || !splitEl) return;
+    ev.preventDefault();
+
+    // "v" splits lay children side-by-side (drag along X); "h" stacks them
+    // (drag along Y).
+    const horizontal = orientation === "v";
+    const start = horizontal ? ev.clientX : ev.clientY;
+    const prevPx0 = horizontal ? prev.offsetWidth : prev.offsetHeight;
+    const nextPx0 = horizontal ? next.offsetWidth : next.offsetHeight;
+    const totalPx = prevPx0 + nextPx0;
+    const prevGrow0 = parseFloat(prev.style.flexGrow || "1") || 1;
+    const nextGrow0 = parseFloat(next.style.flexGrow || "1") || 1;
+    const totalGrow = prevGrow0 + nextGrow0;
+    const MIN_PX = 64; // don't let a pane be dragged smaller than this
+
+    gutter.setPointerCapture(ev.pointerId);
+    gutter.classList.add("split__gutter--dragging");
+
+    const onMove = (e: PointerEvent) => {
+      const pos = horizontal ? e.clientX : e.clientY;
+      let prevPx = prevPx0 + (pos - start);
+      prevPx = Math.max(MIN_PX, Math.min(totalPx - MIN_PX, prevPx));
+      const prevGrow = (totalGrow * prevPx) / totalPx;
+      prev.style.flexGrow = String(prevGrow);
+      next.style.flexGrow = String(totalGrow - prevGrow);
+      // The per-pane ResizeObserver refits xterm automatically as the flex
+      // box changes — no manual fit needed here.
+    };
+    const onUp = () => {
+      gutter.releasePointerCapture(ev.pointerId);
+      gutter.classList.remove("split__gutter--dragging");
+      gutter.removeEventListener("pointermove", onMove);
+      gutter.removeEventListener("pointerup", onUp);
+      gutter.removeEventListener("pointercancel", onUp);
+      this.persistSplitWeights(splitEl);
+    };
+    gutter.addEventListener("pointermove", onMove);
+    gutter.addEventListener("pointerup", onUp);
+    gutter.addEventListener("pointercancel", onUp);
+  }
+
+  /** Read the current flex-grow of every pane/split child of `splitEl` (in
+   *  order, skipping gutters) and ship them to the host to persist. */
+  private persistSplitWeights(splitEl: HTMLElement) {
+    const splitId = splitEl.dataset.splitId;
+    if (!splitId) return;
+    const weights: number[] = [];
+    for (const c of Array.from(splitEl.children)) {
+      if ((c as HTMLElement).classList.contains("split__gutter")) continue;
+      weights.push(parseFloat((c as HTMLElement).style.flexGrow || "1") || 1);
+    }
+    send({ type: "pane.resizeSplit", splitId, weights, final: true });
+  }
+
+  // ---- Move: drag a pane header to rearrange ---------------------------
+
+  /** Make `pane` a drag source (via its header) and a drop target (its whole
+   *  body). Dropping on an edge re-splits the target; dropping center swaps. */
+  private wirePaneDnd(pane: LeafPane) {
+    const el = pane.element;
+    const header = el.querySelector<HTMLElement>(".pane__header");
+    if (header) {
+      header.draggable = true;
+      header.addEventListener("dragstart", (ev) => {
+        this.draggingPaneId = pane.paneId;
+        el.classList.add("pane--dragging");
+        if (ev.dataTransfer) {
+          ev.dataTransfer.effectAllowed = "move";
+          ev.dataTransfer.setData("text/plain", pane.paneId);
+        }
+      });
+      header.addEventListener("dragend", () => {
+        this.draggingPaneId = null;
+        el.classList.remove("pane--dragging");
+        this.hideDropOverlay();
+      });
+    }
+
+    el.addEventListener("dragover", (ev) => {
+      if (!this.draggingPaneId) return;
+      ev.preventDefault();
+      if (ev.dataTransfer) ev.dataTransfer.dropEffect = "move";
+      if (this.draggingPaneId === pane.paneId) { this.hideDropOverlay(); return; }
+      this.showDropOverlay(el, this.computeEdge(el, ev));
+    });
+    el.addEventListener("drop", (ev) => {
+      const src = this.draggingPaneId;
+      if (!src) return;
+      ev.preventDefault();
+      this.hideDropOverlay();
+      if (src === pane.paneId) return;
+      send({ type: "pane.move", src, target: pane.paneId, edge: this.computeEdge(el, ev) });
+    });
+  }
+
+  /** Which drop zone the pointer is in: a centered box is "center" (swap),
+   *  otherwise the nearest edge. */
+  private computeEdge(el: HTMLElement, ev: DragEvent): Edge {
+    const r = el.getBoundingClientRect();
+    const x = (ev.clientX - r.left) / r.width;
+    const y = (ev.clientY - r.top) / r.height;
+    if (Math.abs(x - 0.5) < 0.22 && Math.abs(y - 0.5) < 0.22) return "center";
+    const d = { left: x, right: 1 - x, top: y, bottom: 1 - y };
+    let edge: Edge = "left";
+    let min = d.left;
+    for (const k of ["right", "top", "bottom"] as const) {
+      if (d[k] < min) { min = d[k]; edge = k; }
+    }
+    return edge;
+  }
+
+  private showDropOverlay(el: HTMLElement, edge: Edge) {
+    const r = el.getBoundingClientRect();
+    let { left, top, width, height } = { left: r.left, top: r.top, width: r.width, height: r.height };
+    if (edge === "left") width = r.width / 2;
+    else if (edge === "right") { left = r.left + r.width / 2; width = r.width / 2; }
+    else if (edge === "top") height = r.height / 2;
+    else if (edge === "bottom") { top = r.top + r.height / 2; height = r.height / 2; }
+    const o = this.dropOverlay;
+    o.style.display = "block";
+    o.style.left = `${left}px`;
+    o.style.top = `${top}px`;
+    o.style.width = `${width}px`;
+    o.style.height = `${height}px`;
+  }
+
+  private hideDropOverlay() {
+    this.dropOverlay.style.display = "none";
   }
 }
