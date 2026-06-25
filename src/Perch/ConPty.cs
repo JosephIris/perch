@@ -5,7 +5,7 @@ using System.Text;
 using System.Threading;
 using Microsoft.Win32.SafeHandles;
 
-namespace CmuxWin;
+namespace Perch;
 
 /// Thin wrapper around Win32 ConPTY (`CreatePseudoConsole` &c. — Win10 1809+).
 ///
@@ -48,10 +48,10 @@ internal sealed class ConPty : IDisposable
     // actually rendered, so memory stays flat and the renderer thread stays
     // responsive to input.
     //
-    // CMUX_DISABLE_FLOW_CONTROL=1 reverts to the old fire-and-forget path so
+    // PERCH_DISABLE_FLOW_CONTROL=1 reverts to the old fire-and-forget path so
     // the perf test can demonstrate the regression on demand.
     private static readonly bool FlowControlEnabled =
-        string.IsNullOrEmpty(Environment.GetEnvironmentVariable("CMUX_DISABLE_FLOW_CONTROL"));
+        string.IsNullOrEmpty(Environment.GetEnvironmentVariable("PERCH_DISABLE_FLOW_CONTROL"));
     private const long HighWaterBytes = 256 * 1024;
     private const long LowWaterBytes  = 64 * 1024;
     private readonly ManualResetEventSlim _readGate = new(initialState: true);

@@ -69,9 +69,9 @@ not bottom/left.
 
 ## Where the code currently lives
 
-- `src/CmuxWin/UrlPaneHost.cs` — wraps `CoreWebView2Controller` with parent
+- `src/Perch/UrlPaneHost.cs` — wraps `CoreWebView2Controller` with parent
   HWND + Bounds. Logs `UrlPaneHost.Init.begin` and `UrlPaneHost.Init.ztop`.
-- `src/CmuxWin/UrlPaneController.cs` — dispatches page IPC, calls
+- `src/Perch/UrlPaneController.cs` — dispatches page IPC, calls
   `host.SetBounds` on each `urlpane.layout`. Auto-title pipeline still works.
 - `src/web/src/url-pane.ts` — page-side placeholder + position reporter.
   `forceRefit()` invalidates the rect cache.
@@ -84,6 +84,6 @@ not bottom/left.
 1. Launch the app.
 2. `echo http://google.com` in any terminal pane.
 3. Click the URL → "Open in pane right" → URL pane renders correctly.
-4. **Maximize the cmux-win window** (or drag any edge to a much larger size).
+4. **Maximize the perch window** (or drag any edge to a much larger size).
 5. The Google WebView2 stays at its old smaller size; you'll see the slot
    background in the area where the pane grew but the WebView2 didn't.

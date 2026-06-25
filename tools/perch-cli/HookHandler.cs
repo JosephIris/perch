@@ -4,11 +4,11 @@ using System.IO.Pipes;
 using System.Text;
 using System.Text.Json;
 
-namespace CmuxCli;
+namespace PerchCli;
 
-// Handles `cmux hooks claude <event>` callbacks fired by Claude Code via the
+// Handles `perch hooks claude <event>` callbacks fired by Claude Code via the
 // --settings hooks JSON our wrapper injects. Claude passes the hook context
-// as JSON on stdin; we extract what's useful and send it back to the cmux
+// as JSON on stdin; we extract what's useful and send it back to the perch
 // host through the IPC pipe.
 //
 // We intentionally accept-and-forget unknown events so adding a new hook to
@@ -17,10 +17,10 @@ internal static class HookHandler
 {
     public static int Run(string pipeName, string[] args)
     {
-        // Usage: cmux hooks claude <event>
+        // Usage: perch hooks claude <event>
         if (args.Length < 3 || args[1] != "claude")
         {
-            Console.Error.WriteLine("cmux hooks: usage: cmux hooks claude <event>");
+            Console.Error.WriteLine("perch hooks: usage: perch hooks claude <event>");
             return 2;
         }
         var evt = args[2];
@@ -206,7 +206,7 @@ internal static class HookHandler
         {
             // Hooks must never break the agent. Log to stderr (which Claude
             // shows when verbose) and move on.
-            Console.Error.WriteLine($"cmux hooks: send failed: {ex.Message}");
+            Console.Error.WriteLine($"perch hooks: send failed: {ex.Message}");
         }
     }
 

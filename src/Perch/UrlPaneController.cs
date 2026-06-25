@@ -8,7 +8,7 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using Microsoft.Web.WebView2.Core;
 
-namespace CmuxWin;
+namespace Perch;
 
 /// Owns the per-URL-pane WebView2 lifecycle. The page emits urlpane.layout
 /// (with rect in WebView2-client DIPs) for each URL leaf; we create a

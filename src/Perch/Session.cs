@@ -4,7 +4,7 @@ using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Text.Json.Serialization;
 
-namespace CmuxWin;
+namespace Perch;
 
 internal sealed class Session : INotifyPropertyChanged
 {
@@ -53,7 +53,7 @@ internal sealed class Session : INotifyPropertyChanged
 
     [JsonIgnore] public bool HasNotification => !string.IsNullOrEmpty(_notificationText);
 
-    // ----- Workspace state pushed by `cmux status` / `cmux meta` -----
+    // ----- Workspace state pushed by `perch status` / `perch meta` -----
     //
     // All transient: each field reflects what the agent has reported during
     // the current session. They reset to defaults across restarts — the
@@ -73,9 +73,9 @@ internal sealed class Session : INotifyPropertyChanged
     [JsonIgnore] public bool HasAgentState => _agentState != AgentState.Idle;
     [JsonIgnore] public string AgentStateText => _agentState switch
     {
-        CmuxWin.AgentState.Working    => "working",
-        CmuxWin.AgentState.Waiting    => "waiting",
-        CmuxWin.AgentState.Permission => "permission",
+        Perch.AgentState.Working    => "working",
+        Perch.AgentState.Waiting    => "waiting",
+        Perch.AgentState.Permission => "permission",
         _                             => "",
     };
 
@@ -85,9 +85,9 @@ internal sealed class Session : INotifyPropertyChanged
     /// blocked on you — the loudest signal).
     [JsonIgnore] public string AgentStateBrushKey => _agentState switch
     {
-        CmuxWin.AgentState.Working    => "AccentFillColorDefaultBrush",
-        CmuxWin.AgentState.Waiting    => "SystemFillColorCautionBrush",
-        CmuxWin.AgentState.Permission => "SystemFillColorCriticalBrush",
+        Perch.AgentState.Working    => "AccentFillColorDefaultBrush",
+        Perch.AgentState.Waiting    => "SystemFillColorCautionBrush",
+        Perch.AgentState.Permission => "SystemFillColorCriticalBrush",
         _                             => "SubtleFillColorTertiaryBrush",
     };
 
@@ -144,15 +144,15 @@ internal sealed class Session : INotifyPropertyChanged
     [JsonIgnore]
     public string NotificationDotBrush => _notificationLevel switch
     {
-        CmuxWin.NotificationLevel.Success => "SystemFillColorSuccessBrush",
-        CmuxWin.NotificationLevel.Warn    => "SystemFillColorCautionBrush",
-        CmuxWin.NotificationLevel.Error   => "SystemFillColorCriticalBrush",
+        Perch.NotificationLevel.Success => "SystemFillColorSuccessBrush",
+        Perch.NotificationLevel.Warn    => "SystemFillColorCautionBrush",
+        Perch.NotificationLevel.Error   => "SystemFillColorCriticalBrush",
         _                                  => "AccentFillColorDefaultBrush",
     };
 
     // "Last activity" timestamp, bumped whenever the session's primary pane
     // emits PTY output. Sidebar uses this to render a relative-time subtitle
-    // ("now" / "5m ago" / "idle"), matching cmux for macOS's pattern. Updated
+    // ("now" / "5m ago" / "idle"), matching perch for macOS's pattern. Updated
     // off the TermPTY.TerminalOutput event — no polling, no buffer copy.
     private DateTime? _lastActivity;
     [JsonIgnore]
@@ -191,7 +191,7 @@ internal sealed class Session : INotifyPropertyChanged
     {
         get
         {
-            var s = string.IsNullOrEmpty(Shell) ? CmuxWin.Shell.DefaultCommandLine() : Shell;
+            var s = string.IsNullOrEmpty(Shell) ? Perch.Shell.DefaultCommandLine() : Shell;
             try { return System.IO.Path.GetFileNameWithoutExtension(s).ToLowerInvariant(); }
             catch { return s; }
         }
@@ -216,7 +216,7 @@ internal sealed class PaneNode
     /// instead of a terminal. Sessions persisted to disk preserve their
     /// webview panes across restarts.
     public string? Url { get; set; }
-    /// User- or auto-assigned name used by `cmux focus/send/open` to address
+    /// User- or auto-assigned name used by `perch focus/send/open` to address
     /// the pane from inside an agent. Persisted so addressing stays stable
     /// across restarts. Only leaves carry names; the field is ignored on
     /// split nodes.
@@ -253,7 +253,7 @@ internal sealed class PaneNode
     /// "Pane tagging" section.
     public int ColorIndex { get; set; }
 
-    // ----- Per-pane transient state (set by cmux notify/status/meta) ------
+    // ----- Per-pane transient state (set by perch notify/status/meta) ------
     // All JsonIgnore: these are pushed by the running agent each time it
     // takes a turn. Persisting would invite stale values across restarts.
     // Multiple panes per session each carry their own state (previously

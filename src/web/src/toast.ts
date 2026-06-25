@@ -1,4 +1,4 @@
-// Tiny toast surface for `cmux notify` events. Same lifetime story as a
+// Tiny toast surface for `perch notify` events. Same lifetime story as a
 // browser toast: show, hold for a few seconds, fade. Multiple notifies
 // land in quick succession during agent activity, so we cancel the
 // outgoing timer when a new one arrives instead of stacking.

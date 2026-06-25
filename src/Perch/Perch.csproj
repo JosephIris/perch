@@ -10,9 +10,9 @@
     <PlatformTarget>x64</PlatformTarget>
     <UseRidGraph>true</UseRidGraph>
     <RuntimeIdentifier>win10-x64</RuntimeIdentifier>
-    <ApplicationIcon>Assets\cmux.ico</ApplicationIcon>
-    <AssemblyTitle>cmux</AssemblyTitle>
-    <Product>cmux</Product>
+    <ApplicationIcon>Assets\perch.ico</ApplicationIcon>
+    <AssemblyTitle>Perch</AssemblyTitle>
+    <Product>Perch</Product>
   </PropertyGroup>
 
   <ItemGroup>
@@ -22,13 +22,13 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Resource Include="Assets\cmux.ico" />
+    <Resource Include="Assets\perch.ico" />
   </ItemGroup>
 
   <!-- Stage the built web bundle next to the exe so MainWindow's
        SetVirtualHostNameToFolderMapping can serve it. The web bundle is
        produced by `npm run build` in src/web/ and emitted into
-       src/CmuxWin/wwwroot/. -->
+       src/Perch/wwwroot/. -->
   <ItemGroup>
     <Content Include="wwwroot\**\*.*"
              Condition="Exists('$(MSBuildThisFileDirectory)wwwroot')">
@@ -55,19 +55,19 @@
           IgnoreStandardErrorWarningFormat="true" />
   </Target>
 
-  <!-- cmux.exe + claude.cmd. App.xaml.cs prepends app/tools to PATH so
-       panes can run `cmux ...` and so claude.cmd intercepts `claude` to
+  <!-- perch.exe + claude.cmd. App.xaml.cs prepends app/tools to PATH so
+       panes can run `perch ...` and so claude.cmd intercepts `claude` to
        inject Claude Code's hooks settings JSON. -->
-  <Target Name="BuildCmuxCli" AfterTargets="Build">
-    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\..\tools\cmux-cli\cmux-cli.csproj&quot; -c $(Configuration) -r win-x64 --self-contained true -p:PublishSingleFile=true -p:InvariantGlobalization=true -o &quot;$(OutDir)tools&quot; --nologo -v q" />
-    <Copy SourceFiles="$(MSBuildThisFileDirectory)..\..\tools\cmux-cli\claude.cmd" DestinationFolder="$(OutDir)tools" SkipUnchangedFiles="true" />
+  <Target Name="BuildPerchCli" AfterTargets="Build">
+    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\..\tools\perch-cli\perch-cli.csproj&quot; -c $(Configuration) -r win-x64 --self-contained true -p:PublishSingleFile=true -p:InvariantGlobalization=true -o &quot;$(OutDir)tools&quot; --nologo -v q" />
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)..\..\tools\perch-cli\claude.cmd" DestinationFolder="$(OutDir)tools" SkipUnchangedFiles="true" />
   </Target>
 
-  <!-- `dotnet publish` ignores tools/ from BuildCmuxCli's OutDir, so we
+  <!-- `dotnet publish` ignores tools/ from BuildPerchCli's OutDir, so we
        republish into PublishDir/tools for the installer to pick up. -->
-  <Target Name="PublishCmuxCli" AfterTargets="Publish">
-    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\..\tools\cmux-cli\cmux-cli.csproj&quot; -c $(Configuration) -r win-x64 --self-contained true -p:PublishSingleFile=true -p:InvariantGlobalization=true -o &quot;$(PublishDir)tools&quot; --nologo -v q" />
-    <Copy SourceFiles="$(MSBuildThisFileDirectory)..\..\tools\cmux-cli\claude.cmd" DestinationFolder="$(PublishDir)tools" SkipUnchangedFiles="true" />
+  <Target Name="PublishPerchCli" AfterTargets="Publish">
+    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\..\tools\perch-cli\perch-cli.csproj&quot; -c $(Configuration) -r win-x64 --self-contained true -p:PublishSingleFile=true -p:InvariantGlobalization=true -o &quot;$(PublishDir)tools&quot; --nologo -v q" />
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)..\..\tools\perch-cli\claude.cmd" DestinationFolder="$(PublishDir)tools" SkipUnchangedFiles="true" />
   </Target>
 
 </Project>

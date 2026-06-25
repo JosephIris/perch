@@ -1,12 +1,12 @@
 <#
 .SYNOPSIS
-Capture the cmux window into design-loop/. Uses PrintWindow with
+Capture the perch window into design-loop/. Uses PrintWindow with
 PW_RENDERFULLCONTENT so Mica chrome AND native HwndHost children (terminal
 HWND, WebView2 panes) all render — unlike screen CopyFromScreen which depends
 on z-order and fails for occluded windows.
 
 .PARAMETER ProcessName
-Process name to capture. Defaults to CmuxWin.
+Process name to capture. Defaults to Perch.
 
 .PARAMETER ProcessId
 Specific PID; overrides ProcessName when set.
@@ -21,7 +21,7 @@ $OutDir/history. Defaults to the repo's design-loop/.
 #>
 [CmdletBinding()]
 param(
-    [Parameter()][string]$ProcessName = 'CmuxWin',
+    [Parameter()][string]$ProcessName = 'Perch',
     [Parameter()][int]$ProcessId,
     [Parameter()][string]$OutDir = (Join-Path $PSScriptRoot '..\design-loop' | Resolve-Path -Relative -ErrorAction SilentlyContinue)
 )

@@ -6,10 +6,10 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Threading;
 
-namespace CmuxWin;
+namespace Perch;
 
 /// App-level control pipe for the test harness. Off by default; only listens
-/// when CMUX_ENABLE_TEST_IPC is set in the host's environment so a normal
+/// when PERCH_ENABLE_TEST_IPC is set in the host's environment so a normal
 /// install exposes no surface.
 ///
 /// Accepts line-delimited JSON like `{"verb":"pty.send","text":"echo hi\r"}`.
@@ -18,12 +18,12 @@ namespace CmuxWin;
 ///
 /// The reason this exists: the previous WPF-era test harness drove the app
 /// with SendKeys.SendWait, which sends to whichever HWND has the foreground.
-/// When cmux briefly lost focus during a pane split/redraw, the keystrokes
+/// When perch briefly lost focus during a pane split/redraw, the keystrokes
 /// spilled into the user's Chrome and tore down browser windows. This pipe
 /// is the keystroke-free replacement -- the page never enters the picture.
 internal sealed class ControlIpcServer : IDisposable
 {
-    public const string PipeName = @"cmux\control";
+    public const string PipeName = @"perch\control";
 
     public delegate void VerbHandler(string verb, JsonElement root);
 
@@ -40,7 +40,7 @@ internal sealed class ControlIpcServer : IDisposable
     }
 
     public static bool IsEnabled =>
-        !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("CMUX_ENABLE_TEST_IPC"));
+        !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("PERCH_ENABLE_TEST_IPC"));
 
     public void Start()
     {

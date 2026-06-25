@@ -69,11 +69,18 @@ side eye, lifted unchanged.
   browser himself - **do not auto-launch** it.
 - `perch-glyph.svg`, `perch-glyph-min.svg`, `perch-mascot.svg` - exported assets.
 
-## Next steps (not done yet)
+## Status - DONE
 
-1. Build the app `.ico` at 16/32/48/256 from `perch-glyph.svg` (needs ImageMagick
-   or Inkscape) to replace `src/CmuxWin/Assets/cmux.ico`.
-2. Wire the plain glyph into the sidebar footer: swap the `▣` mark and the `cmux`
-   label -> `Perch` in `src/web/index.html` (and `.sidebar__identity-mark`). No
-   other UI copy.
-3. Full repo / product rename (`cmux-win` -> `perch`) is a separate, larger step.
+- App `.ico` built via `build_ico.py` (Pillow) = the cropped monocled-bird face,
+  now at `src/Perch/Assets/perch.ico` (referenced by `Perch.csproj` ApplicationIcon
+  + Resource, MainWindow `Icon`, and `installer/perch.iss`). Renaming the file
+  (vs overwriting `cmux.ico`) forces MSBuild to re-embed it -> fixes the stale
+  taskbar/exe icon.
+- Sidebar footer glyph + `Perch` label wired in `src/web/index.html`.
+- **Full internal purge done** (v1.7.0): repo + folders + namespaces renamed
+  `cmux`/`CmuxWin` -> `Perch`; assembly `Perch.exe`, CLI `perch.exe`
+  (`perch notify`/`status`/`meta`), namespace `Perch`/`PerchCli`, env vars
+  `PERCH_*`, IPC pipe `\\.\pipe\perch\`, virtual host `perch.local`,
+  `installer/perch.iss`, `tools/perch-cli`. Only the upstream `manaflow-ai/cmux`
+  reference is intentionally kept. Verified with `npm run build` + `dotnet build`
+  (0 errors; `Perch.exe` + `tools/perch.exe` produced).

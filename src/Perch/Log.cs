@@ -1,14 +1,14 @@
 using System;
 using System.IO;
 
-namespace CmuxWin;
+namespace Perch;
 
 internal static class Log
 {
     private static readonly object _lock = new();
     private static readonly string LogPath = Path.Combine(
         AppPaths.DataRoot,
-        "cmux-win", "errors.log");
+        "perch", "errors.log");
 
     public static void Error(string context, Exception? ex)
     {

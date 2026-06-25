@@ -6,7 +6,7 @@
 //   - "Needs you" : sessions that are waiting (your feedback) or blocked on a
 //                   permission. Each row also shows the agent's note (its ask).
 //   - "Projects"  : everything else (working / idle), single-line rows.
-// Each row is a framed card (see .session-item in style.css) — cmux-style
+// Each row is a framed card (see .session-item in style.css) — perch-style
 // tabs-as-cards. Selection still reads via fill, not an accent stripe.
 
 import type { SessionView } from "./bridge.js";

@@ -3,7 +3,7 @@
 Capture a window's pixels by HWND region, robust to z-order.
 
 .PARAMETER ProcessName
-Process name to capture (e.g. "CmuxWin"). The first instance with a non-zero
+Process name to capture (e.g. "Perch"). The first instance with a non-zero
 MainWindowHandle is used.
 
 .PARAMETER ProcessId
@@ -18,7 +18,7 @@ even if other windows would have been in front. The window is restored to
 non-topmost after capture. Default: $true.
 
 .EXAMPLE
-./capture-window.ps1 -ProcessName CmuxWin -OutPath C:\tmp\shot.png
+./capture-window.ps1 -ProcessName Perch -OutPath C:\tmp\shot.png
 #>
 [CmdletBinding()]
 param(

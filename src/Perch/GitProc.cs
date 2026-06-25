@@ -2,7 +2,7 @@ using System;
 using System.Diagnostics;
 using System.Threading.Tasks;
 
-namespace CmuxWin;
+namespace Perch;
 
 /// Static helpers for the small set of `git` commands we shell out to:
 /// branch detection, repo root, and commit-count-since-baseline. All async,

@@ -1,6 +1,6 @@
 # Push notifications from inside a pane (OSC 9)
 
-cmux-win listens for **OSC 9** escape sequences in any pane's output stream
+perch listens for **OSC 9** escape sequences in any pane's output stream
 and surfaces the message on that session's sidebar row with a colored dot.
 Same protocol iTerm2, Ghostty, and Windows Terminal recognise — anything
 already wired for those terminals' notifications works here unchanged.
@@ -17,14 +17,14 @@ ESC ] 9 ; <payload> BEL
 - Terminator: `\x07` (BEL) — or the long form `\x1b\\` (ESC `\`, "ST")
 - Payload: UTF-8 text. ≤ 4 KB; longer sequences are dropped.
 
-cmux-win also accepts a **levelled extension** so the dot reflects severity:
+perch also accepts a **levelled extension** so the dot reflects severity:
 
 ```
-ESC ] 9 ; cmux:<level> ; <text> BEL
+ESC ] 9 ; perch:<level> ; <text> BEL
 ```
 
 where `<level>` is one of `info`, `success`, `warn`, `error`. Anything else
-falls back to `info`. Other terminals will see the literal `cmux:warn;…`
+falls back to `info`. Other terminals will see the literal `perch:warn;…`
 text as the notification body — harmless, just slightly noisy.
 
 ## Shell snippets
@@ -38,7 +38,7 @@ Write-Host "`e]9;Build OK`a" -NoNewline
 # Levelled
 function Notify {
     param([string]$Text, [ValidateSet('info','success','warn','error')][string]$Level = 'info')
-    Write-Host "`e]9;cmux:$Level;$Text`a" -NoNewline
+    Write-Host "`e]9;perch:$Level;$Text`a" -NoNewline
 }
 Notify -Text 'Tests failing' -Level error
 ```
@@ -59,7 +59,7 @@ Save as `notify.cmd`, then `notify.cmd "Build OK"`.
 ```bash
 notify() {
     local level="${2:-info}"
-    printf '\e]9;cmux:%s;%s\a' "$level" "$1"
+    printf '\e]9;perch:%s;%s\a' "$level" "$1"
 }
 notify "Tests passing" success
 ```
@@ -88,13 +88,13 @@ to surface what they're doing without polling. Wire it into your hooks:
 Because OSC 9 is just bytes on stdout, this works from inside any subprocess
 the agent spawns — no IPC, no socket, no env var setup.
 
-## Comparison to cmux for macOS
+## Comparison to perch for macOS
 
-cmux (mac) exposes a `cmux notify` CLI that writes to a workspace socket.
+perch (mac) exposes a `perch notify` CLI that writes to a workspace socket.
 That's richer (it can also set git branch / cwd / ports per workspace) but
 requires the CLI and a socket protocol.
 
-cmux-win uses OSC 9 instead because:
+perch uses OSC 9 instead because:
 - It's already a standard recognised across the terminal ecosystem.
 - It needs no IPC infrastructure — works through any subprocess pipeline.
 - It composes with `tee`, `ssh`, `tmux`, etc. — anywhere bytes flow.
@@ -102,12 +102,12 @@ cmux-win uses OSC 9 instead because:
 The trade-off: OSC 9 only carries text + (in our extension) a severity.
 Workspace metadata like git branch and listening ports would need a
 separate mechanism. If that becomes load-bearing, the cleanest path is a
-local named pipe (`\\.\pipe\cmux\<session-id>`) plus a tiny `cmux` CLI —
+local named pipe (`\\.\pipe\perch\<session-id>`) plus a tiny `perch` CLI —
 documented but not built yet.
 
 ## Working directory reporting (OSC 7 / OSC 9;9)
 
-cmux-win also tracks the **current working directory** per session so the
+perch also tracks the **current working directory** per session so the
 next time you open the session, it starts where you left off. Two
 escape-sequence dialects are accepted:
 
@@ -154,7 +154,7 @@ PROMPT_COMMAND="update_cwd_osc${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
 ```
 
 **Windows Terminal shell integration** — if you've already enabled WT
-shell integration (it emits OSC 9;9), it works automatically; cmux-win
+shell integration (it emits OSC 9;9), it works automatically; perch
 recognises the WT dialect.
 
 ## Limitations

@@ -10,7 +10,7 @@ using static Native;
 string exe = args.Length > 0 ? args[0] : "cmd.exe";
 int waitMs = args.Length > 1 && int.TryParse(args[1], out var w) ? w : 2500;
 
-// Detach from our parent console BEFORE spawning. CmuxWin is a WPF app with
+// Detach from our parent console BEFORE spawning. Perch is a WPF app with
 // no inherited console, so cmd.exe attaches to the pseudoconsole. If the
 // probe stays attached to its parent console (bash/cmd), cmd happily ignores
 // the pseudoconsole and inherits the parent's console instead -- masking

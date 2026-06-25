@@ -4,7 +4,7 @@
 #   * Window opens; WebView2 + xterm.js bootstrap
 #   * ConPty spawns a real shell; bytes flow from PTY to the page
 #   * The page round-trips bytes back to the host via `pty.in`, which we
-#     mimic here through `cmux test pty.send --text ...` (control pipe ->
+#     mimic here through `perch test pty.send --text ...` (control pipe ->
 #     ConPty.Write -> PTY -> shell echoes back -> OutputReceived adds bytes)
 #   * A clean `exit\r` brings the shell down with exit code 0
 #
@@ -13,38 +13,38 @@
 #     other apps. The control pipe and UIA both work fine against a
 #     minimized window.
 #   * No keystroke synthesis anywhere. Input goes via the named pipe.
-#   * The control pipe only listens when CMUX_ENABLE_TEST_IPC=1 is in the
+#   * The control pipe only listens when PERCH_ENABLE_TEST_IPC=1 is in the
 #     launching env, so a normal install exposes no surface.
 
 [CmdletBinding()]
 param(
-    [string]$ExePath  = "$PSScriptRoot\..\src\CmuxWin\bin\Debug\net8.0-windows\win10-x64\CmuxWin.exe",
-    [string]$ToolsDir = "$PSScriptRoot\..\src\CmuxWin\bin\Debug\net8.0-windows\win10-x64\tools",
+    [string]$ExePath  = "$PSScriptRoot\..\src\Perch\bin\Debug\net8.0-windows\win10-x64\Perch.exe",
+    [string]$ToolsDir = "$PSScriptRoot\..\src\Perch\bin\Debug\net8.0-windows\win10-x64\tools",
     [switch]$KeepVisible
 )
 
 $ErrorActionPreference = 'Continue'
-$LogPath = "$env:APPDATA\cmux-win\errors.log"
-$CmuxExe = Join-Path $ToolsDir 'cmux.exe'
+$LogPath = "$env:APPDATA\perch\errors.log"
+$PerchExe = Join-Path $ToolsDir 'perch.exe'
 
-if (-not (Test-Path $ExePath))  { throw "CmuxWin.exe not found at $ExePath" }
-if (-not (Test-Path $CmuxExe))  { throw "cmux.exe missing at $CmuxExe" }
+if (-not (Test-Path $ExePath))  { throw "Perch.exe not found at $ExePath" }
+if (-not (Test-Path $PerchExe))  { throw "perch.exe missing at $PerchExe" }
 
 # --- Helpers ----------------------------------------------------------------
 
-if (-not ('Cmux.WinShow2' -as [type])) {
+if (-not ('Perch.WinShow2' -as [type])) {
     Add-Type @'
 using System;
 using System.Runtime.InteropServices;
-namespace Cmux { public static class WinShow2 {
+namespace Perch { public static class WinShow2 {
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);
   public const int SW_MINIMIZE = 6, SW_RESTORE = 9;
 } }
 '@
 }
 
-function Stop-CmuxWin {
-    Get-Process -Name CmuxWin -EA SilentlyContinue |
+function Stop-Perch {
+    Get-Process -Name Perch -EA SilentlyContinue |
         Where-Object { $_.Path -like '*\bin\Debug\*' } |
         Stop-Process -Force -EA SilentlyContinue
     Start-Sleep -Milliseconds 400
@@ -74,40 +74,40 @@ function Get-PtyBytes-FromLastSnapshot {
     return -1
 }
 
-function Invoke-CmuxTest {
+function Invoke-PerchTest {
     param([string]$Verb, [string]$Text)
     $verbArgs = @('test', $Verb)
     if ($PSBoundParameters.ContainsKey('Text')) {
         # `--text` is a generic field flag in stage 3; pty.send still uses it.
         $verbArgs += @('--text', $Text)
     }
-    $out = & $CmuxExe @verbArgs 2>&1
+    $out = & $PerchExe @verbArgs 2>&1
     if ($LASTEXITCODE -ne 0) {
-        throw "cmux test $Verb exited $LASTEXITCODE`: $out"
+        throw "perch test $Verb exited $LASTEXITCODE`: $out"
     }
 }
 
 # --- Run --------------------------------------------------------------------
 
-Stop-CmuxWin
+Stop-Perch
 Remove-Item $LogPath -Force -EA SilentlyContinue
 
-$env:CMUX_ENABLE_TEST_IPC = '1'
+$env:PERCH_ENABLE_TEST_IPC = '1'
 $p = Start-Process -PassThru -FilePath $ExePath
 
 # Wait for the window to actually exist before minimizing it.
 $deadline = (Get-Date).AddSeconds(15)
 while ((Get-Date) -lt $deadline) {
     $p.Refresh()
-    if ($p.HasExited) { throw "CmuxWin exited early code=$($p.ExitCode)" }
+    if ($p.HasExited) { throw "Perch exited early code=$($p.ExitCode)" }
     if ($p.MainWindowHandle -ne [IntPtr]::Zero) { break }
     Start-Sleep -Milliseconds 200
 }
 if ($p.MainWindowHandle -eq [IntPtr]::Zero) { throw "main window never appeared" }
 if (-not $KeepVisible) {
-    [Cmux.WinShow2]::ShowWindow($p.MainWindowHandle, [Cmux.WinShow2]::SW_MINIMIZE) | Out-Null
+    [Perch.WinShow2]::ShowWindow($p.MainWindowHandle, [Perch.WinShow2]::SW_MINIMIZE) | Out-Null
 }
-Write-Host "Launched cmux pid=$($p.Id) (minimized: $(-not $KeepVisible))"
+Write-Host "Launched perch pid=$($p.Id) (minimized: $(-not $KeepVisible))"
 
 # --- Assertion 1: ConPty starts a shell ------------------------------------
 $startLine = Wait-For-Log -Pattern 'Pane\.spawn:\s*pane=[0-9a-f]+\s*pid=\d+' -TimeoutSec 12
@@ -121,7 +121,7 @@ Write-Host "  [+] ConPty started: shell pid=$shellPid"
 # --- Assertion 2: banner + prompt produced output --------------------------
 # PowerShell's banner takes a moment to flush; give it 2s, then snapshot.
 Start-Sleep -Seconds 2
-Invoke-CmuxTest -Verb 'pty.snapshot'
+Invoke-PerchTest -Verb 'pty.snapshot'
 Start-Sleep -Milliseconds 200
 $bytesAfterBanner = Get-PtyBytes-FromLastSnapshot
 if ($bytesAfterBanner -lt 1) {
@@ -131,13 +131,13 @@ if ($bytesAfterBanner -lt 1) {
 Write-Host "  [+] Banner+prompt produced $bytesAfterBanner bytes"
 
 # --- Assertion 3: pty.send -> shell echoes back ----------------------------
-# Send `echo cmux-stage2-marker<CR>`. PowerShell echoes the command line back
-# (the cursor reposition + bytes) AND prints the literal "cmux-stage2-marker"
+# Send `echo perch-stage2-marker<CR>`. PowerShell echoes the command line back
+# (the cursor reposition + bytes) AND prints the literal "perch-stage2-marker"
 # on its own line. Either way, total bytes received goes up substantially.
-$marker = 'cmux-stage2-marker'
-Invoke-CmuxTest -Verb 'pty.send' -Text "echo $marker`r"
+$marker = 'perch-stage2-marker'
+Invoke-PerchTest -Verb 'pty.send' -Text "echo $marker`r"
 Start-Sleep -Seconds 1
-Invoke-CmuxTest -Verb 'pty.snapshot'
+Invoke-PerchTest -Verb 'pty.snapshot'
 Start-Sleep -Milliseconds 200
 $bytesAfterEcho = Get-PtyBytes-FromLastSnapshot
 $delta = $bytesAfterEcho - $bytesAfterBanner
@@ -148,7 +148,7 @@ if ($delta -lt 8) {
 Write-Host "  [+] echo produced $delta new bytes (total: $bytesAfterEcho)"
 
 # --- Assertion 4: 'exit' brings the shell down cleanly --------------------
-Invoke-CmuxTest -Verb 'pty.send' -Text "exit`r"
+Invoke-PerchTest -Verb 'pty.send' -Text "exit`r"
 $exitLine = Wait-For-Log -Pattern 'pty\.out' -TimeoutSec 1  # eats final bytes
 # We can't directly observe pty.exit unless we log it; rely on process death.
 $deadline = (Get-Date).AddSeconds(8)

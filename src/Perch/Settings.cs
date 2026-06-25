@@ -3,7 +3,7 @@ using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace CmuxWin;
+namespace Perch;
 
 public sealed class Settings
 {
@@ -35,7 +35,7 @@ public sealed class Settings
     private static string SettingsPath =>
         Path.Combine(
             AppPaths.DataRoot,
-            "cmux-win",
+            "perch",
             "settings.json");
 
     public static Settings Load()

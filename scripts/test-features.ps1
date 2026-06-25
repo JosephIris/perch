@@ -1,9 +1,9 @@
 # Test harness for the toast + URL Ctrl+click features.
 [CmdletBinding()]
 param(
-    [Parameter()][string]$ExePath = 'C:\Users\josep\dev-projects\cmux-win\src\CmuxWin\bin\Debug\net8.0-windows\win10-x64\CmuxWin.exe',
-    [Parameter()][string]$LogPath = "$env:APPDATA\cmux-win\errors.log",
-    [Parameter()][string]$ShotPath = 'C:\tmp\cmux-test.png'
+    [Parameter()][string]$ExePath = 'C:\Users\josep\dev-projects\perch\src\Perch\bin\Debug\net8.0-windows\win10-x64\Perch.exe',
+    [Parameter()][string]$LogPath = "$env:APPDATA\perch\errors.log",
+    [Parameter()][string]$ShotPath = 'C:\tmp\perch-test.png'
 )
 
 Add-Type -AssemblyName System.Drawing | Out-Null
@@ -137,7 +137,7 @@ function Send-MouseClickWithCtrl($screenX, $screenY) {
 
 # --- Setup ---
 if (Test-Path $LogPath) { Remove-Item $LogPath -Force }
-Get-Process -Name CmuxWin -EA SilentlyContinue | Where-Object { $_.Path -like '*Debug*' } | Stop-Process -Force
+Get-Process -Name Perch -EA SilentlyContinue | Where-Object { $_.Path -like '*Debug*' } | Stop-Process -Force
 Start-Sleep -Milliseconds 500
 
 # --- Launch ---
@@ -164,11 +164,11 @@ foreach ($h in $top) {
 Write-Output "Terminal HWND: $termHwnd"
 
 # --- Test 1: clipboard / toast ---
-Set-Clipboard -Value ("cmux-test-" + (Get-Random))
+Set-Clipboard -Value ("perch-test-" + (Get-Random))
 Start-Sleep -Milliseconds 400
 
 # --- Capture mid-toast ---
-& 'C:\Users\josep\dev-projects\cmux-win\scripts\capture-window.ps1' -ProcessId $p.Id -OutPath $ShotPath -TopMostFirst $false | Out-Null
+& 'C:\Users\josep\dev-projects\perch\scripts\capture-window.ps1' -ProcessId $p.Id -OutPath $ShotPath -TopMostFirst $false | Out-Null
 Write-Output "Screenshot: $ShotPath"
 
 # --- Test 2: post a URL to the buffer, then synthesize selection + right-click ---
@@ -213,11 +213,11 @@ if ($termHwnd -ne [IntPtr]::Zero) {
     [W]::PostMessage($termHwnd, 0x0205, [IntPtr]0, $lpRC) | Out-Null  # WM_RBUTTONUP
     Start-Sleep -Milliseconds 600
 
-    & 'C:\Users\josep\dev-projects\cmux-win\scripts\capture-window.ps1' -ProcessId $p.Id -OutPath 'C:\tmp\cmux-test-rclick.png' -TopMostFirst $false | Out-Null
-    Write-Output "Right-click screenshot: C:\tmp\cmux-test-rclick.png"
+    & 'C:\Users\josep\dev-projects\perch\scripts\capture-window.ps1' -ProcessId $p.Id -OutPath 'C:\tmp\perch-test-rclick.png' -TopMostFirst $false | Out-Null
+    Write-Output "Right-click screenshot: C:\tmp\perch-test-rclick.png"
 }
 
-# --- Dump entire HWND tree for the cmux process ---
+# --- Dump entire HWND tree for the perch process ---
 Write-Output "`n=== TOP-LEVEL HWNDs ($($p.Id)) ==="
 foreach ($h in $top) {
     Write-Output ""

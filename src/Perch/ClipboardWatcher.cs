@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
 
-namespace CmuxWin;
+namespace Perch;
 
 /// Listens for clipboard updates while the host window is active and raises
 /// <see cref="ClipboardChanged"/>. Used to surface a "Copied" toast when the

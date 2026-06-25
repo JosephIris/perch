@@ -8,13 +8,13 @@
     <Platforms>x64</Platforms>
     <PlatformTarget>x64</PlatformTarget>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
-    <!-- Single-file, self-contained so the EXE drops next to CmuxWin.exe
+    <!-- Single-file, self-contained so the EXE drops next to Perch.exe
          without needing a separate DLL set or a runtime install. -->
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
     <InvariantGlobalization>true</InvariantGlobalization>
-    <AssemblyName>cmux</AssemblyName>
-    <RootNamespace>CmuxCli</RootNamespace>
+    <AssemblyName>perch</AssemblyName>
+    <RootNamespace>PerchCli</RootNamespace>
   </PropertyGroup>
 
 </Project>
