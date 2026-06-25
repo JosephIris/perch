@@ -306,6 +306,10 @@ ul { list-style: none; padding: 0; margin: 0; }
   background: var(--color-state-working);
   box-shadow: none;
 }
+.session-item__dot[data-state="done"] {
+  background: var(--color-state-done);
+  box-shadow: none;
+}
 .session-item__dot[data-state="waiting"] {
   background: var(--color-state-waiting);
   box-shadow: none;
@@ -744,6 +748,12 @@ ul { list-style: none; padding: 0; margin: 0; }
   background: var(--color-state-working);
   box-shadow: none;
 }
+.pane__state-dot[data-state="done"] {
+  /* Green, solid, NO pulse — turn finished, your move, but calm: it isn't
+   * clamoring for you the way waiting/permission do. */
+  background: var(--color-state-done);
+  box-shadow: none;
+}
 .pane__state-dot[data-state="waiting"] {
   background: var(--color-state-waiting);
   box-shadow: none;
@@ -809,7 +819,11 @@ ul { list-style: none; padding: 0; margin: 0; }
   flex: 0 0 auto;
 }
 /* When state is waiting, push the label color to caution so the row
- * reads "this needs you" even peripherally. Permission goes red. */
+ * reads "this needs you" even peripherally. Permission goes red. Done is
+ * green but kept calm — same muted tint, just the green hue. */
+.pane__state-dot[data-state="done"] + .pane__state-label {
+  color: var(--color-state-done);
+}
 .pane__state-dot[data-state="waiting"] + .pane__state-label {
   color: var(--color-caution);
 }
@@ -1191,8 +1205,15 @@ ul { list-style: none; padding: 0; margin: 0; }
   inset: 0;
   z-index: 60;
   display: flex;
-  align-items: center;
+  /* flex-start + margin:auto on the card centers it when it fits and pins it
+   * to the top (so nothing clips) when it's taller than the window; overflow-y
+   * lets the overlay scroll to reveal the rest. This is robust to embedded
+   * WebView2's unreliable 100vh, which made a max-height clamp on the card a
+   * no-op (the footer CTA fell off the bottom of the 640px default window). */
+  align-items: flex-start;
   justify-content: center;
+  overflow-y: auto;
+  padding: var(--sp-24);
   background: rgba(0, 0, 0, 0.45);
   animation: settings-fade-in var(--dur-normal) var(--ease-entry);
 }
@@ -1202,8 +1223,9 @@ ul { list-style: none; padding: 0; margin: 0; }
 .onboarding-card {
   width: 560px;
   max-width: calc(100vw - var(--sp-48));
-  max-height: calc(100vh - var(--sp-48));
-  overflow: auto;
+  /* margin:auto centers within the scrollable overlay when it fits, and yields
+   * to top-alignment + scroll when the content is taller than the window. */
+  margin: auto;
   display: flex;
   flex-direction: column;
   padding: var(--sp-32);
@@ -1281,6 +1303,50 @@ ul { list-style: none; padding: 0; margin: 0; }
   font-size: var(--type-caption-size);
   color: var(--color-text-tertiary);
 }
+
+/* Status-color legend inside the welcome lightbox. Reuses .onboarding-item's
+ * two-column row (left tag 140px, right text) so it lines up with the keyboard
+ * tips above it. Separated by a hairline + extra top space so it reads as its
+ * own block. */
+.onboarding-legend {
+  margin-top: var(--sp-24);
+  padding-top: var(--sp-24);
+  border-top: 1px solid var(--color-stroke);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-16);
+}
+.onboarding-legend__title {
+  font-family: var(--font-small);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+}
+.onboarding-legend__tag {
+  flex: 0 0 140px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-8);
+}
+.onboarding-legend__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+.onboarding-legend__dot[data-state="working"]    { background: var(--color-state-working); }
+.onboarding-legend__dot[data-state="done"]       { background: var(--color-state-done); }
+.onboarding-legend__dot[data-state="waiting"]    { background: var(--color-state-waiting); }
+.onboarding-legend__dot[data-state="permission"] { background: var(--color-state-permission); }
+.onboarding-legend__word {
+  font-family: var(--font-text);
+  font-size: var(--type-body-size);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.onboarding-legend__word[data-state="done"]       { color: var(--color-state-done); }
+.onboarding-legend__word[data-state="waiting"]    { color: var(--color-caution); }
+.onboarding-legend__word[data-state="permission"] { color: var(--color-state-permission); }
 
 .settings-overlay {
   position: fixed;
@@ -1523,6 +1589,7 @@ body.show-dashboard .dashboard { display: flex; }
 }
 .dash__count::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .dash__count--alert { color: var(--color-caution); }
+.dash__count--ready { color: var(--color-state-done); }
 .dash__count--work  { color: var(--color-accent-strong); }
 .dash__count--muted { color: var(--color-text-tertiary); }
 .dash__count--muted::before { background: transparent; box-shadow: inset 0 0 0 1px currentColor; }
@@ -1558,6 +1625,7 @@ body.show-dashboard .dashboard { display: flex; }
 .card__head { display: flex; align-items: center; gap: var(--sp-8); }
 .card__dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
 .card__dot[data-state="working"]    { background: var(--color-state-working); }
+.card__dot[data-state="done"]       { background: var(--color-state-done); }
 .card__dot[data-state="waiting"]    { background: var(--color-state-waiting); }
 .card__dot[data-state="permission"] { background: var(--color-state-permission); }
 .card__dot[data-state="idle"]       { background: transparent; box-shadow: inset 0 0 0 1px var(--color-text-tertiary); }

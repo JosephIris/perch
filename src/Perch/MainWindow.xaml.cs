@@ -33,6 +33,22 @@ public partial class MainWindow : FluentWindow
     // and the test harness; the page doesn't see this.
     private readonly Dictionary<Guid, long> _ptyBytesReceived = new();
 
+    // Last PTY-output timestamp (Stopwatch ticks) per pane id, written from
+    // the ConPty read thread and read by the idle watchdog on the UI thread —
+    // hence ConcurrentDictionary. Drives the Working→Done demotion: an agent
+    // pane that's actually working redraws its spinner ~1/sec, so a few
+    // seconds of total silence reliably means the turn ended (and recovers us
+    // when a Stop hook was dropped). See OnIdleWatchdogTick.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, long> _ptyLastOutputTicks = new();
+
+    // How long a Working pane must be output-silent before the watchdog treats
+    // its turn as finished and demotes it to Done. Long enough to ride out
+    // brief pauses between an agent's spinner frames, short enough that a
+    // dropped Stop self-heals quickly.
+    private static readonly long IdleDemoteTicks = (long)(8.0 * System.Diagnostics.Stopwatch.Frequency);
+
+    private System.Windows.Threading.DispatcherTimer? _idleWatchdog;
+
     private ControlIpcServer? _control;
 
     public MainWindow()
@@ -72,9 +88,19 @@ public partial class MainWindow : FluentWindow
                 _control = new ControlIpcServer(Dispatcher, OnControlVerb);
                 _control.Start();
             }
+            // Idle watchdog: 1Hz sweep that demotes output-silent Working panes
+            // to Done (and re-promotes its own guesses when output resumes), so
+            // a missed Stop hook can't pin a pane on "working" forever.
+            _idleWatchdog = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = TimeSpan.FromSeconds(1),
+            };
+            _idleWatchdog.Tick += OnIdleWatchdogTick;
+            _idleWatchdog.Start();
         };
         Closed += (_, _) =>
         {
+            _idleWatchdog?.Stop();
             _control?.Dispose();
             foreach (var ipc in _paneIpc.Values) { try { ipc.Dispose(); } catch { } }
             _paneIpc.Clear();
@@ -295,6 +321,7 @@ public partial class MainWindow : FluentWindow
             {
                 lock (_ptyBytesReceived)
                     _ptyBytesReceived[paneId] = (_ptyBytesReceived.TryGetValue(paneId, out var n) ? n : 0) + bytes.Length;
+                _ptyLastOutputTicks[paneId] = System.Diagnostics.Stopwatch.GetTimestamp();
                 PostPaneOut(paneId, bytes);
             };
             pty.Exited += (_, code) =>
@@ -337,6 +364,7 @@ public partial class MainWindow : FluentWindow
         _ptys.Remove(paneId);
         try { pty.Dispose(); } catch { }
         lock (_ptyBytesReceived) _ptyBytesReceived.Remove(paneId);
+        _ptyLastOutputTicks.TryRemove(paneId, out _);
     }
 
     // ---- Agent IPC handlers (perch status / notify / meta) ----------------
@@ -344,6 +372,7 @@ public partial class MainWindow : FluentWindow
     private static AgentState ParseAgentState(string? s) => s switch
     {
         "working"    => AgentState.Working,
+        "done"       => AgentState.Done,
         "waiting"    => AgentState.Waiting,
         "permission" => AgentState.Permission,
         _            => AgentState.Idle,
@@ -373,6 +402,11 @@ public partial class MainWindow : FluentWindow
         if (pane == null) return;
         var prev = pane.AgentState;
         pane.AgentState = ParseAgentState(msg.State);
+        // Authoritative: an agent hook (Stop, prompt-submit, notification…)
+        // is ground truth, so clear the watchdog's "inferred" mark. This is
+        // what stops a real Stop-hook "done" from being re-promoted to
+        // "working" by later background output.
+        pane.StateInferred = false;
         pane.ActivityDetail = msg.Detail ?? "";
         // Attention nudge: any transition INTO an attention state (waiting
         // for feedback, or blocked on permission) flashes the taskbar (only
@@ -382,13 +416,59 @@ public partial class MainWindow : FluentWindow
         static bool IsAttention(AgentState st) =>
             st is AgentState.Waiting or AgentState.Permission;
         if (!IsAttention(prev) && IsAttention(pane.AgentState))
-        {
-            FlashAttention();
-        }
+            FlashAttention();                                    // loud: blocked / wants feedback
+        else if (prev != AgentState.Done && pane.AgentState == AgentState.Done)
+            FlashDoneGentle();                                   // calm: turn just finished
         // Refresh the cc-session commit counter on every state change
         // (cheap if no baseline is set, otherwise one `git rev-list`).
         _ = RefreshCommitCountAsync(pane);
         PushState();
+    }
+
+    // Idle watchdog tick (1Hz, UI thread). Agent state is otherwise purely
+    // edge-triggered off hooks, so a single dropped Stop pins a pane on
+    // "working" forever. This reconciles from a level signal — PTY output
+    // silence — to make "working" non-terminal:
+    //   • Working + silent ≥ threshold  → Done (marked inferred). A working
+    //     agent redraws its spinner ~1/sec, so sustained silence means the
+    //     turn actually ended.
+    //   • Done(inferred) + output resumed → back to Working. Covers the false
+    //     positive where a long, silent tool call (a quiet build) looked done;
+    //     when it prints again we walk it back. A real Stop-hook Done is NOT
+    //     inferred, so genuine turn-ends are never re-promoted by stray output.
+    // Only Working/Done(inferred) panes are touched — Idle shells, Waiting and
+    // Permission are left exactly as the agent reported them.
+    private void OnIdleWatchdogTick(object? sender, EventArgs e)
+    {
+        var now = System.Diagnostics.Stopwatch.GetTimestamp();
+        var changed = false;
+        foreach (var sess in _store.Sessions)
+        {
+            foreach (var pane in AllLeaves(sess.Root))
+            {
+                // No output seen yet (just spawned) → treat as not-silent so we
+                // don't demote a pane that hasn't had a chance to draw.
+                var silent = _ptyLastOutputTicks.TryGetValue(pane.Id, out var last)
+                             && (now - last) >= IdleDemoteTicks;
+
+                if (pane.AgentState == AgentState.Working && silent)
+                {
+                    pane.AgentState = AgentState.Done;
+                    pane.StateInferred = true;
+                    changed = true;
+                    Log.Info("IdleWatchdog", $"pane={pane.Id:N} working->done (output-silent)");
+                }
+                else if (pane.AgentState == AgentState.Done && pane.StateInferred && !silent)
+                {
+                    pane.AgentState = AgentState.Working;
+                    // Stays inferred — it's still a watchdog guess until a hook
+                    // says otherwise.
+                    changed = true;
+                    Log.Info("IdleWatchdog", $"pane={pane.Id:N} done->working (output resumed)");
+                }
+            }
+        }
+        if (changed) PushState();
     }
 
     // Auto-name a terminal pane from the agent's first prompt — "capture
@@ -518,6 +598,8 @@ public partial class MainWindow : FluentWindow
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
     private static extern bool FlashWindowEx(ref FLASHWINFO pwfi);
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
     private struct FLASHWINFO {
         public uint cbSize;
@@ -526,9 +608,28 @@ public partial class MainWindow : FluentWindow
         public uint uCount;
         public uint dwTimeout;
     }
+    private const uint FLASHW_TRAY = 2;           // taskbar button only (no caption)
     private const uint FLASHW_ALL = 3;
     private const uint FLASHW_TIMERNOFG = 12;     // stop flashing when foreground
-    private void FlashAttention()
+
+    // Loud: agent is blocked on you / wants feedback. Caption + taskbar, flashing
+    // until the window is foregrounded.
+    private void FlashAttention() => Flash(FLASHW_ALL | FLASHW_TIMERNOFG, count: 5);
+
+    // Calm: a turn just finished (→ Done). One brief taskbar-button blink — a
+    // glance-worthy "an agent freed up" ping without the nagging caption flash
+    // of a real attention state. Skipped when we're already foreground (there's
+    // nothing to draw the eye back to). Only fired from the authoritative Stop
+    // hook, never the idle watchdog's inferred Done, so a silent build that
+    // momentarily looks done doesn't ping you.
+    private void FlashDoneGentle()
+    {
+        var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
+        if (hwnd == IntPtr.Zero || GetForegroundWindow() == hwnd) return;
+        Flash(FLASHW_TRAY, count: 1);
+    }
+
+    private void Flash(uint flags, uint count)
     {
         try
         {
@@ -538,13 +639,13 @@ public partial class MainWindow : FluentWindow
             {
                 cbSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf<FLASHWINFO>(),
                 hwnd = hwnd,
-                dwFlags = FLASHW_ALL | FLASHW_TIMERNOFG,
-                uCount = 5,
+                dwFlags = flags,
+                uCount = count,
                 dwTimeout = 0,
             };
             FlashWindowEx(ref fi);
         }
-        catch (Exception ex) { Log.Error("FlashAttention", ex); }
+        catch (Exception ex) { Log.Error("Flash", ex); }
     }
 
     private void PostToast(string text, string? level, Guid paneId)
@@ -1412,21 +1513,34 @@ public partial class MainWindow : FluentWindow
     }
 
     /// Most-urgent state across panes. Drives the session row indicator.
-    /// Order: Permission > Waiting > Working > Idle.
+    /// Order: Permission > Waiting > Done > Working > Idle. Done outranks
+    /// Working so a session with one finished pane (your move) surfaces as
+    /// "ready" even while its other panes still churn.
     private static AgentState AggregateState(IEnumerable<PaneNode> leaves)
     {
         var seen = AgentState.Idle;
         foreach (var p in leaves)
         {
             if (p.AgentState == AgentState.Permission) return AgentState.Permission;
-            if (p.AgentState == AgentState.Waiting) seen = AgentState.Waiting;
-            else if (p.AgentState == AgentState.Working && seen != AgentState.Waiting) seen = AgentState.Working;
+            // Rank the remaining states; never let a lower one overwrite a
+            // higher one already seen.
+            var rank = Rank(p.AgentState);
+            if (rank > Rank(seen)) seen = p.AgentState;
         }
         return seen;
+
+        static int Rank(AgentState s) => s switch
+        {
+            AgentState.Waiting    => 3,
+            AgentState.Done       => 2,
+            AgentState.Working    => 1,
+            _                     => 0, // Idle
+        };
     }
     private static string StateToString(AgentState s) => s switch
     {
         AgentState.Working    => "working",
+        AgentState.Done       => "done",
         AgentState.Waiting    => "waiting",
         AgentState.Permission => "permission",
         _                     => "idle",

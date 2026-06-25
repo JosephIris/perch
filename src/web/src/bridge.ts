@@ -80,7 +80,7 @@ export type OutMessage =
 
 // ---- Incoming message shapes (host -> page) --------------------------------
 
-export type AgentStateName = "idle" | "working" | "waiting" | "permission";
+export type AgentStateName = "idle" | "working" | "done" | "waiting" | "permission";
 export type NotificationLevel = "info" | "success" | "warn" | "error";
 
 export type PaneTreeView =
@@ -127,7 +127,8 @@ export type SessionView = {
   shell: string;
   rootPane: PaneTreeView;
   /* Session-level fields are aggregations of the panes' per-pane state.
-   * agentState = most-urgent across panes (waiting > working > done > idle). */
+   * agentState = most-urgent across panes
+   * (permission > waiting > done > working > idle). */
   agentState: AgentStateName;
   activityDetail: string;
   branch: string;

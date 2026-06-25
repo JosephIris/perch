@@ -22,6 +22,15 @@ internal static class BinResolver
             string dir;
             try { dir = Path.GetFullPath(raw.Trim()); } catch { continue; }
             if (string.Equals(dir, selfDir, StringComparison.OrdinalIgnoreCase)) continue;
+            // Skip ANY perch install's tools dir, not just our own. A perch tools
+            // dir is identified by perch.exe sitting next to the shim. Skipping
+            // only selfDir is not enough: with two perch installs on PATH (e.g. a
+            // dev build run next to the installed one), each wrapper would resolve
+            // `claude`/`codex` to the OTHER perch's shim and they'd recurse, every
+            // hop prepending another --settings until cmd.exe rejects the line
+            // ("The command line is too long"). Skipping all perch dirs guarantees
+            // we land on the genuine target.
+            try { if (File.Exists(Path.Combine(dir, "perch.exe"))) continue; } catch { }
 
             foreach (var ext in new[] { ".exe", ".cmd", ".bat", "" })
             {
