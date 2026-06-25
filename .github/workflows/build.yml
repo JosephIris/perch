@@ -122,13 +122,18 @@ jobs:
           if-no-files-found: error
           retention-days: 5
 
-      - name: Upload portable exe artifact
+      # The portable build is the WHOLE publish/perch folder, not just the exe:
+      # PublishSingleFile embeds the .NET runtime into Perch.exe but NOT Content
+      # items, so wwwroot/ and tools/ ship as loose siblings. Upload the folder
+      # so the downloaded artifact actually runs (a bare Perch.exe can't find
+      # wwwroot and shows the "Web bundle not found" fallback).
+      - name: Upload portable artifact
         if: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: perch-portable-${{ env.APP_VERSION }}
-          path: publish/perch/Perch.exe
+          path: publish/perch/**
           if-no-files-found: error
           retention-days: 5
 
@@ -139,9 +144,16 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Rename portable exe to include version so the release asset is descriptive.
-          $portable = "publish/perch/Perch-$env:APP_VERSION.exe"
-          Copy-Item "publish/perch/Perch.exe" $portable
+          # The portable build is NOT a true single file: PublishSingleFile
+          # embeds the .NET runtime into Perch.exe but NOT Content items, so
+          # wwwroot/ (the xterm.js + chrome bundle) and tools/ (perch CLI +
+          # claude.cmd hook wrapper) ship as loose files beside the exe. Zip the
+          # whole publish/perch folder so the portable download runs standalone;
+          # a bare Perch.exe has no sibling wwwroot and shows the "Web bundle not
+          # found" fallback. publish/perch/* puts the contents (Perch.exe,
+          # wwwroot/, tools/) at the zip root so users unzip and run Perch.exe.
+          $portable = "publish/Perch-Portable-$env:APP_VERSION.zip"
+          Compress-Archive -Path "publish/perch/*" -DestinationPath $portable -Force
           $installer = "publish/installer/Perch-Setup-$env:APP_VERSION.exe"
 
           $notes = @"
@@ -151,7 +163,7 @@ jobs:
 
           **Downloads**
           - ``Perch-Setup-$env:APP_VERSION.exe`` — installer (Start menu + uninstaller)
-          - ``Perch-$env:APP_VERSION.exe`` — portable single-file
+          - ``Perch-Portable-$env:APP_VERSION.zip`` — portable (unzip, keep the files together, run Perch.exe)
           "@
 
           gh release create $env:GITHUB_REF_NAME `
