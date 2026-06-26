@@ -2,3 +2,12 @@
 # are checked in; the running output is not.
 current.png
 history/
+
+# Visual-validation harness build outputs (regenerate with
+# `cd src/web && npm run build:harness`) and throwaway validation shots.
+# harness.ts + harness.html are checked in; the bundle and PNGs are not.
+harness.js
+harness.css
+harness.js.map
+harness.css.map
+validate-*.png
