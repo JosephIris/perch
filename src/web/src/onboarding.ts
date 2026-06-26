@@ -33,9 +33,8 @@ interface StateTip {
 // reader builds the mental model from "nothing to do" up to "blocked on me".
 const STATES: StateTip[] = [
   { state: "working", word: "Working", text: "The agent is thinking or running a tool — nothing for you to do yet." },
-  { state: "done", word: "Done", text: "The turn finished. The agent is ready for your next task — your move, but no rush." },
-  { state: "waiting", word: "Waiting", text: "A finished turn you haven't picked up — the agent has been waiting on your feedback for a while." },
-  { state: "permission", word: "Permission", text: "The agent is blocked: it needs you to approve something before it can continue." },
+  { state: "done", word: "Idle", text: "The turn finished. The agent is at rest, ready for your next move — your call, no rush." },
+  { state: "permission", word: "Needs you", text: "The agent is blocked: it needs you to approve something before it can continue." },
 ];
 
 /** Show the welcome lightbox. No-op if it's already open. */

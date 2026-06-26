@@ -476,9 +476,10 @@ public partial class MainWindow : FluentWindow
             FlashAttention();                                    // loud: blocked / wants feedback
         else if (prev != AgentState.Done && pane.AgentState == AgentState.Done)
             FlashDoneGentle();                                   // calm: turn just finished
-        // Refresh the cc-session commit counter on every state change
-        // (cheap if no baseline is set, otherwise one `git rev-list`).
-        _ = RefreshCommitCountAsync(pane);
+        // Refresh the cc-session git signals (commits / diff size / unpushed)
+        // on every state change. Cheap if no baseline is set; otherwise a few
+        // concurrent plumbing commands off-thread.
+        _ = RefreshGitStatsAsync(pane);
         PushState();
     }
 
@@ -609,21 +610,38 @@ public partial class MainWindow : FluentWindow
         if (string.IsNullOrEmpty(pane.CommitBaseline))
         {
             pane.CommitCount = 0;
+            pane.LinesAdded = pane.LinesDeleted = pane.FilesChanged = pane.Ahead = 0;
             PushState();
             return;
         }
-        _ = RefreshCommitCountAsync(pane);
+        _ = RefreshGitStatsAsync(pane);
     }
 
-    private async System.Threading.Tasks.Task RefreshCommitCountAsync(PaneNode pane)
+    private async System.Threading.Tasks.Task RefreshGitStatsAsync(PaneNode pane)
     {
         if (string.IsNullOrEmpty(pane.CommitBaseline)) return;
         if (!_paneCwd.TryGetValue(pane.Id, out var cwd) || string.IsNullOrEmpty(cwd)) return;
-        var count = await GitProc.CommitsSinceAsync(pane.CommitBaseline, cwd);
-        if (count is not int n) return;
+        // Run the git queries concurrently off the UI thread — they're
+        // independent and each is a fast plumbing command.
+        var countT = GitProc.CommitsSinceAsync(pane.CommitBaseline, cwd);
+        var diffT  = GitProc.DiffStatsAsync(pane.CommitBaseline, cwd);
+        var aheadT = GitProc.AheadAsync(cwd);
+        await System.Threading.Tasks.Task.WhenAll(countT, diffT, aheadT);
+        var count = await countT;
+        var diff  = await diffT;
+        var ahead = await aheadT;
         await Dispatcher.InvokeAsync(() =>
         {
-            if (pane.CommitCount != n) { pane.CommitCount = n; PushState(); }
+            var changed = false;
+            if (count is int n && pane.CommitCount != n) { pane.CommitCount = n; changed = true; }
+            if (diff is (int files, int added, int deleted))
+            {
+                if (pane.FilesChanged != files)  { pane.FilesChanged = files;  changed = true; }
+                if (pane.LinesAdded   != added)  { pane.LinesAdded   = added;  changed = true; }
+                if (pane.LinesDeleted != deleted){ pane.LinesDeleted = deleted; changed = true; }
+            }
+            if (ahead is int a && pane.Ahead != a) { pane.Ahead = a; changed = true; }
+            if (changed) PushState();
         });
     }
 
@@ -1507,6 +1525,13 @@ public partial class MainWindow : FluentWindow
                         paneCount,
                         waitingCount,
                         workingCount,
+                        // Git signal aggregated across panes: total diff size
+                        // (the session's whole footprint) and the largest
+                        // unpushed count (panes usually share a branch).
+                        linesAdded   = leaves.Sum(p => p.LinesAdded),
+                        linesDeleted = leaves.Sum(p => p.LinesDeleted),
+                        filesChanged = leaves.Sum(p => p.FilesChanged),
+                        ahead        = leaves.Select(p => p.Ahead).DefaultIfEmpty(0).Max(),
                         // Relative "last activity" for the dashboard card footer.
                         lastActivity = s.LastActivityRelative,
                     };
@@ -1549,6 +1574,12 @@ public partial class MainWindow : FluentWindow
                  * pane header so the user can see at a glance how much work
                  * the agent has actually landed. */
                 commitCount = node.CommitCount,
+                /* Diff size since baseline (committed + uncommitted) and the
+                 * unpushed-commit count — feed the "+A −D · ↑N" signal. */
+                linesAdded   = node.LinesAdded,
+                linesDeleted = node.LinesDeleted,
+                filesChanged = node.FilesChanged,
+                ahead        = node.Ahead,
                 notification = string.IsNullOrEmpty(node.NotificationText) ? null : new
                 {
                     text  = node.NotificationText,

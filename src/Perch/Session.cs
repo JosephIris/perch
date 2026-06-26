@@ -300,6 +300,15 @@ internal sealed class PaneNode
     [JsonIgnore] public string CommitBaseline { get; set; } = "";
     [JsonIgnore] public int CommitCount { get; set; }
 
+    /// Diff size since the agent's baseline (committed + uncommitted), and
+    /// how many commits are ahead of upstream. Recomputed on the same git
+    /// path as CommitCount; surface the "what it changed / what's unpushed"
+    /// signal in the sidebar idle line and dashboard cards.
+    [JsonIgnore] public int LinesAdded { get; set; }
+    [JsonIgnore] public int LinesDeleted { get; set; }
+    [JsonIgnore] public int FilesChanged { get; set; }
+    [JsonIgnore] public int Ahead { get; set; }
+
     [JsonIgnore] public bool IsLeaf => Split == null;
     [JsonIgnore] public bool IsWebView => IsLeaf && !string.IsNullOrEmpty(Url);
     [JsonIgnore] public bool HasNotification => !string.IsNullOrEmpty(NotificationText);

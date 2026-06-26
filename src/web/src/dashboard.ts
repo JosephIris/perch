@@ -1,9 +1,9 @@
 // Dashboard = the full-window view of the attention center. Same derived
 // state as the sidebar (the host's SessionView[]), rendered as cards grouped
-// into Needs you / Ready / Active / Idle. "Ready" = sessions whose agent has
-// finished its turn (green "done") and is awaiting the next task — distinct
-// from "Needs you" (blocked / actively wants feedback). Opened from the ▦
-// button in the sidebar or Ctrl+Shift+A; Esc or the ✕ closes it.
+// into Needs you / Active / Idle. "Idle" = sessions whose agent finished its
+// turn ("done") or is dormant — at rest, your move, nothing blocked — distinct
+// from "Needs you" (blocked on a permission and can't proceed). Opened from the
+// ▦ button in the sidebar or Ctrl+Shift+A; Esc or the ✕ closes it.
 //
 // Every card is clickable → selects that project + closes (navigate). Waiting
 // cards additionally show a "peek" (the agent's ask) and, when the ask is
@@ -29,7 +29,7 @@ const STATE_WORD: Record<AgentStateName, string> = {
   waiting: "waiting",
   permission: "needs permission",
   working: "working",
-  done: "ready",
+  done: "idle",
   idle: "idle",
 };
 
@@ -110,9 +110,12 @@ export class Dashboard {
     const needs = sessions.filter(
       (s) => s.agentState === "waiting" || s.agentState === "permission"
     );
-    const ready = sessions.filter((s) => s.agentState === "done");
     const working = sessions.filter((s) => s.agentState === "working");
-    const idle = sessions.filter((s) => s.agentState === "idle");
+    // "Idle" folds the finished-turn ("done") and dormant ("idle") sessions
+    // together — both are at rest, your move, nothing blocked.
+    const idle = sessions.filter(
+      (s) => s.agentState === "done" || s.agentState === "idle"
+    );
 
     const frag = document.createDocumentFragment();
 
@@ -123,7 +126,6 @@ export class Dashboard {
     head.appendChild(title);
     const counts = el("div", "dash__counts");
     counts.appendChild(this.countPill(`${needs.length} need you`, needs.length ? "alert" : "muted"));
-    if (ready.length) counts.appendChild(this.countPill(`${ready.length} ready`, "ready"));
     counts.appendChild(this.countPill(`${working.length} working`, "work"));
     counts.appendChild(this.countPill(`${idle.length} idle`, "muted"));
     head.appendChild(counts);
@@ -145,12 +147,6 @@ export class Dashboard {
       frag.appendChild(this.emptyCard("All clear - nothing needs you right now."));
     }
 
-    if (ready.length) {
-      frag.appendChild(this.groupLabel("Ready"));
-      const grid = el("div", "dash__grid");
-      for (const s of ready) grid.appendChild(this.card(s));
-      frag.appendChild(grid);
-    }
     if (working.length) {
       frag.appendChild(this.groupLabel("Active"));
       const grid = el("div", "dash__grid");
@@ -167,7 +163,7 @@ export class Dashboard {
     this.root.replaceChildren(frag);
   }
 
-  private countPill(text: string, variant: "alert" | "work" | "ready" | "muted"): HTMLElement {
+  private countPill(text: string, variant: "alert" | "work" | "muted"): HTMLElement {
     const p = el("span", `dash__count dash__count--${variant}`);
     p.textContent = text;
     return p;
@@ -204,13 +200,14 @@ export class Dashboard {
     if (s.agentState === "waiting" || s.agentState === "permission") {
       this.renderWaitingBody(c, s, dot);
     } else {
-      const note = el("div", "card__note" + (s.agentState === "idle" ? " card__note--idle" : ""));
+      const atRest = s.agentState === "idle" || s.agentState === "done";
+      const note = el("div", "card__note" + (atRest ? " card__note--idle" : ""));
       note.textContent =
         s.notification?.text ||
         (s.agentState === "working"
           ? s.activityDetail || "Working…"
           : s.agentState === "done"
-          ? "Finished — ready for the next task."
+          ? "Idle — your move, no rush."
           : "No recent activity");
       c.appendChild(note);
     }
@@ -234,6 +231,32 @@ export class Dashboard {
     if (commits > 0) {
       const ch = el("span", "chip chip--commits");
       ch.textContent = `+${commits} commit${commits === 1 ? "" : "s"}`;
+      foot.appendChild(ch);
+    }
+    // Diff footprint since baseline — added (green) / deleted (red) / files.
+    if (s.linesAdded || s.linesDeleted) {
+      const ch = el("span", "chip chip--diff");
+      if (s.linesAdded) {
+        const a = el("span", "diff-add");
+        a.textContent = `+${s.linesAdded}`;
+        ch.appendChild(a);
+      }
+      if (s.linesDeleted) {
+        const d = el("span", "diff-del");
+        d.textContent = `−${s.linesDeleted}`;
+        ch.appendChild(d);
+      }
+      if (s.filesChanged) {
+        const f = el("span", "diff-files");
+        f.textContent = `${s.filesChanged} file${s.filesChanged === 1 ? "" : "s"}`;
+        ch.appendChild(f);
+      }
+      foot.appendChild(ch);
+    }
+    // Unpushed commits.
+    if (s.ahead > 0) {
+      const ch = el("span", "chip");
+      ch.textContent = `↑${s.ahead}`;
       foot.appendChild(ch);
     }
     for (const port of s.ports ?? []) {
