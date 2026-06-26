@@ -7,6 +7,12 @@
   #define AppVersion "0.1.0"
 #endif
 
+; Code signing is intentionally NOT done here. Inno's [Setup] SignTool mechanism
+; is unused because we sign AFTER the build, in CI, via SignPath Foundation (free
+; signing for OSS). SignPath's Artifact Configuration signs both this installer
+; and the Perch.exe / perch.exe nested inside it in a single pass. Onboarding and
+; the CI wiring are documented in docs/CODE-SIGNING.md.
+
 [Setup]
 AppId={{6F2A9D54-3CE0-4C2B-9B7D-PERCH-WIN-APP}}
 AppName=Perch
