@@ -123,6 +123,9 @@ export type PaneTreeView =
       linesDeleted: number;
       filesChanged: number;
       ahead: number;
+      /* Unix-ms the pane entered its current working spell (0 when not
+       * working). The page ticks elapsed against Date.now(). */
+      turnStartMs: number;
       /* Size weight inside the parent split (flex-grow). Defaults to 1. */
       weight?: number;
     }
@@ -160,6 +163,9 @@ export type SessionView = {
   linesDeleted: number;
   filesChanged: number;
   ahead: number;
+  /* Unix-ms the earliest working pane started (0 when nothing's working) —
+   * drives the live "working · 2m" elapsed in the sidebar/dashboard. */
+  turnStartMs: number;
   /* Relative "last activity" string ("now" / "5m ago") for the dashboard. */
   lastActivity: string;
 };

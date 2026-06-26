@@ -141,11 +141,13 @@ internal static class HookHandler
                 break;
 
             case "pre-tool-use":
-                // Optional: report the tool name as activity detail. Cheap
-                // signal; useful for "what's the agent doing right now?".
+                // Report what the agent is doing as a human verb + target —
+                // "editing pane.ts", "running npm", "reading Session.cs" — so
+                // the sidebar/dashboard answer "what's it doing right now?"
+                // concretely instead of "using Edit".
                 var tool = StringFrom(root, "tool_name") ?? StringFrom(root, "tool");
                 if (!string.IsNullOrEmpty(tool))
-                    Send(pipeName, new { type = "status", state = "working", detail = $"using {tool}" });
+                    Send(pipeName, new { type = "status", state = "working", detail = PrettyAction(root, tool!) });
                 break;
 
             case "post-tool-use":
@@ -193,6 +195,81 @@ internal static class HookHandler
         }
         if (s != null && maxLen > 0 && s.Length > maxLen) s = s.Substring(0, maxLen) + "…";
         return s;
+    }
+
+    /// Pull a string field out of the hook's `tool_input` object (Edit's
+    /// file_path, Bash's command, …). Checks the root and the same wrappers
+    /// StringFrom does. Null when absent.
+    private static string? ToolInputString(JsonElement? root, string field)
+    {
+        if (root is not JsonElement el) return null;
+        static string? FromHolder(JsonElement h, string f)
+        {
+            if (h.TryGetProperty("tool_input", out var ti) && ti.ValueKind == JsonValueKind.Object
+                && ti.TryGetProperty(f, out var v) && v.ValueKind == JsonValueKind.String)
+                return v.GetString();
+            return null;
+        }
+        var s = FromHolder(el, field);
+        if (s == null)
+        {
+            foreach (var wrap in new[] { "hook_input", "data" })
+                if (el.TryGetProperty(wrap, out var w) && w.ValueKind == JsonValueKind.Object)
+                {
+                    s = FromHolder(w, field);
+                    if (s != null) break;
+                }
+        }
+        return s;
+    }
+
+    /// Human "verb + target" label for a tool call — "editing pane.ts",
+    /// "running npm", "reading Session.cs". Falls back to "using {tool}" for
+    /// tools we don't special-case (or when the input field is missing).
+    private static string PrettyAction(JsonElement? root, string tool)
+    {
+        static string Base(string? p)
+        {
+            if (string.IsNullOrEmpty(p)) return "";
+            var idx = p!.LastIndexOfAny(new[] { '/', '\\' });
+            return idx >= 0 ? p.Substring(idx + 1) : p;
+        }
+        switch (tool)
+        {
+            case "Edit":
+            case "MultiEdit":
+            case "Write":
+            case "NotebookEdit":
+            {
+                var f = Base(ToolInputString(root, "file_path") ?? ToolInputString(root, "notebook_path"));
+                return f.Length > 0 ? $"editing {f}" : "editing a file";
+            }
+            case "Read":
+            {
+                var f = Base(ToolInputString(root, "file_path"));
+                return f.Length > 0 ? $"reading {f}" : "reading a file";
+            }
+            case "Bash":
+            {
+                var cmd = (ToolInputString(root, "command") ?? "").TrimStart();
+                var sp = cmd.IndexOfAny(new[] { ' ', '\n', '\t' });
+                var prog = sp > 0 ? cmd.Substring(0, sp) : cmd;
+                return prog.Length > 0 ? $"running {prog}" : "running a command";
+            }
+            case "Grep":
+            case "Glob":
+                return "searching";
+            case "WebFetch":
+                return "fetching the web";
+            case "WebSearch":
+                return "searching the web";
+            case "Task":
+                return "running a subagent";
+            case "TodoWrite":
+                return "planning";
+            default:
+                return $"using {tool}";
+        }
     }
 
     /// Run `git rev-parse HEAD` in the cwd Claude was launched from. Returns

@@ -309,6 +309,12 @@ internal sealed class PaneNode
     [JsonIgnore] public int FilesChanged { get; set; }
     [JsonIgnore] public int Ahead { get; set; }
 
+    /// Unix-ms timestamp the pane entered its current Working spell, so the
+    /// UI can tick "working · 2m". 0 whenever the pane isn't working. Wall
+    /// clock (not Stopwatch) because the page compares against Date.now() on
+    /// the same machine.
+    [JsonIgnore] public long TurnStartUnixMs { get; set; }
+
     [JsonIgnore] public bool IsLeaf => Split == null;
     [JsonIgnore] public bool IsWebView => IsLeaf && !string.IsNullOrEmpty(Url);
     [JsonIgnore] public bool HasNotification => !string.IsNullOrEmpty(NotificationText);
