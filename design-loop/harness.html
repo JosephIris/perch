@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Perch harness</title>
+  <!-- Load Inter from the local source file so the screenshot uses the real
+       bundled font (app.css's /fonts/* URL can't resolve under file://). -->
+  <style>
+    @font-face {
+      font-family: "Inter Variable";
+      src: url("../src/web/fonts/InterVariable.woff2") format("woff2-variations");
+      font-weight: 100 900;
+      font-display: swap;
+    }
+    html, body { margin: 0; height: 100vh; }
+    /* Simulate the dark Mica backdrop (transparent in-app; won't screenshot). */
+    body { background: #1f1f1f; }
+  </style>
+  <link rel="stylesheet" href="./harness.css" />
+</head>
+<body>
+  <div id="app">
+    <aside class="sidebar" role="navigation" aria-label="Sessions">
+      <div class="sidebar__top-actions">
+        <button id="new-session-button" class="sidebar__action" type="button">
+          <span class="sidebar__action-icon" aria-hidden="true">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="1.8"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19"/>
+              <line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+          </span>
+          <span class="sidebar__action-label">New session</span>
+        </button>
+        <button id="open-dashboard" class="sidebar__icon-btn" type="button"
+                title="Open dashboard" aria-label="Open dashboard">
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none"
+               stroke="currentColor" stroke-width="1.4">
+            <rect x="2" y="2" width="5" height="5" rx="1"/>
+            <rect x="9" y="2" width="5" height="5" rx="1"/>
+            <rect x="2" y="9" width="5" height="5" rx="1"/>
+            <rect x="9" y="9" width="5" height="5" rx="1"/>
+          </svg>
+          <span class="sidebar__icon-badge" id="dash-badge" style="display:none">0</span>
+        </button>
+      </div>
+      <div id="sidebar-scroll" class="sidebar__scroll"></div>
+      <footer class="sidebar__footer">
+        <button class="sidebar__identity" type="button" title="Perch" aria-label="Perch">
+          <span class="sidebar__identity-text">
+            <span class="sidebar__identity-name">Perch</span>
+            <span class="sidebar__identity-sub" id="status-text">harness</span>
+          </span>
+        </button>
+      </footer>
+    </aside>
+    <main id="workspace" class="workspace"></main>
+    <section id="dashboard" class="dashboard" aria-hidden="true"></section>
+  </div>
+  <script src="./harness.js"></script>
+</body>
+</html>
