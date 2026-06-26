@@ -465,6 +465,18 @@ public partial class MainWindow : FluentWindow
         // "working" by later background output.
         pane.StateInferred = false;
         pane.ActivityDetail = newDetail;
+        // Turn-start clock for "working · 2m": stamp when a pane ENTERS working
+        // from a non-working state; clear whenever it leaves. A working→working
+        // edge (a new tool mid-turn) keeps the original start.
+        if (newState == AgentState.Working)
+        {
+            if (prev != AgentState.Working)
+                pane.TurnStartUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        }
+        else
+        {
+            pane.TurnStartUnixMs = 0;
+        }
         // Attention nudge: any transition INTO an attention state (waiting
         // for feedback, or blocked on permission) flashes the taskbar (only
         // when our window isn't already foreground). One place to raise the
@@ -513,6 +525,7 @@ public partial class MainWindow : FluentWindow
                 {
                     pane.AgentState = AgentState.Done;
                     pane.StateInferred = true;
+                    pane.TurnStartUnixMs = 0;            // left working → no elapsed
                     changed = true;
                     Log.Info("IdleWatchdog", $"pane={pane.Id:N} working->done (output-silent)");
                 }
@@ -520,7 +533,8 @@ public partial class MainWindow : FluentWindow
                 {
                     pane.AgentState = AgentState.Working;
                     // Stays inferred — it's still a watchdog guess until a hook
-                    // says otherwise.
+                    // says otherwise. Restart the turn clock for the new spell.
+                    pane.TurnStartUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                     changed = true;
                     Log.Info("IdleWatchdog", $"pane={pane.Id:N} done->working (output resumed)");
                 }
@@ -1532,6 +1546,13 @@ public partial class MainWindow : FluentWindow
                         linesDeleted = leaves.Sum(p => p.LinesDeleted),
                         filesChanged = leaves.Sum(p => p.FilesChanged),
                         ahead        = leaves.Select(p => p.Ahead).DefaultIfEmpty(0).Max(),
+                        // Earliest working pane's start → "this session has been
+                        // working Xm". 0 when nothing is working.
+                        turnStartMs  = leaves
+                            .Where(p => p.AgentState == AgentState.Working && p.TurnStartUnixMs > 0)
+                            .Select(p => p.TurnStartUnixMs)
+                            .DefaultIfEmpty(0)
+                            .Min(),
                         // Relative "last activity" for the dashboard card footer.
                         lastActivity = s.LastActivityRelative,
                     };
@@ -1580,6 +1601,9 @@ public partial class MainWindow : FluentWindow
                 linesDeleted = node.LinesDeleted,
                 filesChanged = node.FilesChanged,
                 ahead        = node.Ahead,
+                /* Unix-ms the pane started its current working spell (0 when
+                 * not working) — the page ticks "working · 2m" against it. */
+                turnStartMs  = node.TurnStartUnixMs,
                 notification = string.IsNullOrEmpty(node.NotificationText) ? null : new
                 {
                     text  = node.NotificationText,

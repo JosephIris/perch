@@ -16,6 +16,7 @@
 import type { SessionView } from "./bridge.js";
 import { send } from "./bridge.js";
 import { confirmDialog } from "./confirm.js";
+import { elapsedSpan } from "./elapsed.js";
 
 /** "+142 −38" diff summary (U+2212 minus). Empty when nothing changed, so the
  *  caller can omit the item entirely. Either clause is dropped when zero. */
@@ -131,11 +132,11 @@ export class Sidebar {
     //   working → "▸ what it's doing"
     //   done    → "+A −D · ⎇ branch ↑N"  (what it produced / what's unpushed)
     //   else    → "⎇ branch · :ports"     (dormant / needs-you keep code context)
-    const metaItems: Array<{ text: string; alert?: boolean }> = [];
+    const metaItems: Array<{ text: string; alert?: boolean; turnStart?: number }> = [];
     const ahead = s.ahead > 0 ? ` ↑${s.ahead}` : "";
 
     if (s.agentState === "working") {
-      metaItems.push({ text: `▸ ${s.activityDetail || "working"}` });
+      metaItems.push({ text: `▸ ${s.activityDetail || "working"}`, turnStart: s.turnStartMs });
     } else if (s.agentState === "done") {
       const diff = fmtDiff(s.linesAdded, s.linesDeleted);
       if (diff) metaItems.push({ text: diff });
@@ -162,6 +163,12 @@ export class Sidebar {
         span.className =
           "session-item__meta-item" + (mi.alert ? " session-item__meta-item--alert" : "");
         span.textContent = mi.text;
+        // Live "· 2m" elapsed appended to the working item; the ticker only
+        // rewrites the inner span, leaving the action text untouched.
+        if (mi.turnStart && mi.turnStart > 0) {
+          span.append(" · ");
+          span.appendChild(elapsedSpan(mi.turnStart));
+        }
         meta.appendChild(span);
       }
       item.appendChild(meta);

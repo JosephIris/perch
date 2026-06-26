@@ -12,6 +12,11 @@ import { installShortcutHint } from "./shortcut-hint.js";
 import { Toast } from "./toast.js";
 import { openSettings, applySettingsData } from "./settings.js";
 import { showOnboarding } from "./onboarding.js";
+import { startElapsedTicker } from "./elapsed.js";
+
+// One shared 1Hz ticker keeps every "working · 2m" label live without
+// rebuilding the sidebar/dashboard. Safe to start before the first state.
+startElapsedTicker();
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const el = document.getElementById(id);

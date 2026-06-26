@@ -13,6 +13,7 @@
 
 import type { PaneTreeView, SessionView, AgentStateName } from "./bridge.js";
 import { send, bytesToB64 } from "./bridge.js";
+import { elapsedSpan } from "./elapsed.js";
 
 const enc = new TextEncoder();
 
@@ -215,7 +216,14 @@ export class Dashboard {
     // Footer: last-activity + code chips (branch / +commits / ports / panes).
     const foot = el("div", "card__foot");
     const act = el("span", "card__activity");
-    act.textContent = `${STATE_WORD[s.agentState]}${s.lastActivity ? ` · ${s.lastActivity}` : ""}`;
+    act.textContent = STATE_WORD[s.agentState];
+    // Live elapsed for a working session; otherwise the relative last-activity.
+    if (s.agentState === "working" && s.turnStartMs > 0) {
+      act.append(" · ");
+      act.appendChild(elapsedSpan(s.turnStartMs));
+    } else if (s.lastActivity) {
+      act.append(` · ${s.lastActivity}`);
+    }
     foot.appendChild(act);
     if (s.paneCount > 1) {
       const ch = el("span", "chip" + (s.waitingCount > 0 ? " chip--alert" : ""));
