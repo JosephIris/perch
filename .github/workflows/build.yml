@@ -16,6 +16,13 @@ jobs:
   build:
     runs-on: windows-latest
 
+    # Expose the SignPath token as a job-level env so steps can gate on its
+    # presence in `if:` (secrets can't be referenced directly in `if:`; promoting
+    # to job env is the documented workaround). No token (pre-onboarding, or on a
+    # fork) => the signing steps skip and the release publishes unsigned.
+    env:
+      SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+
     steps:
       - uses: actions/checkout@v7
 
@@ -64,6 +71,12 @@ jobs:
       - name: Restore
         run: dotnet restore src/Perch/Perch.csproj
 
+      # NOTE: EnableCompressionInSingleFile is intentionally OFF. A *compressed*
+      # single-file bundle is effectively a self-extracting exe that decompresses
+      # native DLLs to disk at runtime, which Defender's ML heuristic reads as a
+      # packer/dropper (the Trojan:Win32/Wacatac.B!ml false positive). Uncompressed
+      # is a larger download but not self-extracting. Only re-enable once
+      # Authenticode signing is live AND confirmed to clear the detection on its own.
       - name: Publish self-contained single-file
         run: |
           dotnet publish src/Perch/Perch.csproj `
@@ -72,7 +85,7 @@ jobs:
             --self-contained `
             -p:PublishSingleFile=true `
             -p:IncludeNativeLibrariesForSelfExtract=true `
-            -p:EnableCompressionInSingleFile=true `
+            -p:EnableCompressionInSingleFile=false `
             -o publish/perch
 
       # Bundle the WebView2 Runtime evergreen bootstrapper into the
@@ -138,24 +151,87 @@ jobs:
           retention-days: 5
 
       # ------- Release: runs only on tag pushes -------
+      # Flow: package portable -> stage installer + portable into one folder ->
+      # upload that as a GH artifact -> SignPath signs it (gated on the secret) ->
+      # create the Release from the signed files (or unsigned, if SignPath isn't
+      # configured yet). The one-time SignPath Foundation onboarding that
+      # populates SIGNPATH_API_TOKEN and the vars.* below is in docs/CODE-SIGNING.md.
+      - name: Package portable zip
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          # The portable build is the WHOLE publish/perch folder, not a lone exe:
+          # PublishSingleFile embeds the .NET runtime into Perch.exe but NOT Content
+          # items, so wwwroot/ (the xterm.js + chrome bundle) and tools/ (perch CLI
+          # + claude.cmd hook wrapper) ship as loose siblings. Zipping
+          # publish/perch/* puts Perch.exe + wwwroot/ + tools/ at the zip root so
+          # users unzip, keep the files together, and run Perch.exe; a bare
+          # Perch.exe has no sibling wwwroot and shows the "Web bundle not found"
+          # fallback.
+          Compress-Archive -Path "publish/perch/*" -DestinationPath "publish/Perch-Portable-$env:APP_VERSION.zip" -Force
+
+      - name: Stage release artifacts for signing
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          # Put both release artifacts in one folder so a SINGLE SignPath
+          # submission signs both. upload-artifact zips this folder, so SignPath's
+          # Artifact Configuration is rooted as a <zip-file> and signs the nested
+          # Inno installer (plus its inner Perch.exe/perch.exe) and the portable
+          # zip's exes. See docs/CODE-SIGNING.md for that configuration.
+          New-Item -ItemType Directory -Force -Path staging | Out-Null
+          Copy-Item "publish/installer/Perch-Setup-$env:APP_VERSION.exe" staging/
+          Copy-Item "publish/Perch-Portable-$env:APP_VERSION.zip"        staging/
+
+      - name: Upload unsigned release bundle
+        id: unsigned_bundle
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v7
+        with:
+          name: perch-release-unsigned-${{ env.APP_VERSION }}
+          path: staging/**
+          if-no-files-found: error
+          retention-days: 5
+
+      # SignPath Foundation (free for OSS) signs the bundle server-side. GATED on
+      # the secret: when SIGNPATH_API_TOKEN is unset (pre-onboarding, or on forks)
+      # this step is skipped and the release publishes UNSIGNED instead of failing.
+      # Once SignPath fails for a CONFIGURED token (bad slug etc.) the job fails
+      # loudly rather than silently shipping unsigned — that's intentional.
+      - name: Sign release bundle (SignPath)
+        id: signed_bundle
+        if: ${{ startsWith(github.ref, 'refs/tags/v') && env.SIGNPATH_API_TOKEN != '' }}
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIG_SLUG }}
+          github-artifact-id: ${{ steps.unsigned_bundle.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed
+
+      - name: Resolve release source (signed if available)
+        id: relsrc
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          if (Test-Path "signed/Perch-Setup-$env:APP_VERSION.exe") {
+            "dir=signed" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            Write-Output "Publishing SIGNED artifacts."
+          } else {
+            "dir=staging" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            Write-Output "::warning::SignPath not configured (no SIGNPATH_API_TOKEN) - publishing UNSIGNED artifacts. See docs/CODE-SIGNING.md."
+          }
+
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # The portable build is NOT a true single file: PublishSingleFile
-          # embeds the .NET runtime into Perch.exe but NOT Content items, so
-          # wwwroot/ (the xterm.js + chrome bundle) and tools/ (perch CLI +
-          # claude.cmd hook wrapper) ship as loose files beside the exe. Zip the
-          # whole publish/perch folder so the portable download runs standalone;
-          # a bare Perch.exe has no sibling wwwroot and shows the "Web bundle not
-          # found" fallback. publish/perch/* puts the contents (Perch.exe,
-          # wwwroot/, tools/) at the zip root so users unzip and run Perch.exe.
-          $portable = "publish/Perch-Portable-$env:APP_VERSION.zip"
-          Compress-Archive -Path "publish/perch/*" -DestinationPath $portable -Force
-          $installer = "publish/installer/Perch-Setup-$env:APP_VERSION.exe"
-
+          $src = "${{ steps.relsrc.outputs.dir }}"
           $notes = @"
           ## Perch $env:GITHUB_REF_NAME
 
@@ -167,7 +243,7 @@ jobs:
           "@
 
           gh release create $env:GITHUB_REF_NAME `
-            $installer `
-            $portable `
+            "$src/Perch-Setup-$env:APP_VERSION.exe" `
+            "$src/Perch-Portable-$env:APP_VERSION.zip" `
             --title "Perch $env:GITHUB_REF_NAME" `
             --notes $notes
