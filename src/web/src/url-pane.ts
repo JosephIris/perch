@@ -126,7 +126,9 @@ export class UrlPane {
     this.nameEl.textContent = leaf.name;
     this.stateDotEl.dataset.state = leaf.agentState;
     this.stateLabelEl.textContent =
-      leaf.agentState === "idle" ? "" : leaf.agentState;
+      leaf.agentState === "idle" ? "" :
+      leaf.agentState === "done" ? "idle" :
+      leaf.agentState;
     this.colorDotEl.dataset.color = String(leaf.colorIndex);
     this.element.dataset.color = String(leaf.colorIndex);
     this.element.dataset.state = leaf.agentState;

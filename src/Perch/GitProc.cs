@@ -44,6 +44,38 @@ internal static class GitProc
         return int.TryParse(stdout.Trim(), out var n) ? n : (int?)null;
     }
 
+    /// Diff size from <paramref name="baselineSha"/> to the working tree —
+    /// i.e. everything the agent has touched since session-start, committed
+    /// AND uncommitted. Parses `git diff --shortstat`; any clause may be
+    /// absent ("1 file changed, 5 insertions(+)" with no deletions). Returns
+    /// (files, added, deleted), or null on failure.
+    public static async Task<(int files, int added, int deleted)?> DiffStatsAsync(string baselineSha, string cwd)
+    {
+        if (string.IsNullOrEmpty(baselineSha)) return null;
+        var (ok, stdout) = await RunAsync("git", $"diff --shortstat {baselineSha}", cwd);
+        if (!ok) return null;
+        int files = 0, added = 0, deleted = 0;
+        var mF = System.Text.RegularExpressions.Regex.Match(stdout, @"(\d+) files? changed");
+        if (mF.Success) int.TryParse(mF.Groups[1].Value, out files);
+        var mA = System.Text.RegularExpressions.Regex.Match(stdout, @"(\d+) insertions?\(\+\)");
+        if (mA.Success) int.TryParse(mA.Groups[1].Value, out added);
+        var mD = System.Text.RegularExpressions.Regex.Match(stdout, @"(\d+) deletions?\(-\)");
+        if (mD.Success) int.TryParse(mD.Groups[1].Value, out deleted);
+        return (files, added, deleted);
+    }
+
+    /// Commits HEAD is ahead of its upstream (`@{upstream}..HEAD`) — the
+    /// "↑N unpushed" signal. Returns 0 when there's no upstream tracking
+    /// branch configured or nothing to push; null only on an unexpected
+    /// failure. (No upstream is a normal state, not an error, so it folds
+    /// to 0 rather than null.)
+    public static async Task<int?> AheadAsync(string cwd)
+    {
+        var (ok, stdout) = await RunAsync("git", "rev-list --count @{upstream}..HEAD", cwd);
+        if (!ok) return 0;
+        return int.TryParse(stdout.Trim(), out var n) ? n : 0;
+    }
+
     /// Shared process runner — captures stdout, ignores stderr, returns
     /// (success, stdout). Success means exit code 0. No timeout; git
     /// commands here are fast and we're already off the UI thread.

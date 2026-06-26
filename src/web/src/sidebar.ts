@@ -3,17 +3,29 @@
 // exactly. Reconciles diff-free: clear + rebuild on every state push.
 //
 // The list is split into sections driven purely by derived agent state:
-//   - "Needs you" : sessions that are waiting (your feedback) or blocked on a
-//                   permission. Each row also shows the agent's note (its ask).
-//   - "Ready"     : sessions whose agent finished its turn (green "done") and
-//                   is waiting for the NEXT task — your move, but not blocked.
-//                   Calm, single-line rows, no alarming note.
-//   - "Projects"  : everything else (working / idle), single-line rows.
+//   - "Needs you" : sessions blocked on a permission prompt (or a genuine,
+//                   reserved "waiting"). The agent CAN'T proceed without you.
+//                   Each row also shows the agent's note (its ask).
+//   - "Idle"      : sessions whose agent finished its turn ("done") and is at
+//                   rest — your move, but nothing is blocked and there's no
+//                   rush. Calm, single-line rows, no alarming note.
+//   - "Projects"  : everything else (working / dormant idle), single-line rows.
 // Each row is a framed card (see .session-item in style.css) — perch-style
 // tabs-as-cards. Selection still reads via fill, not an accent stripe.
 
 import type { SessionView } from "./bridge.js";
 import { send } from "./bridge.js";
+import { confirmDialog } from "./confirm.js";
+
+/** "+142 −38" diff summary (U+2212 minus). Empty when nothing changed, so the
+ *  caller can omit the item entirely. Either clause is dropped when zero. */
+export function fmtDiff(added: number, deleted: number): string {
+  if (!added && !deleted) return "";
+  const parts: string[] = [];
+  if (added) parts.push(`+${added}`);
+  if (deleted) parts.push(`−${deleted}`);
+  return parts.join(" ");
+}
 
 export class Sidebar {
   private readonly listEl: HTMLElement;
@@ -29,14 +41,15 @@ export class Sidebar {
   }
 
   render(sessions: SessionView[], activeId: string) {
-    // Partition by derived state. waiting (feedback) + permission both want
-    // your attention (Needs you); done is "finished, your move" (Ready);
-    // working/idle are just the map (Projects). Order within each section
-    // follows the host's session order (stable) — no resort, so rows don't jump.
+    // Partition by derived state. permission (+ the reserved "waiting") want
+    // your attention (Needs you); done is "finished, at rest, your move" (Idle);
+    // working/dormant-idle are just the map (Projects). Order within each
+    // section follows the host's session order (stable) — no resort, so rows
+    // don't jump.
     const needs = sessions.filter(
       (s) => s.agentState === "waiting" || s.agentState === "permission"
     );
-    const ready = sessions.filter((s) => s.agentState === "done");
+    const idle = sessions.filter((s) => s.agentState === "done");
     const rest = sessions.filter(
       (s) => s.agentState === "working" || s.agentState === "idle"
     );
@@ -52,11 +65,11 @@ export class Sidebar {
       frag.appendChild(list);
     }
 
-    if (ready.length) {
-      frag.appendChild(this.sectionLabel("Ready", ready.length));
+    if (idle.length) {
+      frag.appendChild(this.sectionLabel("Idle", idle.length));
       const list = document.createElement("div");
       list.className = "session-list";
-      for (const s of ready)
+      for (const s of idle)
         list.appendChild(this.renderItem(s, s.id === activeId, false));
       frag.appendChild(list);
     }
@@ -113,37 +126,43 @@ export class Sidebar {
     primary.appendChild(title);
     item.appendChild(primary);
 
-    // Optional secondary line: pane-count breakdown · branch · ports. The code
-    // context stays visible in both sections — code tool first, attention on top.
-    const hasBreakdown = s.paneCount > 1;
-    const hasBranchPorts = s.branch || (s.ports && s.ports.length > 0);
-    if (hasBreakdown || hasBranchPorts) {
+    // Secondary line(s): one state-aware signal, then pane breakdown. flex-wrap
+    // lets a dense session spill onto a second muted line.
+    //   working → "▸ what it's doing"
+    //   done    → "+A −D · ⎇ branch ↑N"  (what it produced / what's unpushed)
+    //   else    → "⎇ branch · :ports"     (dormant / needs-you keep code context)
+    const metaItems: Array<{ text: string; alert?: boolean }> = [];
+    const ahead = s.ahead > 0 ? ` ↑${s.ahead}` : "";
+
+    if (s.agentState === "working") {
+      metaItems.push({ text: `▸ ${s.activityDetail || "working"}` });
+    } else if (s.agentState === "done") {
+      const diff = fmtDiff(s.linesAdded, s.linesDeleted);
+      if (diff) metaItems.push({ text: diff });
+      if (s.branch) metaItems.push({ text: `⎇ ${s.branch}${ahead}` });
+    } else {
+      // dormant idle / needs-you: branch (+ unpushed) + dev-server ports.
+      if (s.branch) metaItems.push({ text: `⎇ ${s.branch}${ahead}` });
+      for (const p of s.ports ?? []) metaItems.push({ text: `:${p}` });
+    }
+
+    // Pane breakdown, appended for any multi-pane session.
+    if (s.paneCount > 1) {
+      const parts: string[] = [`${s.paneCount} panes`];
+      if (s.waitingCount > 0) parts.push(`${s.waitingCount} waiting`);
+      else if (s.workingCount > 0) parts.push(`${s.workingCount} working`);
+      metaItems.push({ text: parts.join(" · "), alert: s.waitingCount > 0 });
+    }
+
+    if (metaItems.length) {
       const meta = document.createElement("span");
       meta.className = "session-item__meta";
-
-      if (hasBreakdown) {
-        const parts: string[] = [`${s.paneCount} panes`];
-        if (s.waitingCount > 0) parts.push(`${s.waitingCount} waiting`);
-        else if (s.workingCount > 0) parts.push(`${s.workingCount} working`);
-        const breakdown = document.createElement("span");
-        breakdown.className =
-          "session-item__meta-item" +
-          (s.waitingCount > 0 ? " session-item__meta-item--alert" : "");
-        breakdown.textContent = parts.join(" · ");
-        meta.appendChild(breakdown);
-      }
-
-      if (s.branch) {
-        const b = document.createElement("span");
-        b.className = "session-item__meta-item";
-        b.textContent = `⎇ ${s.branch}`;
-        meta.appendChild(b);
-      }
-      for (const p of s.ports ?? []) {
-        const b = document.createElement("span");
-        b.className = "session-item__meta-item";
-        b.textContent = `:${p}`;
-        meta.appendChild(b);
+      for (const mi of metaItems) {
+        const span = document.createElement("span");
+        span.className =
+          "session-item__meta-item" + (mi.alert ? " session-item__meta-item--alert" : "");
+        span.textContent = mi.text;
+        meta.appendChild(span);
       }
       item.appendChild(meta);
     }
@@ -174,9 +193,19 @@ export class Sidebar {
     close.title = "Close session";
     close.setAttribute("aria-label", `Close ${s.title}`);
     close.textContent = "✕";
-    close.addEventListener("click", (ev) => {
+    // Closing a session tears down its entire pane layout — unrecoverable, and
+    // losing a hand-arranged setup stings. Gate it behind a confirm.
+    close.addEventListener("click", async (ev) => {
       ev.stopPropagation();
-      send({ type: "session.close", id: s.id });
+      const panes = s.paneCount === 1 ? "1 pane" : `${s.paneCount} panes`;
+      const ok = await confirmDialog({
+        title: `Close ${s.title}?`,
+        body: `This closes the session and its ${panes}. The pane layout can't be recovered.`,
+        confirmLabel: "Close session",
+        cancelLabel: "Keep open",
+        danger: true,
+      });
+      if (ok) send({ type: "session.close", id: s.id });
     });
     item.appendChild(close);
 

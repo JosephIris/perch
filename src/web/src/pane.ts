@@ -375,8 +375,13 @@ export class Pane {
     this.nameFull = leaf.nameFull ?? "";
     this.nameEl.textContent = leaf.name;
     this.stateDotEl.dataset.state = leaf.agentState;
+    // Header badge word. A finished turn ("done") reads as "idle" — calm, your
+    // move, no rush; a dormant shell ("idle") shows nothing. Everything else
+    // shows its raw state name.
     this.stateLabelEl.textContent =
-      leaf.agentState === "idle" ? "" : leaf.agentState;
+      leaf.agentState === "idle" ? "" :
+      leaf.agentState === "done" ? "idle" :
+      leaf.agentState;
     this.colorDotEl.dataset.color = String(leaf.colorIndex);
     // data-color on the pane element drives the CSS rule that tints
     // .pane__name text in the same color as the dot — features pop

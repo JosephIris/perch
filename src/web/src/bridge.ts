@@ -80,6 +80,15 @@ export type OutMessage =
 
 // ---- Incoming message shapes (host -> page) --------------------------------
 
+// Agent states, calm → loud. Surfaced words differ from the internal names:
+//   idle       — dormant shell / agent exited. No badge.
+//   working    — actively generating or running a tool.
+//   done       — finished its turn, at rest. Shown to the user as "idle":
+//                your move, nothing blocked, no rush. NOT a call for attention.
+//   waiting    — RESERVED for a genuine "blocked waiting on your reply". No
+//                longer auto-fired by Claude's 60s idle nudge (that stays
+//                "done"); grouped with permission under "Needs you".
+//   permission — blocked on a permission prompt, can't proceed. The loud state.
 export type AgentStateName = "idle" | "working" | "done" | "waiting" | "permission";
 export type NotificationLevel = "info" | "success" | "warn" | "error";
 
@@ -107,6 +116,13 @@ export type PaneTreeView =
       /* Commits made since the agent session's baseline. 0 when no
        * baseline is set. */
       commitCount: number;
+      /* Diff size since the agent baseline (committed + uncommitted) and the
+       * count of commits not yet pushed to upstream. All 0 when no baseline
+       * is set. Feed the "+A −D · ↑N" signal. */
+      linesAdded: number;
+      linesDeleted: number;
+      filesChanged: number;
+      ahead: number;
       /* Size weight inside the parent split (flex-grow). Defaults to 1. */
       weight?: number;
     }
@@ -138,6 +154,12 @@ export type SessionView = {
   paneCount: number;
   waitingCount: number;
   workingCount: number;
+  /* Git signal aggregated across the session's panes: total diff size and
+   * the largest unpushed-commit count. Drive the idle row's "+A −D · ↑N". */
+  linesAdded: number;
+  linesDeleted: number;
+  filesChanged: number;
+  ahead: number;
   /* Relative "last activity" string ("now" / "5m ago") for the dashboard. */
   lastActivity: string;
 };

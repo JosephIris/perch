@@ -395,8 +395,13 @@ ul { list-style: none; padding: 0; margin: 0; }
    * add grid-row: 1 / -1 here: with no grid-template-rows the `-1` line is
    * degenerate, which mis-places the button and collapses this auto column to
    * 0 — the title then eats column 3 and the X spills into overflow:hidden.
-   * The X sits on the title row (row 1), which is the right place anyway. */
+   * grid-row: 1 (a single line, NOT 1/-1) pins the X to the title row so it
+   * stays TOP-right; without it, a card that also renders meta/note rows
+   * auto-places the X into the bottom row (the note spans into column 3),
+   * which read as a stray bottom-right X. */
   grid-column: 3 / 4;
+  grid-row: 1;
+  align-self: start;
   width: 22px;
   height: 22px;
   display: flex;
@@ -1489,6 +1494,29 @@ ul { list-style: none; padding: 0; margin: 0; }
   outline: 1px solid var(--color-accent-soft);
   outline-offset: 2px;
 }
+/* Destructive primary action — solid error fill, reserved for irreversible
+ * ops (closing a session tears down its whole pane layout). White-on-red
+ * reads in both themes; the localized fg hardcode mirrors the accent button's
+ * `#06243a` exception above. */
+.settings-btn--danger {
+  color: #fff;
+  background: var(--color-error);
+  border: 1px solid var(--color-error);
+}
+.settings-btn--danger:hover { filter: brightness(1.08); }
+
+/* Confirm dialog — a compact settings-card for a single destructive prompt.
+ * Backdrop/animation/buttons are shared with the settings dialog. */
+.confirm-card {
+  width: 400px;
+  gap: var(--sp-12);
+}
+.confirm-card__body {
+  margin: 0;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line);
+  color: var(--color-text-secondary);
+}
 
 /* ---- Custom dropdown (combobox) ----------------------------------------
  * Replaces native <select> so the option popup renders on our dark
@@ -1669,6 +1697,12 @@ body.show-dashboard .dashboard { display: flex; }
 }
 .chip--commits { color: var(--color-success); background: rgba(108, 203, 95, 0.12); }
 .chip--alert { color: var(--color-caution); }
+/* Diff chip: added/deleted/files share one pill, each clause its own color so
+ * the footprint reads at a glance. */
+.chip--diff { display: inline-flex; gap: 6px; }
+.chip--diff .diff-add   { color: var(--color-success); }
+.chip--diff .diff-del   { color: var(--color-error); }
+.chip--diff .diff-files { color: var(--color-text-tertiary); }
 
 /* Waiting/permission-card body: peek at the agent's ask, then reply or open. */
 .card__wait { display: flex; flex-direction: column; gap: var(--sp-8); }

@@ -105,23 +105,33 @@ internal static class HookHandler
                 // Claude's Notification hook fires for two distinct cases:
                 //   1. a permission request (agent is BLOCKED, can't proceed)
                 //   2. an idle nudge ("waiting for your input" after 60s)
-                // We split them: a permission prompt is the loud red state,
-                // an idle nudge is the yellow "waiting" escalation of a turn
-                // that finished (green "done") and has now sat ignored for 60s.
-                // Detect by the message text.
+                // Only #1 is a real call for attention. #2 fires on a turn that
+                // already finished (Stop → "done"/idle) and merely sat untouched
+                // for 60s — the agent is NOT blocked and nothing new happened, so
+                // escalating it to a loud "waiting / needs you" cried wolf. We
+                // detect the permission case by message text; for the idle nudge
+                // we raise no notification and re-assert "done", leaving the pane
+                // calm at idle (re-asserting also recovers a pane whose Stop hook
+                // was dropped). Detect by the message text.
                 var msg = StringFrom(root, "message") ?? "claude needs attention";
                 var isPermission = msg.IndexOf("permission", StringComparison.OrdinalIgnoreCase) >= 0;
-                Send(pipeName, new { type = "notify", level = "warn", text = msg });
-                Send(pipeName, new { type = "status", state = isPermission ? "permission" : "waiting", detail = (string?)null });
+                if (isPermission)
+                {
+                    Send(pipeName, new { type = "notify", level = "warn", text = msg });
+                    Send(pipeName, new { type = "status", state = "permission", detail = (string?)null });
+                }
+                else
+                {
+                    Send(pipeName, new { type = "status", state = "done", detail = (string?)null });
+                }
                 break;
 
             case "stop":
-                // Turn complete — green "done", not yellow "waiting". The ball
-                // is in your court but the agent is NOT blocked: it's "ready for
-                // the next task", a calm state. If you ignore it, Claude's 60s
-                // idle Notification escalates it to "waiting" (yellow) — see the
-                // notification case. Splitting the two is what lets the UI tell
-                // "finished, no rush" apart from "actively waiting on you".
+                // Turn complete — the calm "done" state, surfaced to the user as
+                // "idle". The ball is in your court but the agent is NOT blocked:
+                // it finished and is at rest, your move, no rush. This never
+                // escalates on its own; only a genuine permission prompt (see the
+                // notification case) raises the loud "needs you" state.
                 Send(pipeName, new { type = "status", state = "done", detail = (string?)null });
                 break;
 
