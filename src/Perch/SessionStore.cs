@@ -14,6 +14,14 @@ internal sealed class SessionStore
     public ObservableCollection<Session> Sessions { get; } = new();
     public Guid? ActiveSessionId { get; set; }
 
+    /// Closed sessions kept for one-click restore ("Recently closed" in the
+    /// sidebar). Closing a session ARCHIVES it here instead of deleting it, so
+    /// the pane layout — and each pane's saved Claude session id — can be
+    /// brought back. Most-recently-closed first. Capped at MaxClosed; the
+    /// oldest fall off. Persisted alongside the live sessions.
+    public List<Session> ClosedSessions { get; } = new();
+    private const int MaxClosed = 10;
+
     private static string StorePath => Path.Combine(
         AppPaths.DataRoot,
         "perch",
@@ -73,6 +81,14 @@ internal sealed class SessionStore
                     }
                     store.Sessions.Add(s);
                 }
+                // Recently-closed list (v3+). New schema, so no legacy name-flag
+                // migration applies; just the defensive Root guard.
+                if (dto.ClosedSessions is { Count: > 0 })
+                    foreach (var s in dto.ClosedSessions)
+                    {
+                        s.Root ??= new PaneNode();
+                        store.ClosedSessions.Add(s);
+                    }
                 store.ActiveSessionId = dto.ActiveSessionId;
                 return store;
             }
@@ -98,8 +114,9 @@ internal sealed class SessionStore
             Directory.CreateDirectory(Path.GetDirectoryName(StorePath)!);
             var dto = new SessionStoreDto
             {
-                Version = 2,
+                Version = 3,
                 Sessions = Sessions.ToList(),
+                ClosedSessions = ClosedSessions.ToList(),
                 ActiveSessionId = ActiveSessionId,
             };
             var json = JsonSerializer.Serialize(dto, SessionStoreJsonContext.Default.SessionStoreDto);
@@ -136,10 +153,15 @@ internal sealed class SessionStore
     }
     private static IEnumerable<PaneNode> AllLeavesOf(PaneNode n) => Leaves(n);
 
+    /// Closes a session: ARCHIVES it to ClosedSessions (so it can be restored)
+    /// rather than discarding it, then returns the session that should become
+    /// active. Caller is responsible for tearing down the closed session's
+    /// PTYs and for Save()/PushState().
     public Session Remove(Session s)
     {
         var idx = Sessions.IndexOf(s);
         Sessions.Remove(s);
+        Archive(s);
 
         if (Sessions.Count == 0)
         {
@@ -152,6 +174,41 @@ internal sealed class SessionStore
         var next = Sessions[Math.Max(0, Math.Min(idx, Sessions.Count - 1))];
         ActiveSessionId = next.Id;
         return next;
+    }
+
+    /// Pushes a closed session onto the front of the Recently-closed list,
+    /// stamps the close time, and trims the list to MaxClosed (oldest off).
+    private void Archive(Session s)
+    {
+        s.ClosedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        ClosedSessions.RemoveAll(x => x.Id == s.Id);   // dedupe defensively
+        ClosedSessions.Insert(0, s);
+        while (ClosedSessions.Count > MaxClosed)
+            ClosedSessions.RemoveAt(ClosedSessions.Count - 1);
+    }
+
+    /// Brings a closed session back to the live list and makes it active.
+    /// Returns the restored session, or null if the id isn't in the closed
+    /// list. Caller does Save()/PushState() and arms agent resume.
+    public Session? Restore(Guid id)
+    {
+        var s = ClosedSessions.FirstOrDefault(x => x.Id == id);
+        if (s == null) return null;
+        ClosedSessions.Remove(s);
+        s.ClosedAtUnixMs = 0;
+        Sessions.Add(s);
+        ActiveSessionId = s.Id;
+        return s;
+    }
+
+    /// Permanently drops a closed session from the Recently-closed list.
+    /// Returns true if it was present.
+    public bool Purge(Guid id)
+    {
+        var s = ClosedSessions.FirstOrDefault(x => x.Id == id);
+        if (s == null) return false;
+        ClosedSessions.Remove(s);
+        return true;
     }
 
     private string NextUntitled()
@@ -170,9 +227,11 @@ internal sealed class SessionStoreDto
 {
     /// Store schema version. Absent (0) in pre-v2 files, which triggers the
     /// one-shot name-flag migration in Load(). v2 added per-pane
-    /// IsUserNamed / AllowAutoName.
+    /// IsUserNamed / AllowAutoName. v3 added ClosedSessions (Recently closed)
+    /// plus per-pane Cwd / ClaudeSessionId — all additive, no migration.
     public int Version { get; set; }
     public List<Session>? Sessions { get; set; }
+    public List<Session>? ClosedSessions { get; set; }
     public Guid? ActiveSessionId { get; set; }
 }
 

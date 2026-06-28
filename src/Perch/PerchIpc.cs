@@ -30,6 +30,7 @@ internal sealed class PerchIpcServer : IDisposable
     public event Action<TitleMessage>? OnTitle;
     public event Action<NameResetMessage>? OnNameReset;
     public event Action<AgentMessage>? OnAgent;
+    public event Action<SessionMessage>? OnSession;
 
     private readonly CancellationTokenSource _cts = new();
     private readonly Dispatcher _dispatcher;
@@ -146,6 +147,10 @@ internal sealed class PerchIpcServer : IDisposable
                     var am = JsonSerializer.Deserialize<AgentMessage>(json, IpcJson.Options);
                     if (am != null) _dispatcher.BeginInvoke(() => OnAgent?.Invoke(am));
                     break;
+                case "session":
+                    var ses = JsonSerializer.Deserialize<SessionMessage>(json, IpcJson.Options);
+                    if (ses != null) _dispatcher.BeginInvoke(() => OnSession?.Invoke(ses));
+                    break;
             }
         }
         catch (JsonException ex) { Log.Error("PerchIpc.Dispatch.Json", ex); }
@@ -224,3 +229,10 @@ internal sealed record NameResetMessage(
 /// pane so the header can show a "CC" badge. A plain shell never sends this.
 internal sealed record AgentMessage(
     [property: JsonPropertyName("name")] string? Name);
+
+/// Sent by the cc HookHandler on Claude's session-start, carrying Claude's
+/// own session id (the SessionStart payload's `session_id`). The host persists
+/// it on the pane so a relaunch can `claude --resume <id>`. Idempotent: the
+/// resumed run re-emits session-start with the same id.
+internal sealed record SessionMessage(
+    [property: JsonPropertyName("id")] string? Id);

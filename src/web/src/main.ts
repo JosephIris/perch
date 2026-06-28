@@ -13,6 +13,8 @@ import { Toast } from "./toast.js";
 import { openSettings, applySettingsData } from "./settings.js";
 import { showOnboarding } from "./onboarding.js";
 import { startElapsedTicker } from "./elapsed.js";
+import { confirmDialog } from "./confirm.js";
+import { RestoreProgress } from "./restore-progress.js";
 
 // One shared 1Hz ticker keeps every "working · 2m" label live without
 // rebuilding the sidebar/dashboard. Safe to start before the first state.
@@ -24,11 +26,16 @@ const $ = <T extends HTMLElement>(id: string): T => {
   return el as T;
 };
 
-const sidebar = new Sidebar($("sidebar-scroll"), $("new-session-button"));
+const sidebar = new Sidebar($("sidebar-scroll"), $("new-session-button"), $("recently-closed"));
 const workspace = new Workspace($("workspace"));
 const dashboard = new Dashboard($("dashboard"), $("dash-badge"));
 const toast = new Toast($("toast"));
+const restoreProgress = new RestoreProgress();
 const statusEl = $("status-text");
+
+// One-time launch prompt is shown at most once per run; guard against a
+// duplicate resume.prompt (defensive — the host sends it once).
+let resumePromptShown = false;
 installShortcutHint($("shortcut-hint"));
 
 $("settings-button").addEventListener("click", () => openSettings());
@@ -85,7 +92,7 @@ onMessage((msg) => {
       // tick. msg.prefs is always present (host always populates it).
       if (msg.prefs) workspace.applyPrefs(msg.prefs);
       maybeShowOnboarding(msg.prefs);
-      sidebar.render(msg.sessions, msg.activeSessionId);
+      sidebar.render(msg.sessions, msg.activeSessionId, msg.closedSessions ?? []);
       // Pass the full session list + active id: the workspace keeps a stage
       // per session alive across switches (preserving terminal scrollback)
       // and disposes a stage only when its session drops out of this list.
@@ -134,6 +141,37 @@ onMessage((msg) => {
       // this through nudgeUrlPanes; cheap, just walks the pane map and
       // calls forceRefit on URL panes.
       workspace.nudgeUrlPanes();
+      break;
+    case "resume.prompt": {
+      // One-time "reopen previous Claude sessions?" prompt. Until we answer,
+      // the host holds the resumable panes' spawns, so a decision is required
+      // to release them either way.
+      if (resumePromptShown) break;
+      resumePromptShown = true;
+      const n = msg.paneCount;
+      const sess = msg.sessionCount;
+      const what =
+        n === 1
+          ? "1 Claude session from your last run can be reopened."
+          : `${n} Claude sessions across ${sess} ${
+              sess === 1 ? "project" : "projects"
+            } can be reopened.`;
+      confirmDialog({
+        title: "Resume previous sessions?",
+        body: `${what} They'll pick up where they left off.`,
+        confirmLabel: "Resume",
+        cancelLabel: "Not now",
+      }).then((accept) => send({ type: "resume.decision", accept }));
+      break;
+    }
+    case "restore.begin":
+      restoreProgress.begin(msg.panes);
+      break;
+    case "restore.progress":
+      restoreProgress.progress(msg.paneId, msg.state);
+      break;
+    case "restore.done":
+      restoreProgress.finish();
       break;
   }
 });

@@ -109,8 +109,8 @@ ul { list-style: none; padding: 0; margin: 0; }
 .sidebar {
   grid-area: sidebar;
   display: grid;
-  /* top-actions · scroll (Needs you + Projects sections) · footer */
-  grid-template-rows: auto 1fr auto;
+  /* top-actions · scroll (Needs you + Projects) · recently-closed · footer */
+  grid-template-rows: auto 1fr auto auto;
   /* Explicit column is REQUIRED. Without it the single implicit column is an
    * `auto` track, which is treated as indefinite-width — so every `width:100%`
    * / `minmax(0,1fr)` / text-overflow:ellipsis inside the sidebar collapses to
@@ -1238,6 +1238,120 @@ ul { list-style: none; padding: 0; margin: 0; }
   text-overflow: ellipsis;
 }
 
+/* --- Recently closed ----------------------------------------------------
+ * Pinned just above the identity footer. A closed project archives here so
+ * its layout + Claude sessions can be restored. Quiet by default — a small
+ * label and compact rows — so it doesn't compete with the live session list.
+ * Its own thin top hairline separates it from the scrolling list above. */
+.recently-closed {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: var(--sp-4);
+  margin-top: var(--sp-4);
+  border-top: 1px solid var(--color-sidebar-stroke);
+}
+.recently-closed[hidden] { display: none; }
+.recently-closed__header {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-4);
+  padding: var(--sp-4) var(--sp-8);
+}
+.recently-closed__label {
+  font-family: var(--font-small);
+  font-size: var(--type-caption-size);
+  font-weight: 600;
+  color: var(--color-text-tertiary);
+}
+.recently-closed__count {
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-disabled);
+}
+.recently-closed__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  /* Show ~3 rows, then scroll inside the list (header stays pinned above).
+   * A row is ~42px (6px×2 padding + ~30px of title+meta); a peek of a 4th
+   * row signals there's more. */
+  max-height: 132px;
+  overflow-y: auto;
+}
+/* Row: restore icon · (title + meta) · purge ✕. Whole row restores on click;
+ * the ✕ (hover-revealed) discards from the list. Calm pill, fill on hover —
+ * same selection language as the session rows, no accent stripe. */
+.closed-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  width: 100%;
+  padding: 6px var(--sp-8);
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--color-text-secondary);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-entry);
+}
+.closed-item:hover { background: var(--color-subtle-secondary); }
+.closed-item:focus-visible {
+  outline: 1px solid var(--color-accent-soft);
+  outline-offset: -1px;
+}
+.closed-item__icon {
+  flex: 0 0 auto;
+  color: var(--color-text-tertiary);
+}
+.closed-item:hover .closed-item__icon { color: var(--color-text-secondary); }
+.closed-item__text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.closed-item__title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.closed-item__meta {
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Purge ✕ — quiet, square, hover-revealed (matches the session-item close). */
+.closed-item__purge {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-input);
+  color: var(--color-text-tertiary);
+  font-size: 11px;
+  opacity: 0;
+  transition:
+    opacity var(--dur-fast) var(--ease-entry),
+    background var(--dur-fast) var(--ease-entry),
+    color var(--dur-fast) var(--ease-entry);
+}
+.closed-item:hover .closed-item__purge,
+.closed-item__purge:focus-visible { opacity: 1; }
+.closed-item__purge:hover {
+  background: var(--color-subtle-tertiary);
+  color: var(--color-text-secondary);
+}
+
 /* ---- Settings dialog ----------------------------------------------------
  * Centered modal over a dimmed backdrop. The card is a 12px-radius window
  * surface (r-window) with a hairline border — no shadow-and-border on the
@@ -1563,6 +1677,135 @@ ul { list-style: none; padding: 0; margin: 0; }
   color: var(--color-text-secondary);
 }
 
+/* ---- Restore-progress lightbox -----------------------------------------
+ * Shown while resumed Claude panes come back up. Same frosted card/backdrop
+ * family as the settings + confirm dialogs; the pane rows go monospace with
+ * a leading "›" prompt marker for a calm terminal feel (not a fake titlebar).
+ * Sits above other modals so a restore kicked off from a confirm reads on
+ * top. */
+.restore-overlay { z-index: 70; }
+.restore-card {
+  width: 440px;
+  gap: var(--sp-16);
+}
+.restore-card__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-8);
+}
+.restore-card__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--type-subtitle-size);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.restore-card__sub {
+  font-family: var(--font-small);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+}
+.restore-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  max-height: 50vh;
+  overflow-y: auto;
+}
+.restore-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-12);
+  padding: var(--sp-8) var(--sp-12);
+  border-radius: var(--r-input);
+  background: var(--color-layer);
+  border: 1px solid var(--color-stroke);
+}
+.restore-row__status {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-tertiary);
+}
+.restore-row__text {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-8);
+  min-width: 0;
+  flex: 1 1 auto;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+.restore-row__marker {
+  color: var(--color-accent);
+  flex: 0 0 auto;
+}
+.restore-row__name {
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.restore-row__sess {
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.restore-row__label {
+  flex: 0 0 auto;
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+/* Done rows lift the check + label to the success color; failed to error. */
+.restore-row[data-state="ready"] .restore-row__status,
+.restore-row[data-state="ready"] .restore-row__label { color: var(--color-success); }
+.restore-row[data-state="error"] .restore-row__status,
+.restore-row[data-state="error"] .restore-row__label { color: var(--color-error); }
+.restore-row[data-state="resuming"] .restore-row__status { color: var(--color-accent); }
+
+/* Spinner — a 270° arc that rotates. Honors reduced-motion by freezing. */
+.restore-spinner { animation: restore-spin 0.8s linear infinite; }
+@keyframes restore-spin { to { transform: rotate(360deg); } }
+/* Check pops in once when a pane reports ready. */
+.restore-check { animation: restore-pop var(--dur-normal) var(--ease-entry); }
+@keyframes restore-pop {
+  from { transform: scale(0.6); opacity: 0; }
+  to   { transform: scale(1); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .restore-spinner { animation: none; }
+  .restore-check { animation: none; }
+}
+
+.restore-card__foot {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-12);
+}
+/* Auto-dismiss progress bar — fills left→right over 3s once everything's
+ * resumed, a quiet "closing soon" cue. Idle (still resuming) it sits empty. */
+.restore-bar {
+  flex: 1 1 auto;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--color-stroke);
+  overflow: hidden;
+}
+.restore-bar__fill {
+  height: 100%;
+  width: 100%;
+  background: var(--color-accent-soft);
+  transform: scaleX(0);
+  transform-origin: left center;
+}
+.restore-dismiss { flex: 0 0 auto; }
+
 /* ---- Custom dropdown (combobox) ----------------------------------------
  * Replaces native <select> so the option popup renders on our dark
  * surface. Trigger matches the other settings controls; popup matches the
@@ -1745,9 +1988,11 @@ body.show-dashboard .dashboard { display: flex; }
 /* Diff chip: added/deleted/files share one pill, each clause its own color so
  * the footprint reads at a glance. */
 .chip--diff { display: inline-flex; gap: 6px; }
-.chip--diff .diff-add   { color: var(--color-success); }
-.chip--diff .diff-del   { color: var(--color-error); }
-.chip--diff .diff-files { color: var(--color-text-tertiary); }
+/* Diff palette — used by the pane-footer diff chip AND the sidebar done-row
+ * summary. Unscoped so both surfaces get the green/red coding. */
+.diff-add   { color: var(--color-success); }
+.diff-del   { color: var(--color-error); }
+.diff-files { color: var(--color-text-tertiary); }
 
 /* Waiting/permission-card body: peek at the agent's ask, then reply or open. */
 .card__wait { display: flex; flex-direction: column; gap: var(--sp-8); }

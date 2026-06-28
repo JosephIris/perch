@@ -13,35 +13,28 @@
 // Each row is a framed card (see .session-item in style.css) — perch-style
 // tabs-as-cards. Selection still reads via fill, not an accent stripe.
 
-import type { SessionView } from "./bridge.js";
+import type { SessionView, ClosedSessionView } from "./bridge.js";
 import { send } from "./bridge.js";
 import { confirmDialog } from "./confirm.js";
 import { elapsedSpan, agoSpan } from "./elapsed.js";
 
-/** "+142 −38" diff summary (U+2212 minus). Empty when nothing changed, so the
- *  caller can omit the item entirely. Either clause is dropped when zero. */
-export function fmtDiff(added: number, deleted: number): string {
-  if (!added && !deleted) return "";
-  const parts: string[] = [];
-  if (added) parts.push(`+${added}`);
-  if (deleted) parts.push(`−${deleted}`);
-  return parts.join(" ");
-}
-
 export class Sidebar {
   private readonly listEl: HTMLElement;
   private readonly newSessionBtn: HTMLElement;
+  private readonly closedEl: HTMLElement;
 
-  constructor(listEl: HTMLElement, newSessionBtn: HTMLElement) {
+  constructor(listEl: HTMLElement, newSessionBtn: HTMLElement, closedEl: HTMLElement) {
     this.listEl = listEl;
     this.newSessionBtn = newSessionBtn;
+    this.closedEl = closedEl;
 
     this.newSessionBtn.addEventListener("click", () => {
       send({ type: "session.new" });
     });
   }
 
-  render(sessions: SessionView[], activeId: string) {
+  render(sessions: SessionView[], activeId: string, closed: ClosedSessionView[] = []) {
+    this.renderClosed(closed);
     // Partition by derived state. permission (+ the reserved "waiting") want
     // your attention (Needs you); done is "finished, at rest, your move" (Idle);
     // working/dormant-idle are just the map (Projects). Order within each
@@ -85,6 +78,108 @@ export class Sidebar {
     }
 
     this.listEl.replaceChildren(frag);
+  }
+
+  // "Recently closed" list, pinned above the identity footer. Each row
+  // restores the whole session (layout + cwd + Claude resume) on click,
+  // behind a confirm; a hover-revealed ✕ discards it from the list. Hidden
+  // entirely when nothing's been closed.
+  private renderClosed(closed: ClosedSessionView[]) {
+    if (!closed.length) {
+      this.closedEl.hidden = true;
+      this.closedEl.replaceChildren();
+      return;
+    }
+    this.closedEl.hidden = false;
+
+    const frag = document.createDocumentFragment();
+
+    const header = document.createElement("div");
+    header.className = "recently-closed__header";
+    const label = document.createElement("span");
+    label.className = "recently-closed__label";
+    label.textContent = "Recently closed";
+    const count = document.createElement("span");
+    count.className = "recently-closed__count";
+    count.textContent = String(closed.length);
+    header.append(label, count);
+    frag.appendChild(header);
+
+    const list = document.createElement("div");
+    list.className = "recently-closed__list";
+    for (const c of closed) list.appendChild(this.renderClosedRow(c));
+    frag.appendChild(list);
+
+    this.closedEl.replaceChildren(frag);
+  }
+
+  private renderClosedRow(c: ClosedSessionView): HTMLElement {
+    const panes = c.paneCount === 1 ? "1 pane" : `${c.paneCount} panes`;
+
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "closed-item";
+    row.dataset.sessionId = c.id;
+    row.title = `Restore ${c.title}`;
+
+    const icon = restoreIcon();
+    icon.classList.add("closed-item__icon");
+    row.appendChild(icon);
+
+    const text = document.createElement("span");
+    text.className = "closed-item__text";
+
+    const title = document.createElement("span");
+    title.className = "closed-item__title";
+    title.textContent = c.title;
+    text.appendChild(title);
+
+    const meta = document.createElement("span");
+    meta.className = "closed-item__meta";
+    meta.append(panes);
+    if (c.resumableCount > 0) {
+      const agents = c.resumableCount === 1 ? "1 agent" : `${c.resumableCount} agents`;
+      meta.append(` · ${agents}`);
+    }
+    if (c.closedAtMs > 0) {
+      meta.append(" · ");
+      meta.appendChild(agoSpan(c.closedAtMs));
+    }
+    text.appendChild(meta);
+    row.appendChild(text);
+
+    // Discard from the list (no restore). Stops the row's restore handler.
+    const purge = document.createElement("button");
+    purge.type = "button";
+    purge.className = "closed-item__purge";
+    purge.title = "Remove from recently closed";
+    purge.setAttribute("aria-label", `Remove ${c.title} from recently closed`);
+    purge.textContent = "✕";
+    purge.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      send({ type: "session.purge", id: c.id });
+    });
+    row.appendChild(purge);
+
+    // Restoring relaunches agents, so gate it behind a confirm (the user
+    // asked for "are you sure?" before bringing a closed project back).
+    row.addEventListener("click", async () => {
+      const agents =
+        c.resumableCount > 0
+          ? ` and resume ${
+              c.resumableCount === 1 ? "its Claude session" : `${c.resumableCount} Claude sessions`
+            }`
+          : "";
+      const ok = await confirmDialog({
+        title: `Restore ${c.title}?`,
+        body: `Reopen this session's ${panes}${agents}.`,
+        confirmLabel: "Restore",
+        cancelLabel: "Cancel",
+      });
+      if (ok) send({ type: "session.restore", id: c.id });
+    });
+
+    return row;
   }
 
   private sectionLabel(text: string, count?: number): HTMLElement {
@@ -132,7 +227,13 @@ export class Sidebar {
     //   working → "▸ what it's doing"
     //   done    → "+A −D · ⎇ branch ↑N"  (what it produced / what's unpushed)
     //   else    → "⎇ branch · :ports"     (dormant / needs-you keep code context)
-    const metaItems: Array<{ text: string; alert?: boolean; turnStart?: number; since?: number }> = [];
+    const metaItems: Array<{
+      text: string;
+      alert?: boolean;
+      turnStart?: number;
+      since?: number;
+      diff?: { added: number; deleted: number };
+    }> = [];
     const ahead = s.ahead > 0 ? ` ↑${s.ahead}` : "";
 
     if (s.agentState === "working") {
@@ -143,8 +244,10 @@ export class Sidebar {
       // the most useful signal. Falls back to nothing if the turn-end wasn't
       // stamped (older sessions).
       if (s.doneAtMs > 0) metaItems.push({ text: "finished", since: s.doneAtMs });
-      const diff = fmtDiff(s.linesAdded, s.linesDeleted);
-      if (diff) metaItems.push({ text: diff });
+      // Color-coded diff (+adds green / −dels red) reads at a glance vs plain
+      // text. Rendered as sub-spans in the loop below.
+      if (s.linesAdded || s.linesDeleted)
+        metaItems.push({ text: "", diff: { added: s.linesAdded, deleted: s.linesDeleted } });
       if (s.branch) metaItems.push({ text: `⎇ ${s.branch}${ahead}` });
     } else {
       // dormant idle / needs-you: branch (+ unpushed) + dev-server ports.
@@ -167,7 +270,24 @@ export class Sidebar {
         const span = document.createElement("span");
         span.className =
           "session-item__meta-item" + (mi.alert ? " session-item__meta-item--alert" : "");
-        span.textContent = mi.text;
+        if (mi.diff) {
+          // Colored +adds / −dels, reusing the footer's diff palette classes.
+          if (mi.diff.added) {
+            const add = document.createElement("span");
+            add.className = "diff-add";
+            add.textContent = `+${mi.diff.added}`;
+            span.appendChild(add);
+          }
+          if (mi.diff.deleted) {
+            if (mi.diff.added) span.append(" ");
+            const del = document.createElement("span");
+            del.className = "diff-del";
+            del.textContent = `−${mi.diff.deleted}`;
+            span.appendChild(del);
+          }
+        } else {
+          span.textContent = mi.text;
+        }
         // Live "· 2m" elapsed appended to the working item; the ticker only
         // rewrites the inner span, leaving the action text untouched.
         if (mi.turnStart && mi.turnStart > 0) {
@@ -210,14 +330,15 @@ export class Sidebar {
     close.title = "Close session";
     close.setAttribute("aria-label", `Close ${s.title}`);
     close.textContent = "✕";
-    // Closing a session tears down its entire pane layout — unrecoverable, and
-    // losing a hand-arranged setup stings. Gate it behind a confirm.
+    // Closing a session stops its panes but ARCHIVES the layout to "Recently
+    // closed", so it's recoverable. Still a confirm — it tears down running
+    // shells — but no longer the scary "can't be recovered" copy.
     close.addEventListener("click", async (ev) => {
       ev.stopPropagation();
       const panes = s.paneCount === 1 ? "1 pane" : `${s.paneCount} panes`;
       const ok = await confirmDialog({
         title: `Close ${s.title}?`,
-        body: `This closes the session and its ${panes}. The pane layout can't be recovered.`,
+        body: `Stops this session's ${panes}. You can reopen it from Recently closed.`,
         confirmLabel: "Close session",
         cancelLabel: "Keep open",
         danger: true,
@@ -232,4 +353,25 @@ export class Sidebar {
 
     return item;
   }
+}
+
+/** Single-stroke "rotate-ccw" restore glyph (Fluent/Lucide family). */
+function restoreIcon(): SVGElement {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("width", "13");
+  svg.setAttribute("height", "13");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "1.8");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+  const poly = document.createElementNS(ns, "polyline");
+  poly.setAttribute("points", "1 4 1 10 7 10");
+  const path = document.createElementNS(ns, "path");
+  path.setAttribute("d", "M3.51 15a9 9 0 1 0 2.13-9.36L1 10");
+  svg.append(poly, path);
+  return svg;
 }

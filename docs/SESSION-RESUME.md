@@ -1,8 +1,40 @@
 # Claude Code session resume (agent-layer crash/restart restore)
 
-> Status: **TODO — spec complete, not yet implemented.** Scoped 2026-05-29.
-> Upstream behaviour confirmed against a live fetch of
-> `github.com/manaflow-ai/cmux` (not memory). Tracked in `docs/PARITY.md`.
+> Status: **SHIPPED (2026-06-28).** Implemented in dependency order with a
+> couple of additions beyond the original spec (see "What shipped" below).
+> Verified end-to-end by `scripts/test-session-resume.ps1` (mock-claude self
+> test) and `src/web/test/pane-footer.test.ts`. Original spec preserved below.
+
+## What shipped (and what changed from the spec)
+
+1. **Per-pane cwd persistence (Phase 0 — prerequisite the spec missed).** cwd
+   was per-*session* and only fed by `perch meta --cwd`; the live per-pane cwd
+   was never persisted, so restored panes reopened in the default dir — and
+   `claude --resume` needs the right project dir to find its transcript. Added
+   persisted `PaneNode.Cwd`, fed from the OSC 7 handler, used by `SpawnPty`
+   (pane.Cwd → sess.Cwd → default).
+2. **Capture + persist (Phases 1–2)** exactly as specced: `session_id` →
+   `SessionMessage`/`OnSession` → persisted `PaneNode.ClaudeSessionId` →
+   `Shell.BuildStartupCommandLine(initialCommand)` injecting `claude --resume`.
+3. **One-time launch prompt with deferred spawn.** Instead of silent auto-run,
+   a resumable pane *defers* its lazy spawn until the user answers a single
+   "Resume N Claude sessions?" dialog (`resume.prompt`/`resume.decision`), so
+   the prompt actually gates the first agent launch. `Settings.ResumeAgentsOnLaunch`
+   is the master switch.
+4. **Close = archive, not delete (Phase 3).** `SessionStore` keeps a persisted
+   `ClosedSessions` list (v3 schema, cap 10); closing archives, and a
+   "Recently closed" list pinned above the sidebar footer restores (with a
+   confirm) or purges. `session.restore` / `session.purge` verbs.
+5. **Restore-progress lightbox.** A sleek per-pane modal (`restore-progress.ts`)
+   listing each resuming pane with a spinner that flips to a check as its
+   resumed session-start hook fires (`restore.begin/progress/done`), with a
+   12s host-side timeout fallback and 3s auto-dismiss.
+
+---
+
+> Original spec (Status: TODO — scoped 2026-05-29). Upstream behaviour
+> confirmed against a live fetch of `github.com/manaflow-ai/cmux` (not
+> memory). Tracked in `docs/PARITY.md`.
 
 ## Goal
 

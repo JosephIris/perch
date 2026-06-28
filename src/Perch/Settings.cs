@@ -24,6 +24,14 @@ public sealed class Settings
     /// (without clearing this).
     public bool OnboardingSeen { get; set; } = false;
 
+    /// Auto-resume Claude Code sessions on launch / on restoring a closed
+    /// session. When true (default), a pane that carries a saved Claude session
+    /// id offers to `claude --resume <id>` instead of dropping to a bare shell.
+    /// The launch resume is still gated by a one-time prompt; this flag is the
+    /// master switch (off = never resume, never prompt). Mirrors upstream
+    /// perch's "Reopen Previous Session" toggle.
+    public bool ResumeAgentsOnLaunch { get; set; } = true;
+
     /// Working directory used when a session has no recorded Cwd yet.
     /// Defaults to the user's profile directory so we never land in the install
     /// folder (Program Files / AppData). Resolved lazily so an empty stored
