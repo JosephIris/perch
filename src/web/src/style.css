@@ -1238,6 +1238,57 @@ ul { list-style: none; padding: 0; margin: 0; }
   text-overflow: ellipsis;
 }
 
+/* --- Auto-update pill ----------------------------------------------------
+ * Sits directly above the identity footer; revealed only when the host
+ * reports a newer release. Accent TINT (faint fill + accent icon/action),
+ * never a full accent fill — an update is genuinely actionable but the chrome
+ * stays calm, so we signal with hue, not a CTA-weight button. */
+.update-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  width: 100%;
+  margin-bottom: var(--sp-8);
+  padding: 6px var(--sp-12);
+  border-radius: var(--r-pill);
+  background: var(--color-accent-faint);
+  color: var(--color-text-primary);
+  text-align: left;
+  transition: background var(--dur-fast) var(--ease-entry);
+}
+.update-banner[hidden] { display: none; }
+.update-banner:hover { background: var(--color-accent-soft); }
+.update-banner:focus-visible {
+  outline: 1px solid var(--color-accent-soft);
+  outline-offset: -1px;
+}
+.update-banner__icon {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  color: var(--color-accent);
+}
+.update-banner__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.update-banner__action {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-accent);
+}
+/* Mid-download: dim + ignore clicks until the relaunch (or an update.error
+ * resets it). */
+.update-banner--busy {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
 /* --- Recently closed ----------------------------------------------------
  * Pinned just above the identity footer. A closed project archives here so
  * its layout + Claude sessions can be restored. Quiet by default — a small

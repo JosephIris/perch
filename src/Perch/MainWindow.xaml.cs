@@ -81,6 +81,14 @@ public partial class MainWindow : FluentWindow
     private readonly Dictionary<Guid, bool> _restoreBatch = new();
     private System.Windows.Threading.DispatcherTimer? _restoreTimeout;
 
+    // ---- Auto-update (Velopack) ------------------------------------------
+    // Headless updater (see UpdateService). We check once shortly after the
+    // page is ready, then every few hours, and push `update.available` to the
+    // webview footer pill. The pill's click comes back as `update.apply`. Null
+    // until the first check; a no-op when this copy isn't a Velopack install.
+    private UpdateService? _updates;
+    private System.Windows.Threading.DispatcherTimer? _updateTimer;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -147,6 +155,7 @@ public partial class MainWindow : FluentWindow
         Closed += (_, _) =>
         {
             _idleWatchdog?.Stop();
+            _updateTimer?.Stop();
             _clipWatch?.Dispose();
             _control?.Dispose();
             foreach (var ipc in _paneIpc.Values) { try { ipc.Dispose(); } catch { } }
@@ -291,6 +300,7 @@ public partial class MainWindow : FluentWindow
                 case "settings.request": OnSettingsRequest(); break;
                 case "settings.save":    OnSettingsSave(root); break;
                 case "onboarding.seen":  OnOnboardingSeen(); break;
+                case "update.apply":     OnUpdateApply(); break;
                 default:
                     Log.Info("Web.msg.unknown", $"type={type}");
                     break;
@@ -320,6 +330,64 @@ public partial class MainWindow : FluentWindow
         // user once whether to reopen those Claude sessions. The answer
         // (resume.decision) releases the parked spawns.
         if (_resumeDecisionPending) PostResumePrompt();
+
+        // Kick off the auto-update check now that the page can receive
+        // messages. Fire-and-forget: the await inside resumes on the UI thread
+        // (WPF SynchronizationContext) so the eventual PostWebMessageAsJson is
+        // thread-safe. A one-shot here plus a periodic re-check keeps the pill
+        // current without a relaunch.
+        _ = CheckForUpdatesAsync();
+        if (_updateTimer is null)
+        {
+            _updateTimer = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = TimeSpan.FromHours(6),
+            };
+            _updateTimer.Tick += (_, _) => _ = CheckForUpdatesAsync();
+            _updateTimer.Start();
+        }
+    }
+
+    // ---- Auto-update ------------------------------------------------------
+
+    /// Check the GitHub release feed and, if a newer version exists, light up
+    /// the webview's update pill. Silent on a non-Velopack install (dev,
+    /// portable) and on any network/feed error — a failed check must never
+    /// surface noise; the pill simply stays hidden until a later check succeeds.
+    private async Task CheckForUpdatesAsync()
+    {
+        try
+        {
+            _updates ??= new UpdateService();
+            if (!_updates.IsUpdatable) return;          // dev run / portable unzip
+            // Let the first frames settle before hitting the network.
+            await Task.Delay(TimeSpan.FromSeconds(3));
+            var newVersion = await _updates.CheckAsync();
+            if (string.IsNullOrEmpty(newVersion)) return;   // already up to date
+            Web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(
+                new { type = "update.available", version = newVersion }));
+        }
+        catch (Exception ex) { Log.Error("Update.check", ex); }
+    }
+
+    /// User clicked the update pill. Persist session state (the process is
+    /// about to be replaced), then download + relaunch into the new version. On
+    /// failure, tell the page so the pill can offer a retry.
+    private async void OnUpdateApply()
+    {
+        if (_updates is null) return;
+        try
+        {
+            _store.Save();
+            await _updates.DownloadAndApplyAsync();
+            // Not reached on success — ApplyUpdatesAndRestart replaces us.
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Update.apply", ex);
+            Web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(
+                new { type = "update.error", message = ex.Message }));
+        }
     }
 
     /// Every (session, leaf) pair that can ACTUALLY `claude --resume` — carries
