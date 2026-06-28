@@ -252,9 +252,13 @@ public partial class MainWindow : FluentWindow
             core.Settings.AreBrowserAcceleratorKeysEnabled = false;
             core.Settings.IsNonClientRegionSupportEnabled = true;
             core.WebMessageReceived += OnWebMessage;
+            // Recover from a render-process crash instead of stranding the user
+            // on a grey screen. Subscribed BEFORE navigation so even an early
+            // crash is caught. See OnWebViewProcessFailed.
+            core.ProcessFailed += OnWebViewProcessFailed;
 
             if (Directory.Exists(_webRoot))
-                core.Navigate($"https://{VirtualHost}/index.html");
+                core.Navigate(AppUrl(_webglDisabled));
             else
                 core.NavigateToString(BootstrapHtml(_webRoot));
         }
@@ -264,6 +268,87 @@ public partial class MainWindow : FluentWindow
             System.Windows.MessageBox.Show($"WebView2 failed to initialize:\n\n{ex.Message}",
                 "Perch", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Error);
         }
+    }
+
+    // ---- Renderer-crash recovery -----------------------------------------
+    // WebView2 runs our page in a child "render" process. When it dies (a GPU
+    // hiccup, a bad WebGL state, an OOM under a fast output burst such as a
+    // `claude --resume` transcript replay) the page goes blank/grey and STAYS
+    // that way: every later PostWebMessageAsJson throws "the browser process
+    // crashed". Before this handler a single render crash was an unrecoverable
+    // grey screen — and because resume re-ran on the next launch, every relaunch
+    // re-crashed (see the "grey screen resuming after update" report).
+    //
+    // Crash count inside a rolling window, so a *deterministic* crash can't spin
+    // in a reload loop. Reset whenever the window lapses.
+    private int _rendererCrashes;
+    private DateTime _rendererCrashWindowUtc;
+    // Once set, every (re)navigation drops the WebGL terminal renderer (xterm
+    // falls back to its DOM renderer). Sticky for the process lifetime — a GPU
+    // that crashed the renderer once will do it again.
+    private bool _webglDisabled;
+
+    /// The app URL, optionally telling the page to skip the WebGL renderer.
+    private string AppUrl(bool disableWebgl) =>
+        $"https://{VirtualHost}/index.html" + (disableWebgl ? "?nowebgl=1" : "");
+
+    private void OnWebViewProcessFailed(object? sender, CoreWebView2ProcessFailedEventArgs e)
+    {
+        // The crash reason is otherwise invisible — we only ever saw the
+        // downstream "control no longer valid" on the next post. Capture it so a
+        // recurrence is actually diagnosable.
+        Log.Error("WebView2.ProcessFailed", new Exception(
+            $"kind={e.ProcessFailedKind} reason={e.Reason} exit={e.ExitCode} " +
+            $"proc={e.ProcessDescription} module={e.FailureSourceModulePath}"));
+
+        // Only the render process exiting/hanging actually blanks the page and
+        // needs us to reload. GPU / utility / frame-render failures are
+        // auto-recovered by WebView2 itself; the browser process exiting is
+        // unrecoverable (the whole control is gone). Log those and bail.
+        var kind = e.ProcessFailedKind;
+        if (kind != CoreWebView2ProcessFailedKind.RenderProcessExited &&
+            kind != CoreWebView2ProcessFailedKind.RenderProcessUnresponsive)
+            return;
+
+        var now = DateTime.UtcNow;
+        if (_rendererCrashes == 0 || now - _rendererCrashWindowUtc > TimeSpan.FromMinutes(2))
+        {
+            _rendererCrashes = 0;
+            _rendererCrashWindowUtc = now;
+        }
+        _rendererCrashes++;
+
+        var core = Web.CoreWebView2;
+        if (core == null) return;
+
+        // Crashing again within the window → the renderer is failing repeatedly,
+        // and the likeliest culprit is the WebGL terminal path. Re-navigate with
+        // WebGL off so xterm uses its DOM renderer (slower, but it won't take the
+        // GPU/render process down) — keeps the app usable instead of looping on
+        // grey.
+        if (_rendererCrashes >= 2 && !_webglDisabled)
+        {
+            _webglDisabled = true;
+            Log.Info("WebView2.ProcessFailed", "repeated render crash — reloading with WebGL disabled");
+            try { core.Navigate(AppUrl(disableWebgl: true)); }
+            catch (Exception ex) { Log.Error("WebView2.ProcessFailed.navigate", ex); }
+            return;
+        }
+
+        // Still crashing even with WebGL off → stop reloading so we don't thrash;
+        // the page is down, so there's nothing to post. The log holds the reason.
+        if (_rendererCrashes > 4)
+        {
+            Log.Error("WebView2.ProcessFailed",
+                new Exception("render process keeps crashing; stopped auto-reloading"));
+            return;
+        }
+
+        // Reload to respawn the dead render process and restore the UI. The page
+        // re-runs from scratch (sends `ready`); OnPageReady is idempotent and the
+        // backing PTYs are still alive, so panes re-attach to their live shells.
+        try { core.Reload(); }
+        catch (Exception ex) { Log.Error("WebView2.ProcessFailed.reload", ex); }
     }
 
     // ---- WPF chrome → webview commands ------------------------------------

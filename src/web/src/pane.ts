@@ -16,6 +16,13 @@ import { buildPaneHeader, applyChips, applyAgentBadge } from "./pane-header.js";
 import { buildPaneFooter, applyPaneFooter, type PaneFooter } from "./pane-footer.js";
 import { attachTooltip } from "./tooltip.js";
 
+// The host appends ?nowebgl=1 when it re-navigates after a render-process
+// crash, having pinned the WebGL renderer as the likely culprit. Honoring it
+// means the recovery reload falls back to xterm's DOM renderer instead of
+// re-crashing the GPU/render process on the same content. See
+// MainWindow.OnWebViewProcessFailed.
+const WEBGL_DISABLED = new URLSearchParams(location.search).has("nowebgl");
+
 // URL regex — same as @xterm/addon-web-links's strictUrlRegex, copied so
 // our custom provider doesn't depend on the addon at all. Matches
 // http(s)://… up to the first whitespace / quote / disallowed-final.
@@ -301,12 +308,14 @@ export class Pane {
       // is the font's em size (smaller than the cell). Wrapped in
       // try/catch because some WebView2 builds fail WebGL context
       // creation and we want a working fallback.
-      try {
-        const webgl = new WebglAddon();
-        webgl.onContextLoss(() => webgl.dispose());
-        this.term.loadAddon(webgl);
-      } catch (err) {
-        console.warn("[pane] WebGL renderer unavailable, using canvas:", err);
+      if (!WEBGL_DISABLED) {
+        try {
+          const webgl = new WebglAddon();
+          webgl.onContextLoss(() => webgl.dispose());
+          this.term.loadAddon(webgl);
+        } catch (err) {
+          console.warn("[pane] WebGL renderer unavailable, using canvas:", err);
+        }
       }
       this.observer = new ResizeObserver(() => this.reportResize());
       this.observer.observe(this.termHost);
