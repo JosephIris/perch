@@ -34,6 +34,15 @@ internal sealed class UpdateService
     /// unzips return false (and every method below short-circuits).
     public bool IsUpdatable => _mgr.IsInstalled;
 
+    /// The version this copy is running as (the release it was installed from),
+    /// or null when it can't be determined — e.g. a dev `dotnet run` / portable
+    /// unzip that isn't a Velopack install. Surfaced in Settings so the manual
+    /// "Check now" has a current version to show.
+    public string? CurrentVersion
+    {
+        get { try { return _mgr.CurrentVersion?.ToString(); } catch { return null; } }
+    }
+
     /// Check the GitHub feed. Returns the new version string when an update is
     /// available, or null when up to date (or not a Velopack install).
     public async Task<string?> CheckAsync()
