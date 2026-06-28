@@ -82,12 +82,23 @@ public partial class MainWindow : FluentWindow
     private System.Windows.Threading.DispatcherTimer? _restoreTimeout;
 
     // ---- Auto-update (Velopack) ------------------------------------------
-    // Headless updater (see UpdateService). We check once shortly after the
-    // page is ready, then every few hours, and push `update.available` to the
-    // webview footer pill. The pill's click comes back as `update.apply`. Null
-    // until the first check; a no-op when this copy isn't a Velopack install.
+    // Headless updater (see UpdateService). We check shortly after the page is
+    // ready, then hourly, and again whenever the window regains focus after a
+    // lull — so a release published while Perch sat in the background is noticed
+    // the moment you come back, not up to an hour later. Each check pushes
+    // `update.available` to the webview footer pill; the pill's click comes back
+    // as `update.apply`. A manual `update.check` (Settings → "Check now") runs
+    // the same path but also reports the result via `update.status`. Null until
+    // the first check; a no-op when this copy isn't a Velopack install.
     private UpdateService? _updates;
     private System.Windows.Threading.DispatcherTimer? _updateTimer;
+    // When the last update check ran (UTC). Throttles the re-check we fire on
+    // window activation so rapid alt-tabbing can't hammer the GitHub feed.
+    private DateTime _lastUpdateCheckUtc = DateTime.MinValue;
+    // Minimum gap between activation-triggered checks. The launch check + hourly
+    // timer cover the steady state; this just catches a release published while
+    // Perch sat in the background, the moment you come back to it.
+    private static readonly TimeSpan UpdateRefocusThrottle = TimeSpan.FromMinutes(30);
 
     public MainWindow()
     {
@@ -135,7 +146,16 @@ public partial class MainWindow : FluentWindow
             _clipWatch = new ClipboardWatcher(this);
             _clipWatch.ClipboardChanged += SyncClipboardToWeb;
             _clipWatch.Attach();
-            Activated += (_, _) => SyncClipboardToWeb();
+            Activated += (_, _) =>
+            {
+                SyncClipboardToWeb();
+                // Re-check for updates on refocus, throttled. Catches a release
+                // published while the window was in the background without
+                // waiting out the hourly timer; the throttle keeps rapid
+                // alt-tabbing from spamming the feed. No-op on dev/portable.
+                if (DateTime.UtcNow - _lastUpdateCheckUtc >= UpdateRefocusThrottle)
+                    _ = CheckForUpdatesAsync();
+            };
 
             if (ControlIpcServer.IsEnabled)
             {
@@ -301,6 +321,7 @@ public partial class MainWindow : FluentWindow
                 case "settings.save":    OnSettingsSave(root); break;
                 case "onboarding.seen":  OnOnboardingSeen(); break;
                 case "update.apply":     OnUpdateApply(); break;
+                case "update.check":     OnUpdateCheckRequested(); break;
                 default:
                     Log.Info("Web.msg.unknown", $"type={type}");
                     break;
@@ -334,14 +355,19 @@ public partial class MainWindow : FluentWindow
         // Kick off the auto-update check now that the page can receive
         // messages. Fire-and-forget: the await inside resumes on the UI thread
         // (WPF SynchronizationContext) so the eventual PostWebMessageAsJson is
-        // thread-safe. A one-shot here plus a periodic re-check keeps the pill
-        // current without a relaunch.
-        _ = CheckForUpdatesAsync();
+        // thread-safe. A one-shot here (with a brief settle delay) plus the
+        // hourly timer and the on-refocus check keep the pill current without a
+        // relaunch.
+        _ = CheckForUpdatesAsync(initialDelay: true);
         if (_updateTimer is null)
         {
+            // Hourly, matching cmux-for-macOS's Sparkle cadence (it likewise
+            // dropped from a longer default to 1h). Frequent enough that a
+            // running session notices a release the same day without a restart,
+            // cheap enough on the public feed.
             _updateTimer = new System.Windows.Threading.DispatcherTimer
             {
-                Interval = TimeSpan.FromHours(6),
+                Interval = TimeSpan.FromHours(1),
             };
             _updateTimer.Tick += (_, _) => _ = CheckForUpdatesAsync();
             _updateTimer.Start();
@@ -350,24 +376,66 @@ public partial class MainWindow : FluentWindow
 
     // ---- Auto-update ------------------------------------------------------
 
+    /// Page asked for a manual check (Settings → "Check now"). Same path as the
+    /// automatic checks, but `userInitiated` makes it report the outcome back to
+    /// the dialog via `update.status` (the silent background checks stay quiet
+    /// when up to date).
+    private void OnUpdateCheckRequested() => _ = CheckForUpdatesAsync(userInitiated: true);
+
     /// Check the GitHub release feed and, if a newer version exists, light up
-    /// the webview's update pill. Silent on a non-Velopack install (dev,
-    /// portable) and on any network/feed error — a failed check must never
-    /// surface noise; the pill simply stays hidden until a later check succeeds.
-    private async Task CheckForUpdatesAsync()
+    /// the webview's update pill. Background checks (launch / hourly / refocus)
+    /// are silent on a non-Velopack install (dev, portable) and on any
+    /// network/feed error — a failed check must never surface noise; the pill
+    /// simply stays hidden until a later check succeeds. A `userInitiated` check
+    /// additionally posts an `update.status` so the Settings dialog can show
+    /// "up to date" / "couldn't check" / "not this build" feedback.
+    ///
+    /// `initialDelay` lets the very first (launch) check wait a few seconds for
+    /// the first frames to settle before hitting the network; every other caller
+    /// skips it so the result is prompt.
+    private async Task CheckForUpdatesAsync(bool initialDelay = false, bool userInitiated = false)
     {
         try
         {
             _updates ??= new UpdateService();
-            if (!_updates.IsUpdatable) return;          // dev run / portable unzip
-            // Let the first frames settle before hitting the network.
-            await Task.Delay(TimeSpan.FromSeconds(3));
+            if (!_updates.IsUpdatable)                  // dev run / portable unzip
+            {
+                if (userInitiated) PostUpdateStatus("unsupported");
+                return;
+            }
+            // Stamp before the (optional) delay + network call so the refocus
+            // throttle counts from when this check started, not when it finished.
+            _lastUpdateCheckUtc = DateTime.UtcNow;
+            if (initialDelay) await Task.Delay(TimeSpan.FromSeconds(3));
             var newVersion = await _updates.CheckAsync();
-            if (string.IsNullOrEmpty(newVersion)) return;   // already up to date
+            if (string.IsNullOrEmpty(newVersion))           // already up to date
+            {
+                if (userInitiated) PostUpdateStatus("uptodate", _updates.CurrentVersion);
+                return;
+            }
+            // Always reveal the pill; on a manual check also confirm in Settings.
             Web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(
                 new { type = "update.available", version = newVersion }));
+            if (userInitiated) PostUpdateStatus("available", newVersion);
         }
-        catch (Exception ex) { Log.Error("Update.check", ex); }
+        catch (Exception ex)
+        {
+            Log.Error("Update.check", ex);
+            if (userInitiated) PostUpdateStatus("error");
+        }
+    }
+
+    /// Tell the Settings dialog the outcome of a manual check. `state` is one of
+    /// uptodate / available / error / unsupported; `version` is the relevant
+    /// version string where one applies.
+    private void PostUpdateStatus(string state, string? version = null)
+    {
+        try
+        {
+            Web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(
+                new { type = "update.status", state, version }));
+        }
+        catch (Exception ex) { Log.Error("Update.status", ex); }
     }
 
     /// User clicked the update pill. Persist session state (the process is
@@ -1332,6 +1400,10 @@ public partial class MainWindow : FluentWindow
             var shells = Shell.DetectedShells()
                 .Select(s => new { name = s.Name, cmd = s.CommandLine })
                 .ToArray();
+            // Surface the running version + whether this copy can self-update so
+            // the Settings "Updates" row shows what you're on and can disable
+            // "Check now" on a dev/portable build that has no feed.
+            _updates ??= new UpdateService();
             var payload = new
             {
                 type = "settings.data",
@@ -1340,6 +1412,8 @@ public partial class MainWindow : FluentWindow
                 defaultCwd = _settings.DefaultCwd,
                 defaultCwdResolved = _settings.ResolveDefaultCwd(),
                 fontSize = _settings.FontSize,
+                appVersion = _updates.CurrentVersion,
+                updatable = _updates.IsUpdatable,
             };
             Web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(payload));
         }

@@ -87,7 +87,11 @@ export type OutMessage =
   | { type: "onboarding.seen" }
   /* User clicked the footer update pill. Host downloads the pending Velopack
    * update and relaunches into it (the process is replaced on success). */
-  | { type: "update.apply" };
+  | { type: "update.apply" }
+  /* Settings → "Check now": ask the host to check the feed right now. Unlike
+   * the silent background checks, the host replies with an update.status so the
+   * dialog can show the outcome (and still reveals the pill if one is found). */
+  | { type: "update.check" };
 
 // ---- Incoming message shapes (host -> page) --------------------------------
 
@@ -236,6 +240,13 @@ export type SettingsDataMessage = {
   defaultCwd: string;
   defaultCwdResolved: string;
   fontSize: number;
+  /* The running version (the release this copy installed from), or null when
+   * it can't be determined (dev `dotnet run` / portable). Shown in the
+   * Updates row. */
+  appVersion?: string | null;
+  /* Whether this copy can self-update (a real Velopack install). False on a
+   * dev/portable copy, where "Check now" is disabled. */
+  updatable?: boolean;
 };
 
 /* One pane being brought back in the restore-progress lightbox. */
@@ -284,7 +295,12 @@ export type InMessage =
   | { type: "update.available"; version: string }
   /* The download/apply triggered by update.apply failed. The page resets the
    * pill to a retry state and toasts the message. */
-  | { type: "update.error"; message: string };
+  | { type: "update.error"; message: string }
+  /* Result of a manual `update.check`, routed to the Settings dialog. `uptodate`
+   * → already on the latest (version = current); `available` → a newer release
+   * exists (version = target; the pill is shown too); `error` → the check
+   * failed; `unsupported` → this copy can't self-update (dev/portable). */
+  | { type: "update.status"; state: "uptodate" | "available" | "error" | "unsupported"; version?: string | null };
 
 // ---- Implementation --------------------------------------------------------
 

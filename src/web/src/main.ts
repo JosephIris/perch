@@ -10,7 +10,7 @@ import { Workspace } from "./workspace.js";
 import { Dashboard } from "./dashboard.js";
 import { installShortcutHint } from "./shortcut-hint.js";
 import { Toast } from "./toast.js";
-import { openSettings, applySettingsData } from "./settings.js";
+import { openSettings, applySettingsData, applyUpdateStatus } from "./settings.js";
 import { showOnboarding } from "./onboarding.js";
 import { startElapsedTicker } from "./elapsed.js";
 import { confirmDialog } from "./confirm.js";
@@ -200,6 +200,10 @@ onMessage((msg) => {
       updateText.textContent = "Update failed";
       updateAction.textContent = "Retry";
       toast.show(`Update failed: ${msg.message}`, "error", null);
+      break;
+    case "update.status":
+      // Outcome of a manual Settings → "Check now"; reflected in the dialog.
+      applyUpdateStatus(msg);
       break;
   }
 });

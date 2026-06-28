@@ -13,7 +13,7 @@
 // only (lazy spawn reads them) — the dialog says so inline.
 
 import { send } from "./bridge.js";
-import type { SettingsDataMessage } from "./bridge.js";
+import type { SettingsDataMessage, InMessage } from "./bridge.js";
 import { MIN_FONT_SIZE, MAX_FONT_SIZE, DEFAULT_FONT_SIZE } from "./pane.js";
 import { Dropdown } from "./dropdown.js";
 import { showOnboarding } from "./onboarding.js";
@@ -22,6 +22,11 @@ let overlay: HTMLElement | null = null;
 let shellDropdown: Dropdown | null = null;
 let cwdInput: HTMLInputElement | null = null;
 let fontInput: HTMLInputElement | null = null;
+let updateCheckBtn: HTMLButtonElement | null = null;
+let updateStatusEl: HTMLElement | null = null;
+// Default Updates-row blurb; restated after a check resets the row. Mirrors the
+// host's actual cadence (launch + hourly timer + on-refocus).
+const UPDATE_CADENCE = "Checks on launch, hourly, and when you return to Perch.";
 
 /** Open the settings dialog. Renders a shell immediately (so the modal
  *  appears instantly) and requests fresh data from the host to fill it. */
@@ -40,6 +45,8 @@ export function closeSettings(): void {
   shellDropdown = null;
   cwdInput = null;
   fontInput = null;
+  updateCheckBtn = null;
+  updateStatusEl = null;
   document.removeEventListener("keydown", onKeyDown, true);
   // Let the fade-out finish before removing — matches dur-normal.
   el.addEventListener("animationend", () => el.remove(), { once: true });
@@ -68,6 +75,45 @@ export function applySettingsData(msg: SettingsDataMessage): void {
   cwdInput.placeholder = msg.defaultCwdResolved || "%USERPROFILE%";
 
   fontInput.value = String(msg.fontSize || DEFAULT_FONT_SIZE);
+
+  // Updates row: show the running version + cadence, and disable "Check now"
+  // on a copy that can't self-update (dev `dotnet run` / portable unzip).
+  if (updateStatusEl && updateCheckBtn) {
+    const ver = msg.appVersion ? `Perch ${msg.appVersion}. ` : "";
+    if (msg.updatable === false) {
+      updateStatusEl.textContent =
+        `${ver}Updates are managed outside this build.`.trim();
+      updateCheckBtn.disabled = true;
+    } else {
+      updateStatusEl.textContent = `${ver}${UPDATE_CADENCE}`;
+      updateCheckBtn.disabled = false;
+    }
+  }
+}
+
+/** Reflect a manual-check result (host `update.status`) in the Updates row.
+ *  No-op if the dialog was closed before the reply arrived. */
+export function applyUpdateStatus(msg: Extract<InMessage, { type: "update.status" }>): void {
+  if (!overlay || !updateCheckBtn || !updateStatusEl) return;
+  updateCheckBtn.disabled = false;
+  updateCheckBtn.textContent = "Check now";
+  switch (msg.state) {
+    case "uptodate":
+      updateStatusEl.textContent = msg.version
+        ? `Perch ${msg.version} is up to date.`
+        : "Perch is up to date.";
+      break;
+    case "available":
+      updateStatusEl.textContent = `Update to v${msg.version} ready — use the pill in the sidebar.`;
+      break;
+    case "error":
+      updateStatusEl.textContent = "Couldn't reach the update feed. Try again.";
+      break;
+    case "unsupported":
+      updateCheckBtn.disabled = true;
+      updateStatusEl.textContent = "Updates are managed outside this build.";
+      break;
+  }
 }
 
 function save(): void {
@@ -166,6 +212,25 @@ function buildSkeleton(): void {
       welcomeBtn,
     ),
   );
+
+  // Row 5 — updates. The description doubles as the live status line (version
+  // + cadence, swapped for the result after a manual check), so we keep refs to
+  // it and the button. applySettingsData fills the version; "Check now" runs the
+  // same check the host does automatically, just on demand.
+  updateCheckBtn = document.createElement("button");
+  updateCheckBtn.type = "button";
+  updateCheckBtn.className = "settings-btn settings-btn--subtle";
+  updateCheckBtn.textContent = "Check now";
+  updateCheckBtn.addEventListener("click", () => {
+    if (!updateCheckBtn || !updateStatusEl) return;
+    updateCheckBtn.disabled = true;
+    updateCheckBtn.textContent = "Checking…";
+    updateStatusEl.textContent = "Checking for updates…";
+    send({ type: "update.check" });
+  });
+  const updatesRow = makeRow("Updates", UPDATE_CADENCE, updateCheckBtn);
+  updateStatusEl = updatesRow.querySelector<HTMLElement>(".settings-row__desc");
+  body.appendChild(updatesRow);
 
   // Footer — cancel + save.
   const footer = document.createElement("div");
