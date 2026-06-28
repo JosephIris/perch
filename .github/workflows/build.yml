@@ -106,8 +106,13 @@ jobs:
       # the only time we publish, so it's the only time a prior release to diff
       # against is relevant. Best-effort: the very first release has nothing to
       # download and pack just produces a full package.
+      # continue-on-error: the FIRST Velopack release has no prior .nupkg to
+      # diff against (the previous release is the old Inno build), and a failed
+      # delta-download must never block the release — pack just produces a full
+      # package instead.
       - name: Download previous release (for deltas)
         if: startsWith(github.ref, 'refs/tags/v')
+        continue-on-error: true
         run: vpk download github --repoUrl https://github.com/JosephIris/perch --token ${{ secrets.GITHUB_TOKEN }}
 
       # Pack into Setup.exe + full/delta .nupkg + release manifest under
