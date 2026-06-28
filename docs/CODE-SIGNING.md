@@ -1,16 +1,28 @@
 # Code signing
 
+> **⚠ Pipeline moved to Velopack — this doc's CI steps are partly stale.**
+> Distribution is now Velopack (`vpk pack` → `Setup.exe` + `.nupkg` feed), not
+> the Inno installer + portable zip. The **SignPath *account* onboarding below
+> (steps 1–6) is still valid**, but the *CI wiring* and *artifact configuration*
+> need re-doing for Velopack: sign the exes **during `vpk pack`** via its
+> `--signTemplate` / signtool-compatible hook, rather than as a post-build
+> GitHub-artifact signing pass. See **"Re-wiring for Velopack"** below. Until
+> that's done, releases publish **unsigned** — same as today (the token was
+> never set).
+
 ## Why this exists
 
-`Perch-Setup-*.exe` and the portable `Perch.exe` ship **unsigned** by default.
+The Velopack `Setup.exe` and the app's `Perch.exe` ship **unsigned** by default.
 Unsigned, low-prevalence Windows executables — especially a terminal app that
 spawns ConPTY processes and runs shell commands — trip two separate warnings:
 
-1. **Microsoft Defender** flags the installer as `Trojan:Win32/Wacatac.B!ml`.
+1. **Microsoft Defender** flagged the old installer as `Trojan:Win32/Wacatac.B!ml`.
    The `!ml` suffix means it's a machine-learning *heuristic*, not a signature
-   match — a false positive. A *compressed* .NET single-file bundle is a known
-   trigger (it behaves like a self-extracting packer), which is why
-   `EnableCompressionInSingleFile` is set to **false** in `.github/workflows/build.yml`.
+   match — a false positive. The strongest trigger was a *compressed* .NET
+   single-file bundle (it behaves like a self-extracting packer). **The Velopack
+   pipeline publishes a plain self-contained folder, not a single-file bundle**,
+   so that heuristic no longer applies — but an unsigned binary can still draw an
+   `!ml` flag, so signing remains worthwhile.
 2. **SmartScreen** shows "Windows protected your PC / unknown publisher."
    Only an Authenticode signature with reputation removes this.
 
@@ -20,23 +32,25 @@ qualifies. SignPath signs **server-side**: there is no certificate file or
 private key to store in the repo. CI uploads the build, SignPath signs it, CI
 publishes the signed result.
 
-## How the CI wiring works
+## Re-wiring for Velopack (the follow-up)
 
-On a tag push (`v*.*.*`), `build.yml`:
+The previous flow signed a post-build GitHub artifact (the Inno installer +
+portable zip). That artifact no longer exists. With Velopack the right place to
+sign is **inside `vpk pack`**, which has a built-in hook to invoke a
+signtool-compatible command across every exe/dll it bundles *and* the generated
+`Setup.exe`:
 
-1. Packages the installer and the portable zip into a `staging/` folder.
-2. Uploads `staging/` as a GitHub Actions artifact (this **zips** it).
-3. **Sign step** (`signpath/github-action-submit-signing-request@v2`) submits
-   that artifact to SignPath, which signs the nested files per the project's
-   *Artifact Configuration* and returns the signed bundle to `signed/`.
-4. The release is created from `signed/` if present, else from `staging/`.
+- `vpk pack ... --signTemplate "<command with {{file}} placeholder>"` — Velopack
+  calls it once per file. Point it at whatever produces an Authenticode
+  signature (Azure Trusted Signing's `dotnet sign`, a local signtool + cert,
+  or SignPath's CLI submitter).
+- SignPath publishes a Velopack-specific guide (sign the `./Releases` output, or
+  use their CLI as the `--signTemplate` command). Wire `SIGNPATH_API_TOKEN` in as
+  the gate exactly as before, but call SignPath from the pack step instead of a
+  separate `submit-signing-request` action.
 
-The sign step is **gated** on the `SIGNPATH_API_TOKEN` secret:
-
-- **Secret absent** (before onboarding, or on forks) → sign step is skipped, the
-  release publishes **unsigned**, and the job logs a `::warning::`. Nothing breaks.
-- **Secret present** → the build signs. If signing fails (wrong slug, project not
-  approved, etc.) the **job fails loudly** rather than silently shipping unsigned.
+Until this is wired, the `Install/Pack/Publish` steps in `build.yml` run unsigned.
+The `SIGNPATH_API_TOKEN` env is still declared there as the intended gate.
 
 ## One-time onboarding (you do this once)
 
@@ -52,15 +66,12 @@ and populate the secret + variables it references.
    - **Organization** → its ID.
    - **Project** (e.g. `perch`) → its slug.
    - **Signing policy** (e.g. `release-signing`) → its slug.
-   - **Artifact configuration** (e.g. `release-bundle`) → its slug. Configure it to
-     match what CI uploads — a `<zip-file>` root (because `upload-artifact` zips the
-     folder) containing:
-       - `Perch-Setup-<ver>.exe` — an **Inno Setup** installer; enable nested signing
-         so its inner `Perch.exe` and `tools/perch.exe` get signed, then the installer
-         itself.
-       - `Perch-Portable-<ver>.zip` — a `<zip-file>`; sign the nested `Perch.exe` and
-         `tools/perch.exe`.
-     See the Artifact Configuration reference:
+   - **Artifact configuration** (e.g. `release-bundle`) → its slug. For the
+     Velopack pipeline this should match the `./Releases` output of `vpk pack`
+     (the `Perch-*-full.nupkg`, the delta `.nupkg`, and `*Setup.exe`), OR — the
+     simpler path — drive signing from `vpk pack --signTemplate` so SignPath signs
+     each file inline and no separate artifact configuration is needed. See the
+     Artifact Configuration reference:
      <https://docs.signpath.io/documentation/artifact-configuration/>.
 4. **Create a CI API token** (a CI-user token scoped to the signing policy).
 5. **Add the GitHub secret:** repo → Settings → Secrets and variables → Actions →
@@ -71,8 +82,8 @@ and populate the secret + variables it references.
    - `SIGNPATH_PROJECT_SLUG`
    - `SIGNPATH_SIGNING_POLICY_SLUG`
    - `SIGNPATH_ARTIFACT_CONFIG_SLUG`
-7. Push a tag (`git tag v1.9.1 && git push origin v1.9.1`) and confirm the
-   **Sign release bundle (SignPath)** step runs and the release assets are signed.
+7. Push a tag (`git tag v1.9.1 && git push origin v1.9.1`) and confirm the signing
+   step runs (the pack step's `--signTemplate`) and the release assets are signed.
 
 ## Interim mitigation (before signing is live)
 
@@ -81,8 +92,8 @@ and populate the secret + variables it references.
   the exe → mark "Incorrectly detected as malware/PUA." Cleared hashes propagate to
   all Defender installs, usually within a day. Re-submit per release until reputation
   builds.
-- The `EnableCompressionInSingleFile=false` change already removes the strongest
-  Defender heuristic trigger on its own.
+- Moving off single-file (the Velopack folder publish) already removes the
+  strongest Defender heuristic trigger on its own.
 
 ## Notes
 
@@ -90,8 +101,8 @@ and populate the secret + variables it references.
   still accrues over downloads/time. Signing removes "unknown publisher" and the
   Defender false positive; the very first signed releases may still see a SmartScreen
   prompt until reputation builds. EV-class instant reputation is a paid path only.
-- **Do not** re-enable `EnableCompressionInSingleFile` until a signed build is
-  confirmed clean by Defender — compression can re-trigger the heuristic even on
-  signed binaries.
+- **Do not** reintroduce a compressed single-file publish for the app — it can
+  re-trigger the Defender packer heuristic even on signed binaries, and it breaks
+  Velopack's file-level delta updates and self-replacement.
 - Verify a signed download locally: right-click → Properties → **Digital Signatures**,
-  or `signtool verify /pa /v Perch-Setup-<ver>.exe`.
+  or `signtool verify /pa /v *Setup.exe`.

@@ -20,6 +20,13 @@ jobs:
     # presence in `if:` (secrets can't be referenced directly in `if:`; promoting
     # to job env is the documented workaround). No token (pre-onboarding, or on a
     # fork) => the signing steps skip and the release publishes unsigned.
+    #
+    # NOTE: code signing is NOT yet re-wired for the Velopack pipeline. The old
+    # SignPath flow signed the Inno installer + portable zip as a post-build
+    # GitHub-artifact pass; Velopack instead wants the exes signed DURING
+    # `vpk pack` (via --signTemplate / a signtool-compatible command). Until that
+    # is wired, releases publish UNSIGNED — exactly as they did before, since the
+    # SignPath token was never set. See docs/CODE-SIGNING.md for the follow-up.
     env:
       SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
 
@@ -71,179 +78,81 @@ jobs:
       - name: Restore
         run: dotnet restore src/Perch/Perch.csproj
 
-      # NOTE: EnableCompressionInSingleFile is intentionally OFF. A *compressed*
-      # single-file bundle is effectively a self-extracting exe that decompresses
-      # native DLLs to disk at runtime, which Defender's ML heuristic reads as a
-      # packer/dropper (the Trojan:Win32/Wacatac.B!ml false positive). Uncompressed
-      # is a larger download but not self-extracting. Only re-enable once
-      # Authenticode signing is live AND confirmed to clear the detection on its own.
-      - name: Publish self-contained single-file
+      # Velopack's packaging CLI. Produces the Setup.exe, the full/delta
+      # .nupkg update feed, and the release manifest the in-app updater reads.
+      - name: Install Velopack CLI (vpk)
+        run: dotnet tool install -g vpk
+
+      # Publish as a NORMAL self-contained FOLDER (not single-file). Velopack's
+      # update + self-replacement machinery operates on the individual files in
+      # the app folder (versioned `current/` dir + Update.exe stub), so a
+      # single-file bundle would defeat delta updates and the atomic swap.
+      #
+      # Bonus: dropping single-file also retires the Defender packer
+      # false-positive we were fighting (a *compressed* single-file decompresses
+      # native DLLs at runtime, which Defender's ML read as a dropper). A plain
+      # folder publish isn't self-extracting, so the heuristic never triggers —
+      # which is why there's no EnableCompressionInSingleFile knob here anymore.
+      - name: Publish self-contained folder
         run: |
           dotnet publish src/Perch/Perch.csproj `
             -c Release `
             -r win-x64 `
             --self-contained `
-            -p:PublishSingleFile=true `
-            -p:IncludeNativeLibrariesForSelfExtract=true `
-            -p:EnableCompressionInSingleFile=false `
             -o publish/perch
 
-      # Bundle the WebView2 Runtime evergreen bootstrapper into the
-      # installer. Win11 has WebView2 preinstalled; older Win10 may not,
-      # and without it the app shows a blank webview. The bootstrapper
-      # itself is small (~150KB) and silently no-ops when the runtime is
-      # already present. The installer only runs it on machines that
-      # need it (see NeedsWebView2 in perch.iss).
-      - name: Download WebView2 Runtime bootstrapper
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path publish | Out-Null
-          Invoke-WebRequest `
-            -Uri "https://go.microsoft.com/fwlink/p/?LinkId=2124703" `
-            -OutFile "publish/MicrosoftEdgeWebview2Setup.exe" `
-            -UseBasicParsing
-          Get-Item publish/MicrosoftEdgeWebview2Setup.exe |
-            Select-Object Name, Length
+      # Pull the latest existing release's packages so `vpk pack` can compute a
+      # DELTA against them (smaller, faster updates). Tag builds only — that's
+      # the only time we publish, so it's the only time a prior release to diff
+      # against is relevant. Best-effort: the very first release has nothing to
+      # download and pack just produces a full package.
+      - name: Download previous release (for deltas)
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: vpk download github --repoUrl https://github.com/JosephIris/perch --token ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build installer (Inno Setup)
-        shell: pwsh
+      # Pack into Setup.exe + full/delta .nupkg + release manifest under
+      # ./Releases. `--framework webview2` makes the installer ensure the
+      # Evergreen WebView2 Runtime is present on first run (replacing the Inno
+      # bootstrapper we used to bundle + invoke by hand). Runs on every trigger
+      # so a PR/dispatch build still validates the pack end-to-end.
+      - name: Pack with Velopack
         run: |
-          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
-          if (-not (Test-Path $iscc)) { throw "Inno Setup not found at $iscc" }
-          & $iscc installer/perch.iss /DAppVersion=$env:APP_VERSION
-          if ($LASTEXITCODE -ne 0) { throw "ISCC failed: $LASTEXITCODE" }
-          Get-ChildItem publish/installer
+          vpk pack `
+            --packId Perch `
+            --packVersion $env:APP_VERSION `
+            --packDir publish/perch `
+            --mainExe Perch.exe `
+            --packTitle Perch `
+            --packAuthors JosephIris `
+            --icon src/Perch/Assets/perch.ico `
+            --framework webview2
 
-      # Upload build outputs as artifacts ONLY for PRs and manual dispatch —
-      # a quick way to grab a build from the Actions run page. Tag builds go
-      # to GitHub Releases below; routine `main` pushes don't need a grab-able
-      # copy and uploading on every one just churns the tiny 0.5 GB free
-      # Actions-storage quota (the 90-day default once piled up ~4.6 GB).
-      #
-      # continue-on-error: a throwaway convenience artifact must NEVER fail the
-      # build. GitHub recalculates storage usage only every 6-12 hours, so the
-      # quota can read "full" for hours after a cleanup — without this the
-      # upload step reds the whole run over a non-essential copy. Capped at
-      # 5-day retention as a second guard against accumulation.
-      - name: Upload installer artifact
+      # Convenience artifact for PR / manual-dispatch runs — grab the installer
+      # straight off the Actions run page. Tag builds go to GitHub Releases
+      # below; routine main pushes don't need a grab-able copy. continue-on-error
+      # + short retention mirror the old policy: a throwaway copy must never fail
+      # the build or churn the tiny free Actions-storage quota.
+      - name: Upload Setup artifact
         if: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
         continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           name: Perch-Setup-${{ env.APP_VERSION }}
-          path: publish/installer/Perch-Setup-*.exe
-          if-no-files-found: error
-          retention-days: 5
-
-      # The portable build is the WHOLE publish/perch folder, not just the exe:
-      # PublishSingleFile embeds the .NET runtime into Perch.exe but NOT Content
-      # items, so wwwroot/ and tools/ ship as loose siblings. Upload the folder
-      # so the downloaded artifact actually runs (a bare Perch.exe can't find
-      # wwwroot and shows the "Web bundle not found" fallback).
-      - name: Upload portable artifact
-        if: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
-        continue-on-error: true
-        uses: actions/upload-artifact@v7
-        with:
-          name: perch-portable-${{ env.APP_VERSION }}
-          path: publish/perch/**
+          path: Releases/*Setup.exe
           if-no-files-found: error
           retention-days: 5
 
       # ------- Release: runs only on tag pushes -------
-      # Flow: package portable -> stage installer + portable into one folder ->
-      # upload that as a GH artifact -> SignPath signs it (gated on the secret) ->
-      # create the Release from the signed files (or unsigned, if SignPath isn't
-      # configured yet). The one-time SignPath Foundation onboarding that
-      # populates SIGNPATH_API_TOKEN and the vars.* below is in docs/CODE-SIGNING.md.
-      - name: Package portable zip
+      # `vpk upload github` creates/updates the GitHub Release for the tag and
+      # attaches the Setup.exe + .nupkg feed. The in-app updater (UpdateService /
+      # GithubSource) reads exactly this feed. --publish marks the release live
+      # (not a draft) so users — and the auto-updater — see it immediately.
+      - name: Publish GitHub Release (Velopack)
         if: startsWith(github.ref, 'refs/tags/v')
-        shell: pwsh
         run: |
-          # The portable build is the WHOLE publish/perch folder, not a lone exe:
-          # PublishSingleFile embeds the .NET runtime into Perch.exe but NOT Content
-          # items, so wwwroot/ (the xterm.js + chrome bundle) and tools/ (perch CLI
-          # + claude.cmd hook wrapper) ship as loose siblings. Zipping
-          # publish/perch/* puts Perch.exe + wwwroot/ + tools/ at the zip root so
-          # users unzip, keep the files together, and run Perch.exe; a bare
-          # Perch.exe has no sibling wwwroot and shows the "Web bundle not found"
-          # fallback.
-          Compress-Archive -Path "publish/perch/*" -DestinationPath "publish/Perch-Portable-$env:APP_VERSION.zip" -Force
-
-      - name: Stage release artifacts for signing
-        if: startsWith(github.ref, 'refs/tags/v')
-        shell: pwsh
-        run: |
-          # Put both release artifacts in one folder so a SINGLE SignPath
-          # submission signs both. upload-artifact zips this folder, so SignPath's
-          # Artifact Configuration is rooted as a <zip-file> and signs the nested
-          # Inno installer (plus its inner Perch.exe/perch.exe) and the portable
-          # zip's exes. See docs/CODE-SIGNING.md for that configuration.
-          New-Item -ItemType Directory -Force -Path staging | Out-Null
-          Copy-Item "publish/installer/Perch-Setup-$env:APP_VERSION.exe" staging/
-          Copy-Item "publish/Perch-Portable-$env:APP_VERSION.zip"        staging/
-
-      - name: Upload unsigned release bundle
-        id: unsigned_bundle
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@v7
-        with:
-          name: perch-release-unsigned-${{ env.APP_VERSION }}
-          path: staging/**
-          if-no-files-found: error
-          retention-days: 5
-
-      # SignPath Foundation (free for OSS) signs the bundle server-side. GATED on
-      # the secret: when SIGNPATH_API_TOKEN is unset (pre-onboarding, or on forks)
-      # this step is skipped and the release publishes UNSIGNED instead of failing.
-      # Once SignPath fails for a CONFIGURED token (bad slug etc.) the job fails
-      # loudly rather than silently shipping unsigned — that's intentional.
-      - name: Sign release bundle (SignPath)
-        id: signed_bundle
-        if: ${{ startsWith(github.ref, 'refs/tags/v') && env.SIGNPATH_API_TOKEN != '' }}
-        uses: signpath/github-action-submit-signing-request@v2
-        with:
-          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
-          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
-          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIG_SLUG }}
-          github-artifact-id: ${{ steps.unsigned_bundle.outputs.artifact-id }}
-          wait-for-completion: true
-          output-artifact-directory: signed
-
-      - name: Resolve release source (signed if available)
-        id: relsrc
-        if: startsWith(github.ref, 'refs/tags/v')
-        shell: pwsh
-        run: |
-          if (Test-Path "signed/Perch-Setup-$env:APP_VERSION.exe") {
-            "dir=signed" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-            Write-Output "Publishing SIGNED artifacts."
-          } else {
-            "dir=staging" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-            Write-Output "::warning::SignPath not configured (no SIGNPATH_API_TOKEN) - publishing UNSIGNED artifacts. See docs/CODE-SIGNING.md."
-          }
-
-      - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          $src = "${{ steps.relsrc.outputs.dir }}"
-          $notes = @"
-          ## Perch $env:GITHUB_REF_NAME
-
-          A power tool for non-power users. Self-contained - no .NET install needed.
-
-          **Downloads**
-          - ``Perch-Setup-$env:APP_VERSION.exe`` — installer (Start menu + uninstaller)
-          - ``Perch-Portable-$env:APP_VERSION.zip`` — portable (unzip, keep the files together, run Perch.exe)
-          "@
-
-          gh release create $env:GITHUB_REF_NAME `
-            "$src/Perch-Setup-$env:APP_VERSION.exe" `
-            "$src/Perch-Portable-$env:APP_VERSION.zip" `
-            --title "Perch $env:GITHUB_REF_NAME" `
-            --notes $notes
+          vpk upload github `
+            --repoUrl https://github.com/JosephIris/perch `
+            --token ${{ secrets.GITHUB_TOKEN }} `
+            --publish true `
+            --releaseName "Perch $env:GITHUB_REF_NAME" `
+            --tag $env:GITHUB_REF_NAME

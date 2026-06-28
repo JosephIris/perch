@@ -33,6 +33,20 @@ const toast = new Toast($("toast"));
 const restoreProgress = new RestoreProgress();
 const statusEl = $("status-text");
 
+// Footer auto-update pill (hidden until the host reports a newer release).
+const updateBanner = $<HTMLButtonElement>("update-banner");
+const updateText = updateBanner.querySelector<HTMLElement>(".update-banner__text")!;
+const updateAction = updateBanner.querySelector<HTMLElement>(".update-banner__action")!;
+updateBanner.addEventListener("click", () => {
+  // One-way trip: dim, swap to a progress label, and hand off to the host.
+  // On success the process is replaced; update.error resets us on failure.
+  updateBanner.classList.add("update-banner--busy");
+  updateBanner.disabled = true;
+  updateText.textContent = "Downloading update…";
+  updateAction.textContent = "";
+  send({ type: "update.apply" });
+});
+
 // One-time launch prompt is shown at most once per run; guard against a
 // duplicate resume.prompt (defensive — the host sends it once).
 let resumePromptShown = false;
@@ -172,6 +186,20 @@ onMessage((msg) => {
       break;
     case "restore.done":
       restoreProgress.finish();
+      break;
+    case "update.available":
+      updateText.textContent = `Update to v${msg.version}`;
+      updateAction.textContent = "Restart";
+      updateBanner.disabled = false;
+      updateBanner.classList.remove("update-banner--busy");
+      updateBanner.hidden = false;
+      break;
+    case "update.error":
+      updateBanner.classList.remove("update-banner--busy");
+      updateBanner.disabled = false;
+      updateText.textContent = "Update failed";
+      updateAction.textContent = "Retry";
+      toast.show(`Update failed: ${msg.message}`, "error", null);
       break;
   }
 });

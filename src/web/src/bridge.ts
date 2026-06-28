@@ -84,7 +84,10 @@ export type OutMessage =
   | { type: "settings.save"; defaultShell?: string; defaultCwd?: string; fontSize?: number }
   /* Page dismissed the onboarding lightbox → host marks it seen so it won't
    * auto-open next launch. */
-  | { type: "onboarding.seen" };
+  | { type: "onboarding.seen" }
+  /* User clicked the footer update pill. Host downloads the pending Velopack
+   * update and relaunches into it (the process is replaced on success). */
+  | { type: "update.apply" };
 
 // ---- Incoming message shapes (host -> page) --------------------------------
 
@@ -274,7 +277,14 @@ export type InMessage =
   /* Host asks the page to open the settings dialog (title-bar gear or the
    * test harness). The page already has the open path wired to the
    * sidebar gear; this just lets the host trigger it too. */
-  | { type: "ui.open-settings" };
+  | { type: "ui.open-settings" }
+  /* A newer release is available (Velopack found it on the GitHub feed).
+   * `version` is the target version string. The page reveals the footer
+   * update pill; clicking it sends update.apply. */
+  | { type: "update.available"; version: string }
+  /* The download/apply triggered by update.apply failed. The page resets the
+   * pill to a retry state and toasts the message. */
+  | { type: "update.error"; message: string };
 
 // ---- Implementation --------------------------------------------------------
 

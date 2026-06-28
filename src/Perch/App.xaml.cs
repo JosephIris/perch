@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using System.Threading.Tasks;
+using Velopack;
 
 namespace Perch;
 
@@ -18,6 +19,26 @@ public partial class App : System.Windows.Application
 
     public App()
     {
+        // MUST run before ANY other startup work. When Velopack's Setup.exe (or
+        // an in-place update) relaunches us with its hook args
+        // (--veloapp-install / -updated / -uninstall / -firstrun), this detects
+        // them, performs the hook (shortcuts, version bookkeeping), and calls
+        // Environment.Exit — so it has to short-circuit before we touch the
+        // console, PATH, or spawn anything. On a normal launch (no hook args)
+        // it returns immediately and the rest of the constructor runs as usual.
+        // It's also a safe no-op when the copy isn't a Velopack install at all
+        // (dev `dotnet run`, portable unzip).
+        //
+        // `vpk pack` prints a benign warning that this isn't in a method named
+        // `Main`. That's expected for WPF: the XAML-generated entry point is
+        // `Main → new App() → InitializeComponent() → Run()`, so this first line
+        // of the constructor runs before InitializeComponent loads the theme
+        // resources and before any window exists — early enough for the hooks.
+        // Hand-rolling a Program.Main would mean disabling the generated entry
+        // point and risking the App.xaml resource/theme load, which isn't worth
+        // it to silence a cosmetic warning.
+        try { VelopackApp.Build().Run(); } catch (Exception ex) { Log.Error("Velopack.Run", ex); }
+
         // Detach from any inherited console state BEFORE we ever spawn a
         // shell. The danger path: a console parent (`dotnet run`, bash,
         // Tabby) launches us with STARTF_USESTDHANDLES forwarding its
