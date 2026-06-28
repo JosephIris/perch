@@ -15,11 +15,35 @@ export function fmtElapsed(ms: number): string {
   return `${h}h ${m % 60}m`;
 }
 
+/** Relative "ago" for a finished turn: "now" / "8s ago" / "2m ago" / "1h ago"
+ * / "3d ago". Calmer than fmtElapsed (the turn is at rest, not counting up),
+ * so it coarsens past the hour to one unit. Clamps negatives to "now". */
+export function fmtAgo(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 5) return "now";
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
 /** Create a span that auto-updates to the elapsed since `turnStartMs`. */
 export function elapsedSpan(turnStartMs: number): HTMLElement {
   const e = document.createElement("span");
   e.dataset.turnStart = String(turnStartMs);
   e.textContent = fmtElapsed(Date.now() - turnStartMs);
+  return e;
+}
+
+/** Create a span that auto-updates to the relative-ago since `doneAtMs` (the
+ * Unix-ms a turn finished). Same shared ticker as elapsedSpan, so a done row's
+ * "finished · 2m ago" stays live without the host re-pushing state. */
+export function agoSpan(doneAtMs: number): HTMLElement {
+  const e = document.createElement("span");
+  e.dataset.since = String(doneAtMs);
+  e.textContent = fmtAgo(Date.now() - doneAtMs);
   return e;
 }
 
@@ -31,11 +55,19 @@ export function startElapsedTicker(): void {
   started = true;
   window.setInterval(() => {
     const now = Date.now();
+    // Two kinds of live time labels share this tick: forward-counting elapsed
+    // on working rows (data-turn-start) and relative-ago on finished rows
+    // (data-since). One DOM walk, branch per node.
     document
-      .querySelectorAll<HTMLElement>("[data-turn-start]")
+      .querySelectorAll<HTMLElement>("[data-turn-start], [data-since]")
       .forEach((el) => {
-        const t = Number(el.dataset.turnStart) || 0;
-        if (t > 0) el.textContent = fmtElapsed(now - t);
+        const start = Number(el.dataset.turnStart) || 0;
+        if (start > 0) {
+          el.textContent = fmtElapsed(now - start);
+          return;
+        }
+        const since = Number(el.dataset.since) || 0;
+        if (since > 0) el.textContent = fmtAgo(now - since);
       });
   }, 1000);
 }

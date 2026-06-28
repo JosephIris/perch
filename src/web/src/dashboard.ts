@@ -13,7 +13,7 @@
 
 import type { PaneTreeView, SessionView, AgentStateName } from "./bridge.js";
 import { send, bytesToB64 } from "./bridge.js";
-import { elapsedSpan } from "./elapsed.js";
+import { elapsedSpan, agoSpan } from "./elapsed.js";
 
 const enc = new TextEncoder();
 
@@ -217,10 +217,15 @@ export class Dashboard {
     const foot = el("div", "card__foot");
     const act = el("span", "card__activity");
     act.textContent = STATE_WORD[s.agentState];
-    // Live elapsed for a working session; otherwise the relative last-activity.
+    // Live elapsed for a working session; live relative-ago for a finished
+    // one (ticks on the page, no host re-push); else the host's last-activity
+    // string as a fallback for rows without a stamped turn-end.
     if (s.agentState === "working" && s.turnStartMs > 0) {
       act.append(" · ");
       act.appendChild(elapsedSpan(s.turnStartMs));
+    } else if (s.agentState === "done" && s.doneAtMs > 0) {
+      act.append(" · ");
+      act.appendChild(agoSpan(s.doneAtMs));
     } else if (s.lastActivity) {
       act.append(` · ${s.lastActivity}`);
     }

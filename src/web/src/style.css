@@ -886,6 +886,51 @@ ul { list-style: none; padding: 0; margin: 0; }
   overflow: hidden;
 }
 
+/* Pane footer — per-pane status bar (see pane-footer.ts). Bottom counterpart
+ * to the header: liveness (what it's doing + work produced), not identity.
+ * Status-bar discipline — transparent, a single 1px top hairline as the only
+ * chrome, caption type, tertiary text. Quieter than the terminal it sits
+ * under so it never competes for the eye. */
+.pane__footer {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  height: 22px;
+  padding: 0 var(--sp-8);
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  background: transparent;
+  border-top: 1px solid var(--color-stroke);
+  flex: 0 0 auto;
+}
+/* Collapsed for a plain idle shell with nothing to report — no empty bar
+ * eating a terminal row. */
+.pane__footer--empty { display: none; }
+.pane__footer-spacer { flex: 1 1 auto; }
+/* Left cluster: live activity. Ellipsis when the detail runs long so it never
+ * shoves the metrics off the right edge. State-tinted text mirrors the
+ * header's state-label rules — done calm-green, waiting caution, permission
+ * red — so the pane's status reads the same top and bottom. */
+.pane__footer-activity {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-secondary);
+}
+.pane__footer-activity[data-state="idle"]       { color: var(--color-text-tertiary); }
+.pane__footer-activity[data-state="done"]        { color: var(--color-state-done); }
+.pane__footer-activity[data-state="waiting"]     { color: var(--color-caution); }
+.pane__footer-activity[data-state="permission"]  { color: var(--color-state-permission); }
+/* Right cluster: produced-work + port chips, never wraps. */
+.pane__footer-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  flex: 0 0 auto;
+}
+
 /* --- Link action menu ---------------------------------------------------
  * Floating menu shown when the user clicks a URL in the terminal. Lives
  * outside the normal flow (position:fixed) and dismisses on Esc /

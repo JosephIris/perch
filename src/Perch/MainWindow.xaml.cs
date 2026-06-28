@@ -477,6 +477,12 @@ public partial class MainWindow : FluentWindow
         {
             pane.TurnStartUnixMs = 0;
         }
+        // Turn-end clock for "finished · 2m ago": stamp the moment a pane ENTERS
+        // Done from any other state. The page ticks relative-ago against it on
+        // done rows, so the "your move" age stays live between pushes. Mirror of
+        // the turn-start stamp above; the watchdog Working→Done path stamps too.
+        if (newState == AgentState.Done && prev != AgentState.Done)
+            pane.DoneAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         // Attention nudge: any transition INTO an attention state (waiting
         // for feedback, or blocked on permission) flashes the taskbar (only
         // when our window isn't already foreground). One place to raise the
@@ -526,6 +532,7 @@ public partial class MainWindow : FluentWindow
                     pane.AgentState = AgentState.Done;
                     pane.StateInferred = true;
                     pane.TurnStartUnixMs = 0;            // left working → no elapsed
+                    pane.DoneAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();  // turn-end clock for "finished · Xm ago"
                     changed = true;
                     Log.Info("IdleWatchdog", $"pane={pane.Id:N} working->done (output-silent)");
                 }
@@ -1553,6 +1560,15 @@ public partial class MainWindow : FluentWindow
                             .Select(p => p.TurnStartUnixMs)
                             .DefaultIfEmpty(0)
                             .Min(),
+                        // Most-recent turn-end among panes that are CURRENTLY at
+                        // rest → "this session finished Xm ago". 0 when none is
+                        // done. Filtered to Done so a working pane's stale prior
+                        // turn-end never leaks into the live "ago".
+                        doneAtMs     = leaves
+                            .Where(p => p.AgentState == AgentState.Done && p.DoneAtUnixMs > 0)
+                            .Select(p => p.DoneAtUnixMs)
+                            .DefaultIfEmpty(0)
+                            .Max(),
                         // Relative "last activity" for the dashboard card footer.
                         lastActivity = s.LastActivityRelative,
                     };
@@ -1604,6 +1620,9 @@ public partial class MainWindow : FluentWindow
                 /* Unix-ms the pane started its current working spell (0 when
                  * not working) — the page ticks "working · 2m" against it. */
                 turnStartMs  = node.TurnStartUnixMs,
+                /* Unix-ms the pane last finished a turn (0 if never) — the page
+                 * ticks "finished · 2m ago" against it on done rows. */
+                doneAtMs     = node.DoneAtUnixMs,
                 notification = string.IsNullOrEmpty(node.NotificationText) ? null : new
                 {
                     text  = node.NotificationText,

@@ -315,6 +315,13 @@ internal sealed class PaneNode
     /// the same machine.
     [JsonIgnore] public long TurnStartUnixMs { get; set; }
 
+    /// Unix-ms timestamp the pane last entered Done (finished a turn), so the
+    /// UI can tick "finished · 2m ago" live without the host re-pushing. 0 if
+    /// the pane has never finished a turn. Not cleared on leaving Done — the
+    /// web guards on the Done state and the value records the last turn-end.
+    /// Wall clock (page compares against Date.now() on the same machine).
+    [JsonIgnore] public long DoneAtUnixMs { get; set; }
+
     [JsonIgnore] public bool IsLeaf => Split == null;
     [JsonIgnore] public bool IsWebView => IsLeaf && !string.IsNullOrEmpty(Url);
     [JsonIgnore] public bool HasNotification => !string.IsNullOrEmpty(NotificationText);
