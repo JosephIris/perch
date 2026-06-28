@@ -16,7 +16,7 @@
 import type { SessionView } from "./bridge.js";
 import { send } from "./bridge.js";
 import { confirmDialog } from "./confirm.js";
-import { elapsedSpan } from "./elapsed.js";
+import { elapsedSpan, agoSpan } from "./elapsed.js";
 
 /** "+142 −38" diff summary (U+2212 minus). Empty when nothing changed, so the
  *  caller can omit the item entirely. Either clause is dropped when zero. */
@@ -132,12 +132,17 @@ export class Sidebar {
     //   working → "▸ what it's doing"
     //   done    → "+A −D · ⎇ branch ↑N"  (what it produced / what's unpushed)
     //   else    → "⎇ branch · :ports"     (dormant / needs-you keep code context)
-    const metaItems: Array<{ text: string; alert?: boolean; turnStart?: number }> = [];
+    const metaItems: Array<{ text: string; alert?: boolean; turnStart?: number; since?: number }> = [];
     const ahead = s.ahead > 0 ? ` ↑${s.ahead}` : "";
 
     if (s.agentState === "working") {
       metaItems.push({ text: `▸ ${s.activityDetail || "working"}`, turnStart: s.turnStartMs });
     } else if (s.agentState === "done") {
+      // Lead with live "finished · 2m ago" so the freshness reads first — this
+      // is the "your move" section, and how long it's been waiting on you is
+      // the most useful signal. Falls back to nothing if the turn-end wasn't
+      // stamped (older sessions).
+      if (s.doneAtMs > 0) metaItems.push({ text: "finished", since: s.doneAtMs });
       const diff = fmtDiff(s.linesAdded, s.linesDeleted);
       if (diff) metaItems.push({ text: diff });
       if (s.branch) metaItems.push({ text: `⎇ ${s.branch}${ahead}` });
@@ -168,6 +173,11 @@ export class Sidebar {
         if (mi.turnStart && mi.turnStart > 0) {
           span.append(" · ");
           span.appendChild(elapsedSpan(mi.turnStart));
+        }
+        // Live "finished · 2m ago" on done rows — same ticker, relative form.
+        if (mi.since && mi.since > 0) {
+          span.append(" · ");
+          span.appendChild(agoSpan(mi.since));
         }
         meta.appendChild(span);
       }

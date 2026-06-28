@@ -12,6 +12,7 @@ import "./style.css";
 import { Sidebar } from "./sidebar.js";
 import { Dashboard } from "./dashboard.js";
 import { confirmDialog } from "./confirm.js";
+import { buildPaneFooter, applyPaneFooter } from "./pane-footer.js";
 import type { SessionView, PaneTreeView } from "./bridge.js";
 
 type Leaf = Extract<PaneTreeView, { kind: "leaf" }>;
@@ -33,12 +34,15 @@ function leaf(over: Partial<Leaf>): Leaf {
     filesChanged: 0,
     ahead: 0,
     turnStartMs: 0,
+    doneAtMs: 0,
     ...over,
   };
 }
 
-// Sample "working since 2m ago" for the live-elapsed label.
+// Sample "working since 2m ago" for the live-elapsed label, and a turn that
+// finished ~4m ago for the live "finished · Xm ago" on done rows.
 const TWO_MIN_AGO = Date.now() - 125_000;
+const FOUR_MIN_AGO = Date.now() - 248_000;
 
 const sessions: SessionView[] = [
   // Working, single pane — sidebar shows "▸ {action}".
@@ -60,6 +64,7 @@ const sessions: SessionView[] = [
     filesChanged: 0,
     ahead: 0,
     turnStartMs: TWO_MIN_AGO,
+    doneAtMs: 0,
     lastActivity: "now",
   },
   // Idle / done, multi-pane — sidebar shows "+142 −38 · ⎇ main ↑2" + breakdown.
@@ -72,8 +77,8 @@ const sessions: SessionView[] = [
       id: "split-1",
       orientation: "v",
       children: [
-        leaf({ name: "bq-query-monitor", agentState: "done", branch: "main", commitCount: 2, linesAdded: 90, linesDeleted: 20, filesChanged: 4, ahead: 2 }),
-        leaf({ name: "nadec updates", agentState: "done", branch: "main", commitCount: 1, linesAdded: 52, linesDeleted: 18, filesChanged: 3, ahead: 2 }),
+        leaf({ name: "bq-query-monitor", agentState: "done", branch: "main", commitCount: 2, linesAdded: 90, linesDeleted: 20, filesChanged: 4, ahead: 2, doneAtMs: FOUR_MIN_AGO }),
+        leaf({ name: "nadec updates", agentState: "done", branch: "main", commitCount: 1, linesAdded: 52, linesDeleted: 18, filesChanged: 3, ahead: 2, doneAtMs: Date.now() - 600_000 }),
         leaf({ name: "cohort costs", agentState: "working", activityDetail: "using Bash", branch: "main" }),
       ],
     },
@@ -90,6 +95,7 @@ const sessions: SessionView[] = [
     filesChanged: 7,
     ahead: 2,
     turnStartMs: 0,
+    doneAtMs: FOUR_MIN_AGO,
     lastActivity: "4m ago",
   },
   // Dormant idle — sidebar shows "⎇ main · :3000".
@@ -111,6 +117,7 @@ const sessions: SessionView[] = [
     filesChanged: 0,
     ahead: 0,
     turnStartMs: 0,
+    doneAtMs: 0,
     lastActivity: "2h ago",
   },
   // Permission — the genuine "Needs you" with an ask note.
@@ -132,6 +139,7 @@ const sessions: SessionView[] = [
     filesChanged: 0,
     ahead: 0,
     turnStartMs: 0,
+    doneAtMs: 0,
     lastActivity: "now",
   },
 ];
@@ -147,6 +155,48 @@ const dash = new Dashboard(
   document.getElementById("dash-badge")!
 );
 dash.render(sessions);
+
+// #panefooter — mock .pane shells (no xterm) exercising every footer state, so
+// the per-pane status bar can be screenshotted offline. Active panes show the
+// focus-gated git stats; inactive ones don't.
+if (view === "panefooter") {
+  type Leaf = Extract<PaneTreeView, { kind: "leaf" }>;
+  const cases: Array<{ label: string; leaf: Leaf; active: boolean }> = [
+    { label: "working (active)", active: true,
+      leaf: leaf({ name: "nadec-api", agentState: "working", activityDetail: "editing live-updates.ts", turnStartMs: TWO_MIN_AGO, linesAdded: 142, linesDeleted: 38, filesChanged: 7, ahead: 2, ports: [5173] }) },
+    { label: "done (active)", active: true,
+      leaf: leaf({ name: "cohort costs", agentState: "done", doneAtMs: FOUR_MIN_AGO, linesAdded: 90, linesDeleted: 20, filesChanged: 4, ahead: 2 }) },
+    { label: "done (inactive — git stats hidden)", active: false,
+      leaf: leaf({ name: "split sibling", agentState: "done", doneAtMs: FOUR_MIN_AGO, linesAdded: 90, linesDeleted: 20, filesChanged: 4, ahead: 2 }) },
+    { label: "permission", active: true,
+      leaf: leaf({ name: "infra deploy", agentState: "permission" }) },
+    { label: "idle shell with dev server", active: false,
+      leaf: leaf({ name: "shell", agentState: "idle", ports: [3000] }) },
+    { label: "idle shell, nothing (footer collapses)", active: false,
+      leaf: leaf({ name: "shell", agentState: "idle" }) },
+  ];
+  const stage = document.getElementById("workspace")!;
+  stage.style.cssText = "display:flex;flex-direction:column;gap:12px;padding:16px;";
+  for (const c of cases) {
+    const wrap = document.createElement("div");
+    wrap.style.cssText = "font:11px var(--font-small,sans-serif);color:rgba(255,255,255,0.4)";
+    const cap = document.createElement("div");
+    cap.textContent = c.label;
+    cap.style.cssText = "margin-bottom:4px";
+    const pane = document.createElement("div");
+    pane.className = "pane" + (c.active ? " pane--active" : "");
+    pane.style.cssText = "height:84px";
+    const term = document.createElement("div");
+    term.className = "pane__term";
+    term.style.cssText = "display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,0.25)";
+    term.textContent = "terminal";
+    const footer = buildPaneFooter();
+    applyPaneFooter(footer, c.leaf, c.active);
+    pane.append(term, footer.root);
+    wrap.append(cap, pane);
+    stage.appendChild(wrap);
+  }
+}
 
 if (view === "dashboard") {
   dash.show();

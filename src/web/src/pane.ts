@@ -13,6 +13,7 @@ import type { PaneTreeView } from "./bridge.js";
 import { cachedClipboardText, setCachedClipboardText } from "./clipboard.js";
 import { showLinkMenu } from "./link-menu.js";
 import { buildPaneHeader, applyChips, applyAgentBadge } from "./pane-header.js";
+import { buildPaneFooter, applyPaneFooter, type PaneFooter } from "./pane-footer.js";
 import { attachTooltip } from "./tooltip.js";
 
 // URL regex — same as @xterm/addon-web-links's strictUrlRegex, copied so
@@ -45,6 +46,7 @@ export class Pane {
   private readonly branchEl: HTMLElement;
   private readonly commitsEl: HTMLElement;
   private readonly agentBadgeEl: HTMLElement;
+  private readonly footer: PaneFooter;
   private readonly termHost: HTMLElement;
   private readonly term: Terminal;
   private readonly fit: FitAddon;
@@ -90,6 +92,12 @@ export class Pane {
     this.termHost = document.createElement("div");
     this.termHost.className = "pane__term";
     this.element.appendChild(this.termHost);
+
+    // Per-pane status bar at the bottom: live activity + work produced. Built
+    // here, populated on every applyLeafView. Sits below the terminal so the
+    // pane reads header · terminal · footer top-to-bottom.
+    this.footer = buildPaneFooter();
+    this.element.appendChild(this.footer.root);
 
     // Terminal theme. Background is --color-terminal-bg (#1f1f1f), one
     // step LIGHTER than --color-sidebar-surface (#181818) so the pane
@@ -357,10 +365,11 @@ export class Pane {
     // Only the focused pane runs a cursor-blink loop (see the constructor
     // note) — keeps the multi-pane cursor calm during heavy output.
     this.term.options.cursorBlink = active;
-    // The commit chip is focus-gated; re-evaluate it now that active changed
-    // without waiting for the next state push.
+    // The commit chip and the footer's git stats are focus-gated; re-evaluate
+    // now that active changed without waiting for the next state push.
     if (this.lastLeaf) {
       applyChips(this.branchEl, this.commitsEl, this.lastLeaf, active);
+      applyPaneFooter(this.footer, this.lastLeaf, active);
     }
   }
 
@@ -394,6 +403,7 @@ export class Pane {
     this.element.dataset.state = leaf.agentState;
     applyChips(this.branchEl, this.commitsEl, leaf, this.isActive);
     applyAgentBadge(this.agentBadgeEl, leaf.agentType);
+    applyPaneFooter(this.footer, leaf, this.isActive);
   }
 
   /** Bump the terminal font size by `delta` px, clamped to [9, 32].
