@@ -62,6 +62,25 @@ public partial class MainWindow : FluentWindow
     // oversize case. UTF-16 chars; ~2 MB.
     private const int MaxCachedClipboardChars = 1_000_000;
 
+    // ---- Agent-session resume (claude --resume <id>) ---------------------
+    // Panes armed to inject `claude --resume <id>` on their NEXT spawn. Drained
+    // one-shot in SpawnPty so a later manual re-split never auto-launches an
+    // agent. Populated when the user accepts the launch prompt or restores a
+    // closed session.
+    private readonly HashSet<Guid> _armedResumePanes = new();
+    // True between launch and the user's answer to the one-time "Resume N
+    // Claude sessions?" prompt. While pending, a resumable pane's lazy spawn is
+    // parked in _deferredSpawns so the prompt actually gates the first agent
+    // launch instead of racing it.
+    private bool _resumeDecisionPending;
+    private readonly Dictionary<Guid, (int cols, int rows)> _deferredSpawns = new();
+    // Panes shown in the restore-progress lightbox → whether the pane has
+    // reported "alive again" (its resumed session-start hook fired). Empty when
+    // no restore is in flight. _restoreTimeout force-completes a batch whose
+    // panes never come back so the lightbox can't hang.
+    private readonly Dictionary<Guid, bool> _restoreBatch = new();
+    private System.Windows.Threading.DispatcherTimer? _restoreTimeout;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -73,6 +92,13 @@ public partial class MainWindow : FluentWindow
         // CLI, test harnesses) can read pane ids and pipe paths from disk
         // before the user does anything.
         _store.Save();
+        // Arm agent-session resume: if any persisted pane carries a saved
+        // Claude session id and the user hasn't disabled it, hold those panes'
+        // spawns until the one-time prompt (sent from OnPageReady) is answered.
+        // Set here — before the page can send its first pane.resize — so the
+        // deferral in OnPaneResize is in effect from the very first measure.
+        if (_settings.ResumeAgentsOnLaunch && AllResumablePanes().Any())
+            _resumeDecisionPending = true;
 
         Loaded += async (_, _) =>
         {
@@ -256,6 +282,9 @@ public partial class MainWindow : FluentWindow
                 case "session.select":  OnSessionSelect(root); break;
                 case "session.rename":  OnSessionRename(root); break;
                 case "session.close":   OnSessionClose(root); break;
+                case "session.restore": OnSessionRestore(root); break;
+                case "session.purge":   OnSessionPurge(root); break;
+                case "resume.decision": OnResumeDecision(root); break;
                 case "pane.focus":      OnPaneFocus(root); break;
                 case "url.open":        OnUrlOpen(root); break;
                 case "prefs.set":       OnPrefsSet(root); break;
@@ -287,6 +316,191 @@ public partial class MainWindow : FluentWindow
         // the first right-click paste is synchronous without waiting for a
         // clipboard change or window re-activation.
         SyncClipboardToWeb();
+        // If we held back any resumable panes (see the constructor), ask the
+        // user once whether to reopen those Claude sessions. The answer
+        // (resume.decision) releases the parked spawns.
+        if (_resumeDecisionPending) PostResumePrompt();
+    }
+
+    /// Every (session, leaf) pair that can ACTUALLY `claude --resume` — carries
+    /// a saved session id AND has a transcript on disk for it. The transcript
+    /// check is what stops us from firing `claude --resume <id>` for a session
+    /// Claude never persisted (started then closed before a turn), which errors
+    /// "No conversation found" and drops a red line in the pane. Spans all
+    /// sessions so the launch prompt's count reflects everything resumable.
+    private IEnumerable<(Session sess, PaneNode pane)> AllResumablePanes() =>
+        _store.Sessions.SelectMany(s => AllLeaves(s.Root).Select(p => (sess: s, pane: p)))
+            .Where(t => !string.IsNullOrEmpty(t.pane.ClaudeSessionId)
+                        && TranscriptExists(t.pane.ClaudeSessionId!, ResolvePaneCwd(t.sess, t.pane)));
+
+    /// The cwd a pane spawns in: its own persisted cwd, then the session cwd,
+    /// then the configured default. Single source so the resume pre-flight and
+    /// SpawnPty agree on where the agent runs.
+    private string ResolvePaneCwd(Session sess, PaneNode pane) =>
+        FirstExistingDir(pane.Cwd, sess.Cwd) ?? _settings.ResolveDefaultCwd();
+
+    /// Best-effort check that Claude has a saved transcript for this session id
+    /// under the given cwd, so we only `--resume` something that exists.
+    /// Claude stores transcripts at
+    /// <c>~/.claude/projects/&lt;sanitized-cwd&gt;/&lt;id&gt;.jsonl</c>. We try the
+    /// cwd-scoped path first, then fall back to matching the file anywhere under
+    /// projects (the sanitization rule can drift across Claude versions). On ANY
+    /// uncertainty — projects dir missing, IO error — we return true so the
+    /// check never blocks a genuine resume; it only suppresses the clearly-absent
+    /// case.
+    private static bool TranscriptExists(string sessionId, string cwd)
+    {
+        try
+        {
+            // Claude's config root is ~/.claude unless CLAUDE_CONFIG_DIR overrides
+            // it — honor the same override so we look where Claude actually wrote.
+            var configDir = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR");
+            var baseDir = string.IsNullOrWhiteSpace(configDir)
+                ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude")
+                : configDir;
+            var projects = Path.Combine(baseDir, "projects");
+            if (!Directory.Exists(projects)) return true; // unknown layout — don't block
+            var scoped = Path.Combine(projects, SanitizeCwd(cwd), sessionId + ".jsonl");
+            if (File.Exists(scoped)) return true;
+            return Directory.EnumerateFiles(projects, sessionId + ".jsonl", SearchOption.AllDirectories).Any();
+        }
+        catch { return true; }
+    }
+
+    /// Claude's project-dir key: path separators and the drive colon become '-'
+    /// (e.g. C:\Users\josep\dev-projects\cmux-win → C--Users-josep-dev-projects-cmux-win).
+    private static string SanitizeCwd(string cwd)
+    {
+        var sb = new System.Text.StringBuilder(cwd.Length);
+        foreach (var ch in cwd) sb.Append(ch is '\\' or '/' or ':' ? '-' : ch);
+        return sb.ToString();
+    }
+
+    /// One-time "Resume N Claude sessions?" prompt. The page renders the dialog
+    /// and replies with resume.decision {accept}.
+    private void PostResumePrompt()
+    {
+        var resumable = AllResumablePanes().ToList();
+        var sessionCount = resumable.Select(t => t.sess.Id).Distinct().Count();
+        var payload = new
+        {
+            type = "resume.prompt",
+            paneCount = resumable.Count,
+            sessionCount,
+        };
+        try { Web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(payload)); }
+        catch (Exception ex) { Log.Error("PostResumePrompt", ex); }
+    }
+
+    /// User answered the launch resume prompt. Accept → arm every resumable
+    /// pane and open the progress lightbox for the ones we deferred (the
+    /// visible session's). Either way, release every parked spawn.
+    private void OnResumeDecision(JsonElement root)
+    {
+        var accept = root.TryGetProperty("accept", out var a) &&
+                     (a.ValueKind == JsonValueKind.True ||
+                      (a.ValueKind == JsonValueKind.String && a.GetString() == "true"));
+        _resumeDecisionPending = false;
+        if (accept)
+        {
+            foreach (var (_, pane) in AllResumablePanes())
+                _armedResumePanes.Add(pane.Id);
+            // The lightbox tracks the panes we're bringing back right now.
+            BeginRestoreProgress(_deferredSpawns.Keys.ToList());
+        }
+        // Release the parked spawns — resuming (armed) or bare (not armed).
+        foreach (var kv in _deferredSpawns.ToList())
+        {
+            var sess = OwningSession(kv.Key);
+            var pane = sess == null ? null : AllLeaves(sess.Root).FirstOrDefault(p => p.Id == kv.Key);
+            if (sess != null && pane != null)
+                SpawnPty(sess, pane, kv.Value.cols, kv.Value.rows);
+        }
+        _deferredSpawns.Clear();
+    }
+
+    // ---- Restore-progress lightbox (host side) ---------------------------
+    // The page shows a sleek per-pane progress modal while resumed agents come
+    // back up. Host drives it: restore.begin lists the panes, restore.progress
+    // flips each row, restore.done closes it. "Ready" = the pane's resumed
+    // session-start hook fired (OnAgentSession). A timer force-completes a
+    // batch whose panes never report back so the modal can't hang.
+
+    /// Open the lightbox for the given panes (only those with a saved session
+    /// id — the rest aren't resuming and have nothing to show).
+    private void BeginRestoreProgress(List<Guid> paneIds)
+    {
+        CompleteRestoreBatch(force: true);  // close any prior batch first
+        var panes = new List<object>();
+        foreach (var id in paneIds)
+        {
+            var sess = OwningSession(id);
+            var pane = sess == null ? null : AllLeaves(sess.Root).FirstOrDefault(p => p.Id == id);
+            if (pane == null || string.IsNullOrEmpty(pane.ClaudeSessionId)) continue;
+            _restoreBatch[id] = false;
+            panes.Add(new
+            {
+                paneId = id.ToString("D"),
+                name = pane.Name ?? "pane",
+                sessionTitle = sess!.Title,
+            });
+        }
+        if (panes.Count == 0) return;
+        try
+        {
+            Web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(
+                new { type = "restore.begin", panes = panes.ToArray() }));
+        }
+        catch (Exception ex) { Log.Error("BeginRestoreProgress", ex); }
+        // Safety net: a pane that never re-fires session-start (resume failed,
+        // stale id, plain shell) shouldn't pin the lightbox open.
+        _restoreTimeout?.Stop();
+        _restoreTimeout = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(12),
+        };
+        _restoreTimeout.Tick += (_, __) => CompleteRestoreBatch(force: true);
+        _restoreTimeout.Start();
+    }
+
+    /// SpawnPty just injected `claude --resume` for this pane — flip its row to
+    /// the active "resuming" spinner (no-op if it isn't in the batch).
+    private void NoteRestorePaneResuming(Guid paneId)
+    {
+        if (_restoreBatch.ContainsKey(paneId)) PostRestoreProgress(paneId, "resuming");
+    }
+
+    /// The pane's resumed agent reported in (session-start hook). Mark its row
+    /// done; when the whole batch is back, close the lightbox.
+    private void MarkRestorePaneReady(Guid paneId)
+    {
+        if (!_restoreBatch.TryGetValue(paneId, out var done) || done) return;
+        _restoreBatch[paneId] = true;
+        PostRestoreProgress(paneId, "ready");
+        if (_restoreBatch.Values.All(v => v)) CompleteRestoreBatch(force: false);
+    }
+
+    private void CompleteRestoreBatch(bool force)
+    {
+        _restoreTimeout?.Stop();
+        _restoreTimeout = null;
+        if (_restoreBatch.Count == 0) return;
+        if (force)
+            foreach (var id in _restoreBatch.Keys.ToList())
+                if (!_restoreBatch[id]) PostRestoreProgress(id, "ready");
+        _restoreBatch.Clear();
+        try { Web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(new { type = "restore.done" })); }
+        catch (Exception ex) { Log.Error("CompleteRestoreBatch", ex); }
+    }
+
+    private void PostRestoreProgress(Guid paneId, string state)
+    {
+        try
+        {
+            Web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(
+                new { type = "restore.progress", paneId = paneId.ToString("D"), state }));
+        }
+        catch (Exception ex) { Log.Error("PostRestoreProgress", ex); }
     }
 
     /// Read the OS clipboard and push its text to the page so right-click paste
@@ -336,6 +550,20 @@ public partial class MainWindow : FluentWindow
         return null;
     }
 
+    /// First of the candidate paths that names an existing directory, or null.
+    /// Used to pick a pane's spawn cwd: per-pane cwd, then session cwd, then
+    /// (caller) the configured default. A stale path (worktree deleted, drive
+    /// unmounted) is skipped rather than failing the spawn.
+    private static string? FirstExistingDir(params string?[] candidates)
+    {
+        foreach (var c in candidates)
+        {
+            if (string.IsNullOrWhiteSpace(c)) continue;
+            try { if (Directory.Exists(c)) return c; } catch { }
+        }
+        return null;
+    }
+
     // ---- ConPty spawn / teardown -----------------------------------------
 
     private void SpawnPty(Session sess, PaneNode pane, int cols = 80, int rows = 24)
@@ -355,13 +583,25 @@ public partial class MainWindow : FluentWindow
             var baseShell = string.IsNullOrEmpty(sess.Shell)
                 ? Shell.DefaultCommandLine(_settings.DefaultShell)
                 : sess.Shell;
-            var cwd = !string.IsNullOrWhiteSpace(sess.Cwd) && Directory.Exists(sess.Cwd)
-                ? sess.Cwd
-                : _settings.ResolveDefaultCwd();
+            // Per-pane cwd wins (the dir THIS pane last cd'd to, persisted via
+            // OSC 7), then the session-level cwd, then the configured default.
+            // This is what makes a restored pane reopen where the user left it.
+            var cwd = ResolvePaneCwd(sess, pane);
+            // Agent-session resume: if this pane is armed (the user accepted the
+            // launch prompt or restored a closed session) and carries a saved
+            // Claude session id, launch straight back into the conversation.
+            // Drained one-shot so a later manual re-split of this pane never
+            // auto-relaunches the agent.
+            string? initialCommand = null;
+            if (_armedResumePanes.Remove(pane.Id) && !string.IsNullOrEmpty(pane.ClaudeSessionId))
+            {
+                initialCommand = $"claude --resume {pane.ClaudeSessionId}";
+                NoteRestorePaneResuming(pane.Id);
+            }
             // Shell.BuildStartupCommandLine injects PERCH_PIPE / PERCH_PANE_ID
             // env vars per-pane so agents inside the shell can call back
             // into our IPC layer (stage 4 reactivates that pipe).
-            var startCmd = Shell.BuildStartupCommandLine(baseShell, cwd, pane.Id);
+            var startCmd = Shell.BuildStartupCommandLine(baseShell, cwd, pane.Id, initialCommand);
             var pty = ConPty.Start(startCmd, cols: cols, rows: rows, cwd: cwd);
             var paneId = pane.Id;
             pty.OutputReceived += (_, bytes) =>
@@ -392,6 +632,7 @@ public partial class MainWindow : FluentWindow
             ipc.OnTitle  += msg => OnAgentTitle(sess, paneId, msg);
             ipc.OnNameReset += msg => OnNameReset(sess, paneId, msg);
             ipc.OnAgent  += msg => OnAgentType(sess, paneId, msg);
+            ipc.OnSession += msg => OnAgentSession(sess, paneId, msg);
             ipc.Start();
             _paneIpc[paneId] = ipc;
 
@@ -588,6 +829,26 @@ public partial class MainWindow : FluentWindow
         if (pane.AgentType == next) return;
         pane.AgentType = next;
         PushState();
+    }
+
+    // Claude reported its session id (session-start hook). Persist it on the
+    // pane so a relaunch can `claude --resume <id>`. Overwrite on every
+    // session-start (the latest conversation is the one worth resuming); never
+    // cleared on session-end. If this pane is mid-restore (we just injected a
+    // resume command and are waiting for claude to come back up), this hook
+    // firing is the authoritative "it's alive again" signal for the progress
+    // lightbox.
+    private void OnAgentSession(Session sess, Guid paneId, SessionMessage msg)
+    {
+        var pane = FindPane(sess, paneId);
+        if (pane == null) return;
+        var id = string.IsNullOrWhiteSpace(msg.Id) ? null : msg.Id;
+        if (id != null && pane.ClaudeSessionId != id)
+        {
+            pane.ClaudeSessionId = id;
+            _store.Save();
+        }
+        MarkRestorePaneReady(paneId);
     }
 
     // New Claude session in a terminal pane (fresh launch after ctrl+c twice,
@@ -840,6 +1101,15 @@ public partial class MainWindow : FluentWindow
             var pane = sess == null ? null : AllLeaves(sess.Root).FirstOrDefault(p => p.Id == id);
             if (sess != null && pane != null)
             {
+                // While the launch resume prompt is unanswered, park a resumable
+                // pane's spawn so the prompt gates the first `claude --resume`
+                // instead of racing it. Non-resumable panes spawn immediately.
+                if (_resumeDecisionPending && !string.IsNullOrEmpty(pane.ClaudeSessionId))
+                {
+                    Log.Info($"Pane.resize.defer pane={id:N} (awaiting resume decision)");
+                    _deferredSpawns[id] = (cols, rows);
+                    return;
+                }
                 Log.Info($"Pane.resize.spawn pane={id:N} cols={cols} rows={rows}");
                 SpawnPty(sess, pane, cols, rows);
             }
@@ -902,10 +1172,43 @@ public partial class MainWindow : FluentWindow
         if (sess == null) return;
         // Tear down every PTY owned by this session.
         foreach (var leaf in AllLeaves(sess.Root).ToList()) DestroyPty(leaf.Id);
-        _store.Remove(sess);
+        _store.Remove(sess);   // archives to Recently closed (not deleted)
         EnsureActivePane();
         _store.Save();
         PushState();
+    }
+
+    // Bring a closed session back from "Recently closed". Restores its layout
+    // in the original directories and — gated by ResumeAgentsOnLaunch — arms
+    // its Claude panes to `claude --resume`, driving the progress lightbox.
+    private void OnSessionRestore(JsonElement root)
+    {
+        if (!TryGuid(root, "id", out var id)) return;
+        var sess = _store.Restore(id);
+        if (sess == null) return;
+        _activePaneId = FirstLeaf(sess.Root)?.Id;
+        if (_settings.ResumeAgentsOnLaunch)
+        {
+            // Only arm panes whose transcript actually exists — a saved id with
+            // no on-disk conversation would just error "No conversation found".
+            var resumable = AllLeaves(sess.Root)
+                .Where(p => !string.IsNullOrEmpty(p.ClaudeSessionId)
+                            && TranscriptExists(p.ClaudeSessionId!, ResolvePaneCwd(sess, p)))
+                .ToList();
+            foreach (var p in resumable) _armedResumePanes.Add(p.Id);
+            // Open the lightbox before PushState so it's tracking these panes
+            // by the time their spawns (and resumed hooks) fire.
+            BeginRestoreProgress(resumable.Select(p => p.Id).ToList());
+        }
+        _store.Save();
+        PushState();
+    }
+
+    // Permanently drop a session from "Recently closed".
+    private void OnSessionPurge(JsonElement root)
+    {
+        if (!TryGuid(root, "id", out var id)) return;
+        if (_store.Purge(id)) { _store.Save(); PushState(); }
     }
 
     private void OnPaneFocus(JsonElement root)
@@ -1123,6 +1426,10 @@ public partial class MainWindow : FluentWindow
         if (sess == null) return;
         var pane = AllLeaves(sess.Root).FirstOrDefault(p => p.Id == id);
         if (pane == null) return;
+        // Persist the per-pane cwd so a restart/respawn reopens this pane in the
+        // same directory (and `claude --resume` runs in the right project dir).
+        // Gated above on an actual change, so this only writes on real cd's.
+        if (pane.Cwd != cwd) { pane.Cwd = cwd; _store.Save(); }
         // Resolve the branch off-thread — git can take 50–200ms on a big
         // repo and we don't want to stall the message pump. Also try to
         // auto-name the session by the repo basename (so "tab per repo"
@@ -1573,6 +1880,21 @@ public partial class MainWindow : FluentWindow
                         lastActivity = s.LastActivityRelative,
                     };
                 }).ToArray(),
+                // Recently-closed sessions for the sidebar's restore list. Just
+                // the summary the row needs — title, pane/agent counts, and when
+                // it was closed (the page renders "closed 5m ago" live).
+                closedSessions = _store.ClosedSessions.Select(s =>
+                {
+                    var leaves = AllLeaves(s.Root).ToArray();
+                    return new
+                    {
+                        id = s.Id.ToString("D"),
+                        title = s.Title,
+                        paneCount = leaves.Length,
+                        resumableCount = leaves.Count(p => !string.IsNullOrEmpty(p.ClaudeSessionId)),
+                        closedAtMs = s.ClosedAtUnixMs,
+                    };
+                }).ToArray(),
             };
             Web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(snap));
         }
@@ -1764,6 +2086,9 @@ public partial class MainWindow : FluentWindow
             case "session.new":     OnSessionNew(root); break;
             case "session.select":  OnSessionSelect(root); break;
             case "session.close":   OnSessionClose(root); break;
+            case "session.restore": OnSessionRestore(root); break;
+            case "session.purge":   OnSessionPurge(root); break;
+            case "resume.decision": OnResumeDecision(root); break;
             // Stage 3b verbs. The pane.* page verbs already take {paneId,...}
             // so we just forward the JsonElement through.
             case "pane.split":      OnPaneSplit(root); break;
@@ -1905,6 +2230,24 @@ public partial class MainWindow : FluentWindow
                             name = p.Name,
                             agentState = StateToString(p.AgentState),
                             notification = p.NotificationText,
+                            // Resume-related persisted fields, surfaced so the
+                            // self-test can assert capture/persistence.
+                            cwd = p.Cwd,
+                            claudeSessionId = p.ClaudeSessionId,
+                        }).ToArray(),
+                    }).ToArray();
+                    // Recently-closed list, so the test can assert archive /
+                    // restore / purge moved sessions between the two lists.
+                    var closed = _store.ClosedSessions.Select(s => new
+                    {
+                        id = s.Id.ToString("D"),
+                        title = s.Title,
+                        closedAtMs = s.ClosedAtUnixMs,
+                        panes = AllLeaves(s.Root).Select(p => new
+                        {
+                            id = p.Id.ToString("D"),
+                            cwd = p.Cwd,
+                            claudeSessionId = p.ClaudeSessionId,
                         }).ToArray(),
                     }).ToArray();
                     var prefs = new
@@ -1912,8 +2255,9 @@ public partial class MainWindow : FluentWindow
                         fontSize = _settings.FontSize,
                         defaultShell = _settings.DefaultShell,
                         defaultCwd = _settings.DefaultCwd,
+                        resumeAgentsOnLaunch = _settings.ResumeAgentsOnLaunch,
                     };
-                    var dump = new { sessions = snap, prefs };
+                    var dump = new { sessions = snap, closedSessions = closed, prefs };
                     Log.Info("StateDump", "STATE_DUMP" + JsonSerializer.Serialize(dump));
                 }
                 break;

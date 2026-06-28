@@ -29,6 +29,11 @@ internal sealed class Session : INotifyPropertyChanged
     public string Shell { get; set; } = "";
     public string Cwd { get; set; } = "";
 
+    /// Unix-ms when the session was closed and moved to the store's
+    /// "Recently closed" list. 0 for a live session. Persisted so the list
+    /// (and its "closed 5m ago" ordering) survives a full app restart.
+    public long ClosedAtUnixMs { get; set; }
+
     public PaneNode Root { get; set; } = new();
 
     // Notification text emitted by an agent or shell script via OSC 9
@@ -219,6 +224,24 @@ internal sealed class PaneNode
     /// instead of a terminal. Sessions persisted to disk preserve their
     /// webview panes across restarts.
     public string? Url { get; set; }
+
+    /// Last working directory this leaf's shell reported via OSC 7. PERSISTED
+    /// (not [JsonIgnore]) so a restored/respawned pane reopens in the same
+    /// directory the user had cd'd to — previously cwd lived only at the
+    /// session level and the live per-pane cwd was lost on restart. Also lets
+    /// `claude --resume` run in the right project dir (Claude stores its
+    /// transcript per project directory). Empty until the shell emits its
+    /// first prompt; SpawnPty falls back to the session cwd then the default.
+    public string? Cwd { get; set; }
+    /// Last Claude Code session id seen on this pane (from the SessionStart
+    /// hook). PERSISTED (unlike the transient AgentState/Branch/etc. below) so
+    /// a relaunch can `claude --resume <id>` straight back into the
+    /// conversation. Just a UUID; harmless if stale (a pruned session makes
+    /// resume error out and the pane lands at a normal shell). Overwritten on
+    /// each session-start, NOT cleared on session-end — resume works on an
+    /// ended session and we want the last id to stick.
+    public string? ClaudeSessionId { get; set; }
+
     /// User- or auto-assigned name used by `perch focus/send/open` to address
     /// the pane from inside an agent. Persisted so addressing stays stable
     /// across restarts. Only leaves carry names; the field is ignored on

@@ -65,14 +65,15 @@ export function applyPaneFooter(f: PaneFooter, leaf: Leaf, active: boolean): voi
       a.append(`▸ ${leaf.activityDetail || "working"}`);
       if (leaf.turnStartMs > 0) {
         a.append(" · ");
-        a.appendChild(elapsedSpan(leaf.turnStartMs));
+        // Coarse (minute) — the footer shouldn't tick a seconds counter.
+        a.appendChild(elapsedSpan(leaf.turnStartMs, /* coarse */ true));
       }
       break;
     case "done":
       a.append("✓ finished");
       if (leaf.doneAtMs > 0) {
         a.append(" · ");
-        a.appendChild(agoSpan(leaf.doneAtMs));
+        a.appendChild(agoSpan(leaf.doneAtMs, /* coarse */ true));
       }
       break;
     case "waiting":

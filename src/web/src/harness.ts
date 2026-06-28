@@ -13,6 +13,7 @@ import { Sidebar } from "./sidebar.js";
 import { Dashboard } from "./dashboard.js";
 import { confirmDialog } from "./confirm.js";
 import { buildPaneFooter, applyPaneFooter } from "./pane-footer.js";
+import { RestoreProgress } from "./restore-progress.js";
 import type { SessionView, PaneTreeView } from "./bridge.js";
 
 type Leaf = Extract<PaneTreeView, { kind: "leaf" }>;
@@ -148,7 +149,20 @@ const view = location.hash.replace("#", "") || "sidebar";
 
 const list = document.getElementById("sidebar-scroll")!;
 const newBtn = document.getElementById("new-session-button")!;
-new Sidebar(list, newBtn).render(sessions, "s-idle");
+// "Recently closed" container — present in the real index.html; create a
+// fallback for the standalone harness page and pin it above the footer.
+let closedEl = document.getElementById("recently-closed");
+if (!closedEl) {
+  closedEl = document.createElement("div");
+  closedEl.id = "recently-closed";
+  closedEl.className = "recently-closed";
+  list.parentElement?.insertBefore(closedEl, list.nextSibling);
+}
+const NOW = Date.now();
+new Sidebar(list, newBtn, closedEl).render(sessions, "s-idle", [
+  { id: "c-1", title: "kanban refactor", paneCount: 3, resumableCount: 2, closedAtMs: NOW - 5 * 60_000 },
+  { id: "c-2", title: "docs site", paneCount: 1, resumableCount: 0, closedAtMs: NOW - 42 * 60_000 },
+]);
 
 const dash = new Dashboard(
   document.getElementById("dashboard")!,
@@ -202,10 +216,19 @@ if (view === "dashboard") {
   dash.show();
 } else if (view === "confirm") {
   void confirmDialog({
-    title: "Close product-tools-prod?",
-    body: "This closes the session and its 3 panes. The pane layout can't be recovered.",
-    confirmLabel: "Close session",
-    cancelLabel: "Keep open",
-    danger: true,
+    title: "Restore kanban refactor?",
+    body: "Reopen this session's 3 panes and resume 2 Claude sessions.",
+    confirmLabel: "Restore",
+    cancelLabel: "Cancel",
   });
+} else if (view === "restore") {
+  // Restore-progress lightbox mid-flight: one pane resumed, one still spinning.
+  const rp = new RestoreProgress();
+  rp.begin([
+    { paneId: "p1", name: "nadec-api", sessionTitle: "kanban refactor" },
+    { paneId: "p2", name: "kanban-ui", sessionTitle: "kanban refactor" },
+    { paneId: "p3", name: "docs", sessionTitle: "kanban refactor" },
+  ]);
+  rp.progress("p1", "ready");
+  rp.progress("p2", "resuming");
 }

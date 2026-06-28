@@ -63,6 +63,14 @@ internal static class HookHandler
                 // so the tool name is definitive.
                 Send(pipeName, new { type = "agent", name = "claude" });
                 Send(pipeName, new { type = "status", state = "working", detail = "claude started" });
+                // Capture Claude's own session id so a future relaunch can
+                // `claude --resume <id>` straight back into this conversation.
+                // Same root/hook_input/data fallback the other fields use. The
+                // resumed run re-fires session-start with the same id, so
+                // re-capture is idempotent. Empty/absent → nothing persisted.
+                var sessionId = StringFrom(root, "session_id");
+                if (!string.IsNullOrWhiteSpace(sessionId))
+                    Send(pipeName, new { type = "session", id = sessionId });
                 // Re-arm pane auto-naming so the next first prompt re-titles
                 // the pane to the new task — that's what makes a fresh launch
                 // (ctrl+c twice → relaunch) or `/clear` pick up a new name.

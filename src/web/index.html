@@ -47,6 +47,12 @@
            this scroll container. -->
       <div id="sidebar-scroll" class="sidebar__scroll"></div>
 
+      <!-- Recently closed: pinned just above the identity footer. A closed
+           project archives here (instead of being deleted) so its layout +
+           Claude sessions can be restored. Rendered by sidebar.ts; hidden
+           when empty. -->
+      <div id="recently-closed" class="recently-closed" hidden></div>
+
       <!-- Bottom row: app identity + settings. Mirrors Claude's user-info
            row at the bottom of the sidebar. The identity block is static;
            the gear opens the settings dialog. -->

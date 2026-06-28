@@ -29,7 +29,13 @@ internal static class Shell
     /// doesn't expose a child-env hook, so we splice the assignments into the
     /// shell's own startup syntax. paneId=null skips the IPC env (used by
     /// any callers that don't need it).
-    public static string BuildStartupCommandLine(string shellCommandLine, string? cwd, Guid? paneId)
+    ///
+    /// <paramref name="initialCommand"/>, when set, is run once after the env +
+    /// cwd setup and before the interactive shell takes over — this is how a
+    /// restored pane launches <c>claude --resume &lt;id&gt;</c>. Because we pass
+    /// <c>-NoExit</c> (pwsh) / <c>/K</c> (cmd), the user keeps an interactive
+    /// shell when the command exits or errors (e.g. a pruned session id).
+    public static string BuildStartupCommandLine(string shellCommandLine, string? cwd, Guid? paneId, string? initialCommand = null)
     {
         // Default shell paths like "C:\Program Files\PowerShell\7\pwsh.exe"
         // come back unquoted from DetectedShells(). Without normalization,
@@ -83,6 +89,12 @@ internal static class Shell
                 if (hasCwd)
                     sb.Append("Set-Location -LiteralPath '").Append(EscapePs(cwd!)).Append("'; ");
 
+                // Resume / startup command (e.g. `claude --resume <id>`) runs
+                // after cwd is set so the agent launches in the right project
+                // dir. -NoExit means the user keeps the shell if it exits.
+                if (!string.IsNullOrEmpty(initialCommand))
+                    sb.Append(initialCommand).Append("; ");
+
                 var userScript = TranslatePwshArgs(rest);
                 if (!string.IsNullOrEmpty(userScript))
                     sb.Append(userScript);
@@ -105,6 +117,9 @@ internal static class Shell
                     parts.Add($"set PERCH_PANE_ID={paneIdStr}");
                 }
                 if (hasCwd) parts.Add($"cd /D \"{cwd}\"");
+                // Resume / startup command after cd (see pwsh branch). /K keeps
+                // the shell alive when it exits or errors.
+                if (!string.IsNullOrEmpty(initialCommand)) parts.Add(initialCommand);
                 if (!string.IsNullOrEmpty(rest)) parts.Add(rest);
                 if (parts.Count == 0) return shellCommandLine;
                 return $"{quotedExe} /K \"{string.Join(" && ", parts)}\"";

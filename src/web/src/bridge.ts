@@ -50,6 +50,14 @@ export type OutMessage =
   | { type: "session.select"; id: string }
   | { type: "session.rename"; id: string; title: string }
   | { type: "session.close"; id: string }
+  /* Bring a closed session back from "Recently closed" (restores layout +
+   * cwd, and resumes its Claude panes when enabled). */
+  | { type: "session.restore"; id: string }
+  /* Permanently drop a closed session from "Recently closed". */
+  | { type: "session.purge"; id: string }
+  /* Answer to the one-time launch resume prompt. accept=true reopens the
+   * saved Claude sessions; false leaves the panes as plain shells. */
+  | { type: "resume.decision"; accept: boolean }
   /* Open a URL externally — host resolves to the OS default browser. */
   | { type: "url.open"; url: string }
   /* Pane rename + color tag changes from the pane header chrome. */
@@ -178,11 +186,26 @@ export type SessionView = {
   lastActivity: string;
 };
 
+/* A row in the sidebar's "Recently closed" list. Summary only — the panes
+ * themselves live host-side until restored. */
+export type ClosedSessionView = {
+  id: string;
+  title: string;
+  paneCount: number;
+  /* How many of its panes carry a saved Claude session id (i.e. will resume
+   * when restored). 0 → restores as plain shells. */
+  resumableCount: number;
+  /* Unix-ms it was closed; the page ticks "closed 5m ago" against Date.now(). */
+  closedAtMs: number;
+};
+
 export type StateMessage = {
   type: "state";
   activeSessionId: string;
   activePaneId: string;
   sessions: SessionView[];
+  /* Recently-closed sessions, most-recent first, for the restore list. */
+  closedSessions: ClosedSessionView[];
   /* User preferences ferried with every state push — cheap and means the
    * page never has to ask. fontSize is the default terminal cell size
    * applied to new Panes; existing panes follow it too on every state.
@@ -212,6 +235,9 @@ export type SettingsDataMessage = {
   fontSize: number;
 };
 
+/* One pane being brought back in the restore-progress lightbox. */
+export type RestorePaneView = { paneId: string; name: string; sessionTitle: string };
+
 export type InMessage =
   | StateMessage
   | { type: "pane.out"; paneId: string; b64: string }
@@ -219,6 +245,16 @@ export type InMessage =
   | ToastMessage
   | SettingsDataMessage
   | { type: "host.error"; message: string }
+  /* One-time launch prompt: N saved Claude sessions can be reopened. The page
+   * asks the user, then replies with resume.decision. */
+  | { type: "resume.prompt"; paneCount: number; sessionCount: number }
+  /* Open the restore-progress lightbox for these panes (each starts as a
+   * spinner). Sent when a resume/restore actually begins. */
+  | { type: "restore.begin"; panes: RestorePaneView[] }
+  /* Flip one pane's row: "resuming" (active spinner) → "ready" (done check). */
+  | { type: "restore.progress"; paneId: string; state: "resuming" | "ready" | "error" }
+  /* All panes handled — the lightbox auto-dismisses (3s) or the user closes it. */
+  | { type: "restore.done" }
   /* Host-pushed cached clipboard text. The host reads the OS clipboard on
    * change (while foreground), on window activation, and at page-ready, and
    * ferries it here so right-click paste is synchronous — no async

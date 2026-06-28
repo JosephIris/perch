@@ -8,6 +8,7 @@
     "build": "node esbuild.config.mjs",
     "watch": "node esbuild.config.mjs --watch",
     "typecheck": "tsc --noEmit",
+    "test": "esbuild test/pane-footer.test.ts --bundle --platform=node --format=esm --outfile=.test-out/pane-footer.test.mjs && node --test .test-out/pane-footer.test.mjs",
     "build:harness": "esbuild src/harness.ts --bundle --format=iife --target=es2022 --outfile=../../design-loop/harness.js --loader:.css=css --external:/fonts/*"
   },
   "dependencies": {
