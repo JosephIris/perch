@@ -12,6 +12,7 @@ import "./style.css";
 import { Sidebar } from "./sidebar.js";
 import { Dashboard } from "./dashboard.js";
 import { confirmDialog } from "./confirm.js";
+import { showPaneChooser } from "./pane-chooser.js";
 import { buildPaneFooter, applyPaneFooter } from "./pane-footer.js";
 import { RestoreProgress } from "./restore-progress.js";
 import type { SessionView, PaneTreeView } from "./bridge.js";
@@ -210,6 +211,31 @@ if (view === "panefooter") {
     wrap.append(cap, pane);
     stage.appendChild(wrap);
   }
+}
+
+if (view === "panechooser") {
+  // #panechooser — a mock .pane (no xterm) with the in-pane new-pane chooser
+  // overlaid, so the centered dialog can be screenshotted offline. The send()
+  // on a pick is a no-op in the harness (no chrome.webview), and we don't click
+  // anyway — we just render it for the capture.
+  const stage = document.getElementById("workspace")!;
+  // The real .workspace is a flex row; force block so the standalone .pane
+  // fills the width instead of shrinking to its content (harness-only).
+  stage.style.cssText = "padding:16px;height:100%;box-sizing:border-box;display:block;";
+  const pane = document.createElement("div");
+  pane.className = "pane pane--active";
+  pane.style.cssText = "height:100%;width:100%;box-sizing:border-box;";
+  const term = document.createElement("div");
+  term.className = "pane__term";
+  term.style.cssText = "display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,0.18);font:13px var(--font-mono,monospace);";
+  term.textContent = "terminal";
+  pane.appendChild(term);
+  stage.appendChild(pane);
+  void showPaneChooser(pane, {
+    cwd: "C:\\Users\\irisy\\dev-projects\\perch",
+    agentType: "claude",
+    defaultCwd: "C:\\Users\\irisy",
+  });
 }
 
 if (view === "dashboard") {

@@ -74,6 +74,14 @@ public partial class MainWindow : FluentWindow
     // launch instead of racing it.
     private bool _resumeDecisionPending;
     private readonly Dictionary<Guid, (int cols, int rows)> _deferredSpawns = new();
+    // ---- New-pane chooser ------------------------------------------------
+    // Panes split from a pane whose working directory we already know (an agent
+    // ran there, OSC 7 reported the cwd). id -> (source pane's cwd, source
+    // pane's agent type). The fresh pane's lazy spawn is parked in
+    // _deferredSpawns and a `pane.chooser` is posted on its first measure; the
+    // user's pane.chooser.choose answer releases the spawn into the chosen cwd
+    // + initial command, or closes the never-spawned pane on cancel.
+    private readonly Dictionary<Guid, (string cwd, string agentType)> _pendingChoosers = new();
     // Panes shown in the restore-progress lightbox → whether the pane has
     // reported "alive again" (its resumed session-start hook fired). Empty when
     // no restore is in flight. _restoreTimeout force-completes a batch whose
@@ -384,6 +392,7 @@ public partial class MainWindow : FluentWindow
                 case "render.pong":     OnRenderPong(root); break;
                 case "pane.split":      OnPaneSplit(root); break;
                 case "pane.close":      OnPaneClose(root); break;
+                case "pane.chooser.choose": OnPaneChooserChoose(root); break;
                 case "pane.resizeSplit": OnPaneResizeSplit(root); break;
                 case "pane.move":       OnPaneMove(root); break;
                 case "pane.moveDir":    OnPaneMoveDir(root); break;
@@ -787,7 +796,7 @@ public partial class MainWindow : FluentWindow
 
     // ---- ConPty spawn / teardown -----------------------------------------
 
-    private void SpawnPty(Session sess, PaneNode pane, int cols = 80, int rows = 24)
+    private void SpawnPty(Session sess, PaneNode pane, int cols = 80, int rows = 24, string? initialCommand = null)
     {
         // Idempotency guard. If we somehow reach SpawnPty for a pane that
         // already has a backing ConPty, leaking it would leave an orphan
@@ -812,9 +821,10 @@ public partial class MainWindow : FluentWindow
             // launch prompt or restored a closed session) and carries a saved
             // Claude session id, launch straight back into the conversation.
             // Drained one-shot so a later manual re-split of this pane never
-            // auto-relaunches the agent.
-            string? initialCommand = null;
-            if (_armedResumePanes.Remove(pane.Id) && !string.IsNullOrEmpty(pane.ClaudeSessionId))
+            // auto-relaunches the agent. Skipped when the caller already supplied
+            // an initial command (the new-pane chooser passes "claude"/"codex");
+            // a fresh split is never armed for resume anyway, so they can't clash.
+            if (initialCommand == null && _armedResumePanes.Remove(pane.Id) && !string.IsNullOrEmpty(pane.ClaudeSessionId))
             {
                 initialCommand = $"claude --resume {pane.ClaudeSessionId}";
                 NoteRestorePaneResuming(pane.Id);
@@ -1331,6 +1341,15 @@ public partial class MainWindow : FluentWindow
                     _deferredSpawns[id] = (cols, rows);
                     return;
                 }
+                // New-pane chooser: park the spawn and ask the user what to run
+                // here. Released by OnPaneChooserChoose (or closed on cancel).
+                if (_pendingChoosers.ContainsKey(id))
+                {
+                    Log.Info($"Pane.resize.chooser pane={id:N} (awaiting new-pane choice)");
+                    _deferredSpawns[id] = (cols, rows);
+                    PostPaneChooser(id);
+                    return;
+                }
                 Log.Info($"Pane.resize.spawn pane={id:N} cols={cols} rows={rows}");
                 SpawnPty(sess, pane, cols, rows);
             }
@@ -1538,7 +1557,11 @@ public partial class MainWindow : FluentWindow
 
     private Guid? _activePaneId;
 
-    private void OnPaneSplit(JsonElement root)
+    // offerChooser: real webview splits (the user pressing Ctrl+Shift+D) get the
+    // in-pane new-pane chooser when the source pane has a known cwd. Test-IPC
+    // splits pass false so the stability/perf harnesses keep their deterministic
+    // auto-spawn instead of parking on a dialog nobody answers.
+    private void OnPaneSplit(JsonElement root, bool offerChooser = true)
     {
         if (!TryGuid(root, "paneId", out var id)) return;
         var dirStr = root.TryGetProperty("dir", out var d) ? d.GetString() : "right";
@@ -1550,6 +1573,9 @@ public partial class MainWindow : FluentWindow
         // instead of an xterm. Otherwise the new leaf is a normal PTY
         // pane and the PTY spawns lazily on first pane.resize.
         var url = root.TryGetProperty("url", out var u) ? u.GetString() : null;
+        // Snapshot the source pane's cwd + agent type BEFORE we mutate the tree —
+        // the new-pane chooser offers "same repo / same agent" relative to it.
+        var srcPane = AllLeaves(sess.Root).FirstOrDefault(p => p.Id == id);
         // Pick a color not used by any other pane (across all sessions).
         // Falls back to round-robin once all six are taken. See
         // SessionStore.PickUnusedColor for the strategy.
@@ -1561,10 +1587,94 @@ public partial class MainWindow : FluentWindow
         var replacement = SplitImpl(sess.Root, id, orient, newPane);
         if (replacement == null) return;
         sess.Root = replacement;
+        // New-pane chooser: when splitting a TERMINAL pane (no url) whose working
+        // directory we already know, offer the in-pane chooser instead of
+        // silently opening a default shell. Record the source context now;
+        // OnPaneResize posts the chooser when the fresh pane first measures and
+        // parks its spawn until pane.chooser.choose answers.
+        if (offerChooser && string.IsNullOrEmpty(url) && srcPane != null)
+        {
+            var srcCwd = FirstExistingDir(srcPane.Cwd);
+            if (srcCwd != null)
+                _pendingChoosers[newPane.Id] = (srcCwd, srcPane.AgentType);
+        }
         AutoName(sess.Root);
         _activePaneId = newPane.Id;
         _store.Save();
         PushState();
+    }
+
+    /// Post the in-pane new-pane chooser to the web: a centered dialog offering
+    /// "start an agent here" / "open a shell here" (both in the source pane's
+    /// dir) / "open a shell in the default folder". Sent when a chooser-eligible
+    /// split pane first measures; its spawn stays parked until the answer.
+    private void PostPaneChooser(Guid paneId)
+    {
+        if (!_pendingChoosers.TryGetValue(paneId, out var ctx)) return;
+        var payload = new
+        {
+            type = "pane.chooser",
+            paneId = paneId.ToString("D"),
+            cwd = ctx.cwd,
+            agentType = ctx.agentType,   // "claude" / "codex" / "" → web labels the agent button
+            defaultCwd = _settings.ResolveDefaultCwd(),
+        };
+        try { Web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(payload)); }
+        catch (Exception ex) { Log.Error("PostPaneChooser", ex); }
+    }
+
+    /// The user picked an option in the new-pane chooser (or dismissed it).
+    /// Releases the pane's parked spawn into the chosen cwd + initial command,
+    /// or closes the never-spawned pane on cancel.
+    private void OnPaneChooserChoose(JsonElement root)
+    {
+        if (!TryGuid(root, "paneId", out var id)) return;
+        var choice = root.TryGetProperty("choice", out var c) ? c.GetString() : null;
+        // Ignore a stale/duplicate answer for a pane we're no longer choosing.
+        if (!_pendingChoosers.Remove(id, out var ctx)) return;
+        _deferredSpawns.Remove(id, out var dims);
+        var cols = dims.cols > 0 ? dims.cols : 80;
+        var rows = dims.rows > 0 ? dims.rows : 24;
+
+        var sess = OwningSession(id);
+        var pane = sess == null ? null : AllLeaves(sess.Root).FirstOrDefault(p => p.Id == id);
+        if (sess == null || pane == null) return;
+
+        if (choice == "cancel")
+        {
+            // Undo the split — the pane never spawned, so this just removes the
+            // empty leaf and collapses its split back. (CloseAndCollapse returns
+            // null when id is the lone leaf; a split-created pane never is.)
+            var newRoot = CloseAndCollapse(sess.Root, id);
+            if (newRoot == null) return;
+            sess.Root = newRoot;
+            AutoName(sess.Root);
+            if (_activePaneId == id) _activePaneId = FirstLeaf(sess.Root)?.Id;
+            _store.Save();
+            PushState();
+            return;
+        }
+
+        // "agent"/"same" land in the source pane's dir; "default" in the
+        // configured default. Persist the resolved cwd so a later respawn /
+        // restore reopens in the same place (ResolvePaneCwd reads pane.Cwd).
+        string? initialCommand = null;
+        switch (choice)
+        {
+            case "agent":
+                pane.Cwd = ctx.cwd;
+                initialCommand = ctx.agentType == "codex" ? "codex" : "claude";
+                break;
+            case "same":
+                pane.Cwd = ctx.cwd;
+                break;
+            default: // "default" (and any unexpected value) → plain shell, default dir
+                pane.Cwd = _settings.ResolveDefaultCwd();
+                break;
+        }
+        _store.Save();
+        Log.Info($"Pane.chooser.choose pane={id:N} choice={choice} cwd={pane.Cwd}");
+        SpawnPty(sess, pane, cols, rows, initialCommand);
     }
 
     // Open a URL in the OS default browser. Shell-execute via Process.Start
@@ -1740,6 +1850,10 @@ public partial class MainWindow : FluentWindow
     private void OnPaneClose(JsonElement root)
     {
         if (!TryGuid(root, "paneId", out var id)) return;
+        // Drop any parked chooser/spawn for this pane so closing one that's
+        // still showing the chooser doesn't leak into the dicts.
+        _pendingChoosers.Remove(id);
+        _deferredSpawns.Remove(id);
         var sess = OwningSession(id);
         if (sess == null) return;
         // Closing the only leaf in a session = close the session.
@@ -2317,8 +2431,9 @@ public partial class MainWindow : FluentWindow
             case "session.purge":   OnSessionPurge(root); break;
             case "resume.decision": OnResumeDecision(root); break;
             // Stage 3b verbs. The pane.* page verbs already take {paneId,...}
-            // so we just forward the JsonElement through.
-            case "pane.split":      OnPaneSplit(root); break;
+            // so we just forward the JsonElement through. Harness splits skip the
+            // new-pane chooser so spawns stay deterministic (offerChooser:false).
+            case "pane.split":      OnPaneSplit(root, offerChooser: false); break;
             case "pane.close":      OnPaneClose(root); break;
             case "pane.move":       OnPaneMove(root); break;
             case "pane.move-dir":   OnPaneMoveDir(root); break;
@@ -2352,7 +2467,7 @@ public partial class MainWindow : FluentWindow
                         : $",\"url\":{JsonSerializer.Serialize(url)}";
                     var fakeRoot = JsonDocument.Parse(
                         $"{{\"paneId\":\"{ap:D}\",\"dir\":\"{dir}\"{urlPart}}}").RootElement;
-                    OnPaneSplit(fakeRoot);
+                    OnPaneSplit(fakeRoot, offerChooser: false);
                 }
                 break;
             case "pane.close-active":

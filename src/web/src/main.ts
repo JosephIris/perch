@@ -178,6 +178,12 @@ onMessage((msg) => {
       }).then((accept) => send({ type: "resume.decision", accept }));
       break;
     }
+    case "pane.chooser":
+      // A freshly-split terminal pane whose source pane had a known cwd —
+      // show the in-pane chooser; its spawn is parked host-side until we
+      // answer with pane.chooser.choose.
+      workspace.showPaneChooser(msg);
+      break;
     case "restore.begin":
       restoreProgress.begin(msg.panes);
       break;

@@ -34,6 +34,12 @@ export type OutMessage =
    * a terminal. Used by the URL action menu's "Open in pane right/down". */
   | { type: "pane.split"; paneId: string; dir: "right" | "down"; url?: string }
   | { type: "pane.close"; paneId: string }
+  /* Answer to the in-pane new-pane chooser (see the "pane.chooser" InMessage).
+   *   "agent"   → start an agent (Claude / Codex) in the source pane's dir
+   *   "same"    → plain shell in the source pane's dir
+   *   "default" → plain shell in the configured default dir
+   *   "cancel"  → dismiss; the host closes the never-spawned pane (undo split). */
+  | { type: "pane.chooser.choose"; paneId: string; choice: "agent" | "same" | "default" | "cancel" }
   /* Drag-resize of a split: new flex-grow weights for the addressed split's
    * children, in order. `final` is false for throttled mid-drag updates and
    * true (or omitted) on the final mouseup; the host only persists on final. */
@@ -262,6 +268,13 @@ export type InMessage =
   /* One-time launch prompt: N saved Claude sessions can be reopened. The page
    * asks the user, then replies with resume.decision. */
   | { type: "resume.prompt"; paneCount: number; sessionCount: number }
+  /* Show the centered in-pane new-pane chooser. Sent when a freshly-split
+   * terminal pane — whose source pane had a known working directory — first
+   * measures; the host parks that pane's shell spawn until the user answers
+   * with pane.chooser.choose. `cwd` is the source pane's dir (label + where
+   * "same" / "agent" land), `defaultCwd` the fallback for "default", and
+   * `agentType` ("claude" / "codex" / "") picks the agent button's label. */
+  | { type: "pane.chooser"; paneId: string; cwd: string; agentType: string; defaultCwd: string }
   /* Open the restore-progress lightbox for these panes (each starts as a
    * spinner). Sent when a resume/restore actually begins. */
   | { type: "restore.begin"; panes: RestorePaneView[] }
