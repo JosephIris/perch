@@ -1516,6 +1516,7 @@ public partial class MainWindow : FluentWindow
                 defaultCwd = _settings.DefaultCwd,
                 defaultCwdResolved = _settings.ResolveDefaultCwd(),
                 fontSize = _settings.FontSize,
+                resumeAgentsOnLaunch = _settings.ResumeAgentsOnLaunch,
                 appVersion = _updates.CurrentVersion,
                 updatable = _updates.IsUpdatable,
             };
@@ -1546,6 +1547,23 @@ public partial class MainWindow : FluentWindow
         {
             var clamped = Math.Max(9, Math.Min(32, n));
             if (_settings.FontSize != clamped) { _settings.FontSize = clamped; dirty = true; fontChanged = true; }
+        }
+        // Accept a JSON bool from the page, or a "true"/"false" string from the
+        // test-IPC settings.save mirror (perch test passes flags as strings).
+        if (root.TryGetProperty("resumeAgentsOnLaunch", out var ra))
+        {
+            bool? v = ra.ValueKind switch
+            {
+                JsonValueKind.True => true,
+                JsonValueKind.False => false,
+                JsonValueKind.String => string.Equals(ra.GetString(), "true", StringComparison.OrdinalIgnoreCase),
+                _ => (bool?)null,
+            };
+            if (v is bool b && _settings.ResumeAgentsOnLaunch != b)
+            {
+                _settings.ResumeAgentsOnLaunch = b;
+                dirty = true;
+            }
         }
         if (dirty) _settings.Save();
         // Re-push so the font size propagates to live panes (no-op for
@@ -2519,11 +2537,13 @@ public partial class MainWindow : FluentWindow
                     var shell = root.TryGetProperty("defaultShell", out var sv) ? sv.GetString() : null;
                     var cwd   = root.TryGetProperty("defaultCwd", out var cv) ? cv.GetString() : null;
                     var fsStr = root.TryGetProperty("fontSize", out var fv) ? fv.GetString() : null;
+                    var resume = root.TryGetProperty("resumeAgentsOnLaunch", out var rv) ? rv.GetString() : null;
                     var sb = new System.Text.StringBuilder("{");
                     var parts = new List<string>();
                     if (shell != null) parts.Add($"\"defaultShell\":{JsonSerializer.Serialize(shell)}");
                     if (cwd != null)   parts.Add($"\"defaultCwd\":{JsonSerializer.Serialize(cwd)}");
                     if (fsStr != null && int.TryParse(fsStr, out var fsn)) parts.Add($"\"fontSize\":{fsn}");
+                    if (resume != null) parts.Add($"\"resumeAgentsOnLaunch\":{JsonSerializer.Serialize(resume)}");
                     sb.Append(string.Join(",", parts)).Append('}');
                     OnSettingsSave(JsonDocument.Parse(sb.ToString()).RootElement);
                 }

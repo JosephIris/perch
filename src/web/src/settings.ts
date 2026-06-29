@@ -22,6 +22,7 @@ let overlay: HTMLElement | null = null;
 let shellDropdown: Dropdown | null = null;
 let cwdInput: HTMLInputElement | null = null;
 let fontInput: HTMLInputElement | null = null;
+let resumeToggle: HTMLButtonElement | null = null;
 let updateCheckBtn: HTMLButtonElement | null = null;
 let updateStatusEl: HTMLElement | null = null;
 // Default Updates-row blurb; restated after a check resets the row. Mirrors the
@@ -45,6 +46,7 @@ export function closeSettings(): void {
   shellDropdown = null;
   cwdInput = null;
   fontInput = null;
+  resumeToggle = null;
   updateCheckBtn = null;
   updateStatusEl = null;
   document.removeEventListener("keydown", onKeyDown, true);
@@ -57,7 +59,7 @@ export function closeSettings(): void {
 /** Fill the open dialog with host data. No-op if the dialog was closed
  *  before the reply arrived. */
 export function applySettingsData(msg: SettingsDataMessage): void {
-  if (!overlay || !shellDropdown || !cwdInput || !fontInput) return;
+  if (!overlay || !shellDropdown || !cwdInput || !fontInput || !resumeToggle) return;
 
   // First option = auto-detect (empty command line), then each detected
   // shell. If the stored shell is a custom command line we don't
@@ -75,6 +77,10 @@ export function applySettingsData(msg: SettingsDataMessage): void {
   cwdInput.placeholder = msg.defaultCwdResolved || "%USERPROFILE%";
 
   fontInput.value = String(msg.fontSize || DEFAULT_FONT_SIZE);
+
+  // Default the toggle ON when the host omits the flag — matches the
+  // Settings.ResumeAgentsOnLaunch code default (resume is opt-out).
+  setToggle(resumeToggle, msg.resumeAgentsOnLaunch ?? true);
 
   // Updates row: show the running version + cadence, and disable "Check now"
   // on a copy that can't self-update (dev `dotnet run` / portable unzip).
@@ -126,6 +132,7 @@ function save(): void {
     defaultShell: shellDropdown.value,
     defaultCwd: cwdInput.value.trim(),
     fontSize,
+    resumeAgentsOnLaunch: resumeToggle ? getToggle(resumeToggle) : undefined,
   });
   closeSettings();
 }
@@ -195,7 +202,19 @@ function buildSkeleton(): void {
     ),
   );
 
-  // Row 4 — replay the onboarding lightbox. Closes settings first so the
+  // Row 4 — resume Claude sessions on launch. This toggle is the master
+  // switch the launch "Resume N Claude sessions?" prompt is gated by; off
+  // means Perch never offers to reopen previous conversations on startup.
+  resumeToggle = makeToggle("Resume Claude sessions on launch");
+  body.appendChild(
+    makeRow(
+      "Resume Claude sessions on launch",
+      "When Perch starts, offer to reopen the Claude conversations that were running.",
+      resumeToggle,
+    ),
+  );
+
+  // Row 5 — replay the onboarding lightbox. Closes settings first so the
   // welcome sits cleanly on the workspace, not stacked over the dialog.
   const welcomeBtn = document.createElement("button");
   welcomeBtn.type = "button";
@@ -213,7 +232,7 @@ function buildSkeleton(): void {
     ),
   );
 
-  // Row 5 — updates. The description doubles as the live status line (version
+  // Row 6 — updates. The description doubles as the live status line (version
   // + cadence, swapped for the result after a manual check), so we keep refs to
   // it and the button. applySettingsData fills the version; "Check now" runs the
   // same check the host does automatically, just on demand.
@@ -255,6 +274,31 @@ function buildSkeleton(): void {
   document.addEventListener("keydown", onKeyDown, true);
   // Focus the first control once attached.
   requestAnimationFrame(() => shellDropdown?.focus());
+}
+
+/** Build a Fluent on/off toggle (button[role=switch]). Click flips it; the
+ *  caller reads/writes state via getToggle/setToggle (aria-checked is the
+ *  source of truth, so the CSS [aria-checked] selectors drive the visuals). */
+function makeToggle(ariaLabel: string): HTMLButtonElement {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "settings-toggle";
+  btn.setAttribute("role", "switch");
+  btn.setAttribute("aria-label", ariaLabel);
+  btn.setAttribute("aria-checked", "false");
+  const knob = document.createElement("span");
+  knob.className = "settings-toggle__knob";
+  btn.appendChild(knob);
+  btn.addEventListener("click", () => setToggle(btn, !getToggle(btn)));
+  return btn;
+}
+
+function getToggle(btn: HTMLButtonElement): boolean {
+  return btn.getAttribute("aria-checked") === "true";
+}
+
+function setToggle(btn: HTMLButtonElement, on: boolean): void {
+  btn.setAttribute("aria-checked", on ? "true" : "false");
 }
 
 /** Build a CardControl-style row: text block left, control right. */
