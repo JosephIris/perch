@@ -1728,6 +1728,142 @@ ul { list-style: none; padding: 0; margin: 0; }
   color: var(--color-text-secondary);
 }
 
+/* ---- New-pane chooser (in-pane) ----------------------------------------
+ * Centered dialog shown inside a freshly-split terminal pane whose source
+ * pane had a known cwd (see pane-chooser.ts). Scoped to the pane (absolute,
+ * not fixed) so it reads as "this pane is asking", clipped to the pane's
+ * rounded card. Same frosted-card language as the settings / confirm dialogs,
+ * sized down to sit comfortably inside one pane; reuses their fade/rise
+ * keyframes. */
+.pane-chooser {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-16);
+  background: rgba(0, 0, 0, 0.45);
+  border-radius: inherit;            /* match the pane's rounded card */
+  animation: settings-fade-in var(--dur-normal) var(--ease-entry);
+}
+.pane-chooser--closing {
+  animation: settings-fade-out var(--dur-fast) var(--ease-exit);
+}
+.pane-chooser__card {
+  width: 360px;
+  max-width: 100%;
+  max-height: 100%;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-12);
+  padding: var(--sp-24);
+  border-radius: var(--r-card);
+  background: rgba(32, 32, 32, 0.98);
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  /* Shadow-only separation (no border) — matches the settings/confirm card
+   * and avoids the border+shadow anti-pattern; the darkened backdrop scrim
+   * gives the card edge enough contrast. */
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  font-family: var(--font-text);
+  color: var(--color-text-primary);
+  animation: settings-rise var(--dur-normal) var(--ease-entry);
+}
+.pane-chooser__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--type-subtitle-size);
+  font-weight: 600;
+  line-height: var(--type-title-line);
+  color: var(--color-text-primary);
+}
+.pane-chooser__sub {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pane-chooser__options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-8);
+  margin-top: var(--sp-4);
+}
+/* Each option is a left-aligned row button: title + secondary desc on the
+ * left, a number-key hint chip on the right. Subtle fill, hairline border,
+ * card radius — grouped by spacing, no boxes-in-boxes. */
+.pane-chooser__opt {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-12);
+  text-align: left;
+  padding: var(--sp-12) var(--sp-16);
+  border-radius: var(--r-card);
+  border: 1px solid var(--color-stroke);
+  background: var(--color-subtle-secondary);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-entry),
+    border-color var(--dur-fast) var(--ease-entry);
+}
+.pane-chooser__opt:hover { background: var(--color-subtle-tertiary); }
+.pane-chooser__opt:focus-visible {
+  outline: 1px solid var(--color-accent-soft);
+  outline-offset: 2px;
+}
+.pane-chooser__opt-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.pane-chooser__opt-title {
+  font-size: var(--type-body-size);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.pane-chooser__opt-desc {
+  font-family: var(--font-small);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Number-key hint — a quiet keycap, same family as the shortcut hints. */
+.pane-chooser__key {
+  flex: 0 0 auto;
+  font-family: var(--font-small);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+  min-width: 18px;
+  padding: 1px 6px;
+  text-align: center;
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--r-input);
+  background: var(--color-subtle-secondary);
+}
+/* The headline action (start the agent): an accent keyline + faint accent
+ * wash + accent title — "marked" as primary without a vivid full-fill that
+ * would read as a generic CTA button (Constitution: no full-fill accent for
+ * a row/selection). */
+.pane-chooser__opt--primary {
+  border-color: var(--color-accent);
+  background: var(--color-accent-faint);
+}
+.pane-chooser__opt--primary:hover { filter: brightness(1.12); }
+.pane-chooser__opt--primary .pane-chooser__opt-title { color: var(--color-accent); }
+.pane-chooser__footer {
+  display: flex;
+  justify-content: flex-end;
+}
+
 /* ---- Restore-progress lightbox -----------------------------------------
  * Shown while resumed Claude panes come back up. Same frosted card/backdrop
  * family as the settings + confirm dialogs; the pane rows go monospace with

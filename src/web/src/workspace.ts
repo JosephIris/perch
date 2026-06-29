@@ -19,6 +19,7 @@ import { send } from "./bridge.js";
 import { Pane, DEFAULT_FONT_SIZE } from "./pane.js";
 import { UrlPane } from "./url-pane.js";
 import { PANE_LEAVE_MS } from "./anim.js";
+import { showPaneChooser } from "./pane-chooser.js";
 
 type LeafPane = Pane | UrlPane;
 
@@ -63,6 +64,9 @@ export class Workspace {
   // that highlights where the dragged pane would land.
   private draggingPaneId: string | null = null;
   private readonly dropOverlay: HTMLElement;
+  // Pane ids currently showing the new-pane chooser, so a re-posted
+  // pane.chooser doesn't stack a second overlay. Cleared when the pick resolves.
+  private readonly choosersOpen = new Set<string>();
 
   constructor(rootEl: HTMLElement) {
     this.root = rootEl;
@@ -314,6 +318,22 @@ export class Workspace {
   paneElement(paneId: string): HTMLElement | null {
     const st = this.activeSessionId ? this.stages.get(this.activeSessionId) : null;
     return st?.panes.get(paneId)?.element ?? null;
+  }
+
+  /** Show the in-pane "new pane" chooser inside a freshly-split terminal
+   *  pane, then ship the user's pick to the host (which has parked this pane's
+   *  shell spawn until pane.chooser.choose answers). No-op if the pane is gone,
+   *  is a URL pane, or is already showing the chooser (a re-posted
+   *  pane.chooser must not stack a second overlay). */
+  showPaneChooser(opts: { paneId: string; cwd: string; agentType: string; defaultCwd: string }) {
+    const pane = this.findPane(opts.paneId);
+    if (!pane || pane instanceof UrlPane) return;
+    if (this.choosersOpen.has(opts.paneId)) return;
+    this.choosersOpen.add(opts.paneId);
+    void showPaneChooser(pane.element, opts).then((choice) => {
+      this.choosersOpen.delete(opts.paneId);
+      send({ type: "pane.chooser.choose", paneId: opts.paneId, choice });
+    });
   }
 
   /** Apply user prefs from a state push: store as the default for future new
