@@ -121,6 +121,11 @@
   /* Even fainter accent for tinted chip/badge backgrounds (e.g. the CC
    * agent badge) — reads as "marked" without competing with text. */
   --color-accent-faint:     rgba(118, 185, 237, 0.14);
+  /* Foreground that reads ON the accent fill. The accent is a light blue, so
+   * text/knobs over it must be the dark navy below (NOT white). Used by the
+   * toggle knob and the accent button (which still inlines the same value as
+   * a documented exception). */
+  --color-on-accent:        #06243a;
 
   --color-success:          #6CCB5F;
   --color-caution:          #FCE100;

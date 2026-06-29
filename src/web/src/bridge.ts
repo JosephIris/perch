@@ -87,7 +87,7 @@ export type OutMessage =
    * partial update; the host only overwrites provided keys. defaultShell
    * is the shell COMMAND LINE (matching one of settings.data.shells[].cmd)
    * or "" for auto-detect. */
-  | { type: "settings.save"; defaultShell?: string; defaultCwd?: string; fontSize?: number }
+  | { type: "settings.save"; defaultShell?: string; defaultCwd?: string; fontSize?: number; resumeAgentsOnLaunch?: boolean }
   /* Page dismissed the onboarding lightbox → host marks it seen so it won't
    * auto-open next launch. */
   | { type: "onboarding.seen" }
@@ -246,6 +246,9 @@ export type SettingsDataMessage = {
   defaultCwd: string;
   defaultCwdResolved: string;
   fontSize: number;
+  /* Whether the launch prompt to reopen previous Claude sessions is enabled
+   * (Settings → "Resume Claude sessions on launch"). */
+  resumeAgentsOnLaunch?: boolean;
   /* The running version (the release this copy installed from), or null when
    * it can't be determined (dev `dotnet run` / portable). Shown in the
    * Updates row. */

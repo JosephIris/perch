@@ -1669,6 +1669,51 @@ ul { list-style: none; padding: 0; margin: 0; }
   color: var(--color-text-disabled);
 }
 
+/* Toggle switch — Win11 Fluent on/off control for a boolean setting. A
+ * button[role=switch] with a sliding knob: accent-filled when on, hairline-
+ * outlined when off. A toggle is a dense control, so the 4px sub-grid applies. */
+.settings-toggle {
+  flex: 0 0 auto;
+  position: relative;
+  width: 40px;
+  height: 20px;
+  border-radius: 10px;
+  background: transparent;
+  border: 1px solid var(--color-stroke-strong);
+  cursor: pointer;
+  padding: 0;
+  transition:
+    background var(--dur-fast) var(--ease-entry),
+    border-color var(--dur-fast) var(--ease-entry);
+}
+.settings-toggle:hover { border-color: var(--color-text-tertiary); }
+.settings-toggle__knob {
+  position: absolute;
+  top: 50%;
+  left: 4px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--color-text-secondary);
+  transform: translate(0, -50%);
+  transition:
+    transform var(--dur-fast) var(--ease-entry),
+    background var(--dur-fast) var(--ease-entry);
+}
+.settings-toggle[aria-checked="true"] {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+.settings-toggle[aria-checked="true"]:hover { background: var(--color-accent-strong); }
+.settings-toggle[aria-checked="true"] .settings-toggle__knob {
+  transform: translate(20px, -50%);
+  background: var(--color-on-accent);
+}
+.settings-toggle:focus-visible {
+  outline: 1px solid var(--color-accent-soft);
+  outline-offset: 2px;
+}
+
 .settings-card__footer {
   display: flex;
   justify-content: flex-end;
