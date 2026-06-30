@@ -59,6 +59,12 @@ internal sealed class UpdateService
     {
         if (_pending is null) return;
         await _mgr.DownloadUpdatesAsync(_pending);
+        // ApplyUpdatesAndRestart spawns Update.exe as a child, then exits us so
+        // it can swap files + relaunch. Without this, that helper inherits our
+        // kill-on-close job (App startup) and is reaped the instant we exit —
+        // so the update never installs and nothing restarts. Let it break away
+        // from the job first.
+        JobObjectGuard.AllowChildBreakaway();
         _mgr.ApplyUpdatesAndRestart(_pending);
     }
 }
