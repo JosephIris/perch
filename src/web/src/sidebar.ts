@@ -13,10 +13,22 @@
 // Each row is a framed card (see .session-item in style.css) — perch-style
 // tabs-as-cards. Selection still reads via fill, not an accent stripe.
 
-import type { SessionView, ClosedSessionView } from "./bridge.js";
+import type { SessionView, ClosedSessionView, PaneTreeView } from "./bridge.js";
 import { send } from "./bridge.js";
 import { confirmDialog } from "./confirm.js";
 import { elapsedSpan, agoSpan } from "./elapsed.js";
+import { attachCommitsHover, openCommitsLightbox } from "./commits-view.js";
+
+/** Flatten a pane tree to its leaves. */
+function leaves(node: PaneTreeView): Array<Extract<PaneTreeView, { kind: "leaf" }>> {
+  return node.kind === "leaf" ? [node] : node.children.flatMap(leaves);
+}
+
+/** The pane whose unpushed-commit recap the session's ↑N represents. */
+function aheadPaneId(s: SessionView): string | null {
+  const ls = leaves(s.rootPane);
+  return (ls.find((l) => l.ahead === s.ahead && s.ahead > 0) ?? ls[0])?.paneId ?? null;
+}
 
 export class Sidebar {
   private readonly listEl: HTMLElement;
@@ -233,8 +245,12 @@ export class Sidebar {
       turnStart?: number;
       since?: number;
       diff?: { added: number; deleted: number };
+      ahead?: number;
     }> = [];
-    const ahead = s.ahead > 0 ? ` ↑${s.ahead}` : "";
+    // The unpushed-commit chip rides just after the branch. Rendered as its own
+    // accent-colored, interactive span (hover → recap, click → details), so it
+    // can't be a plain text suffix anymore.
+    const aheadItem = s.ahead > 0 ? { text: "", ahead: s.ahead } : null;
 
     if (s.agentState === "working") {
       metaItems.push({ text: `▸ ${s.activityDetail || "working"}`, turnStart: s.turnStartMs });
@@ -248,10 +264,12 @@ export class Sidebar {
       // text. Rendered as sub-spans in the loop below.
       if (s.linesAdded || s.linesDeleted)
         metaItems.push({ text: "", diff: { added: s.linesAdded, deleted: s.linesDeleted } });
-      if (s.branch) metaItems.push({ text: `⎇ ${s.branch}${ahead}` });
+      if (s.branch) metaItems.push({ text: `⎇ ${s.branch}` });
+      if (aheadItem) metaItems.push(aheadItem);
     } else {
-      // dormant idle / needs-you: branch (+ unpushed) + dev-server ports.
-      if (s.branch) metaItems.push({ text: `⎇ ${s.branch}${ahead}` });
+      // dormant idle / needs-you: branch + unpushed + dev-server ports.
+      if (s.branch) metaItems.push({ text: `⎇ ${s.branch}` });
+      if (aheadItem) metaItems.push(aheadItem);
       for (const p of s.ports ?? []) metaItems.push({ text: `:${p}` });
     }
 
@@ -270,6 +288,24 @@ export class Sidebar {
         const span = document.createElement("span");
         span.className =
           "session-item__meta-item" + (mi.alert ? " session-item__meta-item--alert" : "");
+        if (mi.ahead) {
+          // Accent-blue, interactive "↑N ready to push" chip.
+          span.classList.add("session-item__meta-item--ahead");
+          span.textContent = `↑${mi.ahead}`;
+          span.title = "Commits ready to push";
+          const pid = aheadPaneId(s);
+          if (pid) {
+            attachCommitsHover(span, pid);
+            span.addEventListener("click", (ev) => {
+              // The whole row is a button that selects the session — keep the
+              // click here from also navigating.
+              ev.stopPropagation();
+              openCommitsLightbox(pid);
+            });
+          }
+          meta.appendChild(span);
+          continue;
+        }
         if (mi.diff) {
           // Colored +adds / −dels, reusing the footer's diff palette classes.
           if (mi.diff.added) {

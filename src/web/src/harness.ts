@@ -15,6 +15,7 @@ import { confirmDialog } from "./confirm.js";
 import { showPaneChooser } from "./pane-chooser.js";
 import { buildPaneFooter, applyPaneFooter } from "./pane-footer.js";
 import { RestoreProgress } from "./restore-progress.js";
+import { openCommitsPopover, openCommitsLightbox } from "./commits-view.js";
 import type { SessionView, PaneTreeView } from "./bridge.js";
 
 type Leaf = Extract<PaneTreeView, { kind: "leaf" }>;
@@ -236,6 +237,15 @@ if (view === "panechooser") {
     agentType: "claude",
     defaultCwd: "C:\\Users\\irisy",
   });
+}
+
+// #commits / #commits-lightbox — the "ready to push" recap, driven by the
+// dev host stub in harness.html (answers commits.request with sample data).
+if (view === "commits") {
+  const anchor = document.querySelector<HTMLElement>(".session-item__meta-item--ahead");
+  if (anchor) openCommitsPopover(anchor, "demo-pane");
+} else if (view === "commits-lightbox") {
+  openCommitsLightbox("demo-pane");
 }
 
 if (view === "dashboard") {

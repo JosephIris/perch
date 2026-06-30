@@ -2226,6 +2226,134 @@ body.show-dashboard .dashboard { display: flex; }
 .diff-del   { color: var(--color-error); }
 .diff-files { color: var(--color-text-tertiary); }
 
+/* Unpushed-commits chip ("↑N ready to push") — accent blue to read as the one
+ * actionable git state (vs the neutral commit/diff chips). Interactive on the
+ * footer + dashboard: opens the recap. */
+.chip--ahead {
+  color: var(--color-accent);
+  background: var(--color-accent-faint);
+  cursor: pointer;
+}
+.chip--ahead:hover { color: var(--color-accent-strong); }
+
+/* --- "Ready to push" recap ---------------------------------------------
+ * Compact flyout (footer chip click) + hover tooltip (sidebar) share
+ * .commits-pop; the full detail view reuses the settings-card modal as
+ * .commits-lightbox. Acrylic family matches the color picker / tooltip. */
+.commits-pop {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 40;
+  min-width: 256px;
+  max-width: 360px;
+  max-height: 60vh;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-8);
+  padding: var(--sp-12);
+  border-radius: var(--r-card);
+  background: rgba(28, 28, 28, 0.96);
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  border: 1px solid var(--color-stroke);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  font-family: var(--font-small);
+  color: var(--color-text-secondary);
+}
+/* Hover variant behaves like the pane-name tooltip: non-interactive, fades. */
+.commits-pop--hover {
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-entry);
+}
+.commits-pop--visible { opacity: 1; }
+
+.commits-pop__head {
+  font-family: var(--font-text);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+}
+.commits-pop__count { color: var(--color-accent); font-weight: 600; }
+.commits-pop__body { display: flex; flex-direction: column; }
+.commits-pop__loading {
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+}
+.commits-pop__more {
+  align-self: flex-start;
+  font-family: var(--font-text);
+  font-size: var(--type-caption-size);
+  color: var(--color-accent);
+  background: transparent;
+  border: none;
+  padding: 2px 0;
+  cursor: pointer;
+}
+.commits-pop__more:hover { color: var(--color-accent-strong); text-decoration: underline; }
+
+.commits-list { display: flex; flex-direction: column; gap: var(--sp-8); }
+.commits-list__empty {
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+}
+.commits-list__group {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-tertiary);
+  margin-top: var(--sp-4);
+}
+.commits-list__group:first-child { margin-top: 0; }
+
+.commit-row { display: flex; flex-direction: column; gap: 2px; }
+.commit-row__subject {
+  font-family: var(--font-text);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.commit-row__meta { font-size: 11px; color: var(--color-text-tertiary); }
+.commit-row__sha { font-family: var(--font-mono); }
+
+.commit-row__files {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: var(--sp-4);
+  padding-left: var(--sp-8);
+}
+.commit-file { display: flex; gap: var(--sp-8); font-size: 11px; }
+.commit-file__counts { flex: 0 0 auto; min-width: 64px; font-family: var(--font-mono); }
+.commit-file__path {
+  font-family: var(--font-mono);
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+/* Sidebar ahead count — accent, interactive (hover recap / click details). */
+.session-item__meta-item--ahead { color: var(--color-accent); cursor: pointer; }
+.session-item__meta-item--ahead:hover { text-decoration: underline; }
+
+/* Full-detail modal: wider than settings, commit rows divided by hairlines,
+ * subjects wrap (no ellipsis) since there's room. */
+.commits-lightbox { width: 560px; }
+.commits-lightbox__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-12);
+  overflow: auto;
+}
+.commits-lightbox .commit-row__subject { white-space: normal; }
+.commits-lightbox .commit-row {
+  padding-bottom: var(--sp-12);
+  border-bottom: 1px solid var(--color-stroke);
+}
+.commits-lightbox .commit-row:last-child { padding-bottom: 0; border-bottom: none; }
+
 /* Waiting/permission-card body: peek at the agent's ask, then reply or open. */
 .card__wait { display: flex; flex-direction: column; gap: var(--sp-8); }
 .card__peek {

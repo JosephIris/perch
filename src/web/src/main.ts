@@ -15,6 +15,8 @@ import { showOnboarding } from "./onboarding.js";
 import { startElapsedTicker } from "./elapsed.js";
 import { confirmDialog } from "./confirm.js";
 import { RestoreProgress } from "./restore-progress.js";
+import { invalidateCommits } from "./commits.js";
+import type { PaneTreeView } from "./bridge.js";
 
 // One shared 1Hz ticker keeps every "working · 2m" label live without
 // rebuilding the sidebar/dashboard. Safe to start before the first state.
@@ -100,6 +102,13 @@ onMessage((msg) => {
   switch (msg.type) {
     case "state": {
       lastState = msg;
+      // Drop any cached commit recap whose pane's ahead-count moved (a push or
+      // a new commit) so the next hover/open refetches fresh.
+      const walk = (n: PaneTreeView) => {
+        if (n.kind === "leaf") invalidateCommits(n.paneId, n.ahead);
+        else n.children.forEach(walk);
+      };
+      for (const sess of msg.sessions) walk(sess.rootPane);
       // Apply prefs BEFORE rendering panes so the very first Pane in a
       // freshly-launched app opens at the persisted font size instead of
       // briefly flashing the default 13px and then resizing on the next

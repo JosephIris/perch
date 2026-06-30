@@ -80,6 +80,10 @@ export type OutMessage =
   /* User preferences (terminal font size, etc.) — host persists to
    * Settings.cs so it survives restart. */
   | { type: "prefs.set"; fontSize?: number }
+  /* Recap: page asks the host for the unpushed-commit list behind a pane's
+   * "↑N" chip (the hover tooltip / lightbox open lazily fetch it). Host
+   * replies with a commits.data message for the same paneId. */
+  | { type: "commits.request"; paneId: string }
   /* Settings dialog: page asks the host for current settings + the list
    * of detected shells, host replies with a settings.data message. */
   | { type: "settings.request" }
@@ -235,6 +239,36 @@ export type ToastMessage = {
   paneId?: string;
 };
 
+/* One file in a commit's diff (the recap lightbox lists these). added/deleted
+ * are line counts; both 0 for a binary file. */
+export type CommitFileView = { path: string; added: number; deleted: number };
+
+/* One unpushed commit in the "ready to push" recap. committedIso is an ISO-8601
+ * timestamp the page turns into a relative "2h ago" label. inSession marks
+ * commits made during the current agent session (baseline..HEAD) so the views
+ * can divide "this session" from "earlier unpushed". */
+export type CommitView = {
+  sha: string;
+  subject: string;
+  committedIso: string;
+  author: string;
+  added: number;
+  deleted: number;
+  inSession: boolean;
+  files: CommitFileView[];
+};
+
+/* Reply to commits.request: the unpushed commits for one pane, newest first.
+ * ahead == commits.length (kept explicit so a caller can sanity-check against
+ * the leaf's ahead count). Empty commits with ahead 0 means nothing to push
+ * (or no upstream / cwd not yet known). */
+export type CommitsDataMessage = {
+  type: "commits.data";
+  paneId: string;
+  ahead: number;
+  commits: CommitView[];
+};
+
 /* Reply to settings.request. shells is the host's detected-shell list;
  * cmd is the command line to store as defaultShell. defaultCwdResolved is
  * what an empty defaultCwd falls back to (shown as the input placeholder
@@ -267,6 +301,7 @@ export type InMessage =
   | { type: "pane.exit"; paneId: string; code: number }
   | ToastMessage
   | SettingsDataMessage
+  | CommitsDataMessage
   | { type: "host.error"; message: string }
   /* One-time launch prompt: N saved Claude sessions can be reopened. The page
    * asks the user, then replies with resume.decision. */
@@ -324,10 +359,17 @@ type Listener = (msg: InMessage) => void;
 
 const listeners: Listener[] = [];
 
+// The WebView2 host bridge, or undefined when we're not running inside the
+// host (plain-browser dev, or a Node test that transitively imports this
+// module). Guarded with `typeof window` so importing bridge never throws
+// outside a DOM.
+const hostWebView =
+  typeof window !== "undefined" ? window.chrome?.webview : undefined;
+
 export function send(msg: OutMessage): void {
   const wire = JSON.stringify(msg);
-  if (window.chrome?.webview) {
-    window.chrome.webview.postMessage(wire);
+  if (hostWebView) {
+    hostWebView.postMessage(wire);
   } else {
     console.log("[bridge.no-host]", wire);
   }
@@ -353,11 +395,11 @@ function dispatch(raw: unknown) {
   }
 }
 
-if (window.chrome?.webview) {
-  window.chrome.webview.addEventListener("message", (e: MessageEvent) => {
+if (hostWebView) {
+  hostWebView.addEventListener("message", (e: MessageEvent) => {
     dispatch(e.data);
   });
-} else {
+} else if (typeof window !== "undefined") {
   console.warn("[bridge] no chrome.webview -- running in plain browser");
 }
 
