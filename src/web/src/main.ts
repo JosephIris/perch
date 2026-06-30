@@ -300,6 +300,11 @@ window.addEventListener("keydown", (ev) => {
         ev.preventDefault(); ev.stopPropagation();
       }
       break;
+    case "KeyE":
+      // Even out panes: reset every split to equal sizing.
+      workspace.distributeEven();
+      ev.preventDefault(); ev.stopPropagation();
+      break;
     // Ctrl+Shift+arrows: move the active pane within its split. The host
     // reorders it among its siblings (no-op if the direction is across the
     // split's axis or the pane is already at the edge).

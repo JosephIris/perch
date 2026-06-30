@@ -430,6 +430,24 @@ export class Workspace {
     return splitEl;
   }
 
+  /** Evenly distribute every pane in the active session: reset every split
+   *  child's flex-grow to 1 (so each level splits its space equally) and
+   *  persist each split via the same resizeSplit path the gutter drag uses.
+   *  No DOM rebuild — we mutate the live layout in place; the per-pane
+   *  ResizeObserver refits xterm as the flex boxes change. */
+  distributeEven(): void {
+    const st = this.activeSessionId ? this.stages.get(this.activeSessionId) : null;
+    if (!st) return;
+    const splits = st.container.querySelectorAll<HTMLElement>(".split");
+    splits.forEach((splitEl) => {
+      for (const c of Array.from(splitEl.children)) {
+        if ((c as HTMLElement).classList.contains("split__gutter")) continue;
+        (c as HTMLElement).style.flexGrow = "1";
+      }
+      this.persistSplitWeights(splitEl);
+    });
+  }
+
   // ---- Resize: draggable split gutters ---------------------------------
 
   /** A grab handle that lives in the gap between two split children. Dragging

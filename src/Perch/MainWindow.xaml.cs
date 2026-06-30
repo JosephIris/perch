@@ -1932,6 +1932,12 @@ public partial class MainWindow : FluentWindow
         if (newRoot == null) return;
         DestroyPty(id);
         sess.Root = newRoot;
+        // Closing a pane evenly redistributes the survivors — a resized layout
+        // would otherwise leave the remaining panes lopsided (and a collapsed
+        // split's lone child keeps a stale weight). The close changes the tree
+        // shape, so the web rebuilds and re-reads these weights. Mirrors the
+        // Ctrl+Shift+E "even out panes" command.
+        ResetWeights(sess.Root);
         AutoName(sess.Root);
         // Active pane: prefer the first remaining leaf in the same session.
         _activePaneId = FirstLeaf(sess.Root)?.Id;
@@ -2013,6 +2019,15 @@ public partial class MainWindow : FluentWindow
         if (newChildren.Count == 1) return newChildren[0];   // collapse
         node.Children = newChildren;
         return node;
+    }
+
+    // Reset every node's flex-grow Weight to 1.0 so each split divides its
+    // space evenly at every level. Used on pane close (redistribute survivors);
+    // the Ctrl+Shift+E command does the same thing web-side via resizeSplit.
+    private static void ResetWeights(PaneNode node)
+    {
+        node.Weight = 1.0;
+        foreach (var c in node.Children) ResetWeights(c);
     }
 
     // ---- Resize: rewrite a split's child weights -------------------------
