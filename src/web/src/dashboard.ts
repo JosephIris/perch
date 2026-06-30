@@ -14,6 +14,7 @@
 import type { PaneTreeView, SessionView, AgentStateName } from "./bridge.js";
 import { send, bytesToB64 } from "./bridge.js";
 import { elapsedSpan, agoSpan } from "./elapsed.js";
+import { openCommitsLightbox } from "./commits-view.js";
 
 const enc = new TextEncoder();
 
@@ -55,6 +56,14 @@ function replyPaneId(s: SessionView): string | null {
 /** Sum of commits-since-baseline across the session's panes. */
 function commitsTotal(s: SessionView): number {
   return leaves(s.rootPane).reduce((a, l) => a + (l.commitCount || 0), 0);
+}
+
+/** The pane to fetch the unpushed-commit recap from: the leaf whose ahead
+ *  count matches the session's (the one the ↑N badge represents), else the
+ *  first leaf. */
+function aheadPaneId(s: SessionView): string | null {
+  const ls = leaves(s.rootPane);
+  return (ls.find((l) => l.ahead === s.ahead && s.ahead > 0) ?? ls[0])?.paneId ?? null;
 }
 
 function isComplexAsk(text: string): boolean {
@@ -266,10 +275,19 @@ export class Dashboard {
       }
       foot.appendChild(ch);
     }
-    // Unpushed commits.
+    // Unpushed commits — click opens the recap lightbox (stop-propagation so
+    // it doesn't also navigate to the session via the card's click handler).
     if (s.ahead > 0) {
-      const ch = el("span", "chip");
+      const ch = el("span", "chip chip--ahead");
       ch.textContent = `↑${s.ahead}`;
+      ch.title = "Commits ready to push — click for recap";
+      const pid = aheadPaneId(s);
+      if (pid) {
+        ch.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          openCommitsLightbox(pid);
+        });
+      }
       foot.appendChild(ch);
     }
     for (const port of s.ports ?? []) {

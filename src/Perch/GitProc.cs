@@ -1,8 +1,27 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading.Tasks;
 
 namespace Perch;
+
+/// One file touched by a commit, with its add/delete line counts. Binary
+/// files report 0/0 (git emits "-" for both, which we fold to 0).
+internal sealed record GitCommitFile(string Path, int Added, int Deleted);
+
+/// A single unpushed commit, plus whether it was made during the current
+/// agent session (reachable from the session baseline). Drives the
+/// "ready to push" recap surfaces.
+internal sealed record GitCommit(
+    string Sha,
+    string ShortSha,
+    string Subject,
+    string CommittedIso,
+    string Author,
+    int Added,
+    int Deleted,
+    bool InSession,
+    IReadOnlyList<GitCommitFile> Files);
 
 /// Static helpers for the small set of `git` commands we shell out to:
 /// branch detection, repo root, and commit-count-since-baseline. All async,
@@ -76,6 +95,90 @@ internal static class GitProc
         return int.TryParse(stdout.Trim(), out var n) ? n : 0;
     }
 
+    /// The unpushed commits (`@{upstream}..HEAD`, newest first) with per-commit
+    /// diff stats and file lists — the data behind the "↑N ready to push" recap.
+    /// Each commit is tagged InSession when it's reachable from
+    /// <paramref name="baselineSha"/> (i.e. made during the current agent
+    /// session) so the UI can divide "this session" from "earlier unpushed".
+    /// Returns null when there's no upstream / not a repo (same fold as
+    /// AheadAsync — a missing upstream means nothing to push, not an error).
+    /// Capped at <paramref name="max"/> commits so a long-lived branch can't
+    /// produce an unbounded payload.
+    public static async Task<IReadOnlyList<GitCommit>?> UnpushedCommitsAsync(
+        string cwd, string baselineSha, int max = 50)
+    {
+        // Set of commits made this session (baseline..HEAD). Empty when no
+        // baseline — then every unpushed commit lands in "earlier unpushed".
+        var sessionShas = new HashSet<string>(StringComparer.Ordinal);
+        if (!string.IsNullOrEmpty(baselineSha))
+        {
+            var (okS, outS) = await RunAsync("git", $"rev-list {baselineSha}..HEAD", cwd);
+            if (okS)
+                foreach (var line in outS.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                    sessionShas.Add(line.Trim());
+        }
+
+        // SOH marks each commit header; US separates its fields. Both are
+        // control chars git never emits inside a one-line subject/author, so
+        // parsing stays unambiguous without -z gymnastics. --numstat appends
+        // "<added>\t<deleted>\t<path>" rows under each header. quotepath=false
+        // keeps non-ASCII paths literal.
+        const char SOH = (char)0x01;
+        const char US = (char)0x1F;
+        var fmt = $"{SOH}%H{US}%h{US}%s{US}%cI{US}%an";
+        var (ok, stdout) = await RunAsync(
+            "git",
+            $"-c core.quotepath=false log @{{upstream}}..HEAD --numstat --format={fmt} -n {max}",
+            cwd);
+        if (!ok) return null;
+
+        var commits = new List<GitCommit>();
+        string? sha = null, shortSha = null, subject = null, iso = null, author = null;
+        var files = new List<GitCommitFile>();
+        int added = 0, deleted = 0;
+
+        void Flush()
+        {
+            if (sha == null) return;
+            commits.Add(new GitCommit(
+                sha, shortSha ?? "", subject ?? "", iso ?? "", author ?? "",
+                added, deleted, sessionShas.Contains(sha), files));
+        }
+
+        foreach (var raw in stdout.Split('\n'))
+        {
+            var line = raw.TrimEnd('\r');
+            if (line.Length > 0 && line[0] == SOH)
+            {
+                Flush();
+                files = new List<GitCommitFile>();
+                added = deleted = 0;
+                var parts = line.Substring(1).Split(US);
+                sha      = parts.Length > 0 ? parts[0] : "";
+                shortSha = parts.Length > 1 ? parts[1] : "";
+                subject  = parts.Length > 2 ? parts[2] : "";
+                iso      = parts.Length > 3 ? parts[3] : "";
+                author   = parts.Length > 4 ? parts[4] : "";
+                continue;
+            }
+            if (sha == null || line.Length == 0) continue;
+            // numstat row: "<added>\t<deleted>\t<path>" ("-" for binary).
+            int t1 = line.IndexOf('\t');
+            int t2 = t1 >= 0 ? line.IndexOf('\t', t1 + 1) : -1;
+            if (t1 <= 0 || t2 <= t1) continue;
+            var aStr = line.Substring(0, t1);
+            var dStr = line.Substring(t1 + 1, t2 - t1 - 1);
+            var path = line.Substring(t2 + 1);
+            int a = aStr == "-" ? 0 : (int.TryParse(aStr, out var av) ? av : 0);
+            int d = dStr == "-" ? 0 : (int.TryParse(dStr, out var dv) ? dv : 0);
+            added += a;
+            deleted += d;
+            files.Add(new GitCommitFile(path, a, d));
+        }
+        Flush();
+        return commits;
+    }
+
     /// Shared process runner — captures stdout, ignores stderr, returns
     /// (success, stdout). Success means exit code 0. No timeout; git
     /// commands here are fast and we're already off the UI thread.
@@ -94,6 +197,10 @@ internal static class GitProc
                     RedirectStandardError = true,
                     UseShellExecute = false,
                     CreateNoWindow = true,
+                    // Git emits UTF-8 by default (i18n.logOutputEncoding); decode
+                    // it as such so non-ASCII commit subjects/paths in the recap
+                    // don't garble through the console's OEM codepage.
+                    StandardOutputEncoding = System.Text.Encoding.UTF8,
                 },
             };
             if (!p.Start()) return (false, "");

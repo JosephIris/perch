@@ -14,6 +14,7 @@
 // ticker, so they climb without the host re-pushing state.
 
 import { elapsedSpan, agoSpan } from "./elapsed.js";
+import { openCommitsPopover } from "./commits-view.js";
 import type { PaneTreeView } from "./bridge.js";
 
 type Leaf = Extract<PaneTreeView, { kind: "leaf" }>;
@@ -96,7 +97,16 @@ export function applyPaneFooter(f: PaneFooter, leaf: Leaf, active: boolean): voi
       c.appendChild(chip("diff-files", `${leaf.filesChanged} file${leaf.filesChanged === 1 ? "" : "s"}`));
     m.appendChild(c);
   }
-  if (active && leaf.ahead > 0) m.appendChild(chip("chip", `↑${leaf.ahead}`));
+  if (active && leaf.ahead > 0) {
+    // Clickable: opens the unpushed-commit recap anchored to the chip.
+    const a = chip("chip chip--ahead", `↑${leaf.ahead}`);
+    a.title = "Commits ready to push — click for recap";
+    a.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      openCommitsPopover(a, leaf.paneId);
+    });
+    m.appendChild(a);
+  }
   for (const p of leaf.ports ?? []) m.appendChild(chip("chip", `:${p}`));
 
   // Collapse to nothing for a plain idle shell with no ports/diff so the bar

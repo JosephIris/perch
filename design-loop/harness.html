@@ -17,6 +17,38 @@
     body { background: #1f1f1f; }
   </style>
   <link rel="stylesheet" href="./harness.css" />
+  <!-- Dev-only host stub: answers commits.request with sample unpushed-commit
+       data so the "ready to push" recap (popover / hover tooltip / lightbox)
+       can be screenshotted offline, the same way the harness fakes the rest of
+       the host state. Defined before harness.js so bridge.ts binds to it. -->
+  <script>
+    (function () {
+      var listeners = [];
+      function iso(msAgo) { return new Date(Date.now() - msAgo).toISOString(); }
+      function sample(paneId) {
+        return {
+          type: "commits.data", paneId: paneId, ahead: 4,
+          commits: [
+            { sha: "c5794d0", subject: "feat(nn-eval): Target Growth column on Datasets tab", committedIso: iso(3.6e6), author: "Joseph", added: 50, deleted: 3, inSession: true, files: [{ path: "services/nn-eval-tool/templates/index.html", added: 50, deleted: 3 }] },
+            { sha: "d54d4e8", subject: "fix(ml-experiments): keep metrics tables readable with 4+ runs", committedIso: iso(5.4e6), author: "Joseph", added: 42, deleted: 3, inSession: true, files: [{ path: "services/ml-experiments/templates/index.html", added: 42, deleted: 3 }] },
+            { sha: "3781094", subject: "feat(nn-preprocessing): add NN_REVENUE_AB_TEST to A/B Test Settings tab", committedIso: iso(9.0e6), author: "Joseph", added: 28, deleted: 5, inSession: false, files: [{ path: "services/nn-preprocessing-validation/app.py", added: 4, deleted: 2 }, { path: "services/nn-preprocessing-validation/templates/index.html", added: 24, deleted: 3 }] },
+            { sha: "e8dcce8", subject: "perf(ssp-monitoring): cut refresh memory peak + return high-water to OS", committedIso: iso(9.6e6), author: "Joseph", added: 76, deleted: 6, inSession: false, files: [{ path: "services/ssp-monitoring/app.py", added: 64, deleted: 3 }, { path: "services/ssp-monitoring/rollup.py", added: 12, deleted: 3 }] }
+          ]
+        };
+      }
+      window.chrome = window.chrome || {};
+      window.chrome.webview = {
+        postMessage: function (wire) {
+          var msg; try { msg = JSON.parse(wire); } catch (e) { return; }
+          if (msg && msg.type === "commits.request") {
+            var reply = JSON.stringify(sample(msg.paneId));
+            setTimeout(function () { listeners.forEach(function (l) { l({ data: reply }); }); }, 120);
+          }
+        },
+        addEventListener: function (type, listener) { if (type === "message") listeners.push(listener); }
+      };
+    })();
+  </script>
 </head>
 <body>
   <div id="app">

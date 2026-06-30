@@ -47,6 +47,12 @@ class El {
     };
   }
 
+  // No-op: the footer's ahead chip attaches a click handler (opens the recap
+  // popover). The shim never dispatches events, so swallowing registration is
+  // enough to render without throwing.
+  addEventListener(_type: string, _listener: unknown) {}
+  set title(_v: string) {}
+
   appendChild(n: El | TextNode) {
     this.childNodes.push(n);
     return n;

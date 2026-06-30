@@ -411,6 +411,7 @@ public partial class MainWindow : FluentWindow
                 case "pane.focus":      OnPaneFocus(root); break;
                 case "url.open":        OnUrlOpen(root); break;
                 case "prefs.set":       OnPrefsSet(root); break;
+                case "commits.request": OnCommitsRequest(root); break;
                 case "settings.request": OnSettingsRequest(); break;
                 case "settings.save":    OnSettingsSave(root); break;
                 case "onboarding.seen":  OnOnboardingSeen(); break;
@@ -1497,6 +1498,52 @@ public partial class MainWindow : FluentWindow
     // Page opened the settings dialog and wants current values + the list
     // of shells we can offer. Detected-shell enumeration touches the disk
     // / PATH so we don't ship it on every state push — only on request.
+    // Page asked for the unpushed-commit recap behind a pane's "↑N" chip.
+    // Resolve the pane's cwd + session baseline synchronously (the JsonElement
+    // is disposed once OnWebMessage returns, and we must not touch app state
+    // off the UI thread after the await), then shell out to git off-thread and
+    // reply with a commits.data message. Mirrors settings.request/.data.
+    private async void OnCommitsRequest(JsonElement root)
+    {
+        if (!TryGuid(root, "paneId", out var id)) return;
+        string cwd = "";
+        string baseline = "";
+        var sess = OwningSession(id);
+        var pane = sess == null ? null : AllLeaves(sess.Root).FirstOrDefault(p => p.Id == id);
+        if (pane != null)
+        {
+            _paneCwd.TryGetValue(id, out var c);
+            cwd = c ?? "";
+            baseline = pane.CommitBaseline;
+        }
+        try
+        {
+            var commits = string.IsNullOrEmpty(cwd)
+                ? null
+                : await GitProc.UnpushedCommitsAsync(cwd, baseline);
+            var list = (commits ?? new List<GitCommit>()).Select(cm => new
+            {
+                sha = cm.ShortSha,
+                subject = cm.Subject,
+                committedIso = cm.CommittedIso,
+                author = cm.Author,
+                added = cm.Added,
+                deleted = cm.Deleted,
+                inSession = cm.InSession,
+                files = cm.Files.Select(f => new { path = f.Path, added = f.Added, deleted = f.Deleted }).ToArray(),
+            }).ToArray();
+            var payload = new
+            {
+                type = "commits.data",
+                paneId = id.ToString("D"),
+                ahead = list.Length,
+                commits = list,
+            };
+            Web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(payload));
+        }
+        catch (Exception ex) { Log.Error("OnCommitsRequest", ex); }
+    }
+
     private void OnSettingsRequest()
     {
         try
