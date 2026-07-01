@@ -71,16 +71,92 @@ internal static class GitProc
     public static async Task<(int files, int added, int deleted)?> DiffStatsAsync(string baselineSha, string cwd)
     {
         if (string.IsNullOrEmpty(baselineSha)) return null;
-        var (ok, stdout) = await RunAsync("git", $"diff --shortstat {baselineSha}", cwd);
-        if (!ok) return null;
         int files = 0, added = 0, deleted = 0;
-        var mF = System.Text.RegularExpressions.Regex.Match(stdout, @"(\d+) files? changed");
-        if (mF.Success) int.TryParse(mF.Groups[1].Value, out files);
-        var mA = System.Text.RegularExpressions.Regex.Match(stdout, @"(\d+) insertions?\(\+\)");
-        if (mA.Success) int.TryParse(mA.Groups[1].Value, out added);
-        var mD = System.Text.RegularExpressions.Regex.Match(stdout, @"(\d+) deletions?\(-\)");
-        if (mD.Success) int.TryParse(mD.Groups[1].Value, out deleted);
+        var (ok, stdout) = await RunAsync("git", $"diff --shortstat {baselineSha}", cwd);
+        if (ok)
+        {
+            var mF = System.Text.RegularExpressions.Regex.Match(stdout, @"(\d+) files? changed");
+            if (mF.Success) int.TryParse(mF.Groups[1].Value, out files);
+            var mA = System.Text.RegularExpressions.Regex.Match(stdout, @"(\d+) insertions?\(\+\)");
+            if (mA.Success) int.TryParse(mA.Groups[1].Value, out added);
+            var mD = System.Text.RegularExpressions.Regex.Match(stdout, @"(\d+) deletions?\(-\)");
+            if (mD.Success) int.TryParse(mD.Groups[1].Value, out deleted);
+        }
+
+        // `git diff` omits untracked files entirely, but for a "what changed"
+        // signal they're the bulk of some work (new scripts, context notes).
+        // Fold them in as added lines. Provenance is unknowable — an untracked
+        // file that predates the anchor still counts — which we accept as the
+        // price of a cheap, side-effect-free signal (no `git add -N`, which
+        // would mutate the user's index).
+        var (uOk, uFiles, uAdded) = await UntrackedStatsAsync(cwd);
+        if (uOk) { files += uFiles; added += uAdded; }
+
+        // Neither the tracked diff nor the untracked enumeration ran → not a
+        // repo (or no git). Report null so the caller leaves the chip alone,
+        // rather than a misleading (0,0,0). Note an unborn HEAD makes the diff
+        // fail while enumeration still works, so a fresh repo's untracked files
+        // (uOk) still surface.
+        if (!ok && !uOk) return null;
         return (files, added, deleted);
+    }
+
+    /// Count of untracked (not-ignored) files and their total added-line count,
+    /// folded into DiffStatsAsync since `git diff` never sees untracked files.
+    /// Binary files (a NUL byte in the head) count as a file but 0 lines,
+    /// mirroring git's own numstat. Reading files (rather than N `git diff
+    /// --no-index` subprocesses or an index-mutating `add -N`) keeps it one
+    /// process + local IO; a total-bytes budget bounds a stray huge/dense
+    /// untracked tree so the refresh — which runs on every state change — can't
+    /// stall. Returns (ok, files, added); ok=false only when the enumeration
+    /// itself fails (no repo / no git).
+    private static async Task<(bool ok, int files, int added)> UntrackedStatsAsync(string cwd)
+    {
+        const int MaxFiles = 1000;                 // cap the file count we tally
+        const int MaxBytesPerFile = 2 << 20;       // sample ≤2 MiB of any one file
+        long budget = 48L << 20;                   // …and ≤48 MiB of IO in total
+
+        var (ok, stdout) = await RunAsync(
+            "git", "ls-files --others --exclude-standard -z", cwd);
+        if (!ok) return (false, 0, 0);
+
+        var rels = stdout.Split('\0', StringSplitOptions.RemoveEmptyEntries);
+        int files = 0, added = 0;
+        var buf = new byte[8192];
+        foreach (var rel in rels)
+        {
+            if (files >= MaxFiles) break;
+            files++;
+            if (budget <= 0) continue;             // out of IO budget: count file, skip lines
+            try
+            {
+                var full = System.IO.Path.Combine(cwd, rel);
+                using var fs = System.IO.File.OpenRead(full);
+                int read, taken = 0, lines = 0;
+                bool binary = false, sawAny = false, lastWasNl = false;
+                while (taken < MaxBytesPerFile && budget > 0 &&
+                       (read = await fs.ReadAsync(buf, 0, buf.Length)) > 0)
+                {
+                    taken += read; budget -= read;
+                    for (int i = 0; i < read; i++)
+                    {
+                        var b = buf[i];
+                        if (b == 0) { binary = true; break; }
+                        sawAny = true;
+                        lastWasNl = b == (byte)'\n';
+                        if (lastWasNl) lines++;
+                    }
+                    if (binary) break;
+                }
+                if (binary) continue;              // counted as a file, 0 lines
+                // A final line with no trailing newline still counts as one,
+                // matching git numstat's no-newline-at-EOF accounting.
+                if (sawAny && !lastWasNl) lines++;
+                added += lines;
+            }
+            catch { /* unreadable/vanished file: still counts as a changed file */ }
+        }
+        return (true, files, added);
     }
 
     /// Commits HEAD is ahead of its upstream (`@{upstream}..HEAD`) — the
