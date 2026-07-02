@@ -83,6 +83,16 @@ internal sealed class ConPty : IDisposable
     private PROCESS_INFORMATION _proc;
     private bool _disposed;
 
+    // Last size we told the pseudo-console. Re-sending the SAME size is a pure
+    // no-op to ConPTY, but it still fires SIGWINCH and makes the attached TUI
+    // redraw — and that redraw is genuine PTY output, which the idle watchdog
+    // reads as "the agent is working again". Tab-switch refits re-emit the
+    // identical size on every switch, so guarding here stops a switch from
+    // flipping a silence-demoted (Done, inferred) pane back to Working. Seeded
+    // with the spawn size so the first real geometry change still gets through.
+    private int _lastCols;
+    private int _lastRows;
+
     public static ConPty Start(string command, int cols, int rows, string? cwd = null)
     {
         if (cols < 1) cols = 80;
@@ -173,6 +183,8 @@ internal sealed class ConPty : IDisposable
                 _ptyOutRead = new SafeFileHandle(hPtyOutRead, ownsHandle: true),
                 _proc = pi,
                 ProcessId = (int)pi.dwProcessId,
+                _lastCols = cols,   // clamped ≥1 above; seeds the no-op guard
+                _lastRows = rows,
             };
             inst._inStream = new FileStream(inst._ptyInWrite, FileAccess.Write, 4096, isAsync: false);
             inst._outStream = new FileStream(inst._ptyOutRead, FileAccess.Read, 4096, isAsync: false);
@@ -318,6 +330,13 @@ internal sealed class ConPty : IDisposable
         if (_disposed || _hPC == IntPtr.Zero) return;
         if (cols < 1) cols = 1;
         if (rows < 1) rows = 1;
+        // No-op resize: re-sending the current size would fire SIGWINCH and
+        // provoke a full TUI redraw, whose output the idle watchdog mistakes
+        // for renewed agent activity (see _lastCols note). Only a real geometry
+        // change reaches ResizePseudoConsole.
+        if (cols == _lastCols && rows == _lastRows) return;
+        _lastCols = cols;
+        _lastRows = rows;
         var size = new COORD { X = (short)cols, Y = (short)rows };
         int hr = ResizePseudoConsole(_hPC, size);
         if (hr != 0) Log.Error("ConPty.Resize", new InvalidOperationException($"hr=0x{hr:X8}"));
