@@ -20,11 +20,9 @@ import { Pane, DEFAULT_FONT_SIZE } from "./pane.js";
 import { UrlPane } from "./url-pane.js";
 import { PANE_LEAVE_MS } from "./anim.js";
 import { showPaneChooser } from "./pane-chooser.js";
+import { treeSignature, computeEdge, type Edge } from "./layout.js";
 
 type LeafPane = Pane | UrlPane;
-
-/** Drop zone within a target pane during a drag-to-rearrange. */
-type Edge = "left" | "right" | "top" | "bottom" | "center";
 
 /** One mounted session: its container DIV (hidden when inactive), the panes
  *  keyed by id (reused across renders to preserve terminal state), and the
@@ -34,15 +32,6 @@ interface Stage {
   readonly container: HTMLElement;
   readonly panes: Map<string, LeafPane>;
   signature: string | null;
-}
-
-/** Stable string for a pane tree's SHAPE — leaf paneIds + split
- *  orientations, in document order. Used to skip the DOM rebuild on
- *  no-op renders (pure focus changes). Does NOT include the active-pane
- *  marker or any other state that toggles via setActive. */
-function treeSignature(node: PaneTreeView): string {
-  if (node.kind === "leaf") return `L:${node.paneId}:${node.url ?? ""}`;
-  return `S(${node.orientation}:${node.children.map(treeSignature).join(",")})`;
 }
 
 export class Workspace {
@@ -565,20 +554,11 @@ export class Workspace {
     });
   }
 
-  /** Which drop zone the pointer is in: a centered box is "center" (swap),
-   *  otherwise the nearest edge. */
+  /** Normalize the pointer to the pane's box and delegate to the pure
+   *  computeEdge (layout.ts) for the zone decision. */
   private computeEdge(el: HTMLElement, ev: DragEvent): Edge {
     const r = el.getBoundingClientRect();
-    const x = (ev.clientX - r.left) / r.width;
-    const y = (ev.clientY - r.top) / r.height;
-    if (Math.abs(x - 0.5) < 0.22 && Math.abs(y - 0.5) < 0.22) return "center";
-    const d = { left: x, right: 1 - x, top: y, bottom: 1 - y };
-    let edge: Edge = "left";
-    let min = d.left;
-    for (const k of ["right", "top", "bottom"] as const) {
-      if (d[k] < min) { min = d[k]; edge = k; }
-    }
-    return edge;
+    return computeEdge((ev.clientX - r.left) / r.width, (ev.clientY - r.top) / r.height);
   }
 
   private showDropOverlay(el: HTMLElement, edge: Edge) {
