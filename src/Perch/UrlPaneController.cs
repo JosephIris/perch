@@ -117,6 +117,16 @@ internal sealed class UrlPaneController
         _panes.Remove(msg.PaneId);
     }
 
+    /// Drop every child window without waiting for page messages. Used when
+    /// the shared browser process died: the hosts are already dead, this just
+    /// tears down their HWNDs and forgets the (stale) environment.
+    public void CloseAll()
+    {
+        foreach (var e in _panes.Values) { try { e.Host.Close(); } catch { } }
+        _panes.Clear();
+        _env = null;
+    }
+
     /// Page rect is in WPF DIPs relative to the WebView2's content area.
     /// MoveWindow expects device pixels relative to the parent HWND's
     /// client area. Convert via the per-monitor DPI of the main window.

@@ -45,13 +45,21 @@ internal static class JobObjectGuard
     /// SILENT_BREAKAWAY means children created from here on are NOT placed in
     /// the job, so Update.exe outlives us. Existing pane children stay in the
     /// job and are still reaped on exit (they're discarded on restart anyway).
-    public static void AllowChildBreakaway()
+    public static void AllowChildBreakaway() => SetLimitFlags(
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK);
+
+    /// Close the breakaway window opened by AllowChildBreakaway: children
+    /// spawned after this call join the job again. Processes that already
+    /// broke away stay out — the flag only affects future CreateProcess calls.
+    public static void DisallowChildBreakaway() => SetLimitFlags(
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE);
+
+    private static void SetLimitFlags(uint flags)
     {
         if (_job == IntPtr.Zero) return;
 
         var info = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
-        info.BasicLimitInformation.LimitFlags =
-            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK;
+        info.BasicLimitInformation.LimitFlags = flags;
 
         var size = Marshal.SizeOf<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>();
         var ptr = Marshal.AllocHGlobal(size);
