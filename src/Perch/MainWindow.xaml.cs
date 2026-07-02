@@ -1136,25 +1136,23 @@ public partial class MainWindow : FluentWindow
         // Ahead-of-upstream is meaningful for ANY repo pane — a plain shell (or
         // a resumed/pre-baseline session) with unpushed commits should still
         // light the "↑N ready to push" chip — so it's gated only on knowing the
-        // cwd, NOT on a cc-session baseline. CommitCount and the diff size ARE
-        // baseline-relative, so we skip those (leaving them at 0) when no agent
-        // session has captured a baseline.
+        // cwd, NOT on a cc-session baseline. CommitCount and the diff/loc size
+        // ARE baseline-relative ("what changed since the agent started"), so we
+        // skip those (leaving them at 0) when no agent session has captured a
+        // baseline. Anchoring the loc to HEAD without a baseline was a mistake:
+        // DiffStatsAsync folds in every pre-existing untracked file, so a fresh
+        // or plain-shell pane showed the working tree's ambient footprint (e.g.
+        // "+3k") as work done in the pane. No baseline → no loc chip.
         if (!_paneCwd.TryGetValue(pane.Id, out var cwd) || string.IsNullOrEmpty(cwd)) return;
         var hasBaseline = !string.IsNullOrEmpty(pane.CommitBaseline);
-        // Diff anchor: the session baseline when we have one ("what changed
-        // since the agent started"), else HEAD ("uncommitted working-tree
-        // footprint"). Either way DiffStatsAsync folds in untracked files, so a
-        // plain-shell pane still shows the loc it's sitting on. Committed-but-
-        // unpushed lines aren't in the HEAD-anchored number — the "↑N" chip
-        // already accounts for those. CommitCount stays baseline-only: "commits
-        // this session" is meaningless without a session anchor.
-        var diffAnchor = hasBaseline ? pane.CommitBaseline : "HEAD";
         // Run the git queries concurrently off the UI thread — they're
         // independent and each is a fast plumbing command.
         var countT = hasBaseline
             ? GitProc.CommitsSinceAsync(pane.CommitBaseline, cwd)
             : System.Threading.Tasks.Task.FromResult<int?>(null);
-        var diffT  = GitProc.DiffStatsAsync(diffAnchor, cwd);
+        var diffT  = hasBaseline
+            ? GitProc.DiffStatsAsync(pane.CommitBaseline, cwd)
+            : System.Threading.Tasks.Task.FromResult<(int files, int added, int deleted)?>(null);
         var aheadT = GitProc.AheadAsync(cwd);
         await System.Threading.Tasks.Task.WhenAll(countT, diffT, aheadT);
         var count = await countT;
