@@ -26,6 +26,12 @@
     <Resource Include="Assets\perch.ico" />
   </ItemGroup>
 
+  <!-- Perch.Tests exercises internal types (PaneTree, Session, the message
+       DTOs) directly — the app is an exe, so internals are the API. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="Perch.Tests" />
+  </ItemGroup>
+
   <!-- Stage the built web bundle next to the exe so MainWindow's
        SetVirtualHostNameToFolderMapping can serve it. The web bundle is
        produced by `npm run build` in src/web/ and emitted into
