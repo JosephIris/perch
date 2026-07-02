@@ -187,6 +187,10 @@ public partial class MainWindow : FluentWindow
             _control?.Dispose();
             _panes.Dispose();
             _store.Save();
+            // Start the browser's own shutdown before the process exits so the
+            // profile is left clean (it lives outside the kill-on-close job —
+            // see InitWebViewAsync — so it gets to finish writing).
+            try { Web.Dispose(); } catch { }
         };
     }
 
@@ -222,11 +226,28 @@ public partial class MainWindow : FluentWindow
                     "--disable-backgrounding-occluded-windows " +
                     "--disable-features=CalculateNativeWinOcclusion");
 
-            var env = await CoreWebView2Environment.CreateAsync(
-                browserExecutableFolder: null,
-                userDataFolder: userDataFolder,
-                options: options);
-            await Web.EnsureCoreWebView2Async(env);
+            // Spawn the browser family OUTSIDE our kill-on-close job. WebView2
+            // watches its host handle and shuts down cleanly on its own when we
+            // die; the job would instead TerminateProcess it mid-write on every
+            // exit — including Velopack's Environment.Exit during an update
+            // restart — leaving the profile dirty. A browser starting on such a
+            // profile intermittently crashes with an access violation seconds
+            // in (BrowserProcessExited 0xC0000005: the post-update grey screen).
+            // Shell/conhost children still join the job: page-driven PTY spawns
+            // can't happen until the page loads, well after this window closes.
+            JobObjectGuard.AllowChildBreakaway();
+            try
+            {
+                var env = await CoreWebView2Environment.CreateAsync(
+                    browserExecutableFolder: null,
+                    userDataFolder: userDataFolder,
+                    options: options);
+                await Web.EnsureCoreWebView2Async(env);
+            }
+            finally
+            {
+                JobObjectGuard.DisallowChildBreakaway();
+            }
 
             var core = Web.CoreWebView2;
             if (Directory.Exists(_webRoot))
@@ -275,6 +296,40 @@ public partial class MainWindow : FluentWindow
     // falls back to its DOM renderer). Sticky for the process lifetime — a GPU
     // that crashed the renderer once will do it again.
     private bool _webglDisabled;
+    // Browser-process deaths handled in a rolling window (see
+    // OnWebViewProcessFailed) — the whole-control rebuilds, not page reloads.
+    private int _browserRecreates;
+    private DateTime _browserRecreateWindowUtc;
+
+    /// The browser process died (e.g. an access violation), taking every view
+    /// with it — the WPF control is permanently dead and Reload() throws. Swap
+    /// in a fresh WebView2 control and run the normal init path against it. The
+    /// PTYs live in PaneManager, untouched; the reloaded page sends `ready` and
+    /// panes re-attach to their still-running shells, same contract as the
+    /// render-crash Reload().
+    private async Task RecreateWebViewAsync()
+    {
+        // URL panes hosted child views of the same dead browser; drop them.
+        // The reloaded page re-emits urlpane.layout and they get recreated.
+        _urlPaneCtrl?.CloseAll();
+
+        var grid = (System.Windows.Controls.Grid)Web.Parent;
+        var slot = grid.Children.IndexOf(Web);
+        grid.Children.RemoveAt(slot);
+        try { Web.Dispose(); } catch { }
+        Web = new Microsoft.Web.WebView2.Wpf.WebView2
+        {
+            DefaultBackgroundColor = System.Drawing.Color.Transparent,
+        };
+        grid.Children.Insert(slot, Web);
+
+        await InitWebViewAsync();
+
+        // The controller captured the old control; rebind to the new one.
+        _urlPaneCtrl = new UrlPaneController(this, Web);
+        _urlPaneCtrl.AutoTitleRequested += (paneId, title) =>
+            ApplyAutoTitle(paneId, title);
+    }
 
     /// The app URL, optionally telling the page to skip the WebGL renderer.
     private string AppUrl(bool disableWebgl) =>
@@ -291,9 +346,33 @@ public partial class MainWindow : FluentWindow
 
         // Only the render process exiting/hanging actually blanks the page and
         // needs us to reload. GPU / utility / frame-render failures are
-        // auto-recovered by WebView2 itself; the browser process exiting is
-        // unrecoverable (the whole control is gone). Log those and bail.
+        // auto-recovered by WebView2 itself. The browser process exiting kills
+        // the whole control — Reload() can't help; the control itself must be
+        // rebuilt (see RecreateWebViewAsync). Bounded so a browser that dies
+        // deterministically at startup can't spin us in a rebuild loop.
         var kind = e.ProcessFailedKind;
+        if (kind == CoreWebView2ProcessFailedKind.BrowserProcessExited)
+        {
+            var nowUtc = DateTime.UtcNow;
+            if (_browserRecreates == 0 || nowUtc - _browserRecreateWindowUtc > TimeSpan.FromMinutes(5))
+            {
+                _browserRecreates = 0;
+                _browserRecreateWindowUtc = nowUtc;
+            }
+            if (++_browserRecreates > 3)
+            {
+                Log.Error("WebView2.ProcessFailed",
+                    new Exception("browser process keeps dying; stopped rebuilding"));
+                return;
+            }
+            Log.Info("WebView2.ProcessFailed", $"browser process gone — rebuilding the control (attempt {_browserRecreates})");
+            _ = Dispatcher.BeginInvoke(async () =>
+            {
+                try { await RecreateWebViewAsync(); }
+                catch (Exception ex) { Log.Error("WebView2.Recreate", ex); }
+            });
+            return;
+        }
         if (kind != CoreWebView2ProcessFailedKind.RenderProcessExited &&
             kind != CoreWebView2ProcessFailedKind.RenderProcessUnresponsive)
             return;
