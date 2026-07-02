@@ -55,16 +55,12 @@ internal sealed class UrlPaneController
 
     /// Handle the page's urlpane.layout message. Creates a new UrlPaneWindow
     /// on first call for a paneId; subsequent calls reposition + resize.
-    public void OnLayout(JsonElement root)
+    public void OnLayout(UrlPaneLayoutMsg msg)
     {
-        if (!TryGuid(root, "paneId", out var id)) return;
-        if (!root.TryGetProperty("url", out var urlEl)) return;
-        var url = urlEl.GetString();
+        var id = msg.PaneId;
+        var url = msg.Url;
         if (string.IsNullOrEmpty(url)) return;
-        if (!TryDouble(root, "x", out var x) ||
-            !TryDouble(root, "y", out var y) ||
-            !TryDouble(root, "w", out var w) ||
-            !TryDouble(root, "h", out var h)) return;
+        var (x, y, w, h) = (msg.X, msg.Y, msg.W, msg.H);
 
         var (px, py, pw, ph) = DipsToPixels(x, y, w, h);
         var topOff = WebTopOffsetInPixels();
@@ -114,12 +110,11 @@ internal sealed class UrlPaneController
     }
 
     /// Handle the page's urlpane.dispose message — close the child window.
-    public void OnDispose(JsonElement root)
+    public void OnDispose(PaneRef msg)
     {
-        if (!TryGuid(root, "paneId", out var id)) return;
-        if (!_panes.TryGetValue(id, out var entry)) return;
+        if (!_panes.TryGetValue(msg.PaneId, out var entry)) return;
         try { entry.Host.Close(); } catch { }
-        _panes.Remove(id);
+        _panes.Remove(msg.PaneId);
     }
 
     /// Page rect is in WPF DIPs relative to the WebView2's content area.
@@ -149,16 +144,4 @@ internal sealed class UrlPaneController
         catch { return 0; }
     }
 
-    private static bool TryGuid(JsonElement root, string prop, out Guid id)
-    {
-        id = Guid.Empty;
-        return root.TryGetProperty(prop, out var v)
-               && v.ValueKind == JsonValueKind.String
-               && Guid.TryParse(v.GetString(), out id);
-    }
-    private static bool TryDouble(JsonElement root, string prop, out double v)
-    {
-        v = 0;
-        return root.TryGetProperty(prop, out var e) && e.TryGetDouble(out v);
-    }
 }

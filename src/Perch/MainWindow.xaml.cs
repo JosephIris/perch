@@ -7,6 +7,7 @@ using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Microsoft.Web.WebView2.Core;
 using Wpf.Ui.Controls;
+using static Perch.PaneTree;
 
 namespace Perch;
 
@@ -18,28 +19,10 @@ public partial class MainWindow : FluentWindow
     private readonly Settings _settings;
     private readonly SessionStore _store;
 
-    // One ConPty per leaf pane. Lifetime: created on first activation of a
-    // session (lazy spawn) so closed-but-persisted sessions don't fork a
-    // shell at startup; disposed when the pane is removed or the session
-    // closes.
-    private readonly Dictionary<Guid, ConPty> _ptys = new();
-
-    // Per-pane named-pipe server listening on \\.\pipe\perch\<paneId>.
-    // Agents inside the pane talk to us via the perch CLI ("perch status
-    // working") which dials this pipe. Lifecycle mirrors _ptys exactly.
-    private readonly Dictionary<Guid, PerchIpcServer> _paneIpc = new();
-
-    // Bytes-received-since-launch per pane id. Surface for `pty.snapshot`
-    // and the test harness; the page doesn't see this.
-    private readonly Dictionary<Guid, long> _ptyBytesReceived = new();
-
-    // Last PTY-output timestamp (Stopwatch ticks) per pane id, written from
-    // the ConPty read thread and read by the idle watchdog on the UI thread —
-    // hence ConcurrentDictionary. Drives the Working→Done demotion: an agent
-    // pane that's actually working redraws its spinner ~1/sec, so a few
-    // seconds of total silence reliably means the turn ended (and recovers us
-    // when a Stop hook was dropped). See OnIdleWatchdogTick.
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, long> _ptyLastOutputTicks = new();
+    // Per-pane ConPty + agent-IPC lifecycles, byte counters and last-output
+    // timestamps all live in PaneManager. MainWindow decides what to spawn
+    // and reacts to its events (wired in the constructor).
+    private readonly PaneManager _panes;
 
     // How long a Working pane must be output-silent before the watchdog treats
     // its turn as finished and demotes it to Done. Long enough to ride out
@@ -50,6 +33,10 @@ public partial class MainWindow : FluentWindow
     private System.Windows.Threading.DispatcherTimer? _idleWatchdog;
 
     private ControlIpcServer? _control;
+
+    // Page → host dispatch table; shared by the WebView2 bridge and the
+    // control pipe. Built once in the constructor (BuildRouter).
+    private readonly MessageRouter _router;
 
     // Watches the OS clipboard so we can push its text to the page (see
     // SyncClipboardToWeb), making right-click paste synchronous instead of a
@@ -114,6 +101,18 @@ public partial class MainWindow : FluentWindow
         _webRoot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
         _settings = Settings.Load();
         _store = SessionStore.Load();
+        _router = BuildRouter();
+        _panes = new PaneManager(Dispatcher);
+        _panes.Output += PostPaneOut;
+        _panes.Exited += PostPaneExit;
+        _panes.AgentStatus += OnAgentStatus;
+        _panes.AgentNotify += OnAgentNotify;
+        _panes.AgentMeta += OnAgentMeta;
+        _panes.GitBaseline += OnGitBaseline;
+        _panes.AgentTitle += OnAgentTitle;
+        _panes.NameReset += OnNameReset;
+        _panes.AgentType += OnAgentType;
+        _panes.AgentSession += OnAgentSession;
         EnsurePaneNames();
         // Persist immediately on first launch so external tools (the perch
         // CLI, test harnesses) can read pane ids and pipe paths from disk
@@ -186,10 +185,7 @@ public partial class MainWindow : FluentWindow
             _updateTimer?.Stop();
             _clipWatch?.Dispose();
             _control?.Dispose();
-            foreach (var ipc in _paneIpc.Values) { try { ipc.Dispose(); } catch { } }
-            _paneIpc.Clear();
-            foreach (var pty in _ptys.Values) { try { pty.Dispose(); } catch { } }
-            _ptys.Clear();
+            _panes.Dispose();
             _store.Save();
         };
     }
@@ -199,22 +195,6 @@ public partial class MainWindow : FluentWindow
         // PaneNode.Name doubles as the human-readable address for `perch
         // focus/send/open`. Auto-assign pane-N for leaves missing a name.
         foreach (var s in _store.Sessions) AutoName(s.Root);
-    }
-    // Next "pane-N" = highest existing N + 1, NOT a positional index. Positional
-    // numbering collided after a close+split: close pane-1, the split collapses
-    // and the survivor keeps "pane-2", then the next split's walker counts the
-    // survivor as position 1 and assigns the new pane "pane-2" too — two panes,
-    // same name. Scanning for the max keeps every auto name unique.
-    private static void AutoName(PaneNode root)
-    {
-        int max = 0;
-        foreach (var leaf in AllLeaves(root))
-        {
-            var m = Regex.Match(leaf.Name ?? "", @"^pane-(\d+)$", RegexOptions.IgnoreCase);
-            if (m.Success && int.TryParse(m.Groups[1].Value, out var k) && k > max) max = k;
-        }
-        foreach (var leaf in AllLeaves(root))
-            if (string.IsNullOrEmpty(leaf.Name)) leaf.Name = $"pane-{++max}";
     }
 
     // ---- WebView2 init ----------------------------------------------------
@@ -372,6 +352,45 @@ public partial class MainWindow : FluentWindow
 
     // ---- Page bridge ------------------------------------------------------
 
+    // One route table for every page → host message. The control pipe
+    // dispatches through the SAME table (see OnControlVerb), so the two entry
+    // points can't drift apart. Payloads deserialize into the typed records in
+    // PageMessages.cs at this boundary; a mismatch throws and is logged with
+    // the payload instead of silently no-op'ing.
+    private MessageRouter BuildRouter() => new MessageRouter()
+        .Add("ready", OnPageReady)
+        .Add<PaneInMsg>("pane.in", OnPaneIn)
+        .Add<PaneAckMsg>("pane.ack", OnPaneAck)
+        .Add<PaneResizeMsg>("pane.resize", OnPaneResize)
+        .Add<RenderPongMsg>("render.pong", OnRenderPong)
+        .Add<PaneSplitMsg>("pane.split", m => OnPaneSplit(m))
+        .Add<PaneRef>("pane.close", OnPaneClose)
+        .Add<PaneChooserChooseMsg>("pane.chooser.choose", OnPaneChooserChoose)
+        .Add<ResizeSplitMsg>("pane.resizeSplit", OnPaneResizeSplit)
+        .Add<PaneMoveMsg>("pane.move", OnPaneMove)
+        .Add<PaneMoveDirMsg>("pane.moveDir", OnPaneMoveDir)
+        .Add<PaneRenameMsg>("pane.rename", OnPaneRename)
+        .Add<PaneRecolorMsg>("pane.recolor", OnPaneRecolor)
+        .Add<PaneCwdMsg>("pane.cwd", OnPaneCwd)
+        .Add<UrlPaneLayoutMsg>("urlpane.layout", m => _urlPaneCtrl?.OnLayout(m))
+        .Add<PaneRef>("urlpane.dispose", m => _urlPaneCtrl?.OnDispose(m))
+        .Add<SessionNewMsg>("session.new", OnSessionNew)
+        .Add<SessionRef>("session.select", OnSessionSelect)
+        .Add<SessionRenameMsg>("session.rename", OnSessionRename)
+        .Add<SessionRef>("session.close", OnSessionClose)
+        .Add<SessionRef>("session.restore", OnSessionRestore)
+        .Add<SessionRef>("session.purge", OnSessionPurge)
+        .Add<ResumeDecisionMsg>("resume.decision", OnResumeDecision)
+        .Add<PaneRef>("pane.focus", OnPaneFocus)
+        .Add<UrlOpenMsg>("url.open", OnUrlOpen)
+        .Add<PrefsSetMsg>("prefs.set", OnPrefsSet)
+        .Add<PaneRef>("commits.request", OnCommitsRequest)
+        .Add("settings.request", OnSettingsRequest)
+        .Add<SettingsSaveMsg>("settings.save", OnSettingsSave)
+        .Add("onboarding.seen", OnOnboardingSeen)
+        .Add("update.apply", OnUpdateApply)
+        .Add("update.check", OnUpdateCheckRequested);
+
     private void OnWebMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
         string raw;
@@ -382,49 +401,19 @@ public partial class MainWindow : FluentWindow
             using var doc = JsonDocument.Parse(raw);
             var root = doc.RootElement;
             if (!root.TryGetProperty("type", out var t)) return;
-            var type = t.GetString();
-            switch (type)
-            {
-                case "ready":           OnPageReady(); break;
-                case "pane.in":         OnPaneIn(root); break;
-                case "pane.ack":        OnPaneAck(root); break;
-                case "pane.resize":     OnPaneResize(root); break;
-                case "render.pong":     OnRenderPong(root); break;
-                case "pane.split":      OnPaneSplit(root); break;
-                case "pane.close":      OnPaneClose(root); break;
-                case "pane.chooser.choose": OnPaneChooserChoose(root); break;
-                case "pane.resizeSplit": OnPaneResizeSplit(root); break;
-                case "pane.move":       OnPaneMove(root); break;
-                case "pane.moveDir":    OnPaneMoveDir(root); break;
-                case "pane.rename":     OnPaneRename(root); break;
-                case "pane.recolor":    OnPaneRecolor(root); break;
-                case "pane.cwd":        OnPaneCwd(root); break;
-                case "urlpane.layout":  OnUrlPaneLayout(root); break;
-                case "urlpane.dispose": OnUrlPaneDispose(root); break;
-                case "session.new":     OnSessionNew(root); break;
-                case "session.select":  OnSessionSelect(root); break;
-                case "session.rename":  OnSessionRename(root); break;
-                case "session.close":   OnSessionClose(root); break;
-                case "session.restore": OnSessionRestore(root); break;
-                case "session.purge":   OnSessionPurge(root); break;
-                case "resume.decision": OnResumeDecision(root); break;
-                case "pane.focus":      OnPaneFocus(root); break;
-                case "url.open":        OnUrlOpen(root); break;
-                case "prefs.set":       OnPrefsSet(root); break;
-                case "commits.request": OnCommitsRequest(root); break;
-                case "settings.request": OnSettingsRequest(); break;
-                case "settings.save":    OnSettingsSave(root); break;
-                case "onboarding.seen":  OnOnboardingSeen(); break;
-                case "update.apply":     OnUpdateApply(); break;
-                case "update.check":     OnUpdateCheckRequested(); break;
-                default:
-                    Log.Info("Web.msg.unknown", $"type={type}");
-                    break;
-            }
+            var type = t.GetString() ?? "";
+            if (!_router.Dispatch(type, root))
+                Log.Info("Web.msg.unknown", $"type={type}");
         }
-        catch (JsonException ex) { Log.Error("Web.OnMessage.json", ex); }
+        // Payload didn't match its DTO (or wasn't JSON at all) — the protocol
+        // drifted between bridge.ts and PageMessages.cs. Log the head of the
+        // payload so the mismatch is diagnosable from errors.log alone.
+        catch (JsonException ex) { Log.Error($"Web.OnMessage.json payload={Truncate(raw, 300)}", ex); }
         catch (Exception ex)     { Log.Error("Web.OnMessage", ex); }
     }
+
+    private static string Truncate(string s, int max) =>
+        s.Length <= max ? s : s.Substring(0, max) + "…";
 
     // ---- Lifecycle: page becomes ready -----------------------------------
 
@@ -562,50 +551,13 @@ public partial class MainWindow : FluentWindow
     private IEnumerable<(Session sess, PaneNode pane)> AllResumablePanes() =>
         _store.Sessions.SelectMany(s => AllLeaves(s.Root).Select(p => (sess: s, pane: p)))
             .Where(t => !string.IsNullOrEmpty(t.pane.ClaudeSessionId)
-                        && TranscriptExists(t.pane.ClaudeSessionId!, ResolvePaneCwd(t.sess, t.pane)));
+                        && ClaudeTranscripts.Exists(t.pane.ClaudeSessionId!, ResolvePaneCwd(t.sess, t.pane)));
 
     /// The cwd a pane spawns in: its own persisted cwd, then the session cwd,
     /// then the configured default. Single source so the resume pre-flight and
     /// SpawnPty agree on where the agent runs.
     private string ResolvePaneCwd(Session sess, PaneNode pane) =>
         FirstExistingDir(pane.Cwd, sess.Cwd) ?? _settings.ResolveDefaultCwd();
-
-    /// Best-effort check that Claude has a saved transcript for this session id
-    /// under the given cwd, so we only `--resume` something that exists.
-    /// Claude stores transcripts at
-    /// <c>~/.claude/projects/&lt;sanitized-cwd&gt;/&lt;id&gt;.jsonl</c>. We try the
-    /// cwd-scoped path first, then fall back to matching the file anywhere under
-    /// projects (the sanitization rule can drift across Claude versions). On ANY
-    /// uncertainty — projects dir missing, IO error — we return true so the
-    /// check never blocks a genuine resume; it only suppresses the clearly-absent
-    /// case.
-    private static bool TranscriptExists(string sessionId, string cwd)
-    {
-        try
-        {
-            // Claude's config root is ~/.claude unless CLAUDE_CONFIG_DIR overrides
-            // it — honor the same override so we look where Claude actually wrote.
-            var configDir = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR");
-            var baseDir = string.IsNullOrWhiteSpace(configDir)
-                ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude")
-                : configDir;
-            var projects = Path.Combine(baseDir, "projects");
-            if (!Directory.Exists(projects)) return true; // unknown layout — don't block
-            var scoped = Path.Combine(projects, SanitizeCwd(cwd), sessionId + ".jsonl");
-            if (File.Exists(scoped)) return true;
-            return Directory.EnumerateFiles(projects, sessionId + ".jsonl", SearchOption.AllDirectories).Any();
-        }
-        catch { return true; }
-    }
-
-    /// Claude's project-dir key: path separators and the drive colon become '-'
-    /// (e.g. C:\Users\josep\dev-projects\cmux-win → C--Users-josep-dev-projects-cmux-win).
-    private static string SanitizeCwd(string cwd)
-    {
-        var sb = new System.Text.StringBuilder(cwd.Length);
-        foreach (var ch in cwd) sb.Append(ch is '\\' or '/' or ':' ? '-' : ch);
-        return sb.ToString();
-    }
 
     /// One-time "Resume N Claude sessions?" prompt. The page renders the dialog
     /// and replies with resume.decision {accept}.
@@ -626,11 +578,11 @@ public partial class MainWindow : FluentWindow
     /// User answered the launch resume prompt. Accept → arm every resumable
     /// pane and open the progress lightbox for the ones we deferred (the
     /// visible session's). Either way, release every parked spawn.
-    private void OnResumeDecision(JsonElement root)
+    private void OnResumeDecision(ResumeDecisionMsg msg)
     {
-        var accept = root.TryGetProperty("accept", out var a) &&
-                     (a.ValueKind == JsonValueKind.True ||
-                      (a.ValueKind == JsonValueKind.String && a.GetString() == "true"));
+        // Absent/malformed accept degrades to "declined" (spawns release as
+        // plain shells) — never to parked-forever.
+        var accept = msg.Accept == true;
         _resumeDecisionPending = false;
         if (accept)
         {
@@ -773,14 +725,6 @@ public partial class MainWindow : FluentWindow
         return _store.Sessions.FirstOrDefault();
     }
 
-    private static PaneNode? FirstLeaf(PaneNode node)
-    {
-        if (node.IsLeaf) return node;
-        foreach (var c in node.Children)
-            if (FirstLeaf(c) is PaneNode leaf) return leaf;
-        return null;
-    }
-
     /// First of the candidate paths that names an existing directory, or null.
     /// Used to pick a pane's spawn cwd: per-pane cwd, then session cwd, then
     /// (caller) the configured default. A stale path (worktree deleted, drive
@@ -799,16 +743,6 @@ public partial class MainWindow : FluentWindow
 
     private void SpawnPty(Session sess, PaneNode pane, int cols = 80, int rows = 24, string? initialCommand = null)
     {
-        // Idempotency guard. If we somehow reach SpawnPty for a pane that
-        // already has a backing ConPty, leaking it would leave an orphan
-        // shell + give the page two byte streams for one xterm (output
-        // interleaved beyond recognition). Log + bail; callers shouldn't
-        // hit this but defensive is cheap.
-        if (_ptys.ContainsKey(pane.Id))
-        {
-            Log.Info($"Pane.spawn.dup pane={pane.Id:N} -- already has a PTY, skipping");
-            return;
-        }
         try
         {
             var baseShell = string.IsNullOrEmpty(sess.Shell)
@@ -834,41 +768,7 @@ public partial class MainWindow : FluentWindow
             // env vars per-pane so agents inside the shell can call back
             // into our IPC layer (stage 4 reactivates that pipe).
             var startCmd = Shell.BuildStartupCommandLine(baseShell, cwd, pane.Id, initialCommand);
-            var pty = ConPty.Start(startCmd, cols: cols, rows: rows, cwd: cwd);
-            var paneId = pane.Id;
-            pty.OutputReceived += (_, bytes) =>
-            {
-                lock (_ptyBytesReceived)
-                    _ptyBytesReceived[paneId] = (_ptyBytesReceived.TryGetValue(paneId, out var n) ? n : 0) + bytes.Length;
-                _ptyLastOutputTicks[paneId] = System.Diagnostics.Stopwatch.GetTimestamp();
-                PostPaneOut(paneId, bytes);
-            };
-            pty.Exited += (_, code) =>
-            {
-                // Drop the dead PTY + IPC so a subsequent pane.resize naturally
-                // respawns into the same paneId. Without this the resize handler
-                // sees a stale _ptys entry and just calls Resize on a dead pty.
-                Dispatcher.BeginInvoke(() => DestroyPty(paneId));
-                PostPaneExit(paneId, code);
-            };
-            _ptys[paneId] = pty;
-
-            // Agent IPC: per-pane named pipe \\.\pipe\perch\<paneId>. The
-            // pane's shell inherits PERCH_PIPE pointing here, so `perch
-            // status working` from inside the shell lands at OnStatus.
-            var ipc = new PerchIpcServer(paneId, Dispatcher);
-            ipc.OnStatus += msg => OnAgentStatus(sess, paneId, msg);
-            ipc.OnNotify += msg => OnAgentNotify(sess, paneId, msg);
-            ipc.OnMeta   += msg => OnAgentMeta(sess, paneId, msg);
-            ipc.OnGitBaseline += msg => OnGitBaseline(sess, paneId, msg);
-            ipc.OnTitle  += msg => OnAgentTitle(sess, paneId, msg);
-            ipc.OnNameReset += msg => OnNameReset(sess, paneId, msg);
-            ipc.OnAgent  += msg => OnAgentType(sess, paneId, msg);
-            ipc.OnSession += msg => OnAgentSession(sess, paneId, msg);
-            ipc.Start();
-            _paneIpc[paneId] = ipc;
-
-            Log.Info("Pane.spawn", $"pane={paneId:N} pid={pty.ProcessId} shell={baseShell} cmd={startCmd}");
+            _panes.Spawn(sess, pane, startCmd, cwd, cols, rows, baseShell);
         }
         catch (Exception ex)
         {
@@ -877,35 +777,10 @@ public partial class MainWindow : FluentWindow
         }
     }
 
-    private void DestroyPty(Guid paneId)
-    {
-        if (_paneIpc.Remove(paneId, out var ipc)) { try { ipc.Dispose(); } catch { } }
-        if (!_ptys.TryGetValue(paneId, out var pty)) return;
-        _ptys.Remove(paneId);
-        try { pty.Dispose(); } catch { }
-        lock (_ptyBytesReceived) _ptyBytesReceived.Remove(paneId);
-        _ptyLastOutputTicks.TryRemove(paneId, out _);
-    }
+    private void DestroyPty(Guid paneId) => _panes.Destroy(paneId);
 
     // ---- Agent IPC handlers (perch status / notify / meta) ----------------
-
-    private static AgentState ParseAgentState(string? s) => s switch
-    {
-        "working"    => AgentState.Working,
-        "done"       => AgentState.Done,
-        "waiting"    => AgentState.Waiting,
-        "permission" => AgentState.Permission,
-        _            => AgentState.Idle,
-    };
-
-    private static NotificationLevel ParseLevel(string? s) => s switch
-    {
-        "success" => NotificationLevel.Success,
-        "warn"    => NotificationLevel.Warn,
-        "warning" => NotificationLevel.Warn,
-        "error"   => NotificationLevel.Error,
-        _         => NotificationLevel.Info,
-    };
+    // State/level string mappings live in StateProjection.cs.
 
     // Agent IPC writes per-pane state now — each pane in a session carries
     // its own AgentState / Branch / Ports / Notification, so 3-5 parallel
@@ -921,7 +796,7 @@ public partial class MainWindow : FluentWindow
         var pane = FindPane(sess, paneId);
         if (pane == null) return;
         var prev = pane.AgentState;
-        var newState  = ParseAgentState(msg.State);
+        var newState  = StateProjection.ParseAgentState(msg.State);
         var newDetail = msg.Detail ?? "";
         // Coalesce no-op repeats. PostToolUse fires once per tool — many/sec
         // during agentic work — and almost all are working→working with no
@@ -997,7 +872,7 @@ public partial class MainWindow : FluentWindow
             {
                 // No output seen yet (just spawned) → treat as not-silent so we
                 // don't demote a pane that hasn't had a chance to draw.
-                var silent = _ptyLastOutputTicks.TryGetValue(pane.Id, out var last)
+                var silent = _panes.TryGetLastOutputTicks(pane.Id, out var last)
                              && (now - last) >= IdleDemoteTicks;
 
                 if (pane.AgentState == AgentState.Working && silent)
@@ -1178,7 +1053,7 @@ public partial class MainWindow : FluentWindow
         var pane = FindPane(sess, paneId);
         if (pane == null) return;
         pane.NotificationText = msg.Text ?? "";
-        pane.NotificationLevel = ParseLevel(msg.Level);
+        pane.NotificationLevel = StateProjection.ParseLevel(msg.Level);
         PushState();
         PostToast(msg.Text ?? "", msg.Level, paneId);
     }
@@ -1276,12 +1151,10 @@ public partial class MainWindow : FluentWindow
 
     // ---- Page → host handlers --------------------------------------------
 
-    private void OnPaneIn(JsonElement root)
+    private void OnPaneIn(PaneInMsg msg)
     {
-        if (!TryGuid(root, "paneId", out var id)) return;
-        if (!_ptys.TryGetValue(id, out var pty)) return;
-        if (!root.TryGetProperty("b64", out var b64El)) return;
-        try { pty.Write(Convert.FromBase64String(b64El.GetString() ?? "")); }
+        if (!_panes.TryGet(msg.PaneId, out var pty)) return;
+        try { pty.Write(Convert.FromBase64String(msg.B64)); }
         catch (Exception ex) { Log.Error("Pane.In", ex); }
 
         // Waiting / Permission are deliberately STICKY across keystrokes.
@@ -1299,12 +1172,7 @@ public partial class MainWindow : FluentWindow
     // The page acks each xterm write once it's drained; we shrink that
     // pane's PTY backpressure backlog so the reader can resume. See the
     // flow-control block in ConPty for why this exists.
-    private void OnPaneAck(JsonElement root)
-    {
-        if (!TryGuid(root, "paneId", out var id)) return;
-        if (!root.TryGetProperty("bytes", out var b) || !b.TryGetInt64(out var n)) return;
-        if (_ptys.TryGetValue(id, out var pty)) pty.Ack(n);
-    }
+    private void OnPaneAck(PaneAckMsg msg) => _panes.Ack(msg.PaneId, msg.Bytes);
 
     // Renderer-responsiveness probe (test-only). The control pipe fires
     // render.ping; we round-trip it through the page's main thread and log
@@ -1313,20 +1181,19 @@ public partial class MainWindow : FluentWindow
     // would process a keystroke is buried in the write backlog); with flow
     // control it stays in the low-ms range. See scripts/test-perf-flow.ps1.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<int, long> _pingSent = new();
-    private void OnRenderPong(JsonElement root)
+    private void OnRenderPong(RenderPongMsg msg)
     {
-        if (!root.TryGetProperty("id", out var ie) || !ie.TryGetInt32(out var id)) return;
-        if (!_pingSent.TryRemove(id, out var ts)) return;
+        if (!_pingSent.TryRemove(msg.Id, out var ts)) return;
         var ms = (System.Diagnostics.Stopwatch.GetTimestamp() - ts) * 1000.0
                  / System.Diagnostics.Stopwatch.Frequency;
-        Log.Info("RenderPong", $"RENDER_PONG id={id} ms={ms:F1}");
+        Log.Info("RenderPong", $"RENDER_PONG id={msg.Id} ms={ms:F1}");
     }
 
-    private void OnPaneResize(JsonElement root)
+    private void OnPaneResize(PaneResizeMsg msg)
     {
-        if (!TryGuid(root, "paneId", out var id)) return;
-        var cols = root.TryGetProperty("cols", out var c) && c.TryGetInt32(out var cv) ? cv : 0;
-        var rows = root.TryGetProperty("rows", out var r) && r.TryGetInt32(out var rv) ? rv : 0;
+        var id = msg.PaneId;
+        var cols = msg.Cols;
+        var rows = msg.Rows;
 
         // Don't act on degenerate measurements -- the page sends one before
         // CSS Grid has finished laying out the pane on first paint, and a
@@ -1341,51 +1208,40 @@ public partial class MainWindow : FluentWindow
         // Lazy spawn: first valid pane.resize for a pane creates its
         // ConPty at the page's measured size, so PowerShell's banner is
         // laid out at the final dimensions and never has to be cleared.
-        if (!_ptys.TryGetValue(id, out var pty))
+        if (_panes.TryResize(id, cols, rows)) return;
+
+        var sess = OwningSession(id);
+        var pane = sess == null ? null : AllLeaves(sess.Root).FirstOrDefault(p => p.Id == id);
+        if (sess == null || pane == null) return;
+        // While the launch resume prompt is unanswered, park a resumable
+        // pane's spawn so the prompt gates the first `claude --resume`
+        // instead of racing it. Non-resumable panes spawn immediately.
+        if (_resumeDecisionPending && !string.IsNullOrEmpty(pane.ClaudeSessionId))
         {
-            var sess = OwningSession(id);
-            var pane = sess == null ? null : AllLeaves(sess.Root).FirstOrDefault(p => p.Id == id);
-            if (sess != null && pane != null)
-            {
-                // While the launch resume prompt is unanswered, park a resumable
-                // pane's spawn so the prompt gates the first `claude --resume`
-                // instead of racing it. Non-resumable panes spawn immediately.
-                if (_resumeDecisionPending && !string.IsNullOrEmpty(pane.ClaudeSessionId))
-                {
-                    Log.Info($"Pane.resize.defer pane={id:N} (awaiting resume decision)");
-                    _deferredSpawns[id] = (cols, rows);
-                    return;
-                }
-                // New-pane chooser: park the spawn and ask the user what to run
-                // here. Released by OnPaneChooserChoose (or closed on cancel).
-                if (_pendingChoosers.ContainsKey(id))
-                {
-                    Log.Info($"Pane.resize.chooser pane={id:N} (awaiting new-pane choice)");
-                    _deferredSpawns[id] = (cols, rows);
-                    PostPaneChooser(id);
-                    return;
-                }
-                Log.Info($"Pane.resize.spawn pane={id:N} cols={cols} rows={rows}");
-                SpawnPty(sess, pane, cols, rows);
-            }
+            Log.Info($"Pane.resize.defer pane={id:N} (awaiting resume decision)");
+            _deferredSpawns[id] = (cols, rows);
             return;
         }
-        pty.Resize(cols, rows);
+        // New-pane chooser: park the spawn and ask the user what to run
+        // here. Released by OnPaneChooserChoose (or closed on cancel).
+        if (_pendingChoosers.ContainsKey(id))
+        {
+            Log.Info($"Pane.resize.chooser pane={id:N} (awaiting new-pane choice)");
+            _deferredSpawns[id] = (cols, rows);
+            PostPaneChooser(id);
+            return;
+        }
+        Log.Info($"Pane.resize.spawn pane={id:N} cols={cols} rows={rows}");
+        SpawnPty(sess, pane, cols, rows);
     }
 
-    private void OnSessionNew(JsonElement root)
+    private void OnSessionNew(SessionNewMsg msg)
     {
         var s = _store.AddNew();
         // Optional shell command line — when present (e.g. the page's
         // "new session with shell X", or the stability harness varying
         // shells) the session spawns that shell instead of the default.
-        if (root.ValueKind == JsonValueKind.Object &&
-            root.TryGetProperty("shell", out var sh) &&
-            sh.ValueKind == JsonValueKind.String)
-        {
-            var shell = sh.GetString();
-            if (!string.IsNullOrWhiteSpace(shell)) s.Shell = shell;
-        }
+        if (!string.IsNullOrWhiteSpace(msg.Shell)) s.Shell = msg.Shell;
         AutoName(s.Root);
         _store.ActiveSessionId = s.Id;
         // The new session's root leaf is the active pane. PTY spawns
@@ -1395,12 +1251,11 @@ public partial class MainWindow : FluentWindow
         PushState();
     }
 
-    private void OnSessionSelect(JsonElement root)
+    private void OnSessionSelect(SessionRef msg)
     {
-        if (!TryGuid(root, "id", out var id)) return;
-        var sess = _store.Sessions.FirstOrDefault(s => s.Id == id);
+        var sess = _store.Sessions.FirstOrDefault(s => s.Id == msg.Id);
         if (sess == null) return;
-        _store.ActiveSessionId = id;
+        _store.ActiveSessionId = msg.Id;
         // PTYs for the selected session's panes spawn lazily on first
         // pane.resize. Just point _activePaneId at a real leaf.
         _activePaneId = FirstLeaf(sess.Root)?.Id;
@@ -1408,22 +1263,19 @@ public partial class MainWindow : FluentWindow
         PushState();
     }
 
-    private void OnSessionRename(JsonElement root)
+    private void OnSessionRename(SessionRenameMsg msg)
     {
-        if (!TryGuid(root, "id", out var id)) return;
-        if (!root.TryGetProperty("title", out var t)) return;
-        var s = _store.Sessions.FirstOrDefault(x => x.Id == id);
+        var s = _store.Sessions.FirstOrDefault(x => x.Id == msg.Id);
         if (s == null) return;
-        s.Title = t.GetString() ?? s.Title;
+        s.Title = msg.Title;
         s.IsAutoTitle = false;     // user committed a name — never auto-overwrite
         _store.Save();
         PushState();
     }
 
-    private void OnSessionClose(JsonElement root)
+    private void OnSessionClose(SessionRef msg)
     {
-        if (!TryGuid(root, "id", out var id)) return;
-        var sess = _store.Sessions.FirstOrDefault(x => x.Id == id);
+        var sess = _store.Sessions.FirstOrDefault(x => x.Id == msg.Id);
         if (sess == null) return;
         // Tear down every PTY owned by this session.
         foreach (var leaf in AllLeaves(sess.Root).ToList()) DestroyPty(leaf.Id);
@@ -1436,10 +1288,9 @@ public partial class MainWindow : FluentWindow
     // Bring a closed session back from "Recently closed". Restores its layout
     // in the original directories and — gated by ResumeAgentsOnLaunch — arms
     // its Claude panes to `claude --resume`, driving the progress lightbox.
-    private void OnSessionRestore(JsonElement root)
+    private void OnSessionRestore(SessionRef msg)
     {
-        if (!TryGuid(root, "id", out var id)) return;
-        var sess = _store.Restore(id);
+        var sess = _store.Restore(msg.Id);
         if (sess == null) return;
         _activePaneId = FirstLeaf(sess.Root)?.Id;
         if (_settings.ResumeAgentsOnLaunch)
@@ -1448,7 +1299,7 @@ public partial class MainWindow : FluentWindow
             // no on-disk conversation would just error "No conversation found".
             var resumable = AllLeaves(sess.Root)
                 .Where(p => !string.IsNullOrEmpty(p.ClaudeSessionId)
-                            && TranscriptExists(p.ClaudeSessionId!, ResolvePaneCwd(sess, p)))
+                            && ClaudeTranscripts.Exists(p.ClaudeSessionId!, ResolvePaneCwd(sess, p)))
                 .ToList();
             foreach (var p in resumable) _armedResumePanes.Add(p.Id);
             // Open the lightbox before PushState so it's tracking these panes
@@ -1460,20 +1311,18 @@ public partial class MainWindow : FluentWindow
     }
 
     // Permanently drop a session from "Recently closed".
-    private void OnSessionPurge(JsonElement root)
+    private void OnSessionPurge(SessionRef msg)
     {
-        if (!TryGuid(root, "id", out var id)) return;
-        if (_store.Purge(id)) { _store.Save(); PushState(); }
+        if (_store.Purge(msg.Id)) { _store.Save(); PushState(); }
     }
 
-    private void OnPaneFocus(JsonElement root)
+    private void OnPaneFocus(PaneRef msg)
     {
         // Stage 3b: focus shifts the active-pane marker so split-right /
         // close-pane act on the right tile.
-        if (!TryGuid(root, "paneId", out var id)) return;
-        if (_activePaneId != id)
+        if (_activePaneId != msg.PaneId)
         {
-            _activePaneId = id;
+            _activePaneId = msg.PaneId;
             PushState();
         }
     }
@@ -1481,10 +1330,10 @@ public partial class MainWindow : FluentWindow
     // User changed a preference from the page (Ctrl +/- font size). Persist
     // immediately so the value survives even a hard crash; no need to
     // re-push state since the page already applied the change locally.
-    private void OnPrefsSet(JsonElement root)
+    private void OnPrefsSet(PrefsSetMsg msg)
     {
         var dirty = false;
-        if (root.TryGetProperty("fontSize", out var fs) && fs.TryGetInt32(out var n))
+        if (msg.FontSize is int n)
         {
             // Clamp on the host side too — the page already clamps, but
             // an out-of-band IPC sender shouldn't be able to poke garbage
@@ -1513,13 +1362,13 @@ public partial class MainWindow : FluentWindow
     // of shells we can offer. Detected-shell enumeration touches the disk
     // / PATH so we don't ship it on every state push — only on request.
     // Page asked for the unpushed-commit recap behind a pane's "↑N" chip.
-    // Resolve the pane's cwd + session baseline synchronously (the JsonElement
-    // is disposed once OnWebMessage returns, and we must not touch app state
-    // off the UI thread after the await), then shell out to git off-thread and
-    // reply with a commits.data message. Mirrors settings.request/.data.
-    private async void OnCommitsRequest(JsonElement root)
+    // Resolve the pane's cwd + session baseline synchronously (we must not
+    // touch app state off the UI thread after the await), then shell out to
+    // git off-thread and reply with a commits.data message. Mirrors
+    // settings.request/.data.
+    private async void OnCommitsRequest(PaneRef msg)
     {
-        if (!TryGuid(root, "paneId", out var id)) return;
+        var id = msg.PaneId;
         string cwd = "";
         string baseline = "";
         var sess = OwningSession(id);
@@ -1590,41 +1439,31 @@ public partial class MainWindow : FluentWindow
     // overwrite the keys present in the message. Shell/cwd take effect on
     // the next session spawn (lazy); fontSize re-pushes state so live
     // panes pick it up via the prefs ferry in PushState.
-    private void OnSettingsSave(JsonElement root)
+    private void OnSettingsSave(SettingsSaveMsg msg)
     {
         var dirty = false;
         var fontChanged = false;
-        if (root.TryGetProperty("defaultShell", out var sh) && sh.ValueKind == JsonValueKind.String)
+        if (msg.DefaultShell is string shell && _settings.DefaultShell != shell)
         {
-            var v = sh.GetString() ?? "";
-            if (_settings.DefaultShell != v) { _settings.DefaultShell = v; dirty = true; }
+            _settings.DefaultShell = shell;
+            dirty = true;
         }
-        if (root.TryGetProperty("defaultCwd", out var cwd) && cwd.ValueKind == JsonValueKind.String)
+        if (msg.DefaultCwd is string cwd && _settings.DefaultCwd != cwd)
         {
-            var v = cwd.GetString() ?? "";
-            if (_settings.DefaultCwd != v) { _settings.DefaultCwd = v; dirty = true; }
+            _settings.DefaultCwd = cwd;
+            dirty = true;
         }
-        if (root.TryGetProperty("fontSize", out var fs) && fs.TryGetInt32(out var n))
+        if (msg.FontSize is int n)
         {
             var clamped = Math.Max(9, Math.Min(32, n));
             if (_settings.FontSize != clamped) { _settings.FontSize = clamped; dirty = true; fontChanged = true; }
         }
-        // Accept a JSON bool from the page, or a "true"/"false" string from the
-        // test-IPC settings.save mirror (perch test passes flags as strings).
-        if (root.TryGetProperty("resumeAgentsOnLaunch", out var ra))
+        // A "true"/"false" string from the test-IPC mirror deserializes fine —
+        // PageJson's LenientBoolConverter handles both wire forms.
+        if (msg.ResumeAgentsOnLaunch is bool b && _settings.ResumeAgentsOnLaunch != b)
         {
-            bool? v = ra.ValueKind switch
-            {
-                JsonValueKind.True => true,
-                JsonValueKind.False => false,
-                JsonValueKind.String => string.Equals(ra.GetString(), "true", StringComparison.OrdinalIgnoreCase),
-                _ => (bool?)null,
-            };
-            if (v is bool b && _settings.ResumeAgentsOnLaunch != b)
-            {
-                _settings.ResumeAgentsOnLaunch = b;
-                dirty = true;
-            }
+            _settings.ResumeAgentsOnLaunch = b;
+            dirty = true;
         }
         if (dirty) _settings.Save();
         // Re-push so the font size propagates to live panes (no-op for
@@ -1640,18 +1479,17 @@ public partial class MainWindow : FluentWindow
     // in-pane new-pane chooser when the source pane has a known cwd. Test-IPC
     // splits pass false so the stability/perf harnesses keep their deterministic
     // auto-spawn instead of parking on a dialog nobody answers.
-    private void OnPaneSplit(JsonElement root, bool offerChooser = true)
+    private void OnPaneSplit(PaneSplitMsg msg, bool offerChooser = true)
     {
-        if (!TryGuid(root, "paneId", out var id)) return;
-        var dirStr = root.TryGetProperty("dir", out var d) ? d.GetString() : "right";
-        var orient = dirStr == "down" ? SplitOrientation.Horizontal : SplitOrientation.Vertical;
+        var id = msg.PaneId;
+        var orient = msg.Dir == "down" ? SplitOrientation.Horizontal : SplitOrientation.Vertical;
         var sess = OwningSession(id);
         if (sess == null) return;
         // When `url` is present the new leaf is a webview pane (iframe) —
         // the page renders an iframe for leaves whose Url is non-null
         // instead of an xterm. Otherwise the new leaf is a normal PTY
         // pane and the PTY spawns lazily on first pane.resize.
-        var url = root.TryGetProperty("url", out var u) ? u.GetString() : null;
+        var url = msg.Url;
         // Snapshot the source pane's cwd + agent type BEFORE we mutate the tree —
         // the new-pane chooser offers "same repo / same agent" relative to it.
         var srcPane = AllLeaves(sess.Root).FirstOrDefault(p => p.Id == id);
@@ -1705,10 +1543,10 @@ public partial class MainWindow : FluentWindow
     /// The user picked an option in the new-pane chooser (or dismissed it).
     /// Releases the pane's parked spawn into the chosen cwd + initial command,
     /// or closes the never-spawned pane on cancel.
-    private void OnPaneChooserChoose(JsonElement root)
+    private void OnPaneChooserChoose(PaneChooserChooseMsg msg)
     {
-        if (!TryGuid(root, "paneId", out var id)) return;
-        var choice = root.TryGetProperty("choice", out var c) ? c.GetString() : null;
+        var id = msg.PaneId;
+        var choice = msg.Choice;
         // Ignore a stale/duplicate answer for a pane we're no longer choosing.
         if (!_pendingChoosers.Remove(id, out var ctx)) return;
         _deferredSpawns.Remove(id, out var dims);
@@ -1761,10 +1599,9 @@ public partial class MainWindow : FluentWindow
     // protocol handler (Edge / Chrome / Firefox). Validate scheme so we
     // can't be tricked into launching arbitrary `file://` or `cmd://`
     // schemes from terminal output.
-    private void OnUrlOpen(JsonElement root)
+    private void OnUrlOpen(UrlOpenMsg msg)
     {
-        if (!root.TryGetProperty("url", out var u)) return;
-        var url = u.GetString();
+        var url = msg.Url;
         if (string.IsNullOrEmpty(url)) return;
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return;
         if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
@@ -1790,15 +1627,13 @@ public partial class MainWindow : FluentWindow
     // names ("simulator-fix", "kanban-integration") and color tags survive
     // restarts. AutoName() won't overwrite a user-set name because it only
     // fills in when Name is null/empty.
-    private void OnPaneRename(JsonElement root)
+    private void OnPaneRename(PaneRenameMsg msg)
     {
-        if (!TryGuid(root, "paneId", out var id)) return;
-        if (!root.TryGetProperty("name", out var n)) return;
-        var name = (n.GetString() ?? "").Trim();
+        var name = msg.Name.Trim();
         if (string.IsNullOrEmpty(name)) return;
-        var sess = OwningSession(id);
+        var sess = OwningSession(msg.PaneId);
         if (sess == null) return;
-        var pane = AllLeaves(sess.Root).FirstOrDefault(p => p.Id == id);
+        var pane = AllLeaves(sess.Root).FirstOrDefault(p => p.Id == msg.PaneId);
         if (pane == null) return;
         pane.Name = name;
         pane.IsAutoName = false;    // user committed a name — never auto-overwrite
@@ -1809,16 +1644,13 @@ public partial class MainWindow : FluentWindow
         PushState();
     }
 
-    private void OnPaneRecolor(JsonElement root)
+    private void OnPaneRecolor(PaneRecolorMsg msg)
     {
-        if (!TryGuid(root, "paneId", out var id)) return;
-        if (!root.TryGetProperty("colorIndex", out var c)) return;
-        if (!c.TryGetInt32(out var idx)) return;
         // Palette has 6 colors; wrap user input safely.
-        idx = ((idx % 6) + 6) % 6;
-        var sess = OwningSession(id);
+        var idx = ((msg.ColorIndex % 6) + 6) % 6;
+        var sess = OwningSession(msg.PaneId);
         if (sess == null) return;
-        var pane = AllLeaves(sess.Root).FirstOrDefault(p => p.Id == id);
+        var pane = AllLeaves(sess.Root).FirstOrDefault(p => p.Id == msg.PaneId);
         if (pane == null) return;
         pane.ColorIndex = idx;
         _store.Save();
@@ -1830,11 +1662,10 @@ public partial class MainWindow : FluentWindow
     // redraw (PowerShell fires OSC 7 on every Enter, even when cwd hasn't
     // changed). Branch update pushes state when it actually changes.
     private readonly Dictionary<Guid, string> _paneCwd = new();
-    private void OnPaneCwd(JsonElement root)
+    private void OnPaneCwd(PaneCwdMsg msg)
     {
-        if (!TryGuid(root, "paneId", out var id)) return;
-        if (!root.TryGetProperty("cwd", out var c)) return;
-        var cwd = c.GetString();
+        var id = msg.PaneId;
+        var cwd = msg.Cwd;
         if (string.IsNullOrEmpty(cwd)) return;
         if (_paneCwd.TryGetValue(id, out var prev) && prev == cwd) return;
         _paneCwd[id] = cwd;
@@ -1911,10 +1742,8 @@ public partial class MainWindow : FluentWindow
 
     // URL-pane lifecycle is owned by UrlPaneController — see that file for
     // the SetParent + DIP→pixel math + WebView2 ownership. MainWindow only
-    // forwards the two dispatch messages + the auto-title callback.
-
-    private void OnUrlPaneLayout(JsonElement root)  => _urlPaneCtrl?.OnLayout(root);
-    private void OnUrlPaneDispose(JsonElement root) => _urlPaneCtrl?.OnDispose(root);
+    // routes the two messages there (see BuildRouter) + the auto-title
+    // callback below.
 
     /// Rename a pane to the website's <title> — but only if the user
     /// hasn't already manually renamed it (IsAutoName guard).
@@ -1933,9 +1762,9 @@ public partial class MainWindow : FluentWindow
         PushState();
     }
 
-    private void OnPaneClose(JsonElement root)
+    private void OnPaneClose(PaneRef msg)
     {
-        if (!TryGuid(root, "paneId", out var id)) return;
+        var id = msg.PaneId;
         // Drop any parked chooser/spawn for this pane so closing one that's
         // still showing the chooser doesn't leak into the dicts.
         _pendingChoosers.Remove(id);
@@ -1945,8 +1774,7 @@ public partial class MainWindow : FluentWindow
         // Closing the only leaf in a session = close the session.
         if (sess.Root.IsLeaf && sess.Root.Id == id)
         {
-            OnSessionClose(JsonDocument.Parse(
-                $"{{\"id\":\"{sess.Id:D}\"}}").RootElement);
+            OnSessionClose(new SessionRef { Id = sess.Id });
             return;
         }
         var newRoot = CloseAndCollapse(sess.Root, id);
@@ -1970,86 +1798,9 @@ public partial class MainWindow : FluentWindow
     private Session? OwningSession(Guid paneId) =>
         _store.Sessions.FirstOrDefault(s => AllLeaves(s.Root).Any(p => p.Id == paneId));
 
-    // Tree mutations. SplitImpl wraps the matching leaf in a new split node
-    // with the original leaf + a fresh sibling as its two children, returning
-    // the (possibly new) root. Mutates `node` in place when descending into
-    // splits so the caller doesn't have to rebuild upper nodes.
-    //
-    // FLAT-SPLIT behavior: when the new split is in the SAME direction as
-    // the parent we descended through, we flatten — the parent absorbs the
-    // newly-wrapped split's children directly. So splitting pane-2 to the
-    // right inside an already-vertical split yields three flat siblings
-    // (pane-1 | pane-2 | pane-3 each at 1fr) instead of nested
-    // (pane-1 | (pane-2 | pane-3) with the new pane taking half of pane-2).
-    // Same applies to horizontal splits ("down" inside an already-down
-    // split). flex: 1 1 0 on .split children then gives even sizing for
-    // any pane count.
-    private static PaneNode? SplitImpl(PaneNode node, Guid paneId, SplitOrientation dir, PaneNode newSibling)
-    {
-        if (node.IsLeaf)
-        {
-            if (node.Id != paneId) return null;
-            // The new wrapper takes the leaf's slot in the parent split, so it
-            // inherits the leaf's Weight; inside, the leaf and its new sibling
-            // split that slot evenly (both 1.0). When nothing's been resized
-            // every Weight is 1.0, so this is identical to the old behavior.
-            var wrapper = new PaneNode
-            {
-                Split = dir,
-                Weight = node.Weight,
-                Children = new List<PaneNode> { node, newSibling },
-            };
-            node.Weight = 1.0;
-            return wrapper;
-        }
-        for (int i = 0; i < node.Children.Count; i++)
-        {
-            var rep = SplitImpl(node.Children[i], paneId, dir, newSibling);
-            if (rep == null) continue;
-            // Flatten: if the replacement is a split in the same direction
-            // as us, splice its children into our children list at the
-            // same index instead of nesting it.
-            if (rep.Split == node.Split)
-            {
-                node.Children.RemoveAt(i);
-                node.Children.InsertRange(i, rep.Children);
-            }
-            else
-            {
-                node.Children[i] = rep;
-            }
-            return node;
-        }
-        return null;
-    }
-
-    // CloseAndCollapse removes the leaf with paneId from the subtree rooted
-    // at `node`. If a split is left with only one child, the split is
-    // replaced by that child (the parent then unwraps recursively too).
-    // Returns the replacement node, or null if the whole subtree disappeared.
-    private static PaneNode? CloseAndCollapse(PaneNode node, Guid paneId)
-    {
-        if (node.IsLeaf) return node.Id == paneId ? null : node;
-        var newChildren = new List<PaneNode>();
-        foreach (var c in node.Children)
-        {
-            var rc = CloseAndCollapse(c, paneId);
-            if (rc != null) newChildren.Add(rc);
-        }
-        if (newChildren.Count == 0) return null;
-        if (newChildren.Count == 1) return newChildren[0];   // collapse
-        node.Children = newChildren;
-        return node;
-    }
-
-    // Reset every node's flex-grow Weight to 1.0 so each split divides its
-    // space evenly at every level. Used on pane close (redistribute survivors);
-    // the Ctrl+Shift+E command does the same thing web-side via resizeSplit.
-    private static void ResetWeights(PaneNode node)
-    {
-        node.Weight = 1.0;
-        foreach (var c in node.Children) ResetWeights(c);
-    }
+    // Tree mutations (SplitImpl / CloseAndCollapse / ResetWeights / SwapNodes /
+    // InsertBesideImpl / MoveWithinParent) live in PaneTree.cs — pure,
+    // window-free, unit-tested. Imported via `using static` above.
 
     // ---- Resize: rewrite a split's child weights -------------------------
     //
@@ -2061,32 +1812,22 @@ public partial class MainWindow : FluentWindow
     // (mouseup) message. No PushState: the web already applied the live
     // layout, and treeSignature ignores Weight so a push would just re-
     // confirm the same shape.
-    private void OnPaneResizeSplit(JsonElement root)
+    private void OnPaneResizeSplit(ResizeSplitMsg msg)
     {
-        if (!TryGuid(root, "splitId", out var splitId)) return;
-        if (!root.TryGetProperty("weights", out var w) || w.ValueKind != JsonValueKind.Array)
-            return;
-        var weights = new List<double>();
-        foreach (var e in w.EnumerateArray())
-        {
-            double val = e.ValueKind == JsonValueKind.Number
-                ? e.GetDouble()
-                : (double.TryParse(e.GetString(), System.Globalization.CultureInfo.InvariantCulture, out var d) ? d : double.NaN);
+        var weights = msg.Weights;
+        foreach (var val in weights)
             if (double.IsNaN(val) || val <= 0) return;   // reject malformed payloads
-            weights.Add(val);
-        }
 
         PaneNode? split = null;
         foreach (var s in _store.Sessions)
         {
-            var n = FindNode(s.Root, splitId);
+            var n = FindNode(s.Root, msg.SplitId);
             if (n != null && !n.IsLeaf) { split = n; break; }
         }
-        if (split == null || split.Children.Count != weights.Count) return;
-        for (int i = 0; i < weights.Count; i++) split.Children[i].Weight = weights[i];
+        if (split == null || split.Children.Count != weights.Length) return;
+        for (int i = 0; i < weights.Length; i++) split.Children[i].Weight = weights[i];
 
-        bool final = !(root.TryGetProperty("final", out var f) && f.ValueKind == JsonValueKind.False);
-        if (final) _store.Save();
+        if (msg.Final != false) _store.Save();
     }
 
     // ---- Move: relocate a pane within its session ------------------------
@@ -2097,12 +1838,12 @@ public partial class MainWindow : FluentWindow
     //   top/bottom  → place src beside target in a Horizontal split
     //   center      → swap src and target in place
     // Within-session only (the drop targets are the active session's panes).
-    private void OnPaneMove(JsonElement root)
+    private void OnPaneMove(PaneMoveMsg msg)
     {
-        if (!TryGuid(root, "src", out var srcId)) return;
-        if (!TryGuid(root, "target", out var tgtId)) return;
+        var srcId = msg.Src;
+        var tgtId = msg.Target;
         if (srcId == tgtId) return;
-        var edge = root.TryGetProperty("edge", out var ee) ? ee.GetString() : null;
+        var edge = msg.Edge;
         if (string.IsNullOrEmpty(edge)) return;
 
         var sess = OwningSession(srcId);
@@ -2137,316 +1878,32 @@ public partial class MainWindow : FluentWindow
         PushState();
     }
 
-    // Keyboard move (Ctrl+Shift+arrows): shift the active pane one slot within
-    // its DIRECT parent split. left/right act on a Vertical (side-by-side)
-    // split, up/down on a Horizontal (stacked) split; a perpendicular
-    // direction or an edge position is a no-op. Swaps the pane with its
-    // adjacent sibling (which may be a whole subtree), so the pane keeps its
-    // identity + state and its Weight travels with it.
-    private void OnPaneMoveDir(JsonElement root)
+    // Keyboard move (Ctrl+Shift+arrows) — tree math in PaneTree.MoveWithinParent;
+    // a no-op (edge / perpendicular direction) skips the save + push entirely.
+    private void OnPaneMoveDir(PaneMoveDirMsg msg)
     {
-        if (!TryGuid(root, "paneId", out var id)) return;
-        var dir = root.TryGetProperty("dir", out var dd) ? dd.GetString() : null;
-        if (string.IsNullOrEmpty(dir)) return;
-        var sess = OwningSession(id);
+        var sess = OwningSession(msg.PaneId);
         if (sess == null) return;
-        if (!FindParent(sess.Root, id, out var parent, out var idx)) return; // root leaf: nowhere to go
-        var wantVertical = dir is "left" or "right";
-        var parentIsVertical = parent.Split == SplitOrientation.Vertical;
-        if (wantVertical != parentIsVertical) return;   // direction is across this split's axis
-        var target = dir is "left" or "up" ? idx - 1 : idx + 1;
-        if (target < 0 || target >= parent.Children.Count) return; // already at the edge
-        (parent.Children[idx], parent.Children[target]) = (parent.Children[target], parent.Children[idx]);
-        _activePaneId = id;
+        if (!MoveWithinParent(sess.Root, msg.PaneId, msg.Dir)) return;
+        _activePaneId = msg.PaneId;
         _store.Save();
         PushState();
     }
 
-    // Find any node (leaf OR split) by id within a subtree.
-    private static PaneNode? FindNode(PaneNode node, Guid id)
-    {
-        if (node.Id == id) return node;
-        if (node.IsLeaf) return null;
-        foreach (var c in node.Children)
-        {
-            var f = FindNode(c, id);
-            if (f != null) return f;
-        }
-        return null;
-    }
-
-    // Find the split that directly contains `id` and the child's index.
-    private static bool FindParent(PaneNode node, Guid id, out PaneNode parent, out int index)
-    {
-        if (!node.IsLeaf)
-        {
-            for (int i = 0; i < node.Children.Count; i++)
-            {
-                if (node.Children[i].Id == id) { parent = node; index = i; return true; }
-                if (FindParent(node.Children[i], id, out parent, out index)) return true;
-            }
-        }
-        parent = null!;
-        index = -1;
-        return false;
-    }
-
-    // Swap two nodes' positions in the tree (each keeps its own Weight, so
-    // sizes travel with the panes). Reads both slots before writing so a
-    // shared-parent swap works too.
-    private static bool SwapNodes(PaneNode root, Guid a, Guid b)
-    {
-        if (!FindParent(root, a, out var pa, out var ia)) return false;
-        if (!FindParent(root, b, out var pb, out var ib)) return false;
-        (pa.Children[ia], pb.Children[ib]) = (pb.Children[ib], pa.Children[ia]);
-        return true;
-    }
-
-    // Insert `newNode` immediately before/after the target leaf, wrapping
-    // them in a split of `orient`. Mirrors SplitImpl's flat-split behavior:
-    // when the new split matches the parent's orientation, the parent absorbs
-    // the children directly instead of nesting. Returns the (possibly new)
-    // root, or null if target wasn't found.
-    private static PaneNode? InsertBesideImpl(PaneNode node, Guid targetId, PaneNode newNode, SplitOrientation orient, bool before)
-    {
-        if (node.IsLeaf)
-        {
-            if (node.Id != targetId) return null;
-            // The wrapper takes the target's slot; inside, target + newNode
-            // share it evenly (both 1.0). Default (all-1.0) trees stay even.
-            var wrapperWeight = node.Weight;
-            node.Weight = 1.0;
-            var children = before
-                ? new List<PaneNode> { newNode, node }
-                : new List<PaneNode> { node, newNode };
-            return new PaneNode { Split = orient, Weight = wrapperWeight, Children = children };
-        }
-        for (int i = 0; i < node.Children.Count; i++)
-        {
-            var rep = InsertBesideImpl(node.Children[i], targetId, newNode, orient, before);
-            if (rep == null) continue;
-            if (rep.Split == node.Split)
-            {
-                node.Children.RemoveAt(i);
-                node.Children.InsertRange(i, rep.Children);
-            }
-            else node.Children[i] = rep;
-            return node;
-        }
-        return null;
-    }
-
-    private static IEnumerable<PaneNode> AllLeaves(PaneNode node)
-    {
-        if (node.IsLeaf) { yield return node; yield break; }
-        foreach (var c in node.Children)
-            foreach (var leaf in AllLeaves(c)) yield return leaf;
-    }
-
     // ---- Host → page push ------------------------------------------------
 
+    // Snapshot building + aggregation rules live in StateProjection.cs (pure,
+    // unit-tested). This just serializes and posts.
     private void PushState()
     {
         try
         {
-            var snap = new
-            {
-                type = "state",
-                activeSessionId = _store.ActiveSessionId?.ToString("D") ?? "",
-                activePaneId    = _activePaneId?.ToString("D") ?? "",
-                // User prefs ferried with every state push. Cheap (two
-                // ints in JSON) and means the page never has to ask. Used
-                // by Workspace.applyPrefs to set the default size of new
-                // panes after a split.
-                prefs = new { fontSize = _settings.FontSize, onboardingSeen = _settings.OnboardingSeen },
-                sessions = _store.Sessions.Select(s =>
-                {
-                    // Aggregate per-pane state to the session row. Most-urgent
-                    // wins: Waiting > Working > Done > Idle. The first pane
-                    // with the winning state also lends its activity detail
-                    // and notification (so the sidebar shows the one that
-                    // wants attention).
-                    var leaves = AllLeaves(s.Root).ToArray();
-                    var aggState = AggregateState(leaves);
-                    var attentionPane = leaves.FirstOrDefault(p => p.AgentState == aggState)
-                                     ?? leaves.FirstOrDefault();
-                    var anyNotify = leaves.FirstOrDefault(p => p.HasNotification);
-                    var paneCount = leaves.Length;
-                    var waitingCount = leaves.Count(p => p.AgentState is AgentState.Waiting or AgentState.Permission);
-                    var workingCount = leaves.Count(p => p.AgentState == AgentState.Working);
-                    return new
-                    {
-                        id    = s.Id.ToString("D"),
-                        title = s.Title,
-                        shell = s.DisplayShell,
-                        rootPane = ProjectPane(s.Root),
-                        agentState = StateToString(aggState),
-                        activityDetail = attentionPane?.ActivityDetail ?? "",
-                        // Branch + ports aggregate by union; user typically
-                        // has one branch per pane (one per worktree).
-                        branch = leaves.Select(p => p.Branch).FirstOrDefault(b => !string.IsNullOrEmpty(b)) ?? "",
-                        ports  = leaves.SelectMany(p => p.Ports).Distinct().ToArray(),
-                        notification = anyNotify == null ? null : new
-                        {
-                            text  = anyNotify.NotificationText,
-                            level = LevelToString(anyNotify.NotificationLevel),
-                        },
-                        // Pane breakdown so the sidebar can say "3 panes · 1 waiting".
-                        paneCount,
-                        waitingCount,
-                        workingCount,
-                        // Git signal aggregated across panes: total diff size
-                        // (the session's whole footprint) and the largest
-                        // unpushed count (panes usually share a branch).
-                        linesAdded   = leaves.Sum(p => p.LinesAdded),
-                        linesDeleted = leaves.Sum(p => p.LinesDeleted),
-                        filesChanged = leaves.Sum(p => p.FilesChanged),
-                        ahead        = leaves.Select(p => p.Ahead).DefaultIfEmpty(0).Max(),
-                        // Earliest working pane's start → "this session has been
-                        // working Xm". 0 when nothing is working.
-                        turnStartMs  = leaves
-                            .Where(p => p.AgentState == AgentState.Working && p.TurnStartUnixMs > 0)
-                            .Select(p => p.TurnStartUnixMs)
-                            .DefaultIfEmpty(0)
-                            .Min(),
-                        // Most-recent turn-end among panes that are CURRENTLY at
-                        // rest → "this session finished Xm ago". 0 when none is
-                        // done. Filtered to Done so a working pane's stale prior
-                        // turn-end never leaks into the live "ago".
-                        doneAtMs     = leaves
-                            .Where(p => p.AgentState == AgentState.Done && p.DoneAtUnixMs > 0)
-                            .Select(p => p.DoneAtUnixMs)
-                            .DefaultIfEmpty(0)
-                            .Max(),
-                        // Relative "last activity" for the dashboard card footer.
-                        lastActivity = s.LastActivityRelative,
-                    };
-                }).ToArray(),
-                // Recently-closed sessions for the sidebar's restore list. Just
-                // the summary the row needs — title, pane/agent counts, and when
-                // it was closed (the page renders "closed 5m ago" live).
-                closedSessions = _store.ClosedSessions.Select(s =>
-                {
-                    var leaves = AllLeaves(s.Root).ToArray();
-                    return new
-                    {
-                        id = s.Id.ToString("D"),
-                        title = s.Title,
-                        paneCount = leaves.Length,
-                        resumableCount = leaves.Count(p => !string.IsNullOrEmpty(p.ClaudeSessionId)),
-                        closedAtMs = s.ClosedAtUnixMs,
-                    };
-                }).ToArray(),
-            };
+            var snap = StateProjection.BuildSnapshot(
+                _store, _activePaneId, _settings.FontSize, _settings.OnboardingSeen);
             Web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(snap));
         }
         catch (Exception ex) { Log.Error("PushState", ex); }
     }
-
-    private static object ProjectPane(PaneNode node)
-    {
-        if (node.IsLeaf)
-            return new
-            {
-                kind = "leaf",
-                paneId = node.Id.ToString("D"),
-                // Size weight within the parent split (flex-grow). See
-                // PaneNode.Weight. Applied by the web on each rebuild.
-                weight = node.Weight,
-                name = node.Name ?? "pane",
-                // Full first-prompt text for the header hover tooltip; the
-                // label above is a 40-char cut of it. Empty when the pane was
-                // never auto-named from a prompt (placeholder / user-named).
-                nameFull = node.NamePrompt ?? "",
-                url = node.Url,
-                colorIndex = node.ColorIndex,
-                // Per-pane state — shows up in the pane header so each
-                // pane's agent status is visible at a glance, no clicking
-                // through the sidebar to figure out which one needs you.
-                agentState = StateToString(node.AgentState),
-                // Which agent runs here ("claude" / "codex" / "") — drives the
-                // small CC badge in the header.
-                agentType = node.AgentType,
-                activityDetail = node.ActivityDetail,
-                branch = node.Branch,
-                ports  = node.Ports,
-                /* Commits made since cc session-start (HEAD baseline). 0 when
-                 * no session is active. Surfaces as "+N commits" chip in the
-                 * pane header so the user can see at a glance how much work
-                 * the agent has actually landed. */
-                commitCount = node.CommitCount,
-                /* Diff size since baseline (committed + uncommitted) and the
-                 * unpushed-commit count — feed the "+A −D · ↑N" signal. */
-                linesAdded   = node.LinesAdded,
-                linesDeleted = node.LinesDeleted,
-                filesChanged = node.FilesChanged,
-                ahead        = node.Ahead,
-                /* Unix-ms the pane started its current working spell (0 when
-                 * not working) — the page ticks "working · 2m" against it. */
-                turnStartMs  = node.TurnStartUnixMs,
-                /* Unix-ms the pane last finished a turn (0 if never) — the page
-                 * ticks "finished · 2m ago" against it on done rows. */
-                doneAtMs     = node.DoneAtUnixMs,
-                notification = string.IsNullOrEmpty(node.NotificationText) ? null : new
-                {
-                    text  = node.NotificationText,
-                    level = LevelToString(node.NotificationLevel),
-                },
-            };
-        return new
-        {
-            kind = "split",
-            // Stable id so pane.resizeSplit can address THIS split node when
-            // the user drags one of its gutters.
-            id = node.Id.ToString("D"),
-            // This split's own size weight inside its parent split (1.0 at the
-            // root, where it's ignored). Lets a nested split keep its share.
-            weight = node.Weight,
-            orientation = node.Split == SplitOrientation.Horizontal ? "h" : "v",
-            children = node.Children.Select(ProjectPane).ToArray(),
-        };
-    }
-
-    /// Most-urgent state across panes. Drives the session row indicator.
-    /// Order: Permission > Waiting > Done > Working > Idle. Done outranks
-    /// Working so a session with one finished pane (your move) surfaces as
-    /// "ready" even while its other panes still churn.
-    private static AgentState AggregateState(IEnumerable<PaneNode> leaves)
-    {
-        var seen = AgentState.Idle;
-        foreach (var p in leaves)
-        {
-            if (p.AgentState == AgentState.Permission) return AgentState.Permission;
-            // Rank the remaining states; never let a lower one overwrite a
-            // higher one already seen.
-            var rank = Rank(p.AgentState);
-            if (rank > Rank(seen)) seen = p.AgentState;
-        }
-        return seen;
-
-        static int Rank(AgentState s) => s switch
-        {
-            AgentState.Waiting    => 3,
-            AgentState.Done       => 2,
-            AgentState.Working    => 1,
-            _                     => 0, // Idle
-        };
-    }
-    private static string StateToString(AgentState s) => s switch
-    {
-        AgentState.Working    => "working",
-        AgentState.Done       => "done",
-        AgentState.Waiting    => "waiting",
-        AgentState.Permission => "permission",
-        _                     => "idle",
-    };
-    private static string LevelToString(NotificationLevel l) => l switch
-    {
-        NotificationLevel.Success => "success",
-        NotificationLevel.Warn    => "warn",
-        NotificationLevel.Error   => "error",
-        _                         => "info",
-    };
 
     private void PostPaneOut(Guid paneId, ReadOnlyMemory<byte> bytes)
     {
@@ -2499,6 +1956,13 @@ public partial class MainWindow : FluentWindow
 
     // ---- Control pipe verbs (test harness) -------------------------------
 
+    // Shared verbs (session.*, pane.*, prefs.set, settings.save, …) dispatch
+    // through the SAME router as the page bridge — PageJson's lenient
+    // converters absorb `perch test` shipping every flag as a string, so
+    // there's no per-verb payload rewriting and the two paths can't drift.
+    // Only genuinely control-only verbs (pty probes, *-active conveniences,
+    // render.ping, state.dump) get cases here, and they construct typed DTOs
+    // instead of fake JSON.
     private void OnControlVerb(string verb, JsonElement root)
     {
         switch (verb)
@@ -2507,10 +1971,9 @@ public partial class MainWindow : FluentWindow
                 // Stage 2 compat: targets the active session's first leaf.
                 {
                     var leaf = ActiveSession() is Session s ? FirstLeaf(s.Root) : null;
-                    if (leaf != null && _ptys.TryGetValue(leaf.Id, out var pty) &&
-                        root.TryGetProperty("text", out var t))
+                    if (leaf != null && root.TryGetProperty("text", out var t))
                     {
-                        pty.Write(System.Text.Encoding.UTF8.GetBytes(t.GetString() ?? ""));
+                        _panes.Write(leaf.Id, System.Text.Encoding.UTF8.GetBytes(t.GetString() ?? ""));
                     }
                 }
                 break;
@@ -2519,38 +1982,35 @@ public partial class MainWindow : FluentWindow
                     var leaf = ActiveSession() is Session s ? FirstLeaf(s.Root) : null;
                     if (leaf != null)
                     {
-                        long n;
-                        lock (_ptyBytesReceived) _ptyBytesReceived.TryGetValue(leaf.Id, out n);
-                        Log.Info("Pty.snapshot", $"bytes={n} pid={(_ptys.TryGetValue(leaf.Id, out var p) ? p.ProcessId : 0)}");
+                        var n = _panes.BytesReceived(leaf.Id);
+                        Log.Info("Pty.snapshot", $"bytes={n} pid={(_panes.TryGet(leaf.Id, out var p) ? p.ProcessId : 0)}");
                     }
                 }
                 break;
-            case "session.new":     OnSessionNew(root); break;
-            case "session.select":  OnSessionSelect(root); break;
-            case "session.close":   OnSessionClose(root); break;
-            case "session.restore": OnSessionRestore(root); break;
-            case "session.purge":   OnSessionPurge(root); break;
-            case "resume.decision": OnResumeDecision(root); break;
-            // Stage 3b verbs. The pane.* page verbs already take {paneId,...}
-            // so we just forward the JsonElement through. Harness splits skip the
-            // new-pane chooser so spawns stay deterministic (offerChooser:false).
-            case "pane.split":      OnPaneSplit(root, offerChooser: false); break;
-            case "pane.close":      OnPaneClose(root); break;
-            case "pane.move":       OnPaneMove(root); break;
-            case "pane.move-dir":   OnPaneMoveDir(root); break;
+            // Harness splits skip the new-pane chooser so spawns stay
+            // deterministic (offerChooser:false) — the one shared verb that
+            // can't go through the router's default binding.
+            case "pane.split":
+                OnPaneSplit(PageJson.Deserialize<PaneSplitMsg>(root), offerChooser: false);
+                break;
+            // Historical control-side spelling of pane.moveDir.
+            case "pane.move-dir":
+                OnPaneMoveDir(PageJson.Deserialize<PaneMoveDirMsg>(root));
+                break;
             case "pane.resize-split":
                 // Harness convenience: weights arrive as a comma-separated
                 // string ("--weights 1.5,0.5") since `perch test` flags are
-                // strings; rewrap as a JSON array for OnPaneResizeSplit.
+                // strings; parse to the typed message.
                 {
-                    var splitId = root.TryGetProperty("splitId", out var si) ? si.GetString() : null;
-                    var wcsv    = root.TryGetProperty("weights", out var wv) ? wv.GetString() : null;
-                    if (!string.IsNullOrEmpty(splitId) && !string.IsNullOrEmpty(wcsv))
+                    var splitIdStr = root.TryGetProperty("splitId", out var si) ? si.GetString() : null;
+                    var wcsv       = root.TryGetProperty("weights", out var wv) ? wv.GetString() : null;
+                    if (Guid.TryParse(splitIdStr, out var splitId) && !string.IsNullOrEmpty(wcsv))
                     {
-                        var arr = string.Join(",", wcsv.Split(',', StringSplitOptions.RemoveEmptyEntries));
-                        var fakeRoot = JsonDocument.Parse(
-                            $"{{\"splitId\":\"{splitId}\",\"weights\":[{arr}],\"final\":true}}").RootElement;
-                        OnPaneResizeSplit(fakeRoot);
+                        var weights = new List<double>();
+                        foreach (var part in wcsv.Split(',', StringSplitOptions.RemoveEmptyEntries))
+                            if (double.TryParse(part, System.Globalization.CultureInfo.InvariantCulture, out var d))
+                                weights.Add(d);
+                        OnPaneResizeSplit(new ResizeSplitMsg { SplitId = splitId, Weights = weights.ToArray(), Final = true });
                     }
                 }
                 break;
@@ -2563,33 +2023,12 @@ public partial class MainWindow : FluentWindow
                 {
                     var dir = root.TryGetProperty("dir", out var d) ? d.GetString() : "right";
                     var url = root.TryGetProperty("url", out var uu) ? uu.GetString() : null;
-                    var urlPart = string.IsNullOrEmpty(url)
-                        ? ""
-                        : $",\"url\":{JsonSerializer.Serialize(url)}";
-                    var fakeRoot = JsonDocument.Parse(
-                        $"{{\"paneId\":\"{ap:D}\",\"dir\":\"{dir}\"{urlPart}}}").RootElement;
-                    OnPaneSplit(fakeRoot, offerChooser: false);
+                    OnPaneSplit(new PaneSplitMsg { PaneId = ap, Dir = dir, Url = url }, offerChooser: false);
                 }
                 break;
             case "pane.close-active":
                 if (_activePaneId is Guid acp)
-                {
-                    var fakeRoot = JsonDocument.Parse($"{{\"paneId\":\"{acp:D}\"}}").RootElement;
-                    OnPaneClose(fakeRoot);
-                }
-                break;
-            case "prefs.set":
-                // Mirror the page → host wire: perch test passes flags as
-                // strings, so parse fontSize defensively. OnPrefsSet then
-                // does its own clamp + save.
-                {
-                    if (root.TryGetProperty("fontSize", out var fs) &&
-                        int.TryParse(fs.GetString(), out var n))
-                    {
-                        var fakeRoot = JsonDocument.Parse($"{{\"fontSize\":{n}}}").RootElement;
-                        OnPrefsSet(fakeRoot);
-                    }
-                }
+                    OnPaneClose(new PaneRef { PaneId = acp });
                 break;
             case "pane.simulate-input":
                 // Synthesize a `pane.in` arrival for the active pane so
@@ -2602,34 +2041,11 @@ public partial class MainWindow : FluentWindow
                 {
                     var text = root.TryGetProperty("text", out var t) ? (t.GetString() ?? "x") : "x";
                     var b64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(text));
-                    var fakeRoot = JsonDocument.Parse(
-                        $"{{\"paneId\":\"{sap:D}\",\"b64\":\"{b64}\"}}").RootElement;
-                    OnPaneIn(fakeRoot);
+                    OnPaneIn(new PaneInMsg { PaneId = sap, B64 = b64 });
                 }
                 break;
             case "ui.open-settings":
                 Web.CoreWebView2?.PostWebMessageAsJson("{\"type\":\"ui.open-settings\"}");
-                break;
-            case "settings.save":
-                // Mirror the page → host settings.save wire so the harness
-                // can exercise persistence without DOM interaction. perch
-                // test passes flags as strings; OnSettingsSave reads the
-                // same property names. fontSize comes through as a string,
-                // so re-wrap it as a number for OnSettingsSave's TryGetInt32.
-                {
-                    var shell = root.TryGetProperty("defaultShell", out var sv) ? sv.GetString() : null;
-                    var cwd   = root.TryGetProperty("defaultCwd", out var cv) ? cv.GetString() : null;
-                    var fsStr = root.TryGetProperty("fontSize", out var fv) ? fv.GetString() : null;
-                    var resume = root.TryGetProperty("resumeAgentsOnLaunch", out var rv) ? rv.GetString() : null;
-                    var sb = new System.Text.StringBuilder("{");
-                    var parts = new List<string>();
-                    if (shell != null) parts.Add($"\"defaultShell\":{JsonSerializer.Serialize(shell)}");
-                    if (cwd != null)   parts.Add($"\"defaultCwd\":{JsonSerializer.Serialize(cwd)}");
-                    if (fsStr != null && int.TryParse(fsStr, out var fsn)) parts.Add($"\"fontSize\":{fsn}");
-                    if (resume != null) parts.Add($"\"resumeAgentsOnLaunch\":{JsonSerializer.Serialize(resume)}");
-                    sb.Append(string.Join(",", parts)).Append('}');
-                    OnSettingsSave(JsonDocument.Parse(sb.ToString()).RootElement);
-                }
                 break;
             case "render.ping":
                 // Round-trip a marker through the page's main thread and log
@@ -2656,7 +2072,7 @@ public partial class MainWindow : FluentWindow
                     var s = ActiveSession();
                     if (s != null)
                         foreach (var leaf in AllLeaves(s.Root))
-                            if (_ptys.TryGetValue(leaf.Id, out var pty))
+                            if (_panes.TryGet(leaf.Id, out var pty))
                                 Log.Info("FlowStats", $"FLOW pane={leaf.Id:D} max={pty.MaxOutstanding}");
                 }
                 break;
@@ -2673,7 +2089,7 @@ public partial class MainWindow : FluentWindow
                         {
                             id = p.Id.ToString("D"),
                             name = p.Name,
-                            agentState = StateToString(p.AgentState),
+                            agentState = StateProjection.StateToString(p.AgentState),
                             notification = p.NotificationText,
                             // Resume-related persisted fields, surfaced so the
                             // self-test can assert capture/persistence.
@@ -2707,20 +2123,23 @@ public partial class MainWindow : FluentWindow
                 }
                 break;
             default:
-                Log.Info($"ControlIpc.unknown verb={verb}");
+                // Everything else (session.*, pane.close/move/moveDir,
+                // resume.decision, prefs.set, settings.save, …) is the same
+                // protocol the page speaks — one dispatch table for both.
+                try
+                {
+                    if (!_router.Dispatch(verb, root))
+                        Log.Info($"ControlIpc.unknown verb={verb}");
+                }
+                catch (JsonException ex)
+                {
+                    Log.Error($"ControlIpc.json verb={verb} payload={Truncate(root.GetRawText(), 300)}", ex);
+                }
                 break;
         }
     }
 
     // ---- Helpers ---------------------------------------------------------
-
-    private static bool TryGuid(JsonElement root, string prop, out Guid id)
-    {
-        id = Guid.Empty;
-        if (!root.TryGetProperty(prop, out var el)) return false;
-        var s = el.GetString();
-        return Guid.TryParse(s, out id);
-    }
 
     private static string BootstrapHtml(string expected) => $@"<!doctype html>
 <html><head><meta charset='utf-8'><title>perch</title>
