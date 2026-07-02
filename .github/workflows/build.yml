@@ -75,8 +75,21 @@ jobs:
         working-directory: src/web
         run: npm run build
 
+      # Gate: web unit tests (node --test via run-tests.mjs). Fast and runs
+      # before any C# work so a page-logic regression fails the build early.
+      - name: Web tests
+        working-directory: src/web
+        run: npm test
+
       - name: Restore
         run: dotnet restore src/Perch/Perch.csproj
+
+      # Gate: host unit tests (PaneTree layout ops, protocol DTOs, state
+      # projection). These are the only automated gate between a bad commit
+      # and the auto-updater shipping it, so they run on every trigger —
+      # including tag builds — before publish/pack.
+      - name: Host tests
+        run: dotnet test src/Perch.Tests/Perch.Tests.csproj -c Release --nologo
 
       # Velopack's packaging CLI. Produces the Setup.exe, the full/delta
       # .nupkg update feed, and the release manifest the in-app updater reads.
