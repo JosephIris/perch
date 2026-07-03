@@ -1077,12 +1077,32 @@ public partial class MainWindow : FluentWindow
         pane.CommitBaseline = msg.Sha ?? "";
         if (string.IsNullOrEmpty(pane.CommitBaseline))
         {
+            pane.UntrackedBaseline = null;
             pane.CommitCount = 0;
             pane.LinesAdded = pane.LinesDeleted = pane.FilesChanged = pane.Ahead = 0;
             PushState();
             return;
         }
-        _ = RefreshGitStatsAsync(pane);
+        _ = CaptureUntrackedBaselineAsync(pane, refresh: true);
+    }
+
+    // Snapshot the pane's untracked-file set the moment its baseline sha
+    // lands (and again on a real cwd change — both anchors are cwd-relative).
+    // DiffStatsAsync uses it to count only untracked files NEW since
+    // session-start; until it lands the refresh skips the untracked fold-in,
+    // so a mid-capture refresh can only undercount, never re-inflate.
+    private async System.Threading.Tasks.Task CaptureUntrackedBaselineAsync(PaneNode pane, bool refresh)
+    {
+        pane.UntrackedBaseline = null;
+        if (_paneCwd.TryGetValue(pane.Id, out var cwd) && !string.IsNullOrEmpty(cwd))
+        {
+            var untracked = await GitProc.UntrackedFilesAsync(cwd);
+            // Enumeration failed → not a repo / no git. Leave the snapshot
+            // null; the refresh's own enumeration would fail the same way.
+            if (untracked != null)
+                pane.UntrackedBaseline = new HashSet<string>(untracked, StringComparer.Ordinal);
+        }
+        if (refresh) await RefreshGitStatsAsync(pane);
     }
 
     private async System.Threading.Tasks.Task RefreshGitStatsAsync(PaneNode pane)
@@ -1098,14 +1118,15 @@ public partial class MainWindow : FluentWindow
         // or plain-shell pane showed the working tree's ambient footprint (e.g.
         // "+3k") as work done in the pane. No baseline → no loc chip.
         if (!_paneCwd.TryGetValue(pane.Id, out var cwd) || string.IsNullOrEmpty(cwd)) return;
-        var hasBaseline = !string.IsNullOrEmpty(pane.CommitBaseline);
+        var baseline = pane.CommitBaseline;
+        var hasBaseline = !string.IsNullOrEmpty(baseline);
         // Run the git queries concurrently off the UI thread — they're
         // independent and each is a fast plumbing command.
         var countT = hasBaseline
-            ? GitProc.CommitsSinceAsync(pane.CommitBaseline, cwd)
+            ? GitProc.CommitsSinceAsync(baseline, cwd)
             : System.Threading.Tasks.Task.FromResult<int?>(null);
         var diffT  = hasBaseline
-            ? GitProc.DiffStatsAsync(pane.CommitBaseline, cwd)
+            ? GitProc.DiffStatsAsync(baseline, cwd, pane.UntrackedBaseline)
             : System.Threading.Tasks.Task.FromResult<(int files, int added, int deleted)?>(null);
         var aheadT = GitProc.AheadAsync(cwd);
         await System.Threading.Tasks.Task.WhenAll(countT, diffT, aheadT);
@@ -1115,8 +1136,17 @@ public partial class MainWindow : FluentWindow
         await Dispatcher.InvokeAsync(() =>
         {
             var changed = false;
-            if (count is int n && pane.CommitCount != n) { pane.CommitCount = n; changed = true; }
-            if (diff is (int files, int added, int deleted))
+            // The baseline may have moved (or been cleared by session-end)
+            // while the git queries ran — session-end sends `status idle`
+            // (which lands here with the old baseline) immediately before the
+            // clearing `git.baseline ""`, so an unguarded write-back
+            // resurrected the just-zeroed stats and the footer kept a dead
+            // session's "+9". Baseline-relative values only apply if the
+            // baseline they were computed against is still current; `ahead`
+            // isn't baseline-relative and always applies.
+            var baselineCurrent = pane.CommitBaseline == baseline;
+            if (baselineCurrent && count is int n && pane.CommitCount != n) { pane.CommitCount = n; changed = true; }
+            if (baselineCurrent && diff is (int files, int added, int deleted))
             {
                 if (pane.FilesChanged != files)  { pane.FilesChanged = files;  changed = true; }
                 if (pane.LinesAdded   != added)  { pane.LinesAdded   = added;  changed = true; }
@@ -1761,8 +1791,14 @@ public partial class MainWindow : FluentWindow
         // git signals now. Without this the "↑N" chip would only ever appear
         // after an agent state change, so a plain-shell pane (no cc hooks) with
         // unpushed commits stayed dark. Gated above on an actual cwd change, so
-        // it fires once per real cd, not on every prompt redraw.
-        _ = RefreshGitStatsAsync(pane);
+        // it fires once per real cd, not on every prompt redraw. A pane with a
+        // live session baseline also re-snapshots its untracked set first —
+        // the old snapshot's rel paths described the previous cwd, and stale
+        // ones would make the new cwd's ambient untracked files read as work.
+        if (!string.IsNullOrEmpty(pane.CommitBaseline))
+            _ = CaptureUntrackedBaselineAsync(pane, refresh: true);
+        else
+            _ = RefreshGitStatsAsync(pane);
         // Resolve the branch off-thread — git can take 50–200ms on a big
         // repo and we don't want to stall the message pump. Also try to
         // auto-name the session by the repo basename (so "tab per repo"

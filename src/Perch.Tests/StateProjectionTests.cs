@@ -85,6 +85,8 @@ public class StateProjectionTests
     [Fact]
     public void GitSignals_SumDiffButMaxAhead()
     {
+        // No cwd on either pane → they can't be correlated, so they keep
+        // their own terms in the sum.
         var a = Pane(AgentState.Idle);
         a.LinesAdded = 100; a.LinesDeleted = 10; a.FilesChanged = 3; a.Ahead = 2;
         var b = Pane(AgentState.Idle);
@@ -97,6 +99,48 @@ public class StateProjectionTests
         Assert.Equal(4, row.GetProperty("filesChanged").GetInt32());
         // Panes usually share a branch → max, NOT sum (summing double-counts).
         Assert.Equal(5, row.GetProperty("ahead").GetInt32());
+    }
+
+    [Fact]
+    public void GitSignals_SameCwdPanesDedupeToTheLargestMeasurement()
+    {
+        // Two panes in one working tree measure the SAME repo footprint;
+        // summing them double-counted every line (the "+180k on a session
+        // that changed nothing" bug). The row takes the single largest
+        // measurement — a coherent triple from ONE pane, never a per-field
+        // max mixing A's adds with B's deletes. Cwd matching is
+        // case-insensitive (Windows paths).
+        var a = Pane(AgentState.Idle);
+        a.Cwd = @"C:\dev\repo";
+        a.LinesAdded = 500; a.LinesDeleted = 10; a.FilesChanged = 3;
+        var b = Pane(AgentState.Idle);
+        b.Cwd = @"c:\DEV\repo";
+        b.LinesAdded = 20; b.LinesDeleted = 50; b.FilesChanged = 1;
+        var s = SessionWith(a, b);
+
+        var row = Project(s);
+        Assert.Equal(500, row.GetProperty("linesAdded").GetInt32());
+        Assert.Equal(10, row.GetProperty("linesDeleted").GetInt32());
+        Assert.Equal(3, row.GetProperty("filesChanged").GetInt32());
+    }
+
+    [Fact]
+    public void GitSignals_DistinctCwdsStillSum()
+    {
+        // Panes in different working trees (e.g. worktree-per-pane) are
+        // genuinely independent footprints — those keep summing.
+        var a = Pane(AgentState.Idle);
+        a.Cwd = @"C:\dev\repo-a";
+        a.LinesAdded = 100; a.LinesDeleted = 10; a.FilesChanged = 3;
+        var b = Pane(AgentState.Idle);
+        b.Cwd = @"C:\dev\repo-b";
+        b.LinesAdded = 50; b.LinesDeleted = 5; b.FilesChanged = 1;
+        var s = SessionWith(a, b);
+
+        var row = Project(s);
+        Assert.Equal(150, row.GetProperty("linesAdded").GetInt32());
+        Assert.Equal(15, row.GetProperty("linesDeleted").GetInt32());
+        Assert.Equal(4, row.GetProperty("filesChanged").GetInt32());
     }
 
     [Fact]

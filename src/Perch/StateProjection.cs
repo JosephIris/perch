@@ -117,6 +117,20 @@ internal static class StateProjection
         var paneCount = leaves.Length;
         var waitingCount = leaves.Count(p => p.AgentState is AgentState.Waiting or AgentState.Permission);
         var workingCount = leaves.Count(p => p.AgentState == AgentState.Working);
+        // Panes sharing a cwd measure the SAME working tree (a split inside
+        // one project), so summing their diff stats double-counted every
+        // line. Within a cwd group keep the single largest measurement — a
+        // coherent (added, deleted, files) triple from one pane, typically
+        // the one with the oldest baseline, whose diff already contains the
+        // others' — and sum across distinct cwds. Panes with no known cwd
+        // can't be correlated, so each stays its own group (old behavior).
+        // Different subdirs of one repo still read as distinct groups; rare,
+        // and resolving them would need a git call in a pure projection.
+        var diffLeaves = leaves
+            .GroupBy(p => string.IsNullOrEmpty(p.Cwd) ? "pane:" + p.Id.ToString("D") : "cwd:" + p.Cwd,
+                     StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.OrderByDescending(p => p.LinesAdded + p.LinesDeleted).First())
+            .ToArray();
         return new
         {
             id    = s.Id.ToString("D"),
@@ -138,12 +152,13 @@ internal static class StateProjection
             paneCount,
             waitingCount,
             workingCount,
-            // Git signal aggregated across panes: total diff size
-            // (the session's whole footprint) and the largest
-            // unpushed count (panes usually share a branch).
-            linesAdded   = leaves.Sum(p => p.LinesAdded),
-            linesDeleted = leaves.Sum(p => p.LinesDeleted),
-            filesChanged = leaves.Sum(p => p.FilesChanged),
+            // Git signal aggregated across panes: total diff size (the
+            // session's whole footprint, deduped by cwd — see diffLeaves
+            // above) and the largest unpushed count (panes usually share
+            // a branch).
+            linesAdded   = diffLeaves.Sum(p => p.LinesAdded),
+            linesDeleted = diffLeaves.Sum(p => p.LinesDeleted),
+            filesChanged = diffLeaves.Sum(p => p.FilesChanged),
             ahead        = leaves.Select(p => p.Ahead).DefaultIfEmpty(0).Max(),
             // Earliest working pane's start → "this session has been
             // working Xm". 0 when nothing is working.
