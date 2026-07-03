@@ -323,6 +323,17 @@ internal sealed class PaneNode
     [JsonIgnore] public string CommitBaseline { get; set; } = "";
     [JsonIgnore] public int CommitCount { get; set; }
 
+    /// Untracked-file set (rel paths, as `git ls-files --others` reports
+    /// them) captured alongside CommitBaseline, so the loc chip counts only
+    /// untracked files NEW since session-start. Without the snapshot every
+    /// pre-existing untracked file counted as session work — a repo with old
+    /// scrape output wore "+90k" on an agent that had touched nothing. Null
+    /// until the capture lands (the refresh skips the untracked fold-in
+    /// entirely then — momentary undercount beats re-inflating); cleared
+    /// with the baseline on session-end. Recaptured on a real cwd change,
+    /// since both anchor to the pane's cwd.
+    [JsonIgnore] public IReadOnlySet<string>? UntrackedBaseline { get; set; }
+
     /// Diff size since the agent's baseline (committed + uncommitted), and
     /// how many commits are ahead of upstream. Recomputed on the same git
     /// path as CommitCount; surface the "what it changed / what's unpushed"

@@ -68,7 +68,17 @@ internal static class GitProc
     /// AND uncommitted. Parses `git diff --shortstat`; any clause may be
     /// absent ("1 file changed, 5 insertions(+)" with no deletions). Returns
     /// (files, added, deleted), or null on failure.
-    public static async Task<(int files, int added, int deleted)?> DiffStatsAsync(string baselineSha, string cwd)
+    ///
+    /// <paramref name="baselineUntracked"/> is the untracked set captured
+    /// when the baseline sha landed (UntrackedFilesAsync); files in it are
+    /// excluded from the untracked fold-in so only files NEW since
+    /// session-start count. Null means the snapshot hasn't landed (or its
+    /// capture failed) — then the untracked fold-in is skipped entirely,
+    /// because counting ambient pre-existing files inflated the chip by the
+    /// repo's whole untracked footprint (+90k on a repo full of old scrape
+    /// output). A momentary undercount is the better failure.
+    public static async Task<(int files, int added, int deleted)?> DiffStatsAsync(
+        string baselineSha, string cwd, IReadOnlySet<string>? baselineUntracked)
     {
         if (string.IsNullOrEmpty(baselineSha)) return null;
         int files = 0, added = 0, deleted = 0;
@@ -85,12 +95,15 @@ internal static class GitProc
 
         // `git diff` omits untracked files entirely, but for a "what changed"
         // signal they're the bulk of some work (new scripts, context notes).
-        // Fold them in as added lines. Provenance is unknowable — an untracked
-        // file that predates the anchor still counts — which we accept as the
-        // price of a cheap, side-effect-free signal (no `git add -N`, which
-        // would mutate the user's index).
-        var (uOk, uFiles, uAdded) = await UntrackedStatsAsync(cwd);
-        if (uOk) { files += uFiles; added += uAdded; }
+        // Fold in the ones created since the baseline snapshot as added lines
+        // (no `git add -N`, which would mutate the user's index).
+        var uOk = false;
+        if (baselineUntracked != null)
+        {
+            int uFiles, uAdded;
+            (uOk, uFiles, uAdded) = await UntrackedStatsAsync(cwd, baselineUntracked);
+            if (uOk) { files += uFiles; added += uAdded; }
+        }
 
         // Neither the tracked diff nor the untracked enumeration ran → not a
         // repo (or no git). Report null so the caller leaves the chip alone,
@@ -101,8 +114,22 @@ internal static class GitProc
         return (files, added, deleted);
     }
 
+    /// The current untracked (not-ignored) file set, rel paths exactly as git
+    /// reports them — captured at baseline time so DiffStatsAsync can later
+    /// tell "was already lying around" from "created this session". Null when
+    /// the enumeration fails (not a repo / no git).
+    public static async Task<IReadOnlyList<string>?> UntrackedFilesAsync(string cwd)
+    {
+        var (ok, stdout) = await RunAsync(
+            "git", "ls-files --others --exclude-standard -z", cwd);
+        if (!ok) return null;
+        return stdout.Split('\0', StringSplitOptions.RemoveEmptyEntries);
+    }
+
     /// Count of untracked (not-ignored) files and their total added-line count,
     /// folded into DiffStatsAsync since `git diff` never sees untracked files.
+    /// Files present in <paramref name="knownAtBaseline"/> (the session-start
+    /// snapshot) are skipped — they predate the session and aren't its work.
     /// Binary files (a NUL byte in the head) count as a file but 0 lines,
     /// mirroring git's own numstat. Reading files (rather than N `git diff
     /// --no-index` subprocesses or an index-mutating `add -N`) keeps it one
@@ -110,7 +137,8 @@ internal static class GitProc
     /// untracked tree so the refresh — which runs on every state change — can't
     /// stall. Returns (ok, files, added); ok=false only when the enumeration
     /// itself fails (no repo / no git).
-    private static async Task<(bool ok, int files, int added)> UntrackedStatsAsync(string cwd)
+    private static async Task<(bool ok, int files, int added)> UntrackedStatsAsync(
+        string cwd, IReadOnlySet<string> knownAtBaseline)
     {
         const int MaxFiles = 1000;                 // cap the file count we tally
         const int MaxBytesPerFile = 2 << 20;       // sample ≤2 MiB of any one file
@@ -125,6 +153,7 @@ internal static class GitProc
         var buf = new byte[8192];
         foreach (var rel in rels)
         {
+            if (knownAtBaseline.Contains(rel)) continue;   // predates the session
             if (files >= MaxFiles) break;
             files++;
             if (budget <= 0) continue;             // out of IO budget: count file, skip lines
