@@ -163,6 +163,12 @@
   --color-terminal-bg:      #1f1f1f;
   --color-terminal-fg:      rgba(255, 255, 255, 0.92);
 
+  /* Focus dim — black scrim laid over every UNFOCUSED pane so the active
+   * pane reads one step brighter (cmux-style focus-follows-brightness).
+   * 0.22 demotes primary text (0.92 white) to ~secondary prominence
+   * (0.92 × 0.78 ≈ 0.72) — "background reading", not "disabled". */
+  --color-pane-dim-scrim:   rgba(0, 0, 0, 0.22);
+
   /* Motion. Win11 entry curve. */
   --ease-entry:   cubic-bezier(0.0, 0.0, 0.0, 1.0);
   --ease-exit:    cubic-bezier(0.3, 0.0, 1.0, 1.0);

@@ -588,6 +588,26 @@ ul { list-style: none; padding: 0; margin: 0; }
   border-color: rgba(255, 255, 255, 0.22);
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08);
 }
+/* Focus dim (cmux-style): every pane carries a black scrim overlay, fully
+ * transparent on the active pane and faded in on the rest, so the focused
+ * pane reads one step brighter than its siblings. Fades via OPACITY on the
+ * compositor — same discipline as the attention pulse below (never repaints
+ * the WebGL canvas). z-index 1 puts it above the terminal stack (isolated
+ * inside .pane__term) but under the attention hairline (z-index 2) and all
+ * in-pane popups (z ≥ 10). Single-pane stages always have their pane
+ * active, so nothing dims. Caveat: a URL pane's WebView2 is a native WPF
+ * overlay the scrim can't reach — only its chrome ring dims. */
+.pane::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: var(--color-pane-dim-scrim);
+  border-radius: inherit;
+  pointer-events: none;
+  transition: opacity var(--dur-normal) var(--ease-entry);
+}
+.pane--active::before { opacity: 0; }
 /* Attention pulse: a colored hairline border breathes around a pane that
  * wants you. Two flavors:
  *   - waiting    → warm yellow, calm 2.4s breath (turn done / wants feedback)
@@ -602,6 +622,9 @@ ul { list-style: none; padding: 0; margin: 0; }
   content: "";
   position: absolute;
   inset: 0;
+  /* Above the focus-dim scrim (z 1): a dimmed pane that's blocked on you
+   * must still pulse at full strength. */
+  z-index: 2;
   border: 1px solid rgba(255, 200, 90, 0.50);
   border-radius: inherit;
   pointer-events: none;
@@ -857,6 +880,11 @@ ul { list-style: none; padding: 0; margin: 0; }
   flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
+  /* Own stacking context: xterm's internals reach z-index 10 (viewport
+   * scrollbar; IME helper 5, decorations 6-8), which would otherwise
+   * escape and paint over the focus-dim scrim at .pane z-index 1. */
+  position: relative;
+  z-index: 0;
   /* Inner padding so terminal cells don't kiss the rounded pane edge.
    * xterm renders to a canvas inside this host; the FitAddon reads the
    * host's content rect, so padding correctly shrinks the available
