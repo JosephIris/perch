@@ -242,7 +242,15 @@ Each interactive surface should answer all three states. Reference table:
 | Session row | `--color-subtle-secondary` pill | `--color-subtle-tertiary` pill | (current: relies on selected state; if we add real keyboard nav, add a 1px accent inset) |
 | `sidebar__action` (New session) | `--color-subtle-secondary` pill | n/a (not a persistent selection) | inherits browser outline |
 | `icon-button` (sidebar toggle) | `--color-subtle-secondary` + text-primary | n/a | inherits browser outline |
-| Pane | n/a | 1px `--color-accent-soft` border | n/a (selected == focused, conceptually) |
+| Pane | n/a | 1px neutral border @ 0.22 + 1px halo @ 0.08 | n/a (selected == focused, conceptually) |
+
+Panes additionally use **focus dim** (cmux-style): every unfocused pane
+sits behind a black scrim (`--color-pane-dim-scrim`, 0.22) so the active
+pane reads one step *brighter*, not just outlined. The scrim demotes an
+unfocused pane's primary text to roughly secondary-text prominence —
+"background reading", never "disabled". It stays UNDER the attention
+hairline: a dimmed pane that's blocked on you still pulses at full
+strength, because dim signals focus, not urgency.
 
 The "selection-via-fill-only" pattern is the perch signature. If you
 ever feel tempted to add an accent stripe to the session row, look at
