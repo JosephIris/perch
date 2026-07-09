@@ -848,6 +848,17 @@ public partial class MainWindow : FluentWindow
             // into our IPC layer (stage 4 reactivates that pipe).
             var startCmd = Shell.BuildStartupCommandLine(baseShell, cwd, pane.Id, initialCommand);
             _panes.Spawn(sess, pane, startCmd, cwd, cols, rows, baseShell);
+            // Seed the pane's cwd from the dir we just spawned into instead of
+            // waiting for the shell to report it via OSC 7. A pane that autostarts
+            // an agent (`claude --resume <id>`) runs that as the LAST statement of
+            // pwsh's -Command script, and the prompt function — the only thing that
+            // emits OSC 7 — doesn't run until the script returns. For a long-lived
+            // agent that's never, so the host never learned the pane's cwd and every
+            // git signal gated on it (branch chip, +N commits, diff chip, unpushed-
+            // commit recap) stayed dark for the whole session. OSC 7 still corrects
+            // this on a real `cd`; OnPaneCwd no-ops when the value hasn't changed.
+            if (!string.IsNullOrEmpty(cwd))
+                OnPaneCwd(new PaneCwdMsg { PaneId = pane.Id, Cwd = cwd });
         }
         catch (Exception ex)
         {
