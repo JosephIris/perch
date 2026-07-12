@@ -12,6 +12,16 @@
 <body>
   <div id="app">
     <aside class="sidebar" role="navigation" aria-label="Sessions">
+      <!-- Sidebar mode. "Sessions" is the flat, state-partitioned list;
+           "Projects" groups tabs under their registered repo. aria-pressed is
+           the source of truth (CSS selects on it), so the toggle can never show
+           one mode while the list renders another. -->
+      <div class="sidebar__mode" role="group" aria-label="Sidebar mode">
+        <button id="mode-sessions" class="sidebar__mode-btn" type="button"
+                aria-pressed="true">Sessions</button>
+        <button id="mode-projects" class="sidebar__mode-btn" type="button"
+                aria-pressed="false">Projects</button>
+      </div>
       <!-- Top actions. Modeled on Claude desktop's sidebar header:
            primary verb at the top, with a labeled section ("Recents")
            between it and the session list. -->
@@ -29,18 +39,25 @@
           </span>
           <span class="sidebar__action-label">New session</span>
         </button>
-        <!-- Opens the dashboard (full-window attention view). Badge = how many
-             projects are waiting on you. -->
-        <button id="open-dashboard" class="sidebar__icon-btn" type="button"
-                title="Open dashboard (Ctrl+Shift+A)" aria-label="Open dashboard">
-          <svg width="15" height="15" viewBox="0 0 16 16" fill="none"
-               stroke="currentColor" stroke-width="1.4">
-            <rect x="2" y="2" width="5" height="5" rx="1"/>
-            <rect x="9" y="2" width="5" height="5" rx="1"/>
-            <rect x="2" y="9" width="5" height="5" rx="1"/>
-            <rect x="9" y="9" width="5" height="5" rx="1"/>
-          </svg>
-          <span class="sidebar__icon-badge" id="dash-badge" style="display:none">0</span>
+      </div>
+      <!-- Dashboard (full-window attention view). A LABELLED button, not a bare
+           icon: a 4-square glyph tells you nothing about what it opens, and this
+           is one of only two verbs in the sidebar. Badge = how many sessions are
+           waiting on you. -->
+      <div class="sidebar__top-actions">
+        <button id="open-dashboard" class="sidebar__action sidebar__action--secondary"
+                type="button" title="Open dashboard (Ctrl+Shift+A)">
+          <span class="sidebar__action-icon" aria-hidden="true">
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none"
+                 stroke="currentColor" stroke-width="1.4">
+              <rect x="2" y="2" width="5" height="5" rx="1"/>
+              <rect x="9" y="2" width="5" height="5" rx="1"/>
+              <rect x="2" y="9" width="5" height="5" rx="1"/>
+              <rect x="9" y="9" width="5" height="5" rx="1"/>
+            </svg>
+          </span>
+          <span class="sidebar__action-label">Dashboard</span>
+          <span class="sidebar__action-badge" id="dash-badge" style="display:none">0</span>
         </button>
       </div>
       <!-- Sections (Needs you / Projects) are rendered by sidebar.ts into
@@ -78,14 +95,10 @@
       <footer class="sidebar__footer">
         <button class="sidebar__identity" type="button"
                 title="Perch" aria-label="Perch">
+          <!-- The app icon itself (the monocled bird), not a re-drawn glyph —
+               same mark as the window, the taskbar, and the empty states. -->
           <span class="sidebar__identity-mark" aria-hidden="true">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
-              <!-- Perch glyph: the monocled eye (lens + eye), lens in accent -->
-              <g transform="translate(12 12) scale(4.0) translate(-17 -9)">
-                <circle cx="17" cy="9" r="1.95" fill="none" stroke="#76B9ED" stroke-width="0.55"/>
-                <circle cx="17" cy="9" r="0.95" fill="currentColor"/>
-              </g>
-            </svg>
+            <img src="/perch-logo.png" alt="" width="18" height="18" />
           </span>
           <span class="sidebar__identity-text">
             <span class="sidebar__identity-name">Perch</span>

@@ -220,4 +220,51 @@ public class StateProjectionTests
         Assert.Equal(1, closedRow.GetProperty("resumableCount").GetInt32());
         Assert.Equal(42, closedRow.GetProperty("closedAtMs").GetInt64());
     }
+
+    // ---- Project mode -----------------------------------------------------
+
+    [Fact]
+    public void Snapshot_CarriesProjectsAndSidebarMode()
+    {
+        var store = new SessionStore();
+        var projects = new ProjectStore();
+        // Add() requires the folder to exist on disk (it refuses a path that's
+        // gone), so register the repo we're running in.
+        var here = System.IO.Directory.GetCurrentDirectory();
+        var p = projects.Add(here, "cmux-win")!;
+
+        var filed = SessionWith(Pane(AgentState.Idle));
+        filed.ProjectId = p.Id;
+        var unfiled = SessionWith(Pane(AgentState.Idle));
+        store.Sessions.Add(filed);
+        store.Sessions.Add(unfiled);
+
+        var snap = JsonSerializer.SerializeToElement(StateProjection.BuildSnapshot(
+            store, null, fontSize: 13, onboardingSeen: true,
+            projects: projects, sidebarMode: "projects"));
+
+        Assert.Equal("projects", snap.GetProperty("prefs").GetProperty("sidebarMode").GetString());
+
+        var row = snap.GetProperty("projects")[0];
+        Assert.Equal(p.Id.ToString("D"), row.GetProperty("id").GetString());
+        Assert.Equal("cmux-win", row.GetProperty("name").GetString());
+
+        // The filed tab carries its project; the unfiled one reports "" so the
+        // page can drop it into "Other" rather than losing it.
+        Assert.Equal(p.Id.ToString("D"), Project(filed).GetProperty("projectId").GetString());
+        Assert.Equal("", Project(unfiled).GetProperty("projectId").GetString());
+    }
+
+    [Fact]
+    public void Snapshot_DefaultsToSessionModeWithNoProjects()
+    {
+        var store = new SessionStore();
+        store.Sessions.Add(SessionWith(Pane(AgentState.Idle)));
+
+        var snap = JsonSerializer.SerializeToElement(
+            StateProjection.BuildSnapshot(store, null, fontSize: 13, onboardingSeen: true));
+
+        Assert.Equal("sessions", snap.GetProperty("prefs").GetProperty("sidebarMode").GetString());
+        Assert.Empty(snap.GetProperty("projects").EnumerateArray());
+    }
 }

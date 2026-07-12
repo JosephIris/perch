@@ -76,14 +76,25 @@ internal static class StateProjection
     /// The full `state` message payload (anonymous object tree, serialized by
     /// the caller). Prefs are ferried with every push — cheap, and the page
     /// never has to ask.
-    public static object BuildSnapshot(SessionStore store, Guid? activePaneId, int fontSize, bool onboardingSeen)
+    public static object BuildSnapshot(
+        SessionStore store, Guid? activePaneId, int fontSize, bool onboardingSeen,
+        ProjectStore? projects = null, string sidebarMode = "sessions")
     {
         return new
         {
             type = "state",
             activeSessionId = store.ActiveSessionId?.ToString("D") ?? "",
             activePaneId    = activePaneId?.ToString("D") ?? "",
-            prefs = new { fontSize, onboardingSeen },
+            prefs = new { fontSize, onboardingSeen, sidebarMode },
+            // Registered repos, for the sidebar's project mode. Ferried with
+            // every push like prefs — the list is tiny and the page then never
+            // has to ask for it separately.
+            projects = (projects?.Projects ?? new List<Project>()).Select(p => new
+            {
+                id = p.Id.ToString("D"),
+                name = p.Name,
+                path = p.Path,
+            }).ToArray(),
             sessions = store.Sessions.Select(ProjectSession).ToArray(),
             // Recently-closed sessions for the sidebar's restore list. Just
             // the summary the row needs — title, pane/agent counts, and when
@@ -136,6 +147,14 @@ internal static class StateProjection
             id    = s.Id.ToString("D"),
             title = s.Title,
             shell = s.DisplayShell,
+            /* The project (registered repo) this tab belongs to, or "" when it
+             * isn't filed under one — project mode puts those under "Other". */
+            projectId = s.ProjectId?.ToString("D") ?? "",
+            /* The branch this tab's worktree was cut on; "" when it has no
+             * worktree (a plain tab, or any non-project session). The page uses
+             * it to offer "also delete the worktree folder" when closing — and
+             * to say WHICH branch survives, since that's the reassuring part. */
+            worktreeBranch = s.WorktreeBranch,
             rootPane = ProjectPane(s.Root),
             agentState = StateToString(aggState),
             activityDetail = attentionPane?.ActivityDetail ?? "",
@@ -208,13 +227,15 @@ internal static class StateProjection
                 activityDetail = node.ActivityDetail,
                 branch = node.Branch,
                 ports  = node.Ports,
-                /* Commits made since cc session-start (HEAD baseline). 0 when
-                 * no session is active. Surfaces as "+N commits" chip in the
-                 * pane header so the user can see at a glance how much work
-                 * the agent has actually landed. */
+                /* Commits AUTHORED here since cc session-start (HEAD baseline).
+                 * 0 when no session is active. Surfaces as "+N commits" chip in
+                 * the pane header so the user can see at a glance how much work
+                 * the agent has actually landed. Commits a `git pull` brought in
+                 * aren't the agent's and don't count. */
                 commitCount = node.CommitCount,
-                /* Diff size since baseline (committed + uncommitted) and the
-                 * unpushed-commit count — feed the "+A −D · ↑N" signal. */
+                /* Session diff size (commits the agent authored + uncommitted +
+                 * new untracked) and the unpushed-commit count — feed the
+                 * "+A −D · ↑N" signal. */
                 linesAdded   = node.LinesAdded,
                 linesDeleted = node.LinesDeleted,
                 filesChanged = node.FilesChanged,

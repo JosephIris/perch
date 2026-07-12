@@ -17,6 +17,7 @@
 import type { PaneTreeView, SessionView } from "./bridge.js";
 import { send } from "./bridge.js";
 import { Pane, DEFAULT_FONT_SIZE } from "./pane.js";
+import { openSettings } from "./settings.js";
 import { UrlPane } from "./url-pane.js";
 import { PANE_LEAVE_MS } from "./anim.js";
 import { showPaneChooser } from "./pane-chooser.js";
@@ -57,12 +58,91 @@ export class Workspace {
   // pane.chooser doesn't stack a second overlay. Cleared when the pick resolves.
   private readonly choosersOpen = new Set<string>();
 
+  /** Shown when there is no session at all. Closing the last one used to be
+   *  impossible — the store conjured a replacement the same instant — so this
+   *  state could never be reached. Now it can, and it needs to say something. */
+  private readonly emptyState: HTMLElement;
+
   constructor(rootEl: HTMLElement) {
     this.root = rootEl;
     this.dropOverlay = document.createElement("div");
     this.dropOverlay.className = "drop-overlay";
     this.dropOverlay.style.display = "none";
     document.body.appendChild(this.dropOverlay);
+
+    this.emptyState = this.buildEmptyState();
+    this.root.appendChild(this.emptyState);
+  }
+
+  private buildEmptyState(): HTMLElement {
+    const box = document.createElement("div");
+    box.className = "workspace-empty";
+    box.hidden = true;
+
+    // The app icon itself — the monocled bird — not a re-drawn glyph. Same mark
+    // as the window and the taskbar; an empty state wearing a different logo is
+    // just a second, wrong logo.
+    const logo = document.createElement("img");
+    logo.className = "workspace-empty__logo";
+    logo.src = "/perch-logo.png";
+    logo.alt = "";
+    logo.setAttribute("aria-hidden", "true");
+    box.appendChild(logo);
+
+    const title = document.createElement("div");
+    title.className = "workspace-empty__title";
+    title.textContent = "Nothing open";
+    box.appendChild(title);
+
+    const body = document.createElement("div");
+    body.className = "workspace-empty__body";
+    body.textContent = "A calm perch over your agents at work.";
+    box.appendChild(body);
+
+    const actions = document.createElement("div");
+    actions.className = "workspace-empty__actions";
+
+    // Each action says what it DOES, not just what it's called — this is the
+    // first thing a new user sees, and three bare verbs explain nothing.
+    const card = (
+      label: string,
+      desc: string,
+      onClick: () => void
+    ): HTMLElement => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "workspace-empty__card";
+
+      const t = document.createElement("span");
+      t.className = "workspace-empty__card-label";
+      t.textContent = label;
+      b.appendChild(t);
+
+      const d = document.createElement("span");
+      d.className = "workspace-empty__card-desc";
+      d.textContent = desc;
+      b.appendChild(d);
+
+      b.addEventListener("click", onClick);
+      return b;
+    };
+
+    actions.appendChild(
+      card("New session", "A terminal in your default folder.", () =>
+        send({ type: "session.new" })
+      )
+    );
+    actions.appendChild(
+      card("New project", "Register a repo and keep its tabs together.", () =>
+        send({ type: "projects.scan" })
+      )
+    );
+    actions.appendChild(
+      card("Settings", "Shell, worktrees, scan folders.", () => openSettings())
+    );
+
+    box.appendChild(actions);
+    return box;
   }
 
   /** Reconcile the workspace to the current set of sessions and the active
@@ -93,8 +173,11 @@ export class Workspace {
       // No active session — hide every stage but keep them mounted.
       for (const st of this.stages.values()) st.container.style.display = "none";
       this.activeSessionId = null;
+      // Genuinely nothing open (as opposed to a momentary switch) → say so.
+      this.emptyState.hidden = sessions.length > 0;
       return;
     }
+    this.emptyState.hidden = true;
 
     const switching =
       this.activeSessionId !== null && this.activeSessionId !== active.id;

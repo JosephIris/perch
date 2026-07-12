@@ -30,6 +30,11 @@ async function copyStatics() {
   await cp(resolve(here, "fonts"), resolve(outDir, "fonts"), {
     recursive: true,
   });
+  // The app icon (the monocled bird), extracted from Assets/perch.ico's 256px
+  // frame. Served at https://perch.local/perch-logo.png. It's the SAME mark the
+  // window and taskbar show, which is the whole point — an empty state wearing a
+  // different logo than the app is just a second, wrong logo.
+  await cp(resolve(here, "perch-logo.png"), resolve(outDir, "perch-logo.png"));
 }
 
 await rm(outDir, { recursive: true, force: true });

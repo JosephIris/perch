@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -31,6 +32,39 @@ public sealed class Settings
     /// master switch (off = never resume, never prompt). Mirrors upstream
     /// perch's "Reopen Previous Session" toggle.
     public bool ResumeAgentsOnLaunch { get; set; } = true;
+
+    /// Which sidebar mode is showing: "sessions" (the flat, state-partitioned
+    /// list) or "projects" (repos as headers, their tabs nested beneath).
+    /// Persisted so the sidebar comes back the way you left it.
+    public string SidebarMode { get; set; } = "sessions";
+
+    /// Parent folders searched (ONE level deep) for repos to offer as projects.
+    /// A list, not a single root, because a dev machine keeps code in several
+    /// places — work repos here, side projects there. Empty by default: we
+    /// never guess a folder, we offer the repos you already have open instead
+    /// (ProjectScan's InUse source) and let you add roots explicitly.
+    public List<string> ProjectScanRoots { get; set; } = new();
+
+    /// What to seed into a new worktree from the main checkout.
+    ///
+    /// A fresh worktree is a CLEAN checkout — no .env, no node_modules, no .venv
+    /// — so without this the agent's first test run fails and it starts "fixing"
+    /// a broken environment. That's the single biggest way this feature turns
+    /// into a trap.
+    ///
+    /// Entries are paths relative to the repo root, and they may be NESTED
+    /// (`src/web/node_modules`) because plenty of repos don't keep their deps at
+    /// the top level — this one doesn't. A trailing glob (`.env*`) matches files
+    /// in that directory. Directories are junctioned (instant); files are copied.
+    public List<string> WorktreeSeedPaths { get; set; } = new()
+    {
+        ".env*", "node_modules", ".venv",
+    };
+
+    /// Where project tabs' git worktrees are created. Empty = the default under
+    /// LOCAL AppData (see Worktree.Root) — local, not roaming, because these are
+    /// full checkouts and a roaming profile would try to sync them.
+    public string WorktreeRoot { get; set; } = "";
 
     /// Working directory used when a session has no recorded Cwd yet.
     /// Defaults to the user's profile directory so we never land in the install

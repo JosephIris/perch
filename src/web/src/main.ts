@@ -4,13 +4,14 @@
 
 import "./style.css";
 
-import { onMessage, send, type StateMessage } from "./bridge.js";
+import { onMessage, send, type StateMessage, type SidebarMode } from "./bridge.js";
 import { Sidebar } from "./sidebar.js";
 import { Workspace } from "./workspace.js";
 import { Dashboard } from "./dashboard.js";
 import { installShortcutHint } from "./shortcut-hint.js";
 import { Toast } from "./toast.js";
 import { openSettings, applySettingsData, applyUpdateStatus } from "./settings.js";
+import { showProjectsDialog } from "./projects-dialog.js";
 import { showOnboarding } from "./onboarding.js";
 import { startElapsedTicker } from "./elapsed.js";
 import { confirmDialog } from "./confirm.js";
@@ -55,6 +56,39 @@ let resumePromptShown = false;
 installShortcutHint($("shortcut-hint"));
 
 $("settings-button").addEventListener("click", () => openSettings());
+
+// ── Sidebar mode (sessions | projects) ──────────────────────────────────────
+// Renders the sidebar from `lastState` (declared below, set on every state
+// push), so a page-local change — collapsing a project header — can redraw
+// without waiting for a host round-trip.
+function renderSidebar() {
+  if (!lastState) return;
+  sidebar.render(
+    lastState.sessions,
+    lastState.activeSessionId,
+    lastState.closedSessions ?? [],
+    lastState.projects ?? [],
+    lastState.prefs?.sidebarMode ?? "sessions"
+  );
+  syncModeToggle(lastState.prefs?.sidebarMode ?? "sessions");
+}
+sidebar.rerender = renderSidebar;
+
+const modeSessions = $<HTMLButtonElement>("mode-sessions");
+const modeProjects = $<HTMLButtonElement>("mode-projects");
+
+function syncModeToggle(mode: SidebarMode) {
+  // aria-pressed is the source of truth the CSS selects on, so the toggle can't
+  // show one thing while the list renders another.
+  modeSessions.setAttribute("aria-pressed", String(mode === "sessions"));
+  modeProjects.setAttribute("aria-pressed", String(mode === "projects"));
+  // The plain "New session" button is meaningless in project mode — there, a
+  // tab is created from its project's "+" so it lands in the right repo.
+  $("new-session-button").hidden = mode === "projects";
+}
+
+modeSessions.addEventListener("click", () => send({ type: "ui.mode", mode: "sessions" }));
+modeProjects.addEventListener("click", () => send({ type: "ui.mode", mode: "projects" }));
 
 // Dashboard: open via the ▦ sidebar button or Ctrl+Shift+A; Esc closes it.
 $("open-dashboard").addEventListener("click", () => dashboard.toggle());
@@ -115,7 +149,7 @@ onMessage((msg) => {
       // tick. msg.prefs is always present (host always populates it).
       if (msg.prefs) workspace.applyPrefs(msg.prefs);
       maybeShowOnboarding(msg.prefs);
-      sidebar.render(msg.sessions, msg.activeSessionId, msg.closedSessions ?? []);
+      renderSidebar();
       // Pass the full session list + active id: the workspace keeps a stage
       // per session alive across switches (preserving terminal scrollback)
       // and disposes a stage only when its session drops out of this list.
@@ -125,6 +159,9 @@ onMessage((msg) => {
       setStatus(active ? `${active.title}  ${active.shell}` : "no session");
       break;
     }
+    case "projects.candidates":
+      showProjectsDialog(msg);
+      break;
     case "pane.out":
       workspace.feed(msg.paneId, msg.b64);
       break;

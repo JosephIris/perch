@@ -116,6 +116,46 @@ public class ProtocolTests
     }
 
     [Fact]
+    public void ProjectMessages()
+    {
+        // session.new carries an optional projectId — absent on the plain "New
+        // session" button, present when a tab is created from a project header.
+        Assert.Null(Round<SessionNewMsg>("{\"type\":\"session.new\"}").ProjectId);
+        Assert.Equal(
+            Guid.Parse(G1),
+            Round<SessionNewMsg>($"{{\"type\":\"session.new\",\"projectId\":\"{G1}\"}}").ProjectId);
+
+        Assert.Equal(@"C:\src\repo", Round<ProjectAddMsg>(
+            "{\"type\":\"project.add\",\"path\":\"C:\\\\src\\\\repo\"}").Path);
+        Assert.Equal("repo", Round<ProjectAddMsg>(
+            "{\"type\":\"project.add\",\"path\":\"C:\\\\src\\\\r\",\"name\":\"repo\"}").Name);
+        Assert.Equal(Guid.Parse(G1), Round<ProjectRef>($"{{\"type\":\"project.remove\",\"id\":\"{G1}\"}}").Id);
+        Assert.Equal("projects", Round<UiModeMsg>("{\"type\":\"ui.mode\",\"mode\":\"projects\"}").Mode);
+
+        var tab = Round<ProjectTabNewMsg>(
+            $"{{\"type\":\"project.tab.new\",\"projectId\":\"{G1}\",\"name\":\"loc diff fix\",\"agent\":\"claude\",\"worktree\":true}}");
+        Assert.Equal("loc diff fix", tab.Name);
+        Assert.Equal("claude", tab.Agent);
+        Assert.True(tab.Worktree);
+
+        var upd = Round<ProjectUpdateMsg>(
+            $"{{\"type\":\"project.update\",\"id\":\"{G1}\",\"seedPaths\":[\"src/web/node_modules\"]}}");
+        Assert.Null(upd.Name);                       // absent → leave the name alone
+        Assert.Equal(new[] { "src/web/node_modules" }, upd.SeedPaths);
+    }
+
+    [Fact]
+    public void SessionClose_RemoveWorktreeIsOptIn()
+    {
+        // Absent → null → the worktree is KEPT and the session is restorable.
+        // Deleting someone's worktree folder must never be the default reading of
+        // a plain close.
+        Assert.Null(Round<SessionCloseMsg>($"{{\"type\":\"session.close\",\"id\":\"{G1}\"}}").RemoveWorktree);
+        Assert.True(Round<SessionCloseMsg>(
+            $"{{\"type\":\"session.close\",\"id\":\"{G1}\",\"removeWorktree\":true}}").RemoveWorktree);
+    }
+
+    [Fact]
     public void ResumeDecision_MissingAcceptDegradesToNull()
     {
         Assert.True(Round<ResumeDecisionMsg>("{\"type\":\"resume.decision\",\"accept\":true}").Accept);
@@ -131,6 +171,19 @@ public class ProtocolTests
         Assert.Equal(16, m.FontSize);
         Assert.False(m.ResumeAgentsOnLaunch);
         Assert.Null(m.DefaultShell);
+        // Absent → null, which the handler reads as "leave scan roots alone".
+        // An empty array is the distinct, deliberate "clear them".
+        Assert.Null(m.ProjectScanRoots);
+    }
+
+    [Fact]
+    public void SettingsSave_CarriesProjectScanRoots()
+    {
+        var m = Round<SettingsSaveMsg>(
+            "{\"type\":\"settings.save\",\"projectScanRoots\":[\"C:\\\\src\",\"D:\\\\work\"]}");
+        Assert.Equal(new[] { @"C:\src", @"D:\work" }, m.ProjectScanRoots);
+        Assert.Empty(Round<SettingsSaveMsg>(
+            "{\"type\":\"settings.save\",\"projectScanRoots\":[]}").ProjectScanRoots!);
     }
 
     // ---- Control-pipe leniencies (perch test ships flags as strings) ------

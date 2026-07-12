@@ -45,8 +45,15 @@ internal sealed class SessionStore
             }
 
             var dto = JsonSerializer.Deserialize(json, SessionStoreJsonContext.Default.SessionStoreDto);
-            if (dto?.Sessions is { Count: > 0 })
+            // A file that PARSED is authoritative — including when it says zero
+            // sessions. That's what "I closed everything" looks like on disk, and
+            // seeding a replacement on the next launch made the empty state
+            // impossible to reach a second way: close the last session, restart,
+            // and a "main" shell is waiting for you again. SeedDefault is for a
+            // FRESH INSTALL (no file at all), which is the case above.
+            if (dto != null)
             {
+                dto.Sessions ??= new List<Session>();
                 // Schema migration only for pre-v2 files (no Version field).
                 // v2 persists IsUserNamed/AllowAutoName explicitly, so re-
                 // running the name-heuristic on every load would re-lock
@@ -144,6 +151,21 @@ internal sealed class SessionStore
         for (int i = 0; i < 6; i++) if (!used.Contains(i)) return i;
         return Sessions.Sum(x => CountLeaves(x.Root)) % 6;
     }
+
+    /// Same, but "used" means used by the tabs of THIS project.
+    ///
+    /// Scoping to the project is the point: a color exists to tell one tab from
+    /// its siblings, and you only ever compare tabs sitting under the same repo.
+    /// Scoping globally (as PickUnusedColor does) would exhaust six hues across
+    /// three projects and start repeating inside one — precisely where a repeat
+    /// costs you something.
+    public int PickUnusedColorForProject(Guid projectId)
+    {
+        var tabs = Sessions.Where(s => s.ProjectId == projectId).ToArray();
+        var used = new HashSet<int>(tabs.SelectMany(s => Leaves(s.Root)).Select(p => p.ColorIndex));
+        for (int i = 0; i < 6; i++) if (!used.Contains(i)) return i;
+        return tabs.Length % 6;   // all six taken → round-robin
+    }
     private static int CountLeaves(PaneNode n) =>
         n.IsLeaf ? 1 : n.Children.Sum(CountLeaves);
     private static IEnumerable<PaneNode> Leaves(PaneNode n)
@@ -157,7 +179,20 @@ internal sealed class SessionStore
     /// rather than discarding it, then returns the session that should become
     /// active. Caller is responsible for tearing down the closed session's
     /// PTYs and for Save()/PushState().
-    public Session Remove(Session s)
+    /// Closes a session and returns the one that should become active — or NULL
+    /// when that was the last one.
+    ///
+    /// It used to seed a fresh "main" session instead of ever going empty, which
+    /// made "close the last thing" impossible: the pane you closed was replaced
+    /// by a new one the same instant, and the app could never show an empty
+    /// state. Worse in project mode, where that auto-seeded session belongs to no
+    /// project — so it had no row anywhere in the sidebar while still owning a
+    /// live pane. A ghost.
+    ///
+    /// Zero sessions is a legitimate state. The page renders an empty workspace,
+    /// and SeedDefault still gives a FRESH INSTALL its first session (which is
+    /// the only place that was ever really wanted).
+    public Session? Remove(Session s)
     {
         var idx = Sessions.IndexOf(s);
         Sessions.Remove(s);
@@ -165,10 +200,8 @@ internal sealed class SessionStore
 
         if (Sessions.Count == 0)
         {
-            var seeded = new Session { Title = "main" };
-            Sessions.Add(seeded);
-            ActiveSessionId = seeded.Id;
-            return seeded;
+            ActiveSessionId = null;
+            return null;
         }
 
         var next = Sessions[Math.Max(0, Math.Min(idx, Sessions.Count - 1))];
