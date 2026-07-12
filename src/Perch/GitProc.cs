@@ -1,9 +1,14 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
 namespace Perch;
+
+/// The pane's session footprint: how much the agent changed since its baseline,
+/// committed AND uncommitted, plus how many commits it authored.
+internal readonly record struct GitSessionStats(int Files, int Added, int Deleted, int Commits);
 
 /// One file touched by a commit, with its add/delete line counts. Binary
 /// files report 0/0 (git emits "-" for both, which we fold to 0).
@@ -52,46 +57,142 @@ internal static class GitProc
         return ok ? stdout.Trim() : null;
     }
 
-    /// Counts commits in HEAD that aren't reachable from <paramref name="baselineSha"/>.
-    /// Used by the cc-session commit counter. Returns null if the count
-    /// can't be determined.
-    public static async Task<int?> CommitsSinceAsync(string baselineSha, string cwd)
+    /// Reflog actions that mean "this commit was AUTHORED here" — as opposed to
+    /// fetched from a remote. This is the whole trick behind not billing a
+    /// `git pull` to the agent: a pulled commit enters the repo under a
+    /// `pull:`/`(start)` action, never an authoring one.
+    ///
+    /// Two traps are encoded here, both found the hard way (see the tests):
+    ///
+    /// - The action is prefixed with the INVOKING COMMAND, not the operation,
+    ///   so a rebasing pull logs "pull --rebase (pick): <subject>" — never
+    ///   "rebase (pick)". Key on the operation in parens; never on the command.
+    /// - `(start)` is excluded on purpose: it records a checkout of the
+    ///   UPSTREAM tip, so counting it would fold every upstream line into the
+    ///   session — the very bug this exists to prevent.
+    ///
+    /// Deliberately NOT here: a bare `merge` (a fast-forward `merge feature`
+    /// records the branch tip, whose lines were authored elsewhere). A merge
+    /// COMMIT is fine to include via `commit (merge)` — git emits no numstat
+    /// rows for a merge, so it contributes 0 lines and only ticks the count.
+    private static readonly Regex AuthoredHereAction = new(
+        @"^commit(:| \((amend|initial|merge)\))|^(cherry-pick|revert|am)\b|\((pick|squash|fixup|reword|continue)\)",
+        RegexOptions.Compiled);
+
+    /// Shas of commits authored in this repo, per HEAD's reflog.
+    ///
+    /// We ask the reflog — rather than the obvious "is it on a remote?" — because
+    /// remote-reachability flips the moment you `git push`: the agent's own
+    /// commits land on the remote and would suddenly read as somebody else's
+    /// work, zeroing the chip on push. The reflog is durable evidence of where a
+    /// commit was born, and no later push, fetch, or rebase rewrites it.
+    ///
+    /// Null when the reflog can't be read (not a repo, or reflogs disabled) —
+    /// callers then skip committed work entirely, which undercounts rather than
+    /// re-inflating.
+    public static async Task<IReadOnlySet<string>?> AuthoredHereAsync(string cwd, int max = 500)
     {
-        if (string.IsNullOrEmpty(baselineSha)) return null;
-        var (ok, stdout) = await RunAsync("git", $"rev-list {baselineSha}..HEAD --count", cwd);
+        var (ok, stdout) = await RunAsync("git", $"reflog show HEAD --format=%H%x09%gs -n {max}", cwd);
         if (!ok) return null;
-        return int.TryParse(stdout.Trim(), out var n) ? n : (int?)null;
+        var set = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var raw in stdout.Split('\n'))
+        {
+            var line = raw.TrimEnd('\r');
+            var tab = line.IndexOf('\t');
+            if (tab <= 0) continue;
+            if (AuthoredHereAction.IsMatch(line.Substring(tab + 1)))
+                set.Add(line.Substring(0, tab));
+        }
+        return set;
     }
 
-    /// Diff size from <paramref name="baselineSha"/> to the working tree —
-    /// i.e. everything the agent has touched since session-start, committed
-    /// AND uncommitted. Parses `git diff --shortstat`; any clause may be
-    /// absent ("1 file changed, 5 insertions(+)" with no deletions). Returns
-    /// (files, added, deleted), or null on failure.
+    /// Everything the agent has touched since session-start — committed,
+    /// uncommitted, and untracked — plus the count of commits it authored.
     ///
-    /// <paramref name="baselineUntracked"/> is the untracked set captured
-    /// when the baseline sha landed (UntrackedFilesAsync); files in it are
-    /// excluded from the untracked fold-in so only files NEW since
-    /// session-start count. Null means the snapshot hasn't landed (or its
-    /// capture failed) — then the untracked fold-in is skipped entirely,
-    /// because counting ambient pre-existing files inflated the chip by the
-    /// repo's whole untracked footprint (+90k on a repo full of old scrape
-    /// output). A momentary undercount is the better failure.
-    public static async Task<(int files, int added, int deleted)?> DiffStatsAsync(
+    /// Built additively (our commits' numstat + the working tree) rather than as
+    /// one `git diff <baseline>` tree diff, because a tree diff bills the agent
+    /// for whatever a `git pull` dragged in: HEAD fast-forwards past the
+    /// baseline and every upstream line lands inside the range. An idle pane
+    /// that only ran `git pull` wore "+100, 1 commit"; a rebasing pull read
+    /// "+203" against a true +3. So:
+    ///
+    ///   session = Σ numstat(commits AUTHORED here, since the baseline)
+    ///           + numstat(working tree vs HEAD)      // uncommitted, tracked
+    ///           + untracked files new since baseline
+    ///
+    /// Nothing here consults a remote ref, so pushing can't move the answer, and
+    /// pulled commits are excluded no matter how they arrived (fast-forward,
+    /// merge, or rebase-replay). Ancestry does the rest: intersecting with
+    /// `baseline..HEAD` drops both pre-session commits and shas a rebase
+    /// orphaned, so a rewritten history heals itself on the next refresh.
+    ///
+    /// The one deviation from a tree diff: a line edited in two commits counts
+    /// twice (a tree diff would net it out). That's the honest reading of "work
+    /// done" for an activity chip, and it's the price of being pull-proof.
+    ///
+    /// <paramref name="baselineUntracked"/> is the untracked set captured when
+    /// the baseline sha landed (UntrackedFilesAsync); files in it are excluded
+    /// from the untracked fold-in so only files NEW since session-start count.
+    /// Null means the snapshot hasn't landed (or its capture failed) — then the
+    /// fold-in is skipped entirely, because counting ambient pre-existing files
+    /// inflated the chip by the repo's whole untracked footprint (+90k on a repo
+    /// full of old scrape output). A momentary undercount is the better failure.
+    public static async Task<GitSessionStats?> SessionStatsAsync(
         string baselineSha, string cwd, IReadOnlySet<string>? baselineUntracked)
     {
         if (string.IsNullOrEmpty(baselineSha)) return null;
-        int files = 0, added = 0, deleted = 0;
-        var (ok, stdout) = await RunAsync("git", $"diff --shortstat {baselineSha}", cwd);
-        if (ok)
+
+        var authored = await AuthoredHereAsync(cwd);
+        int added = 0, deleted = 0, commits = 0;
+        // Distinct paths, so a file touched by several commits (and again in the
+        // working tree) counts once — `files` is "how many files did this touch",
+        // not "how many file-edits happened".
+        var paths = new HashSet<string>(StringComparer.Ordinal);
+
+        // One `log` over the whole range, filtered in-process: cheaper than a
+        // `show` per authored sha, and it can't blow the command-line limit.
+        // quotepath=false keeps non-ASCII paths literal, matching UnpushedCommits.
+        const char SOH = (char)0x01;
+        var (okLog, log) = await RunAsync(
+            "git", $"-c core.quotepath=false log --numstat --format={SOH}%H {baselineSha}..HEAD", cwd);
+        if (okLog && authored != null)
         {
-            var mF = System.Text.RegularExpressions.Regex.Match(stdout, @"(\d+) files? changed");
-            if (mF.Success) int.TryParse(mF.Groups[1].Value, out files);
-            var mA = System.Text.RegularExpressions.Regex.Match(stdout, @"(\d+) insertions?\(\+\)");
-            if (mA.Success) int.TryParse(mA.Groups[1].Value, out added);
-            var mD = System.Text.RegularExpressions.Regex.Match(stdout, @"(\d+) deletions?\(-\)");
-            if (mD.Success) int.TryParse(mD.Groups[1].Value, out deleted);
+            var mine = false;
+            foreach (var raw in log.Split('\n'))
+            {
+                var line = raw.TrimEnd('\r');
+                if (line.Length > 0 && line[0] == SOH)
+                {
+                    // Ancestry has already bounded this to baseline..HEAD; the
+                    // reflog set decides whether it's ours or something a pull
+                    // brought in. Merge commits emit no numstat rows, so an
+                    // authored merge ticks the count and adds no lines.
+                    mine = authored.Contains(line.Substring(1).Trim());
+                    if (mine) commits++;
+                    continue;
+                }
+                if (!mine || line.Length == 0) continue;
+                if (TryNumstat(line, out var a, out var d, out var path))
+                {
+                    added += a; deleted += d; paths.Add(path);
+                }
+            }
         }
+
+        // Uncommitted tracked work. `diff HEAD` (not `diff`) so staged-but-
+        // uncommitted edits count too.
+        var (okDiff, wt) = await RunAsync("git", "-c core.quotepath=false diff --numstat HEAD", cwd);
+        if (okDiff)
+        {
+            foreach (var raw in wt.Split('\n'))
+            {
+                if (TryNumstat(raw.TrimEnd('\r'), out var a, out var d, out var path))
+                {
+                    added += a; deleted += d; paths.Add(path);
+                }
+            }
+        }
+        var files = paths.Count;
 
         // `git diff` omits untracked files entirely, but for a "what changed"
         // signal they're the bulk of some work (new scripts, context notes).
@@ -105,13 +206,28 @@ internal static class GitProc
             if (uOk) { files += uFiles; added += uAdded; }
         }
 
-        // Neither the tracked diff nor the untracked enumeration ran → not a
-        // repo (or no git). Report null so the caller leaves the chip alone,
-        // rather than a misleading (0,0,0). Note an unborn HEAD makes the diff
-        // fail while enumeration still works, so a fresh repo's untracked files
-        // (uOk) still surface.
-        if (!ok && !uOk) return null;
-        return (files, added, deleted);
+        // Nothing ran → not a repo (or no git). Report null so the caller leaves
+        // the chip alone, rather than a misleading all-zeroes.
+        if (!okLog && !okDiff && !uOk) return null;
+        return new GitSessionStats(files, added, deleted, commits);
+    }
+
+    /// A `--numstat` row: "&lt;added&gt;\t&lt;deleted&gt;\t&lt;path&gt;", with "-" for binary
+    /// (folded to 0 lines, matching git's own accounting — the file still counts).
+    private static bool TryNumstat(string line, out int added, out int deleted, out string path)
+    {
+        added = deleted = 0;
+        path = "";
+        int t1 = line.IndexOf('\t');
+        int t2 = t1 >= 0 ? line.IndexOf('\t', t1 + 1) : -1;
+        if (t1 <= 0 || t2 <= t1) return false;
+        var aStr = line.Substring(0, t1);
+        var dStr = line.Substring(t1 + 1, t2 - t1 - 1);
+        path = line.Substring(t2 + 1);
+        if (path.Length == 0) return false;
+        added = aStr == "-" ? 0 : (int.TryParse(aStr, out var av) ? av : 0);
+        deleted = dStr == "-" ? 0 : (int.TryParse(dStr, out var dv) ? dv : 0);
+        return true;
     }
 
     /// The current untracked (not-ignored) file set, rel paths exactly as git
@@ -284,10 +400,86 @@ internal static class GitProc
         return commits;
     }
 
+    /// Turns a tab name into something git will accept as a branch and Windows
+    /// will accept as a folder: lowercase, ASCII-ish, dashes for runs of
+    /// anything else. Git refuses a lot here (spaces, "..", a trailing ".lock",
+    /// leading/trailing dots or dashes), and a tab called "fix: the / bug" must
+    /// not blow up the worktree create — so we normalize rather than validate.
+    /// Empty (a name with no alphanumerics at all) → "" and the caller falls
+    /// back; never return a slug git would reject.
+    public static string Slugify(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return "";
+        var sb = new System.Text.StringBuilder(name.Length);
+        foreach (var ch in name.Trim().ToLowerInvariant())
+        {
+            if (char.IsLetterOrDigit(ch) && ch < 128) sb.Append(ch);
+            else if (sb.Length > 0 && sb[^1] != '-') sb.Append('-');
+        }
+        var slug = sb.ToString().Trim('-');
+        // Windows reserved device names would make the worktree folder
+        // uncreatable (CON, PRN, AUX, NUL, COM1..9, LPT1..9).
+        if (Regex.IsMatch(slug, @"^(con|prn|aux|nul|com\d|lpt\d)$")) slug += "-tab";
+        return slug.Length > 60 ? slug.Substring(0, 60).Trim('-') : slug;
+    }
+
+    /// Creates a worktree for <paramref name="branch"/> at <paramref name="path"/>,
+    /// cut from the repo's current HEAD.
+    ///
+    /// We create the worktree OURSELVES rather than using `claude --worktree`,
+    /// which exists but puts the tree at &lt;repo&gt;/.claude/worktrees/&lt;name&gt; and only
+    /// moves the AGENT into it — the pane's shell (and therefore every git signal
+    /// we compute, which is measured against the pane's cwd) would stay on the
+    /// main checkout and read ~0 forever while the agent worked elsewhere. Owning
+    /// it means the pane's cwd IS the worktree, so the loc/commit chips are true
+    /// per tab with no changes to the signal code at all.
+    ///
+    /// Reuses an existing branch if it already exists (a tab re-created with the
+    /// same name picks its work back up instead of failing). Returns null on
+    /// success, else git's stderr — the caller surfaces it rather than silently
+    /// dropping the user into the wrong directory.
+    public static async Task<string?> WorktreeAddAsync(string repo, string path, string branch)
+    {
+        // Prune first: a worktree whose folder was deleted by hand still occupies
+        // its name in git's registry and would make `add` fail with a stale
+        // "already exists".
+        await RunAsync("git", "worktree prune", repo);
+
+        var exists = (await RunAsync("git", $"rev-parse --verify --quiet refs/heads/{branch}", repo)).ok;
+        var args = exists
+            ? $"worktree add \"{path}\" {branch}"          // reattach an existing branch
+            : $"worktree add -b {branch} \"{path}\"";      // cut a new one from HEAD
+        var (ok, _, err) = await RunWithErrAsync("git", args, repo);
+        return ok ? null : (string.IsNullOrWhiteSpace(err) ? "git worktree add failed" : err.Trim());
+    }
+
+    /// Removes a worktree. The BRANCH is deliberately kept — the tab's commits
+    /// are the whole point of the work and must survive closing its tab; you can
+    /// still check the branch out anywhere. `--force` because an agent almost
+    /// always leaves the tree dirty, and refusing to clean up a closed tab's
+    /// folder over uncommitted scratch would just strand it forever.
+    public static async Task<bool> WorktreeRemoveAsync(string repo, string path)
+    {
+        var (ok, _) = await RunAsync("git", $"worktree remove --force \"{path}\"", repo);
+        if (!ok) await RunAsync("git", "worktree prune", repo);
+        return ok;
+    }
+
     /// Shared process runner — captures stdout, ignores stderr, returns
     /// (success, stdout). Success means exit code 0. No timeout; git
     /// commands here are fast and we're already off the UI thread.
     private static async Task<(bool ok, string stdout)> RunAsync(string exe, string args, string cwd)
+    {
+        var (ok, stdout, _) = await RunWithErrAsync(exe, args, cwd);
+        return (ok, stdout);
+    }
+
+    /// Same, but keeps stderr. Creating a worktree is the one git call whose
+    /// failure the USER has to see (bad path, branch already checked out
+    /// elsewhere, disk full) — swallowing it would drop them into a pane sitting
+    /// in the wrong directory with no explanation.
+    private static async Task<(bool ok, string stdout, string stderr)> RunWithErrAsync(
+        string exe, string args, string cwd)
     {
         try
         {
@@ -306,13 +498,20 @@ internal static class GitProc
                     // it as such so non-ASCII commit subjects/paths in the recap
                     // don't garble through the console's OEM codepage.
                     StandardOutputEncoding = System.Text.Encoding.UTF8,
+                    StandardErrorEncoding = System.Text.Encoding.UTF8,
                 },
             };
-            if (!p.Start()) return (false, "");
-            var stdout = await p.StandardOutput.ReadToEndAsync();
+            if (!p.Start()) return (false, "", "");
+            // Read BOTH pipes before waiting. Waiting first can deadlock: a git
+            // command that writes more than the pipe buffer to stderr blocks
+            // forever on the write while we block forever on the exit.
+            var outT = p.StandardOutput.ReadToEndAsync();
+            var errT = p.StandardError.ReadToEndAsync();
+            var stdout = await outT;
+            var stderr = await errT;
             await p.WaitForExitAsync();
-            return (p.ExitCode == 0, stdout);
+            return (p.ExitCode == 0, stdout, stderr);
         }
-        catch { return (false, ""); }
+        catch { return (false, "", ""); }
     }
 }

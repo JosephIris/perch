@@ -144,6 +144,34 @@ never appears in our captures — the screenshot will look uniform-dark even
 when Mica is working correctly. Trust the XAML for Mica correctness and
 eyeball the running window for the bleed-through.
 
+### Both capture methods lie. Know how, or you'll chase ghosts.
+
+Each of these cost real time. When a capture disagrees with the DOM, the DOM
+is right — measure with `getBoundingClientRect` / `elementFromPoint` before
+you "fix" anything.
+
+- **`PrintWindow` CROPS at non-100% DPI.** At 125% scaling the page renders a
+  1300×760 device-px surface into a window whose client rect is 1040×640, and
+  the capture keeps the top-left 1040×640 of it. The right ~20% and bottom
+  ~20% of the UI look chopped off — in the capture only. Centered content
+  (empty states, dialogs) looks shoved right and clipped. It isn't.
+- **`PrintWindow` misses GPU-composited layers.** Anything with
+  `backdrop-filter` (our dialogs) is composited by the GPU and simply doesn't
+  appear — the dialog is invisible in the shot while fully present in the DOM.
+  Same family as the Mica caveat above.
+- **CDP `Page.captureScreenshot` composites transparency as WHITE.** The
+  workspace has no background (Mica shows through), so a plain CDP capture
+  paints that region white — and white text and hairline borders vanish into
+  it. The element is fine; the capture is not.
+
+The one capture that tells the truth: drive CDP, force an opaque page
+background first, then shoot.
+
+    document.documentElement.style.background = '#1f1f1f';   // then captureScreenshot
+
+`scripts/cdp-drive.mjs` is the existing harness; the webview exposes CDP when
+launched with `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9333`.
+
 ## Fluent discipline — non-negotiable rules
 
 These were learned the hard way (each rule has a story behind it). Don't

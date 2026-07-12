@@ -118,6 +118,45 @@ internal sealed record UrlPaneLayoutMsg
 internal sealed record SessionNewMsg
 {
     public string? Shell { get; init; }
+
+    /// When present, the new session is a tab of that project: it's filed under
+    /// the project in the sidebar and opens in the project's directory.
+    /// Absent (the plain "New session" button) → unfiled, default cwd.
+    public Guid? ProjectId { get; init; }
+}
+
+/// Which sidebar mode to show — "sessions" or "projects". Anything else is
+/// ignored (the host clamps), so a stale page can't wedge the sidebar into a
+/// mode that doesn't render.
+internal sealed record UiModeMsg
+{
+    public required string Mode { get; init; }
+}
+
+internal sealed record ProjectAddMsg
+{
+    public required string Path { get; init; }
+    /// Optional display name; defaults to the folder's basename.
+    public string? Name { get; init; }
+}
+
+internal sealed record ProjectRef
+{
+    public required Guid Id { get; init; }
+}
+
+/// Create a tab under a project: a named, colored agent session, optionally in
+/// its own git worktree.
+internal sealed record ProjectTabNewMsg
+{
+    public required Guid ProjectId { get; init; }
+    /// User-typed tab name. Also becomes the branch (slugified) and the cc
+    /// session's display name. Empty falls back to the project's name.
+    public string? Name { get; init; }
+    /// "claude" (default) | "codex" | "shell".
+    public string? Agent { get; init; }
+    /// Cut a git worktree for this tab. Null/false → open in the repo itself.
+    public bool? Worktree { get; init; }
 }
 
 internal sealed record SessionRenameMsg
@@ -149,6 +188,34 @@ internal sealed record SettingsSaveMsg
     public string? DefaultCwd { get; init; }
     public int? FontSize { get; init; }
     public bool? ResumeAgentsOnLaunch { get; init; }
+    /// Parent folders scanned one level deep for repos to offer as projects.
+    /// Null = key absent (leave as-is); an empty array explicitly clears them.
+    public List<string>? ProjectScanRoots { get; init; }
+    /// Where project tabs' worktrees are created. "" = the built-in default.
+    public string? WorktreeRoot { get; init; }
+    /// Default list of things seeded into a new worktree (a project can override).
+    public List<string>? WorktreeSeedPaths { get; init; }
+}
+
+/// Edit a registered project: rename it, or override what gets seeded into its
+/// worktrees. Every field optional — only the keys present are applied.
+internal sealed record ProjectUpdateMsg
+{
+    public required Guid Id { get; init; }
+    public string? Name { get; init; }
+    /// Empty list = "inherit the global export file" (not "seed nothing"): a
+    /// project that wants nothing seeded is vanishingly rare next to one where
+    /// the user just cleared the box.
+    public List<string>? SeedPaths { get; init; }
+}
+
+/// Close a session. `removeWorktree` additionally reclaims its worktree folder
+/// — which makes the close PERMANENT (it can't go to "Recently closed" and be
+/// restored into a directory that no longer exists). The branch always survives.
+internal sealed record SessionCloseMsg
+{
+    public required Guid Id { get; init; }
+    public bool? RemoveWorktree { get; init; }
 }
 
 /// Deserialization boundary for page + control-pipe messages. Web defaults

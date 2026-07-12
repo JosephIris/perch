@@ -12,17 +12,30 @@ interface ConfirmOpts {
   cancelLabel?: string;
   /** Render the confirm button as the red destructive variant. */
   danger?: boolean;
+  /** An extra, opt-in destructive step folded into the same confirm (e.g. "also
+   *  delete the worktree folder"). Defaults to UNCHECKED — an extra checkbox is
+   *  never a thing to do by accident. */
+  option?: { label: string; hint?: string };
 }
+
+export type ConfirmResult = { ok: boolean; optionChecked: boolean };
 
 let openDialog = false;
 
+/** Plain yes/no. */
 export function confirmDialog(opts: ConfirmOpts): Promise<boolean> {
+  return confirmWithOption(opts).then((r) => r.ok);
+}
+
+/** Yes/no plus an optional checkbox, so a single confirm can carry a second,
+ *  opt-in destructive step instead of stacking two modals on the user. */
+export function confirmWithOption(opts: ConfirmOpts): Promise<ConfirmResult> {
   // One confirm at a time — a second request resolves false rather than
   // stacking modals.
-  if (openDialog) return Promise.resolve(false);
+  if (openDialog) return Promise.resolve({ ok: false, optionChecked: false });
   openDialog = true;
 
-  return new Promise<boolean>((resolve) => {
+  return new Promise<ConfirmResult>((resolve) => {
     const overlay = document.createElement("div");
     overlay.className = "settings-overlay";
 
@@ -54,7 +67,36 @@ export function confirmDialog(opts: ConfirmOpts): Promise<boolean> {
     confirm.textContent = opts.confirmLabel;
 
     footer.append(cancel, confirm);
-    card.append(title, body, footer);
+    card.append(title, body);
+
+    // Optional second step. Unchecked by default: it's the more destructive of
+    // the two actions, and it must never ride along unnoticed.
+    let optionBox: HTMLInputElement | null = null;
+    if (opts.option) {
+      const row = document.createElement("label");
+      row.className = "confirm-card__option";
+
+      optionBox = document.createElement("input");
+      optionBox.type = "checkbox";
+      optionBox.className = "projects-row__check";
+      row.appendChild(optionBox);
+
+      const text = document.createElement("span");
+      text.className = "confirm-card__option-text";
+      const label = document.createElement("span");
+      label.textContent = opts.option.label;
+      text.appendChild(label);
+      if (opts.option.hint) {
+        const hint = document.createElement("span");
+        hint.className = "confirm-card__option-hint";
+        hint.textContent = opts.option.hint;
+        text.appendChild(hint);
+      }
+      row.appendChild(text);
+      card.appendChild(row);
+    }
+
+    card.appendChild(footer);
     overlay.appendChild(card);
     document.body.appendChild(overlay);
 
@@ -67,7 +109,7 @@ export function confirmDialog(opts: ConfirmOpts): Promise<boolean> {
       overlay.classList.add("settings-overlay--closing");
       overlay.addEventListener("animationend", () => overlay.remove(), { once: true });
       window.setTimeout(() => overlay.remove(), 260); // reduced-motion fallback
-      resolve(result);
+      resolve({ ok: result, optionChecked: result && !!optionBox?.checked });
     };
 
     function onKeyDown(ev: KeyboardEvent) {

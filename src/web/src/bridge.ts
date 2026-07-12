@@ -52,10 +52,15 @@ export type OutMessage =
    * (Ctrl+Shift+arrows). left/right reorder a side-by-side split, up/down a
    * stacked one; perpendicular / edge is a no-op host-side. */
   | { type: "pane.moveDir"; paneId: string; dir: "left" | "right" | "up" | "down" }
-  | { type: "session.new"; shell?: string }
+  /* `projectId` files the new tab under a project and opens it in that repo.
+   * Omitted (the plain "New session" button) → unfiled, default cwd. */
+  | { type: "session.new"; shell?: string; projectId?: string }
   | { type: "session.select"; id: string }
   | { type: "session.rename"; id: string; title: string }
-  | { type: "session.close"; id: string }
+  /* `removeWorktree` also reclaims the tab's worktree folder, which makes the
+   * close permanent (a restore would otherwise reopen into a directory that no
+   * longer exists). The branch survives regardless. */
+  | { type: "session.close"; id: string; removeWorktree?: boolean }
   /* Bring a closed session back from "Recently closed" (restores layout +
    * cwd, and resumes its Claude panes when enabled). */
   | { type: "session.restore"; id: string }
@@ -91,10 +96,48 @@ export type OutMessage =
    * partial update; the host only overwrites provided keys. defaultShell
    * is the shell COMMAND LINE (matching one of settings.data.shells[].cmd)
    * or "" for auto-detect. */
-  | { type: "settings.save"; defaultShell?: string; defaultCwd?: string; fontSize?: number; resumeAgentsOnLaunch?: boolean }
+  | {
+      type: "settings.save";
+      defaultShell?: string;
+      defaultCwd?: string;
+      fontSize?: number;
+      resumeAgentsOnLaunch?: boolean;
+      projectScanRoots?: string[];
+      worktreeRoot?: string;
+      worktreeSeedPaths?: string[];
+    }
   /* Page dismissed the onboarding lightbox → host marks it seen so it won't
    * auto-open next launch. */
   | { type: "onboarding.seen" }
+  /* Sidebar mode toggle. "sessions" = the flat state-partitioned list;
+   * "projects" = registered repos as headers with their tabs nested. Persisted
+   * host-side, so the sidebar comes back the way you left it. */
+  | { type: "ui.mode"; mode: "sessions" | "projects" }
+  /* Ask the host for repos worth registering: the ones already open in a pane,
+   * plus a one-level scan of each configured root. Host replies with a
+   * projects.candidates message. */
+  | { type: "projects.scan" }
+  /* Open the native folder picker and register whatever is chosen. The escape
+   * hatch for a repo that's neither open nor under a scan root. */
+  | { type: "project.browse" }
+  | { type: "project.add"; path: string; name?: string }
+  /* Unregister. The project's tabs are NOT closed — they fall back to "Other". */
+  | { type: "project.remove"; id: string }
+  /* Rename a project, or override what its worktrees get seeded with. An EMPTY
+   * seedPaths means "inherit the global list", not "seed nothing". */
+  | { type: "project.update"; id: string; name?: string; seedPaths?: string[] }
+  /* Create a tab under a project. `name` becomes the tab title, the branch
+   * (slugified), and the cc session's --name. `worktree` cuts it its own git
+   * worktree so parallel agents can't overwrite each other's files (and so the
+   * per-tab loc/commit chips are actually true). The host picks a color unused
+   * by that project's other tabs. */
+  | {
+      type: "project.tab.new";
+      projectId: string;
+      name: string;
+      agent: "claude" | "codex" | "shell";
+      worktree: boolean;
+    }
   /* User clicked the footer update pill. Host downloads the pending Velopack
    * update and relaunches into it (the process is replaced on success). */
   | { type: "update.apply" }
@@ -172,6 +215,12 @@ export type SessionView = {
   id: string;
   title: string;
   shell: string;
+  /* The project (registered repo) this tab is filed under; "" when unfiled.
+   * Project mode groups on this and puts the unfiled ones under "Other". */
+  projectId: string;
+  /* Branch of this tab's git worktree; "" when it has no worktree. Drives the
+   * "also delete its worktree folder" option on close. */
+  worktreeBranch: string;
   rootPane: PaneTreeView;
   /* Session-level fields are aggregations of the panes' per-pane state.
    * agentState = most-urgent across panes
@@ -216,18 +265,41 @@ export type ClosedSessionView = {
   closedAtMs: number;
 };
 
+/* A registered repo. Sidebar project mode renders one header per project with
+ * its tabs (sessions) nested beneath. */
+export type ProjectView = {
+  id: string;
+  name: string;
+  path: string;
+};
+
 export type StateMessage = {
   type: "state";
   activeSessionId: string;
   activePaneId: string;
   sessions: SessionView[];
+  /* Registered projects, ferried with every push like prefs — the list is tiny
+   * and the page then never has to ask for it. */
+  projects: ProjectView[];
   /* Recently-closed sessions, most-recent first, for the restore list. */
   closedSessions: ClosedSessionView[];
   /* User preferences ferried with every state push — cheap and means the
    * page never has to ask. fontSize is the default terminal cell size
    * applied to new Panes; existing panes follow it too on every state.
-   * onboardingSeen gates the first-launch welcome lightbox. */
-  prefs: { fontSize: number; onboardingSeen?: boolean };
+   * onboardingSeen gates the first-launch welcome lightbox.
+   * sidebarMode is which sidebar view is showing. */
+  prefs: { fontSize: number; onboardingSeen?: boolean; sidebarMode?: SidebarMode };
+};
+
+export type SidebarMode = "sessions" | "projects";
+
+/* Reply to projects.scan: repos worth registering. `source` says where each
+ * came from — "inUse" (already open in a pane) reads very differently from
+ * "scanned" (found under a configured root), and the dialog groups on it. */
+export type ProjectsCandidatesMessage = {
+  type: "projects.candidates";
+  candidates: { path: string; name: string; source: "inUse" | "scanned" }[];
+  scanRoots: string[];
 };
 
 export type ToastMessage = {
@@ -283,6 +355,18 @@ export type SettingsDataMessage = {
   /* Whether the launch prompt to reopen previous Claude sessions is enabled
    * (Settings → "Resume Claude sessions on launch"). */
   resumeAgentsOnLaunch?: boolean;
+  /* Parent folders scanned (one level deep) for repos to offer as projects. */
+  projectScanRoots?: string[];
+  /* Where project tabs' worktrees are created ("" = the built-in default, which
+   * `worktreeRootResolved` spells out for the placeholder). */
+  worktreeRoot?: string;
+  worktreeRootResolved?: string;
+  /* Default list of things seeded into a new worktree (.env*, node_modules, …).
+   * A project can override it — see `projects[].seedPaths`. */
+  worktreeSeedPaths?: string[];
+  /* Registered projects, so Settings can rename / re-seed / unregister them.
+   * An empty seedPaths means the project inherits the global list. */
+  projects?: { id: string; name: string; path: string; seedPaths: string[] }[];
   /* The running version (the release this copy installed from), or null when
    * it can't be determined (dev `dotnet run` / portable). Shown in the
    * Updates row. */
@@ -302,6 +386,7 @@ export type InMessage =
   | ToastMessage
   | SettingsDataMessage
   | CommitsDataMessage
+  | ProjectsCandidatesMessage
   | { type: "host.error"; message: string }
   /* One-time launch prompt: N saved Claude sessions can be reopened. The page
    * asks the user, then replies with resume.decision. */

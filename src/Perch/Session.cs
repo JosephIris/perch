@@ -29,6 +29,30 @@ internal sealed class Session : INotifyPropertyChanged
     public string Shell { get; set; } = "";
     public string Cwd { get; set; } = "";
 
+    /// The project (registered repo) this session is a tab of, or null when it
+    /// isn't filed under one — a scratch shell, or a session predating project
+    /// mode. Null sessions still show, under "Other", so nothing can vanish
+    /// from the sidebar just because it isn't in a project.
+    ///
+    /// Stored explicitly rather than derived from Cwd because a project tab's
+    /// cwd is its WORKTREE, which lives outside the repo root and so can't be
+    /// matched back to the project by path.
+    public Guid? ProjectId { get; set; }
+
+    /// The git worktree backing this tab, and the branch it sits on. Empty for a
+    /// tab that just opens in the repo itself (the "no worktree" option) and for
+    /// every non-project session.
+    ///
+    /// Persisted: on restart the pane respawns in this directory, and closing the
+    /// tab needs to know which tree to tear down. WorktreeRepo is the PROJECT's
+    /// repo path, kept alongside because `git worktree remove` has to run from
+    /// the main checkout — and the project may have been unregistered by then.
+    /// (Note: the live `Branch` property below is [JsonIgnore] and reflects the
+    /// pane's CURRENT branch, which can drift; this one records what we cut.)
+    public string WorktreePath { get; set; } = "";
+    public string WorktreeRepo { get; set; } = "";
+    public string WorktreeBranch { get; set; } = "";
+
     /// Unix-ms when the session was closed and moved to the store's
     /// "Recently closed" list. 0 for a live session. Persisted so the list
     /// (and its "closed 5m ago" ordering) survives a full app restart.
@@ -319,7 +343,9 @@ internal sealed class PaneNode
 
     /// HEAD sha captured at the start of an agent session (Claude Code's
     /// session-start hook). Empty when no session is active. CommitCount is
-    /// recomputed each time the agent reports a state change.
+    /// recomputed each time the agent reports a state change, and counts only
+    /// commits AUTHORED in this repo since the baseline — a `git pull` that
+    /// fast-forwards HEAD past it is upstream work, not the agent's.
     [JsonIgnore] public string CommitBaseline { get; set; } = "";
     [JsonIgnore] public int CommitCount { get; set; }
 

@@ -18,6 +18,7 @@ public partial class MainWindow : FluentWindow
     private readonly string _webRoot;
     private readonly Settings _settings;
     private readonly SessionStore _store;
+    private readonly ProjectStore _projects;
 
     // Per-pane ConPty + agent-IPC lifecycles, byte counters and last-output
     // timestamps all live in PaneManager. MainWindow decides what to spawn
@@ -69,6 +70,18 @@ public partial class MainWindow : FluentWindow
     // user's pane.chooser.choose answer releases the spawn into the chosen cwd
     // + initial command, or closes the never-spawned pane on cancel.
     private readonly Dictionary<Guid, (string cwd, string agentType)> _pendingChoosers = new();
+
+    /// Command a pane should run on its first spawn — the PTY is created lazily
+    /// (on the page's first pane.resize, so it's sized right), long after the tab
+    /// was created, so the command has to wait here for it. Mirrors
+    /// _armedResumePanes / _pendingChoosers.
+    private readonly Dictionary<Guid, string> _pendingInitialCommand = new();
+
+    /// Prompt-bar color to set inside a Claude session once it's up, keyed by
+    /// pane. cc has no flag for this (only the /color slash command), so it has
+    /// to be typed into the TUI — and only once cc is actually listening, which
+    /// its session-start hook tells us.
+    private readonly Dictionary<Guid, string> _pendingCcColor = new();
     // Panes shown in the restore-progress lightbox → whether the pane has
     // reported "alive again" (its resumed session-start hook fired). Empty when
     // no restore is in flight. _restoreTimeout force-completes a batch whose
@@ -101,6 +114,7 @@ public partial class MainWindow : FluentWindow
         _webRoot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
         _settings = Settings.Load();
         _store = SessionStore.Load();
+        _projects = ProjectStore.Load();
         _router = BuildRouter();
         _panes = new PaneManager(Dispatcher);
         _panes.Output += PostPaneOut;
@@ -125,6 +139,12 @@ public partial class MainWindow : FluentWindow
         // deferral in OnPaneResize is in effect from the very first measure.
         if (_settings.ResumeAgentsOnLaunch && AllResumablePanes().Any())
             _resumeDecisionPending = true;
+
+        // Window geometry. Restored BEFORE the window is shown (SourceInitialized
+        // fires after the HWND exists but before layout/render), so it opens
+        // where you left it instead of visibly jumping there a frame later.
+        SourceInitialized += (_, _) => RestoreWindowPlacement();
+        Closing += (_, _) => SaveWindowPlacement();
 
         Loaded += async (_, _) =>
         {
@@ -456,7 +476,7 @@ public partial class MainWindow : FluentWindow
         .Add<SessionNewMsg>("session.new", OnSessionNew)
         .Add<SessionRef>("session.select", OnSessionSelect)
         .Add<SessionRenameMsg>("session.rename", OnSessionRename)
-        .Add<SessionRef>("session.close", OnSessionClose)
+        .Add<SessionCloseMsg>("session.close", OnSessionClose)
         .Add<SessionRef>("session.restore", OnSessionRestore)
         .Add<SessionRef>("session.purge", OnSessionPurge)
         .Add<ResumeDecisionMsg>("resume.decision", OnResumeDecision)
@@ -467,6 +487,13 @@ public partial class MainWindow : FluentWindow
         .Add("settings.request", OnSettingsRequest)
         .Add<SettingsSaveMsg>("settings.save", OnSettingsSave)
         .Add("onboarding.seen", OnOnboardingSeen)
+        .Add<UiModeMsg>("ui.mode", OnUiMode)
+        .Add("projects.scan", OnProjectsScan)
+        .Add("project.browse", OnProjectBrowse)
+        .Add<ProjectAddMsg>("project.add", OnProjectAdd)
+        .Add<ProjectRef>("project.remove", OnProjectRemove)
+        .Add<ProjectUpdateMsg>("project.update", OnProjectUpdate)
+        .Add<ProjectTabNewMsg>("project.tab.new", OnProjectTabNew)
         .Add("update.apply", OnUpdateApply)
         .Add("update.check", OnUpdateCheckRequested);
 
@@ -838,6 +865,15 @@ public partial class MainWindow : FluentWindow
             // auto-relaunches the agent. Skipped when the caller already supplied
             // an initial command (the new-pane chooser passes "claude"/"codex");
             // a fresh split is never armed for resume anyway, so they can't clash.
+            // A freshly-created project tab carries its own command (`claude
+            // --session-id … --name …`). It wins over resume-arming: the tab was
+            // made seconds ago, so there is nothing to resume into yet — and if
+            // both fired we'd launch two agents in one pane.
+            if (initialCommand == null && _pendingInitialCommand.Remove(pane.Id, out var queued))
+            {
+                initialCommand = queued;
+                _armedResumePanes.Remove(pane.Id);
+            }
             if (initialCommand == null && _armedResumePanes.Remove(pane.Id) && !string.IsNullOrEmpty(pane.ClaudeSessionId))
             {
                 initialCommand = $"claude --resume {pane.ClaudeSessionId}";
@@ -1046,6 +1082,31 @@ public partial class MainWindow : FluentWindow
             _store.Save();
         }
         MarkRestorePaneReady(paneId);
+        ApplyPendingCcColor(paneId);
+    }
+
+    // Set the tab's color INSIDE its Claude session, so the prompt bar matches
+    // the sidebar dot. cc exposes no flag for this — only the `/color` slash
+    // command — so it has to be typed into the TUI, which means waiting until cc
+    // is actually listening. The session-start hook is that proof: it fires from
+    // inside the running session, so the input is up by definition.
+    //
+    // The small delay is for the TUI's first paint; typing into the raw PTY the
+    // instant the hook lands can land before cc's reader is attached and be
+    // dropped. One-shot: drained on use, so a later /clear (which re-fires
+    // session-start) doesn't re-type it.
+    private void ApplyPendingCcColor(Guid paneId)
+    {
+        if (!_pendingCcColor.Remove(paneId, out var color)) return;
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            await System.Threading.Tasks.Task.Delay(700);
+            await Dispatcher.InvokeAsync(() =>
+            {
+                try { _panes.Write(paneId, System.Text.Encoding.UTF8.GetBytes($"/color {color}\r")); }
+                catch (Exception ex) { Log.Info("CcColor", $"skipped: {ex.Message}"); }
+            });
+        });
     }
 
     // New Claude session in a terminal pane (fresh launch after ctrl+c twice,
@@ -1132,17 +1193,15 @@ public partial class MainWindow : FluentWindow
         var baseline = pane.CommitBaseline;
         var hasBaseline = !string.IsNullOrEmpty(baseline);
         // Run the git queries concurrently off the UI thread — they're
-        // independent and each is a fast plumbing command.
-        var countT = hasBaseline
-            ? GitProc.CommitsSinceAsync(baseline, cwd)
-            : System.Threading.Tasks.Task.FromResult<int?>(null);
-        var diffT  = hasBaseline
-            ? GitProc.DiffStatsAsync(baseline, cwd, pane.UntrackedBaseline)
-            : System.Threading.Tasks.Task.FromResult<(int files, int added, int deleted)?>(null);
+        // independent and each is a fast plumbing command. The commit count and
+        // the loc size come from one walk (SessionStatsAsync) so they can't
+        // disagree about what counts as this session's work.
+        var statsT = hasBaseline
+            ? GitProc.SessionStatsAsync(baseline, cwd, pane.UntrackedBaseline)
+            : System.Threading.Tasks.Task.FromResult<GitSessionStats?>(null);
         var aheadT = GitProc.AheadAsync(cwd);
-        await System.Threading.Tasks.Task.WhenAll(countT, diffT, aheadT);
-        var count = await countT;
-        var diff  = await diffT;
+        await System.Threading.Tasks.Task.WhenAll(statsT, aheadT);
+        var stats = await statsT;
         var ahead = await aheadT;
         await Dispatcher.InvokeAsync(() =>
         {
@@ -1156,12 +1215,12 @@ public partial class MainWindow : FluentWindow
             // baseline they were computed against is still current; `ahead`
             // isn't baseline-relative and always applies.
             var baselineCurrent = pane.CommitBaseline == baseline;
-            if (baselineCurrent && count is int n && pane.CommitCount != n) { pane.CommitCount = n; changed = true; }
-            if (baselineCurrent && diff is (int files, int added, int deleted))
+            if (baselineCurrent && stats is GitSessionStats s)
             {
-                if (pane.FilesChanged != files)  { pane.FilesChanged = files;  changed = true; }
-                if (pane.LinesAdded   != added)  { pane.LinesAdded   = added;  changed = true; }
-                if (pane.LinesDeleted != deleted){ pane.LinesDeleted = deleted; changed = true; }
+                if (pane.CommitCount  != s.Commits) { pane.CommitCount  = s.Commits; changed = true; }
+                if (pane.FilesChanged != s.Files)   { pane.FilesChanged = s.Files;   changed = true; }
+                if (pane.LinesAdded   != s.Added)   { pane.LinesAdded   = s.Added;   changed = true; }
+                if (pane.LinesDeleted != s.Deleted) { pane.LinesDeleted = s.Deleted; changed = true; }
             }
             if (ahead is int a && pane.Ahead != a) { pane.Ahead = a; changed = true; }
             if (changed) PushState();
@@ -1362,6 +1421,20 @@ public partial class MainWindow : FluentWindow
         // "new session with shell X", or the stability harness varying
         // shells) the session spawns that shell instead of the default.
         if (!string.IsNullOrWhiteSpace(msg.Shell)) s.Shell = msg.Shell;
+        // A tab created from a project header: file it under the project and
+        // open it in the repo. Cwd is set on the ROOT LEAF, not just the
+        // session — ResolvePaneCwd consults the pane first, and it's the pane
+        // cwd that the git signals (branch, loc, ahead) are measured against.
+        // An unknown/stale project id degrades to a plain unfiled session
+        // rather than spawning in a directory that no longer exists.
+        var proj = msg.ProjectId is Guid pid ? _projects.ById(pid) : null;
+        if (proj != null && Directory.Exists(proj.Path))
+        {
+            s.ProjectId = proj.Id;
+            s.Cwd = proj.Path;
+            s.Root.Cwd = proj.Path;
+            s.Title = proj.Name;   // auto-title; OSC 7 keeps it in sync
+        }
         AutoName(s.Root);
         _store.ActiveSessionId = s.Id;
         // The new session's root leaf is the active pane. PTY spawns
@@ -1393,13 +1466,32 @@ public partial class MainWindow : FluentWindow
         PushState();
     }
 
-    private void OnSessionClose(SessionRef msg)
+    private void OnSessionClose(SessionCloseMsg msg)
     {
         var sess = _store.Sessions.FirstOrDefault(x => x.Id == msg.Id);
         if (sess == null) return;
         // Tear down every PTY owned by this session.
         foreach (var leaf in AllLeaves(sess.Root).ToList()) DestroyPty(leaf.Id);
-        _store.Remove(sess);   // archives to Recently closed (not deleted)
+
+        var wtPath = sess.WorktreePath;
+        var wtRepo = sess.WorktreeRepo;
+        // Null = that was the last session. Legitimate: the page then shows an
+        // empty workspace instead of us conjuring a replacement shell the same
+        // instant the user closed one.
+        var next = _store.Remove(sess);   // archives to Recently closed (not deleted)
+        if (next == null) _activePaneId = null;
+
+        // "Also delete the worktree folder" makes the close PERMANENT: a restored
+        // session would otherwise reopen its panes into a directory that no longer
+        // exists. So we purge the archive too, rather than leave a restore button
+        // that's guaranteed to fail. The BRANCH survives either way — the commits
+        // are the work, and closing a tab must never be able to destroy them.
+        if (msg.RemoveWorktree == true && wtPath.Length > 0 && wtRepo.Length > 0)
+        {
+            _store.Purge(sess.Id);
+            _ = Worktree.RemoveAsync(wtRepo, wtPath);
+        }
+
         EnsureActivePane();
         _store.Save();
         PushState();
@@ -1430,10 +1522,24 @@ public partial class MainWindow : FluentWindow
         PushState();
     }
 
-    // Permanently drop a session from "Recently closed".
+    // Permanently drop a session from "Recently closed". THIS is where a project
+    // tab's worktree is finally torn down — not on close.
+    //
+    // Closing only archives a session (it can be restored, panes/cwd and all), so
+    // deleting its worktree there would strand the restore in a directory that no
+    // longer exists. Purge is the one irreversible step, so it's the honest place
+    // to reclaim the tree. The BRANCH always survives: the commits are the work,
+    // and no amount of tab-closing should be able to destroy them.
     private void OnSessionPurge(SessionRef msg)
     {
-        if (_store.Purge(msg.Id)) { _store.Save(); PushState(); }
+        var doomed = _store.ClosedSessions.FirstOrDefault(s => s.Id == msg.Id);
+        var wtPath = doomed?.WorktreePath ?? "";
+        var wtRepo = doomed?.WorktreeRepo ?? "";
+        if (!_store.Purge(msg.Id)) return;
+        _store.Save();
+        PushState();
+        if (wtPath.Length > 0 && wtRepo.Length > 0)
+            _ = Worktree.RemoveAsync(wtRepo, wtPath);
     }
 
     private void OnPaneFocus(PaneRef msg)
@@ -1527,6 +1633,318 @@ public partial class MainWindow : FluentWindow
         catch (Exception ex) { Log.Error("OnCommitsRequest", ex); }
     }
 
+    // ── Window placement ────────────────────────────────────────────────────
+
+    // Reopen where you left off — including on a second monitor, which is the
+    // whole point (maximizing and dragging back to the right screen every launch
+    // is the annoyance being fixed here).
+    //
+    // The one hazard is a saved position that no longer exists: unplug the second
+    // monitor (or dock/undock, or change DPI) and a naive restore puts the window
+    // off-screen, where it's effectively lost — you can't even grab its title bar.
+    // So a restored rect must INTERSECT some current screen's working area; if it
+    // doesn't, we drop the position and keep only the size, letting Windows place
+    // it. Checking intersection (rather than full containment) keeps a window you
+    // deliberately left half-off an edge.
+    private void RestoreWindowPlacement()
+    {
+        var s = _settings;
+        // Size first — it's always safe, and it's what we fall back to when the
+        // saved position is no longer on any screen.
+        if (s.WindowWidth >= MinWidth && s.WindowHeight >= MinHeight)
+        {
+            Width = s.WindowWidth;
+            Height = s.WindowHeight;
+        }
+
+        var virtualScreen = new System.Windows.Rect(
+            System.Windows.SystemParameters.VirtualScreenLeft,
+            System.Windows.SystemParameters.VirtualScreenTop,
+            System.Windows.SystemParameters.VirtualScreenWidth,
+            System.Windows.SystemParameters.VirtualScreenHeight);
+        if (!double.IsNaN(s.WindowLeft) && !double.IsNaN(s.WindowTop) &&
+            WindowPlacement.IsReachable(
+                new System.Windows.Rect(s.WindowLeft, s.WindowTop, Width, Height), virtualScreen))
+        {
+            // WindowStartupLocation defaults to Manual, so Left/Top are honored.
+            Left = s.WindowLeft;
+            Top = s.WindowTop;
+        }
+
+        // Maximized last: WPF keeps Left/Top/Width/Height as the RESTORE bounds,
+        // so setting them first and then maximizing gives a correct un-maximize.
+        if (s.WindowMaximized) WindowState = System.Windows.WindowState.Maximized;
+    }
+
+    private void SaveWindowPlacement()
+    {
+        try
+        {
+            // When maximized (or minimized), Left/Top/Width/Height report the
+            // MAXIMIZED geometry — persisting those would mean un-maximizing next
+            // launch restores to a full-screen-sized "windowed" window. RestoreBounds
+            // is the rect the window would return to, which is what we want to keep.
+            var maximized = WindowState == System.Windows.WindowState.Maximized;
+            var r = WindowState == System.Windows.WindowState.Normal
+                ? new System.Windows.Rect(Left, Top, Width, Height)
+                : RestoreBounds;
+
+            if (r.Width >= MinWidth && r.Height >= MinHeight && !double.IsNaN(r.X) && !double.IsNaN(r.Y))
+            {
+                _settings.WindowLeft = r.X;
+                _settings.WindowTop = r.Y;
+                _settings.WindowWidth = r.Width;
+                _settings.WindowHeight = r.Height;
+            }
+            _settings.WindowMaximized = maximized;
+            _settings.Save();
+        }
+        catch (Exception ex) { Log.Error("SaveWindowPlacement", ex); }
+    }
+
+    // ── Project mode ────────────────────────────────────────────────────────
+
+    // Sidebar mode toggle ("sessions" | "projects"). Clamped: an unknown mode
+    // is dropped rather than persisted, so a stale page can't wedge the sidebar
+    // into a state that renders nothing.
+    private void OnUiMode(UiModeMsg msg)
+    {
+        var mode = msg.Mode == "projects" ? "projects" : "sessions";
+        if (_settings.SidebarMode == mode) return;
+        _settings.SidebarMode = mode;
+        _settings.Save();
+        PushState();
+    }
+
+    // Candidate repos for the registration dialog: the ones you already have
+    // open (their git roots), plus a one-level scan of each configured root.
+    // Async because resolving a pane's cwd to a repo root shells out to git.
+    private async void OnProjectsScan()
+    {
+        try
+        {
+            // Distinct pane cwds → repo roots. A cwd deep inside a repo resolves
+            // to its toplevel, so panes sitting in subdirectories still offer the
+            // repo itself, and several panes in one repo collapse to one candidate.
+            var cwds = _paneCwd.Values
+                .Where(c => !string.IsNullOrWhiteSpace(c))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            var roots = new List<string>();
+            foreach (var cwd in cwds)
+            {
+                var top = await GitProc.TopLevelAsync(cwd);
+                if (!string.IsNullOrWhiteSpace(top)) roots.Add(top!);
+            }
+
+            var candidates = ProjectScan.Candidates(_settings.ProjectScanRoots, roots, _projects);
+            var payload = new
+            {
+                type = "projects.candidates",
+                candidates = candidates.Select(c => new
+                {
+                    path = c.Path,
+                    name = c.Name,
+                    source = c.Source == ProjectSource.InUse ? "inUse" : "scanned",
+                }).ToArray(),
+                scanRoots = _settings.ProjectScanRoots.ToArray(),
+            };
+            Web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(payload));
+        }
+        catch (Exception ex) { Log.Error("OnProjectsScan", ex); }
+    }
+
+    // Native folder picker → register whatever they pick. The escape hatch for
+    // a repo that's neither open nor under a scan root.
+    private void OnProjectBrowse()
+    {
+        try
+        {
+            var dlg = new Microsoft.Win32.OpenFolderDialog
+            {
+                Title = "Add project",
+                InitialDirectory = _settings.ResolveDefaultCwd(),
+            };
+            if (dlg.ShowDialog(this) != true) return;
+            AddProject(dlg.FolderName);
+        }
+        catch (Exception ex) { Log.Error("OnProjectBrowse", ex); }
+    }
+
+    private void OnProjectAdd(ProjectAddMsg msg) => AddProject(msg.Path, msg.Name);
+
+    private void AddProject(string path, string? name = null)
+    {
+        var p = _projects.Add(path, name);
+        if (p == null) return;   // empty path, or gone from disk
+        _projects.Save();
+        // Adopt any open session already sitting in this repo, so registering a
+        // project you're working in files its tabs immediately instead of
+        // leaving them stranded under "Other".
+        _ = AdoptSessionsIntoProjectAsync(p);
+        PushState();
+    }
+
+    // Files existing sessions under a newly-registered project by matching each
+    // session's repo root to the project's path. Only touches unfiled sessions —
+    // an explicit ProjectId is never reassigned behind the user's back.
+    private async System.Threading.Tasks.Task AdoptSessionsIntoProjectAsync(Project p)
+    {
+        try
+        {
+            var key = ProjectStore.Normalize(p.Path);
+            var changed = false;
+            foreach (var sess in _store.Sessions.ToArray())
+            {
+                if (sess.ProjectId != null) continue;
+                var cwd = PaneTree.AllLeaves(sess.Root)
+                    .Select(leaf => leaf.Cwd)
+                    .FirstOrDefault(c => !string.IsNullOrWhiteSpace(c));
+                if (string.IsNullOrWhiteSpace(cwd)) continue;
+                var top = await GitProc.TopLevelAsync(cwd!);
+                if (string.IsNullOrWhiteSpace(top)) continue;
+                if (ProjectStore.Normalize(top!) != key) continue;
+                sess.ProjectId = p.Id;
+                changed = true;
+            }
+            if (!changed) return;
+            await Dispatcher.InvokeAsync(() => { _store.Save(); PushState(); });
+        }
+        catch (Exception ex) { Log.Error("AdoptSessionsIntoProject", ex); }
+    }
+
+    /// Our 6-hue pane palette mapped onto the color names Claude Code's `/color`
+    /// accepts (red|blue|green|yellow|purple|orange|pink|cyan). Ours is a strict
+    /// SUBSET of cc's, which is the happy accident that lets a single pick drive
+    /// both surfaces: the sidebar dot and the prompt bar inside the session end up
+    /// the same color, so a tab looks the same from the outside and the inside.
+    private static readonly string[] CcColorNames =
+        { "blue", "green", "yellow", "orange", "pink", "purple" };
+
+    // Create a tab under a project. This is the feature: a named, colored agent
+    // session in its own git worktree.
+    private async void OnProjectTabNew(ProjectTabNewMsg msg)
+    {
+        try
+        {
+            var proj = _projects.ById(msg.ProjectId);
+            if (proj == null) return;
+            var name = (msg.Name ?? "").Trim();
+            if (name.Length == 0) name = proj.Name;
+
+            // Worktree first: if it fails we must NOT fall back to opening in the
+            // main checkout. That's the exact collision the worktree prevents (two
+            // agents in one directory silently overwriting each other), so a
+            // failure has to stop the tab, loudly.
+            string cwd = proj.Path, wtPath = "", wtBranch = "";
+            if (msg.Worktree == true)
+            {
+                var (path, branch, error) = await Worktree.CreateAsync(_settings, proj, name);
+                if (error != null || path == null)
+                {
+                    PostToast($"Couldn't create the worktree: {error}", "error", Guid.Empty);
+                    return;
+                }
+                cwd = wtPath = path;
+                wtBranch = branch ?? "";
+            }
+
+            var s = _store.AddNew();
+
+            // Pick the color BEFORE filing the tab under the project. AddNew has
+            // already stamped a globally-unused color on the new leaf, so if it
+            // were already a member of the project, the pick would treat its own
+            // placeholder as "taken" and skip a hue — three tabs came out 0, 2, 3
+            // instead of 0, 1, 2.
+            var colorIndex = _store.PickUnusedColorForProject(proj.Id);
+
+            s.Title = name;
+            s.IsAutoTitle = false;          // a name you typed is never overwritten by OSC 7
+            s.ProjectId = proj.Id;
+            s.Cwd = cwd;
+            s.Root.Cwd = cwd;               // the PANE cwd is what the git signals measure
+            s.WorktreePath = wtPath;
+            s.WorktreeRepo = wtPath.Length > 0 ? proj.Path : "";
+            s.WorktreeBranch = wtBranch;
+            AutoName(s.Root);
+            s.Root.ColorIndex = colorIndex;   // first hue unused by THIS project's tabs
+
+            var agent = msg.Agent ?? "claude";
+            if (agent == "claude")
+            {
+                // Mint the session id ourselves instead of learning it from the
+                // hook afterwards. It makes resume deterministic, and it's what
+                // lets several agents share a repo without `--continue` lassoing
+                // each other's conversations.
+                var sid = Guid.NewGuid().ToString();
+                s.Root.ClaudeSessionId = sid;
+                // --name gets the SLUG, not the raw name. The command is spliced
+                // into the shell's own startup line (pwsh -Command "…"), which
+                // escapes an inner double quote as `" — so `--name "loc diff fix"`
+                // reached claude as the three tokens `"loc`, `diff`, `fix"`, and
+                // the session came up called `"loc`. A slug has no spaces, needs
+                // no quoting, and survives every shell we spawn. (It's also what
+                // Termic passes.) Our own sidebar keeps the name you typed.
+                var ccName = GitProc.Slugify(name);
+                if (ccName.Length == 0) ccName = "tab";
+                _pendingInitialCommand[s.Root.Id] = $"claude --session-id {sid} --name {ccName}";
+                _pendingCcColor[s.Root.Id] = CcColorNames[colorIndex % CcColorNames.Length];
+            }
+            else if (agent == "codex")
+            {
+                _pendingInitialCommand[s.Root.Id] = "codex";
+            }
+
+            _store.ActiveSessionId = s.Id;
+            _activePaneId = s.Root.Id;
+            _store.Save();
+            PushState();   // the page renders the stage → pane.resize → lazy spawn
+        }
+        catch (Exception ex) { Log.Error("OnProjectTabNew", ex); }
+    }
+
+    // Rename a project, or override what its worktrees get seeded with. Both
+    // optional — only the keys present are applied, so the settings dialog can
+    // send a partial update.
+    private void OnProjectUpdate(ProjectUpdateMsg msg)
+    {
+        var p = _projects.ById(msg.Id);
+        if (p == null) return;
+        var dirty = false;
+
+        if (msg.Name is string n && n.Trim().Length > 0 && p.Name != n.Trim())
+        {
+            p.Name = n.Trim();
+            dirty = true;
+        }
+        if (msg.SeedPaths is List<string> seeds)
+        {
+            var clean = seeds.Select(x => x.Trim()).Where(x => x.Length > 0).ToList();
+            // Empty = "inherit the global list", stored as null. A project that
+            // genuinely wants NOTHING seeded is vanishingly rare next to a user
+            // who just cleared the box, and inheriting is the safer read.
+            p.SeedPaths = clean.Count > 0 ? clean : null;
+            dirty = true;
+        }
+
+        if (!dirty) return;
+        _projects.Save();
+        PushState();
+    }
+
+    // Unregister a project. Its tabs are NOT closed — they just fall back to
+    // "Other". Destroying live sessions because a folder was unregistered would
+    // be a wildly disproportionate side effect of a settings tweak.
+    private void OnProjectRemove(ProjectRef msg)
+    {
+        if (!_projects.Remove(msg.Id)) return;
+        foreach (var sess in _store.Sessions)
+            if (sess.ProjectId == msg.Id) sess.ProjectId = null;
+        _projects.Save();
+        _store.Save();
+        PushState();
+    }
+
     private void OnSettingsRequest()
     {
         try
@@ -1547,6 +1965,20 @@ public partial class MainWindow : FluentWindow
                 defaultCwdResolved = _settings.ResolveDefaultCwd(),
                 fontSize = _settings.FontSize,
                 resumeAgentsOnLaunch = _settings.ResumeAgentsOnLaunch,
+                projectScanRoots = _settings.ProjectScanRoots.ToArray(),
+                worktreeRoot = _settings.WorktreeRoot,
+                worktreeRootResolved = Worktree.Root(_settings),
+                worktreeSeedPaths = _settings.WorktreeSeedPaths.ToArray(),
+                // The registered projects, so Settings can manage them (rename,
+                // per-project seeds, unregister) — the "we can do it in settings"
+                // half of the registration story.
+                projects = _projects.Projects.Select(p => new
+                {
+                    id = p.Id.ToString("D"),
+                    name = p.Name,
+                    path = p.Path,
+                    seedPaths = (p.SeedPaths ?? new List<string>()).ToArray(),
+                }).ToArray(),
                 appVersion = _updates.CurrentVersion,
                 updatable = _updates.IsUpdatable,
             };
@@ -1584,6 +2016,36 @@ public partial class MainWindow : FluentWindow
         {
             _settings.ResumeAgentsOnLaunch = b;
             dirty = true;
+        }
+        // Absent key → leave as-is; an empty list is a deliberate "clear them".
+        if (msg.ProjectScanRoots is List<string> roots)
+        {
+            var clean = roots
+                .Select(r => r.Trim())
+                .Where(r => r.Length > 0)
+                .ToList();
+            if (!clean.SequenceEqual(_settings.ProjectScanRoots))
+            {
+                _settings.ProjectScanRoots = clean;
+                dirty = true;
+            }
+        }
+        if (msg.WorktreeRoot is string wtRoot && _settings.WorktreeRoot != wtRoot.Trim())
+        {
+            // Only ever affects worktrees created FROM NOW ON — existing tabs
+            // carry their own absolute WorktreePath, so moving this doesn't strand
+            // them.
+            _settings.WorktreeRoot = wtRoot.Trim();
+            dirty = true;
+        }
+        if (msg.WorktreeSeedPaths is List<string> seeds)
+        {
+            var clean = seeds.Select(x => x.Trim()).Where(x => x.Length > 0).ToList();
+            if (!clean.SequenceEqual(_settings.WorktreeSeedPaths))
+            {
+                _settings.WorktreeSeedPaths = clean;
+                dirty = true;
+            }
         }
         if (dirty) _settings.Save();
         // Re-push so the font size propagates to live panes (no-op for
@@ -1818,11 +2280,27 @@ public partial class MainWindow : FluentWindow
         _ = System.Threading.Tasks.Task.Run(async () =>
         {
             var branch  = await GitProc.BranchAsync(cwd!);
-            var repoTop = sess.IsAutoTitle ? await GitProc.TopLevelAsync(cwd!) : null;
+            // The repo root is needed for the auto-title AND to file an unfiled
+            // session under a registered project, so resolve it for either.
+            var needTop = sess.IsAutoTitle || sess.ProjectId == null;
+            var repoTop = needTop ? await GitProc.TopLevelAsync(cwd!) : null;
             await Dispatcher.InvokeAsync(() =>
             {
                 var dirty = false;
                 if (branch != null && pane.Branch != branch) { pane.Branch = branch; dirty = true; }
+                // Continuous adoption: a session running in a registered repo files
+                // itself under that project. Without this, only sessions open at the
+                // moment you ADD the project ever get filed, so anything you started
+                // from the flat Sessions view would sit in "Other" forever — next to a
+                // project with the same name, which reads as broken. Only ever fills
+                // an EMPTY ProjectId; an explicit one (a worktree tab) is never
+                // reassigned behind your back.
+                if (sess.ProjectId == null && !string.IsNullOrEmpty(repoTop) &&
+                    _projects.ByPath(repoTop!) is Project owner)
+                {
+                    sess.ProjectId = owner.Id;
+                    dirty = true;
+                }
                 if (!string.IsNullOrEmpty(repoTop) && sess.IsAutoTitle)
                 {
                     var name = System.IO.Path.GetFileName(repoTop!.TrimEnd('/', '\\'));
@@ -1897,10 +2375,13 @@ public partial class MainWindow : FluentWindow
         _deferredSpawns.Remove(id);
         var sess = OwningSession(id);
         if (sess == null) return;
-        // Closing the only leaf in a session = close the session.
+        // Closing the only leaf in a session = close the session. The worktree is
+        // KEPT here: closing the last pane is a layout action, not a decision to
+        // throw the work away, and the session still goes to "Recently closed"
+        // where it can be restored into that same directory.
         if (sess.Root.IsLeaf && sess.Root.Id == id)
         {
-            OnSessionClose(new SessionRef { Id = sess.Id });
+            OnSessionClose(new SessionCloseMsg { Id = sess.Id });
             return;
         }
         var newRoot = CloseAndCollapse(sess.Root, id);
@@ -2025,7 +2506,8 @@ public partial class MainWindow : FluentWindow
         try
         {
             var snap = StateProjection.BuildSnapshot(
-                _store, _activePaneId, _settings.FontSize, _settings.OnboardingSeen);
+                _store, _activePaneId, _settings.FontSize, _settings.OnboardingSeen,
+                _projects, _settings.SidebarMode);
             Web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(snap));
         }
         catch (Exception ex) { Log.Error("PushState", ex); }
