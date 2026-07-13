@@ -105,8 +105,9 @@ function listEl(data: CommitsDataMessage, full: boolean): HTMLElement {
 }
 
 /** Anchor a fixed-position panel below `anchor`, flipping above / clamping
- *  horizontally so it never spills off-screen. Mirrors the color-picker. */
-function placeNear(panel: HTMLElement, anchor: HTMLElement): void {
+ *  horizontally so it never spills off-screen. Mirrors the color-picker.
+ *  Exported for the sidebar's metrics hover tip, which shares the pattern. */
+export function placeNear(panel: HTMLElement, anchor: HTMLElement): void {
   const a = anchor.getBoundingClientRect();
   const p = panel.getBoundingClientRect();
   const margin = 8;

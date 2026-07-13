@@ -110,27 +110,56 @@ internal static class HookHandler
                 break;
 
             case "notification":
-                // Claude's Notification hook fires for two distinct cases:
-                //   1. a permission request (agent is BLOCKED, can't proceed)
-                //   2. an idle nudge ("waiting for your input" after 60s)
-                // Only #1 is a real call for attention. #2 fires on a turn that
-                // already finished (Stop → "done"/idle) and merely sat untouched
-                // for 60s — the agent is NOT blocked and nothing new happened, so
-                // escalating it to a loud "waiting / needs you" cried wolf. We
-                // detect the permission case by message text; for the idle nudge
-                // we raise no notification and re-assert "done", leaving the pane
-                // calm at idle (re-asserting also recovers a pane whose Stop hook
-                // was dropped). Detect by the message text.
+                // cc stamps every notification with a structured type (verified
+                // against cc 2.1.207: permission_prompt, idle_prompt, auth_success,
+                // elicitation_dialog, elicitation_complete, elicitation_response,
+                // agent_needs_input, agent_completed). Key on THAT — classifying by
+                // English message text is how a wording change once read a blocked
+                // agent as calm. The text sniff survives only as the fallback for
+                // older cc builds that don't send the field.
+                //
+                //   permission_prompt   → BLOCKED on a tool dialog. The loud red one.
+                //   elicitation_dialog /
+                //   agent_needs_input   → a question/elicitation dialog wants input.
+                //                         Yellow "waiting" + the ask as the note —
+                //                         gentler than permission, but it must land
+                //                         in "Needs you": the turn cannot proceed.
+                //   elicitation_response/
+                //   elicitation_complete→ that dialog was answered; agent resumes.
+                //   idle_prompt         → the 60s nudge on a turn that already
+                //                         finished. NOT a block, nothing new
+                //                         happened — escalating it cried wolf. We
+                //                         re-assert calm "done" (which also
+                //                         recovers a pane whose Stop was dropped).
+                //   auth_success /
+                //   agent_completed /
+                //   anything future     → not a pane-state signal; stay silent so a
+                //                         new cc notification kind can't corrupt
+                //                         state (the buffer probe is the net).
                 var msg = StringFrom(root, "message") ?? "claude needs attention";
-                var isPermission = msg.IndexOf("permission", StringComparison.OrdinalIgnoreCase) >= 0;
-                if (isPermission)
+                var notifType = StringFrom(root, "notification_type") ?? "";
+                if (notifType.Length == 0)
+                    notifType = msg.IndexOf("permission", StringComparison.OrdinalIgnoreCase) >= 0
+                        ? "permission_prompt"
+                        : "idle_prompt";
+                switch (notifType)
                 {
-                    Send(pipeName, new { type = "notify", level = "warn", text = msg });
-                    Send(pipeName, new { type = "status", state = "permission", detail = (string?)null });
-                }
-                else
-                {
-                    Send(pipeName, new { type = "status", state = "done", detail = (string?)null });
+                    case "permission_prompt":
+                        Send(pipeName, new { type = "notify", level = "warn", text = msg });
+                        Send(pipeName, new { type = "status", state = "permission", detail = (string?)null });
+                        break;
+                    case "elicitation_dialog":
+                    case "agent_needs_input":
+                        Send(pipeName, new { type = "notify", level = "warn", text = msg });
+                        Send(pipeName, new { type = "status", state = "waiting", detail = (string?)null });
+                        break;
+                    case "elicitation_response":
+                    case "elicitation_complete":
+                        Send(pipeName, new { type = "status", state = "working", detail = (string?)null });
+                        break;
+                    case "idle_prompt":
+                        Send(pipeName, new { type = "status", state = "done", detail = (string?)null });
+                        break;
                 }
                 break;
 
@@ -167,6 +196,17 @@ internal static class HookHandler
                 // detail — the host coalesces unchanged working→working pushes,
                 // so this firehose is cheap (see OnAgentStatus).
                 Send(pipeName, new { type = "status", state = "working", detail = (string?)null });
+                // File-editing tools also claim the file for THIS pane, so the
+                // host can split a shared working tree's loc between the agents
+                // editing it (projects-mode tabs without worktrees). Only tools
+                // whose input names a file — a Bash side-effect can't be claimed.
+                var editTool = StringFrom(root, "tool_name") ?? StringFrom(root, "tool");
+                if (editTool is "Edit" or "MultiEdit" or "Write" or "NotebookEdit")
+                {
+                    var touched = ToolInputString(root, "file_path") ?? ToolInputString(root, "notebook_path");
+                    if (!string.IsNullOrWhiteSpace(touched))
+                        Send(pipeName, new { type = "git.touched", path = touched });
+                }
                 break;
 
             default:

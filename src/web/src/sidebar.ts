@@ -24,7 +24,8 @@ import { send } from "./bridge.js";
 import { confirmDialog, confirmWithOption } from "./confirm.js";
 import { showNewTabDialog } from "./new-tab-dialog.js";
 import { elapsedSpan, agoSpan } from "./elapsed.js";
-import { attachCommitsHover, openCommitsLightbox } from "./commits-view.js";
+import { spinnerSpan } from "./spinner.js";
+import { attachCommitsHover, openCommitsLightbox, placeNear } from "./commits-view.js";
 
 /** Flatten a pane tree to its leaves. */
 function leaves(node: PaneTreeView): Array<Extract<PaneTreeView, { kind: "leaf" }>> {
@@ -378,17 +379,8 @@ export class Sidebar {
     for (const s of sessions) {
       const needsNote =
         s.agentState === "waiting" || s.agentState === "permission";
-      const item = this.renderItem(s, s.id === activeId, needsNote);
-      if (nested) {
-        item.classList.add("session-item--nested");
-        // The tab's color tag. Same hue the host set INSIDE the Claude session
-        // via /color, so a tab looks the same from the sidebar and from its
-        // prompt bar. Carried on the title (like the pane header does) rather
-        // than as a second dot — the row already has a state dot, and two dots
-        // saying different things would just be noise.
-        const color = leaves(s.rootPane)[0]?.colorIndex;
-        if (color != null) item.dataset.color = String(color);
-      }
+      const item = this.renderItem(s, s.id === activeId, needsNote, nested);
+      if (nested) item.classList.add("session-item--nested");
       list.appendChild(item);
     }
     return list;
@@ -586,22 +578,35 @@ export class Sidebar {
     return el;
   }
 
+  /** `compact` = a project's nested tab row: title + ONE ellipsized meta line
+   *  (2 rows total), smaller type, and a timer glyph in place of the word
+   *  "finished" — several projects × several tabs have to fit on screen. */
   private renderItem(
     s: SessionView,
     active: boolean,
-    showNote: boolean
+    showNote: boolean,
+    compact = false
   ): HTMLElement {
     const item = document.createElement("button");
     item.type = "button";
     item.className = "session-item" + (active ? " session-item--active" : "");
     item.dataset.sessionId = s.id;
 
-    // Status dot on the left. Color comes from CSS via [data-state="..."];
-    // idle = hollow ring, working/waiting/permission = solid fill.
-    const dot = document.createElement("span");
-    dot.className = "session-item__dot";
-    dot.dataset.state = s.agentState;
-    item.appendChild(dot);
+    // Status column. At rest it's the state dot (CSS colors it via
+    // [data-state]); a WORKING tab in compact mode animates instead — the same
+    // braille spinner cc draws in the pane, so the sidebar echoes the
+    // terminal. The spinner replaces the dot in its own 10px slot: same
+    // footprint, and "moving = running" needs no legend.
+    const working = compact && s.agentState === "working";
+    let statusEl: HTMLElement;
+    if (working) {
+      statusEl = spinnerSpan("session-item__spinner");
+    } else {
+      statusEl = document.createElement("span");
+      statusEl.className = "session-item__dot";
+      statusEl.dataset.state = s.agentState;
+    }
+    item.appendChild(statusEl);
 
     // Primary line: title only. The shell rides in the footer; the row gives
     // the title the whole line for a single clean ellipsis.
@@ -613,110 +618,69 @@ export class Sidebar {
     primary.appendChild(title);
     item.appendChild(primary);
 
-    // Secondary line(s): one state-aware signal, then pane breakdown. flex-wrap
-    // lets a dense session spill onto a second muted line.
-    //   working → "▸ what it's doing"
-    //   done    → "+A −D · ⎇ branch ↑N"  (what it produced / what's unpushed)
-    //   else    → "⎇ branch · :ports"     (dormant / needs-you keep code context)
-    const metaItems: Array<{
-      text: string;
-      alert?: boolean;
-      turnStart?: number;
-      since?: number;
-      diff?: { added: number; deleted: number };
-      ahead?: number;
-    }> = [];
-    // The unpushed-commit chip rides just after the branch. Rendered as its own
-    // accent-colored, interactive span (hover → recap, click → details), so it
-    // can't be a plain text suffix anymore.
-    const aheadItem = s.ahead > 0 ? { text: "", ahead: s.ahead } : null;
-
-    if (s.agentState === "working") {
-      metaItems.push({ text: `▸ ${s.activityDetail || "working"}`, turnStart: s.turnStartMs });
-    } else if (s.agentState === "done") {
-      // Lead with live "finished · 2m ago" so the freshness reads first — this
-      // is the "your move" section, and how long it's been waiting on you is
-      // the most useful signal. Falls back to nothing if the turn-end wasn't
-      // stamped (older sessions).
-      if (s.doneAtMs > 0) metaItems.push({ text: "finished", since: s.doneAtMs });
-      // Color-coded diff (+adds green / −dels red) reads at a glance vs plain
-      // text. Rendered as sub-spans in the loop below.
-      if (s.linesAdded || s.linesDeleted)
-        metaItems.push({ text: "", diff: { added: s.linesAdded, deleted: s.linesDeleted } });
-      if (s.branch) metaItems.push({ text: `⎇ ${s.branch}` });
-      if (aheadItem) metaItems.push(aheadItem);
-    } else {
-      // dormant idle / needs-you: branch + unpushed + dev-server ports.
-      if (s.branch) metaItems.push({ text: `⎇ ${s.branch}` });
-      if (aheadItem) metaItems.push(aheadItem);
-      for (const p of s.ports ?? []) metaItems.push({ text: `:${p}` });
-    }
-
-    // Pane breakdown, appended for any multi-pane session.
-    if (s.paneCount > 1) {
-      const parts: string[] = [`${s.paneCount} panes`];
-      if (s.waitingCount > 0) parts.push(`${s.waitingCount} waiting`);
-      else if (s.workingCount > 0) parts.push(`${s.workingCount} working`);
-      metaItems.push({ text: parts.join(" · "), alert: s.waitingCount > 0 });
-    }
-
-    if (metaItems.length) {
-      const meta = document.createElement("span");
-      meta.className = "session-item__meta";
-      for (const mi of metaItems) {
-        const span = document.createElement("span");
-        span.className =
-          "session-item__meta-item" + (mi.alert ? " session-item__meta-item--alert" : "");
-        if (mi.ahead) {
-          // Accent-blue, interactive "↑N ready to push" chip.
-          span.classList.add("session-item__meta-item--ahead");
-          span.textContent = `↑${mi.ahead}`;
-          span.title = "Commits ready to push";
-          const pid = aheadPaneId(s);
-          if (pid) {
-            attachCommitsHover(span, pid);
-            span.addEventListener("click", (ev) => {
-              // The whole row is a button that selects the session — keep the
-              // click here from also navigating.
-              ev.stopPropagation();
-              openCommitsLightbox(pid);
-            });
-          }
-          meta.appendChild(span);
-          continue;
-        }
-        if (mi.diff) {
-          // Colored +adds / −dels, reusing the footer's diff palette classes.
-          if (mi.diff.added) {
-            const add = document.createElement("span");
-            add.className = "diff-add";
-            add.textContent = `+${mi.diff.added}`;
-            span.appendChild(add);
-          }
-          if (mi.diff.deleted) {
-            if (mi.diff.added) span.append(" ");
-            const del = document.createElement("span");
-            del.className = "diff-del";
-            del.textContent = `−${mi.diff.deleted}`;
-            span.appendChild(del);
-          }
-        } else {
-          span.textContent = mi.text;
-        }
-        // Live "· 2m" elapsed appended to the working item; the ticker only
-        // rewrites the inner span, leaving the action text untouched.
-        if (mi.turnStart && mi.turnStart > 0) {
-          span.append(" · ");
-          span.appendChild(elapsedSpan(mi.turnStart));
-        }
-        // Live "finished · 2m ago" on done rows — same ticker, relative form.
-        if (mi.since && mi.since > 0) {
-          span.append(" · ");
-          span.appendChild(agoSpan(mi.since));
-        }
-        meta.appendChild(span);
+    // The tab's /color tag: a small dot hugging the end of the name
+    // (Finder-style label vocabulary), NOT a tint on the title — tinted
+    // titles made every row shout its color and fought legibility. Index 0
+    // is the untouched default, so it renders nothing; only a deliberately
+    // picked color earns a mark. (A user who deliberately picks blue — also
+    // index 0 — goes unmarked in the sidebar; the pane header still shows
+    // it. Distinguishing "default" from "chose blue" needs a host change,
+    // not worth it yet.)
+    if (compact) {
+      const color = leaves(s.rootPane)[0]?.colorIndex ?? 0;
+      if (color > 0) {
+        const tag = document.createElement("span");
+        tag.className = "session-item__tag";
+        tag.dataset.color = String(color);
+        primary.appendChild(tag);
       }
-      item.appendChild(meta);
+    }
+
+    // Secondary metrics (state signal, loc, branch, panes — see buildMeta).
+    // In compact (projects) mode only the ACTIVE tab spends a line on them:
+    // the other rows stay a single title line and fold the same metrics
+    // behind a quiet hover-ⓘ, so a tall project list scans as titles, not
+    // numbers. Session mode keeps the full meta on every row.
+    //
+    // A compact WORKING row is special-cased to ONE line with no prose at
+    // all: the spinner says "running", a ticking elapsed rides the right
+    // edge, and the "what exactly is it doing" line lives on the spinner's
+    // hover tip (and in the pane header you're about to click anyway).
+    if (working) {
+      // The full meta (▸ action · elapsed) as a hover tip on the spinner —
+      // fresh build per reveal so its tickers start current.
+      if (this.buildMeta(s, true))
+        attachMetricsHover(statusEl, () => this.buildMeta(s, true)!);
+      if (s.turnStartMs > 0) {
+        if (active) {
+          // The active row shows the close ✕ permanently in column 3, so its
+          // elapsed takes the slim meta line instead of fighting the ✕.
+          const meta = document.createElement("span");
+          meta.className = "session-item__meta session-item__meta--compact";
+          meta.appendChild(elapsedSpan(s.turnStartMs));
+          item.appendChild(meta);
+        } else {
+          // Right-edge chip, same cell as the hover-revealed ✕ — CSS fades
+          // the chip out as the ✕ fades in.
+          const chip = document.createElement("span");
+          chip.className = "session-item__chip";
+          chip.appendChild(elapsedSpan(s.turnStartMs));
+          item.appendChild(chip);
+        }
+      }
+    } else if (compact && !active) {
+      if (this.buildMeta(s, true)) {
+        const info = document.createElement("span");
+        info.className = "session-item__info";
+        info.setAttribute("aria-label", `Metrics for ${s.title}`);
+        info.appendChild(infoIcon());
+        // Fresh build per reveal so the tip's live tickers start current.
+        attachMetricsHover(info, () => this.buildMeta(s, true)!);
+        primary.appendChild(info);
+      }
+    } else {
+      const meta = this.buildMeta(s, compact);
+      if (meta) item.appendChild(meta);
     }
 
     // Note line — only in the Needs-you section. Shows the agent's ask; falls
@@ -782,6 +746,248 @@ export class Sidebar {
 
     return item;
   }
+
+  /**
+   * The row's metrics line, or null when the session has none to show.
+   *   working → "▸ what it's doing · 2m"
+   *   done    → "finished · 2m ago · +A −D · ⎇ branch ↑N"
+   *   else    → "⎇ branch · :ports"     (dormant / needs-you keep code context)
+   * Session mode renders it under every title (flex-wrap, may take two muted
+   * lines). Compact (projects) mode renders ONE ellipsizing line — inline on
+   * the active tab, inside the hover-ⓘ tip for the rest — with a timer glyph
+   * standing in for the word "finished".
+   */
+  private buildMeta(s: SessionView, compact: boolean): HTMLElement | null {
+    const metaItems: Array<{
+      text: string;
+      alert?: boolean;
+      turnStart?: number;
+      since?: number;
+      sinceTimer?: number;   // compact form of `since`: clock glyph + bare count-up
+      diff?: { added: number; deleted: number };
+      ahead?: number;
+    }> = [];
+    // The unpushed-commit chip rides just after the branch. Rendered as its own
+    // accent-colored, interactive span (hover → recap, click → details), so it
+    // can't be a plain text suffix anymore.
+    const aheadItem = s.ahead > 0 ? { text: "", ahead: s.ahead } : null;
+
+    if (s.agentState === "working") {
+      metaItems.push({ text: `▸ ${s.activityDetail || "working"}`, turnStart: s.turnStartMs });
+    } else if (s.agentState === "done") {
+      // Lead with live "finished · 2m ago" so the freshness reads first — this
+      // is the "your move" section, and how long it's been waiting on you is
+      // the most useful signal. Falls back to nothing if the turn-end wasn't
+      // stamped (older sessions). Compact rows spend a glyph instead of the
+      // word: "⏱ 47s" counting up says the same in a third of the width.
+      if (s.doneAtMs > 0)
+        metaItems.push(
+          compact ? { text: "", sinceTimer: s.doneAtMs } : { text: "finished", since: s.doneAtMs }
+        );
+      // Color-coded diff (+adds green / −dels red) reads at a glance vs plain
+      // text. Rendered as sub-spans in the loop below.
+      if (s.linesAdded || s.linesDeleted)
+        metaItems.push({ text: "", diff: { added: s.linesAdded, deleted: s.linesDeleted } });
+      if (s.branch) metaItems.push({ text: `⎇ ${s.branch}` });
+      if (aheadItem) metaItems.push(aheadItem);
+    } else {
+      // dormant idle / needs-you: branch + unpushed + dev-server ports.
+      if (s.branch) metaItems.push({ text: `⎇ ${s.branch}` });
+      if (aheadItem) metaItems.push(aheadItem);
+      for (const p of s.ports ?? []) metaItems.push({ text: `:${p}` });
+    }
+
+    // Pane breakdown, appended for any multi-pane session.
+    if (s.paneCount > 1) {
+      const parts: string[] = [`${s.paneCount} panes`];
+      if (s.waitingCount > 0) parts.push(`${s.waitingCount} waiting`);
+      else if (s.workingCount > 0) parts.push(`${s.workingCount} working`);
+      metaItems.push({ text: parts.join(" · "), alert: s.waitingCount > 0 });
+    }
+
+    // Compact rows ellipsize as ONE line, shedding from the right — so the
+    // branch chip moves to the end. It's the least differentiating item in a
+    // project group (the tabs usually share it), and clipping it beats
+    // clipping ↑N or the pane breakdown.
+    if (compact) {
+      const bi = metaItems.findIndex((mi) => mi.text.startsWith("⎇"));
+      if (bi >= 0) metaItems.push(metaItems.splice(bi, 1)[0]);
+    }
+
+    if (!metaItems.length) return null;
+
+    const meta = document.createElement("span");
+    meta.className =
+      "session-item__meta" + (compact ? " session-item__meta--compact" : "");
+    for (const mi of metaItems) {
+      // Compact meta is ONE block-flow line (so it can ellipsize as a
+      // whole); flex gap doesn't apply there, so separate items with
+      // literal dots instead.
+      if (compact && meta.childNodes.length) meta.append(" · ");
+      const span = document.createElement("span");
+      span.className =
+        "session-item__meta-item" + (mi.alert ? " session-item__meta-item--alert" : "");
+      if (mi.sinceTimer) {
+        // Clock glyph + bare count-up ("47s", "2m") — the compact stand-in
+        // for "finished · 47s ago". Same shared 1Hz ticker.
+        span.classList.add("session-item__meta-item--timer");
+        span.title = "Time since the agent finished";
+        span.appendChild(timerIcon());
+        span.appendChild(elapsedSpan(mi.sinceTimer));
+        meta.appendChild(span);
+        continue;
+      }
+      if (mi.ahead) {
+        // Accent-blue, interactive "↑N ready to push" chip.
+        span.classList.add("session-item__meta-item--ahead");
+        span.textContent = `↑${mi.ahead}`;
+        span.title = "Commits ready to push";
+        const pid = aheadPaneId(s);
+        if (pid) {
+          attachCommitsHover(span, pid);
+          span.addEventListener("click", (ev) => {
+            // The whole row is a button that selects the session — keep the
+            // click here from also navigating.
+            ev.stopPropagation();
+            openCommitsLightbox(pid);
+          });
+        }
+        meta.appendChild(span);
+        continue;
+      }
+      if (mi.diff) {
+        // Colored +adds / −dels, reusing the footer's diff palette classes.
+        if (mi.diff.added) {
+          const add = document.createElement("span");
+          add.className = "diff-add";
+          add.textContent = `+${mi.diff.added}`;
+          span.appendChild(add);
+        }
+        if (mi.diff.deleted) {
+          if (mi.diff.added) span.append(" ");
+          const del = document.createElement("span");
+          del.className = "diff-del";
+          del.textContent = `−${mi.diff.deleted}`;
+          span.appendChild(del);
+        }
+      } else {
+        span.textContent = mi.text;
+      }
+      // Live "· 2m" elapsed appended to the working item; the ticker only
+      // rewrites the inner span, leaving the action text untouched.
+      if (mi.turnStart && mi.turnStart > 0) {
+        span.append(" · ");
+        span.appendChild(elapsedSpan(mi.turnStart));
+      }
+      // Live "finished · 2m ago" on done rows — same ticker, relative form.
+      if (mi.since && mi.since > 0) {
+        span.append(" · ");
+        span.appendChild(agoSpan(mi.since));
+      }
+      meta.appendChild(span);
+    }
+    return meta;
+  }
+}
+
+// ---- Metrics hover tip (inactive project tabs) ------------------------------
+// One shared fixed-position panel, shown while the pointer rests on a row's
+// ⓘ glyph. Same surface + fade as the commits hover (commits-pop classes),
+// same placement helper — so the two sidebar tooltips read as one system.
+// Content is rebuilt on every reveal (the sidebar rebuilds rows on each state
+// push, so cached content would go stale); the shared 1Hz ticker keeps the
+// times inside it live while it's open.
+
+let tipEl: HTMLElement | null = null;
+let tipTimer = 0;
+let tipAnchor: HTMLElement | null = null;
+
+function metricsTipPanel(): HTMLElement {
+  if (tipEl) return tipEl;
+  tipEl = document.createElement("div");
+  tipEl.className = "commits-pop commits-pop--hover session-metrics-tip";
+  tipEl.setAttribute("role", "tooltip");
+  document.body.appendChild(tipEl);
+  return tipEl;
+}
+
+function hideMetricsTip(): void {
+  if (tipTimer) {
+    clearTimeout(tipTimer);
+    tipTimer = 0;
+  }
+  tipAnchor = null;
+  tipEl?.classList.remove("commits-pop--visible");
+}
+
+function attachMetricsHover(anchor: HTMLElement, build: () => HTMLElement): void {
+  anchor.addEventListener("mouseenter", () => {
+    tipAnchor = anchor;
+    if (tipTimer) clearTimeout(tipTimer);
+    // Shorter than the commits hover's 450ms: the ⓘ is a deliberate,
+    // small target — by the time the pointer lands on it the intent is clear.
+    tipTimer = window.setTimeout(() => {
+      tipTimer = 0;
+      if (tipAnchor !== anchor) return;
+      const tip = metricsTipPanel();
+      tip.replaceChildren(build());
+      tip.classList.add("commits-pop--visible");
+      placeNear(tip, anchor);
+    }, 250);
+  });
+  anchor.addEventListener("mouseleave", hideMetricsTip);
+  anchor.addEventListener("mousedown", hideMetricsTip);
+}
+
+/** Single-stroke "i in a circle" info glyph (Fluent/Lucide family) — marks a
+ *  row whose metrics are folded behind the hover tip. */
+function infoIcon(): SVGElement {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("width", "11");
+  svg.setAttribute("height", "11");
+  svg.setAttribute("viewBox", "0 0 12 12");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "1.1");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("aria-hidden", "true");
+  const ring = document.createElementNS(ns, "circle");
+  ring.setAttribute("cx", "6");
+  ring.setAttribute("cy", "6");
+  ring.setAttribute("r", "4.6");
+  const stem = document.createElementNS(ns, "path");
+  stem.setAttribute("d", "M6 5.6 V8.2");
+  const dot = document.createElementNS(ns, "path");
+  dot.setAttribute("d", "M6 3.8 V3.9");
+  dot.setAttribute("stroke-width", "1.5");
+  svg.append(ring, stem, dot);
+  return svg;
+}
+
+/** Single-stroke clock glyph (Fluent/Lucide family) — the compact rows'
+ *  stand-in for the word "finished"; reads as "time since". */
+function timerIcon(): SVGElement {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("class", "session-item__timer-glyph");
+  svg.setAttribute("width", "10");
+  svg.setAttribute("height", "10");
+  svg.setAttribute("viewBox", "0 0 12 12");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "1.2");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+  const face = document.createElementNS(ns, "circle");
+  face.setAttribute("cx", "6");
+  face.setAttribute("cy", "6");
+  face.setAttribute("r", "4.5");
+  const hands = document.createElementNS(ns, "path");
+  hands.setAttribute("d", "M6 3.6 V6 L7.7 7.1");
+  svg.append(face, hands);
+  return svg;
 }
 
 /** Single-stroke "rotate-ccw" restore glyph (Fluent/Lucide family). */

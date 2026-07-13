@@ -14,6 +14,7 @@ import { openSettings, applySettingsData, applyUpdateStatus } from "./settings.j
 import { showProjectsDialog } from "./projects-dialog.js";
 import { showOnboarding } from "./onboarding.js";
 import { startElapsedTicker } from "./elapsed.js";
+import { startSpinnerTicker } from "./spinner.js";
 import { confirmDialog } from "./confirm.js";
 import { RestoreProgress } from "./restore-progress.js";
 import { invalidateCommits } from "./commits.js";
@@ -22,6 +23,8 @@ import type { PaneTreeView } from "./bridge.js";
 // One shared 1Hz ticker keeps every "working · 2m" label live without
 // rebuilding the sidebar/dashboard. Safe to start before the first state.
 startElapsedTicker();
+// And one shared frame ticker for the working-tab braille spinners.
+startSpinnerTicker();
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const el = document.getElementById(id);

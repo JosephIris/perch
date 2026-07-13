@@ -15,6 +15,7 @@ import { showLinkMenu } from "./link-menu.js";
 import { buildPaneHeader, applyChips, applyAgentBadge } from "./pane-header.js";
 import { buildPaneFooter, applyPaneFooter, type PaneFooter } from "./pane-footer.js";
 import { attachTooltip } from "./tooltip.js";
+import { permissionDialogVisible, blockedDialogVisible } from "./perm-probe.js";
 
 // The host appends ?nowebgl=1 when it re-navigates after a render-process
 // crash, having pinned the WebGL renderer as the likely culprit. Honoring it
@@ -66,6 +67,11 @@ export class Pane {
   // chrome (the commit chip only shows on the active pane) without waiting
   // for the next state push.
   private lastLeaf?: Extract<PaneTreeView, { kind: "leaf" }>;
+  // Agent-state reconciliation against the terminal buffer (see probeTick).
+  private probeTimer = 0;
+  private probeState = "";   // leaf state the streak counters accumulated under
+  private probeStreak = 0;   // consecutive ticks agreeing with the pending report
+  private probeSentAt = 0;
   // Full first-prompt text for the name tooltip; updated from each leaf view.
   private nameFull = "";
 
@@ -326,6 +332,7 @@ export class Pane {
   }
 
   dispose() {
+    this.stopProbe();
     this.observer?.disconnect();
     this.observer = undefined;
     try { this.term.dispose(); } catch { /* ignore */ }
@@ -413,6 +420,95 @@ export class Pane {
     applyChips(this.branchEl, this.commitsEl, leaf, this.isActive);
     applyAgentBadge(this.agentBadgeEl, leaf.agentType);
     applyPaneFooter(this.footer, leaf, this.isActive);
+    this.syncProbe(leaf);
+  }
+
+  // ---- Agent-state reconciliation against the buffer -------------------------
+  // The host's agent state is edge-triggered off cc hooks, and several edges
+  // simply don't exist: a permission prompt dismissed without a hook (Esc
+  // aborts the turn silently; a denial resumes without the tool; an approved
+  // slow tool reports only at completion) pins a pane on red "permission" —
+  // and the mirror image, a question/plan dialog whose notification was lost,
+  // sits silent until the watchdog calls it "done" and a BLOCKED agent reads
+  // calm. The buffer can't go stale the way edges can, so while the pane is in
+  // a reconcilable state we peek at the bottom of it every couple of seconds
+  // and report disagreements; the HOST decides (it knows which states were
+  // inferred vs hook-asserted). Detection lives in perm-probe.ts (pure,
+  // unit-tested). Three watches:
+  //   permission → dialog gone       → report; host demotes to working(inferred)
+  //   done       → blocked dialog up → report (inactive panes only — an ACTIVE
+  //                pane's ❯ menu is usually the user driving /model); host
+  //                promotes to waiting ONLY if its done was itself inferred
+  //   waiting    → dialog gone       → report; host unwinds ONLY its own
+  //                inferred promotion, never a hook-raised waiting (whose
+  //                dialog, e.g. MCP elicitation, may not match cc's markers)
+  // CLAUDE PANES ONLY: the markers are cc's chrome. Another agent that set
+  // `perch status permission` via the CLI draws its own prompt UI — probing
+  // it would demote a genuinely blocked agent.
+
+  private syncProbe(leaf: Extract<PaneTreeView, { kind: "leaf" }>) {
+    const eligible =
+      leaf.agentType === "claude" &&
+      (leaf.agentState === "permission" ||
+        leaf.agentState === "waiting" ||
+        leaf.agentState === "done");
+    if (!eligible) {
+      this.stopProbe();
+      return;
+    }
+    if (leaf.agentState !== this.probeState) {
+      this.probeState = leaf.agentState;
+      this.probeStreak = 0;
+    }
+    if (!this.probeTimer)
+      this.probeTimer = window.setInterval(() => this.probeTick(), 2000);
+  }
+
+  private stopProbe() {
+    if (this.probeTimer) {
+      clearInterval(this.probeTimer);
+      this.probeTimer = 0;
+    }
+    this.probeState = "";
+    this.probeStreak = 0;
+  }
+
+  /** Last rows of the buffer. Dialogs render at the bottom of the CONTENT, so
+   *  this is the whole story — no viewport math, immune to user scroll. */
+  private bufferTail(): string {
+    const buf = this.term.buffer.active;
+    const end = buf.length;
+    let tail = "";
+    for (let i = Math.max(0, end - 40); i < end; i++)
+      tail += (buf.getLine(i)?.translateToString(true) ?? "") + "\n";
+    return tail;
+  }
+
+  private probeTick() {
+    const state = this.lastLeaf?.agentState;
+    const tail = this.bufferTail();
+
+    // Which observation would contradict the current state?
+    let report: { permissionVisible?: boolean; blockedVisible?: boolean } | null = null;
+    if (state === "permission" && !permissionDialogVisible(tail)) {
+      report = { permissionVisible: false };
+    } else if (state === "waiting" && !blockedDialogVisible(tail)) {
+      report = { blockedVisible: false };
+    } else if (state === "done" && !this.isActive && blockedDialogVisible(tail)) {
+      report = { blockedVisible: true };
+    }
+    if (!report) {
+      this.probeStreak = 0;
+      return;
+    }
+    // Two consecutive agreeing ticks before reporting — a single one could
+    // straddle a mid-redraw frame. The resend gate covers the host push
+    // round-trip (and a host that keeps the state on purpose isn't spammed).
+    if (++this.probeStreak < 2) return;
+    const now = Date.now();
+    if (now - this.probeSentAt < 10_000) return;
+    this.probeSentAt = now;
+    send({ type: "pane.probe", paneId: this.paneId, ...report });
   }
 
   /** Bump the terminal font size by `delta` px, clamped to [9, 32].

@@ -50,6 +50,7 @@ internal sealed class PaneManager : IDisposable
     public event Action<Session, Guid, NotifyMessage>? AgentNotify;
     public event Action<Session, Guid, MetaMessage>? AgentMeta;
     public event Action<Session, Guid, GitBaselineMessage>? GitBaseline;
+    public event Action<Session, Guid, GitTouchedMessage>? GitTouched;
     public event Action<Session, Guid, TitleMessage>? AgentTitle;
     public event Action<Session, Guid, NameResetMessage>? NameReset;
     public event Action<Session, Guid, AgentMessage>? AgentType;
@@ -126,6 +127,7 @@ internal sealed class PaneManager : IDisposable
         ipc.OnNotify += msg => AgentNotify?.Invoke(sess, paneId, msg);
         ipc.OnMeta   += msg => AgentMeta?.Invoke(sess, paneId, msg);
         ipc.OnGitBaseline += msg => GitBaseline?.Invoke(sess, paneId, msg);
+        ipc.OnGitTouched += msg => GitTouched?.Invoke(sess, paneId, msg);
         ipc.OnTitle  += msg => AgentTitle?.Invoke(sess, paneId, msg);
         ipc.OnNameReset += msg => NameReset?.Invoke(sess, paneId, msg);
         ipc.OnAgent  += msg => AgentType?.Invoke(sess, paneId, msg);

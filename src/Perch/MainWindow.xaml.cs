@@ -123,6 +123,7 @@ public partial class MainWindow : FluentWindow
         _panes.AgentNotify += OnAgentNotify;
         _panes.AgentMeta += OnAgentMeta;
         _panes.GitBaseline += OnGitBaseline;
+        _panes.GitTouched += OnGitTouched;
         _panes.AgentTitle += OnAgentTitle;
         _panes.NameReset += OnNameReset;
         _panes.AgentType += OnAgentType;
@@ -471,6 +472,7 @@ public partial class MainWindow : FluentWindow
         .Add<PaneRenameMsg>("pane.rename", OnPaneRename)
         .Add<PaneRecolorMsg>("pane.recolor", OnPaneRecolor)
         .Add<PaneCwdMsg>("pane.cwd", OnPaneCwd)
+        .Add<PaneProbeMsg>("pane.probe", OnPaneProbe)
         .Add<UrlPaneLayoutMsg>("urlpane.layout", m => _urlPaneCtrl?.OnLayout(m))
         .Add<PaneRef>("urlpane.dispose", m => _urlPaneCtrl?.OnDispose(m))
         .Add<SessionNewMsg>("session.new", OnSessionNew)
@@ -905,6 +907,87 @@ public partial class MainWindow : FluentWindow
 
     private void DestroyPty(Guid paneId) => _panes.Destroy(paneId);
 
+    // ---- Graceful agent shutdown on close ----------------------------------
+    // Closing a tab used to shoot the console outright (ClosePseudoConsole
+    // terminates the whole attached tree), which could kill Claude halfway
+    // through a multi-file edit and skip its SessionEnd hooks. Now a pane
+    // RUNNING an agent gets a polite exit first: Esc (abort any mid-flight
+    // turn), a beat, Esc again (dismiss a dialog left standing), then
+    // "/exit". The session-end hook coming back over the pane pipe clears
+    // pane.AgentType — that's the clean-exit ack — after which the hard
+    // teardown only kills a bare shell. Timeout → hard kill anyway, so this
+    // can never be worse than the old behavior, only ≤ ~4s slower — and the
+    // UI never waits (the tab is gone immediately; the grace window runs on
+    // detached PTYs).
+    //
+    // Everything here runs on the UI thread (awaits resume on the WPF
+    // context), same as the IPC handlers that mutate pane.AgentType — so the
+    // completion poll below is race-free by construction.
+
+    private readonly Dictionary<Guid, System.Threading.CancellationTokenSource> _pendingShutdown = new();
+
+    private async System.Threading.Tasks.Task ShutdownPaneAsync(PaneNode pane)
+    {
+        // Polite path only for a live Claude pane with a PTY to talk to.
+        // Plain shells have no hooks to save, and "/exit" is cc's exit
+        // choreography — other agents take the hard kill as before.
+        if (pane.AgentType != "claude" || !_panes.Has(pane.Id))
+        {
+            DestroyPty(pane.Id);
+            return;
+        }
+        var cts = new System.Threading.CancellationTokenSource();
+        _pendingShutdown[pane.Id] = cts;
+        try
+        {
+            var esc = new byte[] { 0x1B };
+            _panes.Write(pane.Id, esc);
+            await System.Threading.Tasks.Task.Delay(250, cts.Token);
+            _panes.Write(pane.Id, esc);
+            await System.Threading.Tasks.Task.Delay(250, cts.Token);
+            _panes.Write(pane.Id, System.Text.Encoding.UTF8.GetBytes("/exit\r"));
+            // session-end → `agent ""` clears AgentType: the clean-exit ack.
+            // (If cc died earlier WITHOUT its hook, the ack never comes and
+            // we're typing /exit at a shell — harmless; the deadline caps it.)
+            var deadline = DateTime.UtcNow.AddSeconds(3);
+            while (pane.AgentType == "claude" && DateTime.UtcNow < deadline)
+                await System.Threading.Tasks.Task.Delay(100, cts.Token);
+            Log.Info("Shutdown", pane.AgentType == "claude"
+                ? $"pane={pane.Id:N} no session-end within grace; hard kill"
+                : $"pane={pane.Id:N} clean agent exit");
+        }
+        catch (System.Threading.Tasks.TaskCanceledException) { /* restore cut the grace short */ }
+        catch (Exception ex) { Log.Error("Shutdown", ex); /* dead pipe etc. → straight to kill */ }
+        finally
+        {
+            _pendingShutdown.Remove(pane.Id);
+            DestroyPty(pane.Id);   // idempotent; CancelPendingShutdown may have beaten us here
+        }
+    }
+
+    /// Cut a pane's grace window short. Restore needs the PTY slot NOW:
+    /// Spawn refuses a pane id that still has a live PTY, so a session
+    /// restored while its panes are politely exiting would come up dead.
+    private void CancelPendingShutdown(Guid paneId)
+    {
+        if (_pendingShutdown.Remove(paneId, out var cts))
+        {
+            try { cts.Cancel(); } catch { }
+            DestroyPty(paneId);
+        }
+    }
+
+    /// Post-close teardown, detached from the UI: polite-exit every pane
+    /// concurrently, and only then reclaim the worktree folder (when asked) —
+    /// `git worktree remove` fails while a process still has its cwd inside.
+    private async System.Threading.Tasks.Task CloseTeardownAsync(
+        List<PaneNode> leaves, string wtRepo, string wtPath)
+    {
+        await System.Threading.Tasks.Task.WhenAll(leaves.Select(ShutdownPaneAsync));
+        if (wtRepo.Length > 0 && wtPath.Length > 0)
+            _ = Worktree.RemoveAsync(wtRepo, wtPath);
+    }
+
     // ---- Agent IPC handlers (perch status / notify / meta) ----------------
     // State/level string mappings live in StateProjection.cs.
 
@@ -964,6 +1047,14 @@ public partial class MainWindow : FluentWindow
         // calling `perch status waiting|permission` directly.
         static bool IsAttention(AgentState st) =>
             st is AgentState.Waiting or AgentState.Permission;
+        // The note (the agent's ask) belongs to the blocked state that raised
+        // it. Leaving Waiting/Permission for a non-blocked state means the ask
+        // was answered or abandoned — without this, the dashboard card (which
+        // shows the note for ANY state) kept reading "Claude needs your
+        // permission" long after a normal approve → work → finish cycle.
+        if (IsAttention(prev) && !IsAttention(pane.AgentState) &&
+            pane.NotificationText.Length > 0)
+            pane.NotificationText = "";
         if (!IsAttention(prev) && IsAttention(pane.AgentState))
             FlashAttention();                                    // loud: blocked / wants feedback
         else if (prev != AgentState.Done && pane.AgentState == AgentState.Done)
@@ -1022,6 +1113,71 @@ public partial class MainWindow : FluentWindow
             }
         }
         if (changed) PushState();
+    }
+
+    // The watchdog's sibling for the BLOCKED states, driven by the page. The
+    // watchdog can't touch them — silence is their NORMAL shape (a dialog sits
+    // quietly) — yet several of their edges fire no hook at all (Esc aborts
+    // the turn without a Stop; deny-with-feedback resumes without the tool; a
+    // question dialog whose notification was dropped never announces itself).
+    // The page owns the terminal buffer, so IT watches for dialogs leaving or
+    // appearing and reports here; this handler decides, because only the host
+    // knows which states were hook-asserted vs inferred:
+    //   • Permission + dialog gone → INFERRED Working. If the agent resumed
+    //     (approve/deny) the state is simply correct early; if it's at rest
+    //     (Esc) the watchdog settles it to Done on silence. Permission is the
+    //     one non-inferred state the probe may override — its exits are
+    //     hook-less by design (cc fires no Stop on user interrupt).
+    //   • INFERRED Done + blocked dialog visible → Waiting. The watchdog read
+    //     a question/plan dialog's silence as "turn over"; the dialog says
+    //     otherwise. A real Stop-hook Done is never overridden — an idle
+    //     pane's ❯ menu is usually the user driving /model.
+    //   • INFERRED Waiting + dialog gone → back to Done (still inferred). The
+    //     unwind of the previous rule only — a hook-raised waiting (e.g. MCP
+    //     elicitation, whose dialog may not match cc's markers) is never
+    //     probed away.
+    // No taskbar flash on the Waiting promotion: it's an inference, and a
+    // false flash is the boy who cried wolf this state machine exists to avoid.
+    private void OnPaneProbe(PaneProbeMsg msg)
+    {
+        var sess = OwningSession(msg.PaneId);
+        var pane = sess == null ? null : FindPane(sess, msg.PaneId);
+        if (pane == null) return;
+
+        if (msg.PermissionVisible == false && pane.AgentState == AgentState.Permission)
+        {
+            pane.AgentState = AgentState.Working;
+            pane.StateInferred = true;
+            pane.TurnStartUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            // The ask died with the dialog — a stale "Claude needs your
+            // permission" note must not outlive it in the sidebar/dashboard.
+            pane.NotificationText = "";
+            Log.Info("PaneProbe", $"pane={pane.Id:N} permission->working (dialog gone)");
+            PushState();
+        }
+        else if (msg.BlockedVisible == true &&
+                 pane.AgentState == AgentState.Done && pane.StateInferred)
+        {
+            pane.AgentState = AgentState.Waiting;
+            // Stays inferred — that's the license for the unwind rule below.
+            if (string.IsNullOrEmpty(pane.NotificationText))
+            {
+                pane.NotificationText = "Waiting at a prompt in the terminal";
+                pane.NotificationLevel = NotificationLevel.Warn;
+            }
+            Log.Info("PaneProbe", $"pane={pane.Id:N} done->waiting (blocked dialog visible)");
+            PushState();
+        }
+        else if (msg.BlockedVisible == false &&
+                 pane.AgentState == AgentState.Waiting && pane.StateInferred)
+        {
+            // DoneAtUnixMs still holds the watchdog's original turn-end stamp,
+            // so the row's "finished · Xm ago" resumes where it left off.
+            pane.AgentState = AgentState.Done;
+            pane.NotificationText = "";   // the synthetic note above is ours to take back
+            Log.Info("PaneProbe", $"pane={pane.Id:N} waiting->done (dialog gone)");
+            PushState();
+        }
     }
 
     // Auto-name a terminal pane from the agent's first prompt — "capture
@@ -1147,15 +1303,72 @@ public partial class MainWindow : FluentWindow
         var pane = FindPane(sess, paneId);
         if (pane == null) return;
         pane.CommitBaseline = msg.Sha ?? "";
+        // New session, new attribution: the touched set describes the PREVIOUS
+        // cc session's work. Cleared on session-end too so a dead agent's set
+        // can't filter a future session.
+        pane.TouchedFiles.Clear();
+        pane.DiffAttributed = false;
         if (string.IsNullOrEmpty(pane.CommitBaseline))
         {
             pane.UntrackedBaseline = null;
             pane.CommitCount = 0;
             pane.LinesAdded = pane.LinesDeleted = pane.FilesChanged = pane.Ahead = 0;
             PushState();
+            // This agent leaving may make a shared tree solo again — let the
+            // remaining same-cwd panes widen back to the whole-tree measurement.
+            RefreshCwdSiblings(pane);
             return;
         }
         _ = CaptureUntrackedBaselineAsync(pane, refresh: true);
+        // A second agent joining a tree flips its siblings from "whole tree"
+        // to "my touched files" — recompute them now instead of leaving them
+        // wearing the union until their own next state change.
+        RefreshCwdSiblings(pane);
+    }
+
+    /// A file-editing tool just ran in this pane (post-tool-use hook). Record
+    /// the file in git's own path space (cwd-relative, forward slashes) so
+    /// RefreshGitStatsAsync can split a SHARED working tree's loc between the
+    /// agents editing it. Bounded naturally — one entry per distinct file per
+    /// session. No PushState: the stats refresh on the next status change is
+    /// what repaints.
+    private void OnGitTouched(Session sess, Guid paneId, GitTouchedMessage msg)
+    {
+        var pane = FindPane(sess, paneId);
+        if (pane == null || string.IsNullOrWhiteSpace(msg.Path)) return;
+        if (!_paneCwd.TryGetValue(paneId, out var cwd) || string.IsNullOrEmpty(cwd)) return;
+        string rel;
+        if (!System.IO.Path.IsPathRooted(msg.Path))
+        {
+            rel = msg.Path!;   // already relative (to the agent's cwd = the pane's cwd)
+        }
+        else
+        {
+            try { rel = System.IO.Path.GetRelativePath(cwd, msg.Path!); }
+            catch { return; }
+            // Outside the pane's cwd (or another drive): not expressible in the
+            // cwd-relative space the git numstat rows use — skip rather than
+            // mis-attribute. (Panes sit at the repo/worktree root in practice,
+            // so "under the cwd" and "in the repo" are the same set.)
+            if (rel.StartsWith("..") || System.IO.Path.IsPathRooted(rel)) return;
+        }
+        pane.TouchedFiles.Add(rel.Replace('\\', '/'));
+    }
+
+    /// Recompute git stats for every OTHER agent pane measuring the same
+    /// working tree as <paramref name="pane"/>. An agent joining or leaving a
+    /// tree changes what its siblings' measurement MEANS (whole tree vs own
+    /// touched files) — without this nudge they'd show the stale reading until
+    /// their own next state change.
+    private void RefreshCwdSiblings(PaneNode pane)
+    {
+        if (!_paneCwd.TryGetValue(pane.Id, out var cwd) || string.IsNullOrEmpty(cwd)) return;
+        foreach (var s in _store.Sessions)
+            foreach (var p in AllLeaves(s.Root))
+                if (p.Id != pane.Id && !string.IsNullOrEmpty(p.CommitBaseline)
+                    && _paneCwd.TryGetValue(p.Id, out var c)
+                    && string.Equals(c, cwd, StringComparison.OrdinalIgnoreCase))
+                    _ = RefreshGitStatsAsync(p);
     }
 
     // Snapshot the pane's untracked-file set the moment its baseline sha
@@ -1192,12 +1405,31 @@ public partial class MainWindow : FluentWindow
         if (!_paneCwd.TryGetValue(pane.Id, out var cwd) || string.IsNullOrEmpty(cwd)) return;
         var baseline = pane.CommitBaseline;
         var hasBaseline = !string.IsNullOrEmpty(baseline);
+        // Shared working tree? Two agents with live baselines in the SAME cwd
+        // (projects-mode tabs without worktrees) each read the whole tree's
+        // diff, so every tab wore the union of everyone's work. When shared,
+        // restrict this pane's stats to the files ITS agent reported touching
+        // (git.touched, hook-attributed). A lone pane keeps the whole-tree
+        // measurement — that also catches files a Bash command created, which
+        // attribution can't see. Snapshot the set (it mutates on the UI thread
+        // while the git walk runs off it).
+        IReadOnlySet<string>? pathFilter = null;
+        if (hasBaseline)
+        {
+            var shared = _store.Sessions
+                .SelectMany(s => AllLeaves(s.Root))
+                .Any(p => p.Id != pane.Id && !string.IsNullOrEmpty(p.CommitBaseline)
+                       && _paneCwd.TryGetValue(p.Id, out var otherCwd)
+                       && string.Equals(otherCwd, cwd, StringComparison.OrdinalIgnoreCase));
+            if (shared)
+                pathFilter = new HashSet<string>(pane.TouchedFiles, StringComparer.OrdinalIgnoreCase);
+        }
         // Run the git queries concurrently off the UI thread — they're
         // independent and each is a fast plumbing command. The commit count and
         // the loc size come from one walk (SessionStatsAsync) so they can't
         // disagree about what counts as this session's work.
         var statsT = hasBaseline
-            ? GitProc.SessionStatsAsync(baseline, cwd, pane.UntrackedBaseline)
+            ? GitProc.SessionStatsAsync(baseline, cwd, pane.UntrackedBaseline, pathFilter)
             : System.Threading.Tasks.Task.FromResult<GitSessionStats?>(null);
         var aheadT = GitProc.AheadAsync(cwd);
         await System.Threading.Tasks.Task.WhenAll(statsT, aheadT);
@@ -1221,6 +1453,8 @@ public partial class MainWindow : FluentWindow
                 if (pane.FilesChanged != s.Files)   { pane.FilesChanged = s.Files;   changed = true; }
                 if (pane.LinesAdded   != s.Added)   { pane.LinesAdded   = s.Added;   changed = true; }
                 if (pane.LinesDeleted != s.Deleted) { pane.LinesDeleted = s.Deleted; changed = true; }
+                var attributed = pathFilter != null;
+                if (pane.DiffAttributed != attributed) { pane.DiffAttributed = attributed; changed = true; }
             }
             if (ahead is int a && pane.Ahead != a) { pane.Ahead = a; changed = true; }
             if (changed) PushState();
@@ -1470,8 +1704,7 @@ public partial class MainWindow : FluentWindow
     {
         var sess = _store.Sessions.FirstOrDefault(x => x.Id == msg.Id);
         if (sess == null) return;
-        // Tear down every PTY owned by this session.
-        foreach (var leaf in AllLeaves(sess.Root).ToList()) DestroyPty(leaf.Id);
+        var leaves = AllLeaves(sess.Root).ToList();
 
         var wtPath = sess.WorktreePath;
         var wtRepo = sess.WorktreeRepo;
@@ -1486,15 +1719,18 @@ public partial class MainWindow : FluentWindow
         // exists. So we purge the archive too, rather than leave a restore button
         // that's guaranteed to fail. The BRANCH survives either way — the commits
         // are the work, and closing a tab must never be able to destroy them.
-        if (msg.RemoveWorktree == true && wtPath.Length > 0 && wtRepo.Length > 0)
-        {
-            _store.Purge(sess.Id);
-            _ = Worktree.RemoveAsync(wtRepo, wtPath);
-        }
+        var purgeWorktree = msg.RemoveWorktree == true && wtPath.Length > 0 && wtRepo.Length > 0;
+        if (purgeWorktree) _store.Purge(sess.Id);
 
         EnsureActivePane();
         _store.Save();
         PushState();
+
+        // PTY teardown AFTER the UI has moved on: agent panes get their polite
+        // exit (see ShutdownPaneAsync), and the worktree folder — when its
+        // removal was requested — is reclaimed only once every process that
+        // had a cwd inside it is dead.
+        _ = CloseTeardownAsync(leaves, purgeWorktree ? wtRepo : "", purgeWorktree ? wtPath : "");
     }
 
     // Bring a closed session back from "Recently closed". Restores its layout
@@ -1504,6 +1740,11 @@ public partial class MainWindow : FluentWindow
     {
         var sess = _store.Restore(msg.Id);
         if (sess == null) return;
+        // A restore can race the just-closed session's grace window (its PTYs
+        // may still be politely exiting). Free the slots NOW — Spawn refuses a
+        // pane id that still has a live PTY, so without this the restored tabs
+        // would come up dead.
+        foreach (var p in AllLeaves(sess.Root)) CancelPendingShutdown(p.Id);
         _activePaneId = FirstLeaf(sess.Root)?.Id;
         if (_settings.ResumeAgentsOnLaunch)
         {
@@ -2384,9 +2625,13 @@ public partial class MainWindow : FluentWindow
             OnSessionClose(new SessionCloseMsg { Id = sess.Id });
             return;
         }
+        // Capture the leaf BEFORE the tree drops it — the polite shutdown needs
+        // its AgentType to decide whether there's an agent worth exiting cleanly.
+        var closingLeaf = FindPane(sess, id);
         var newRoot = CloseAndCollapse(sess.Root, id);
         if (newRoot == null) return;
-        DestroyPty(id);
+        if (closingLeaf != null) _ = ShutdownPaneAsync(closingLeaf);
+        else DestroyPty(id);
         sess.Root = newRoot;
         // Closing a pane evenly redistributes the survivors — a resized layout
         // would otherwise leave the remaining panes lopsided (and a collapsed

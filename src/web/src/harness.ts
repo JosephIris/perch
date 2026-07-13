@@ -9,6 +9,8 @@
 // location.hash (#sidebar | #dashboard | #confirm).
 
 import "./style.css";
+import { startElapsedTicker } from "./elapsed.js";
+import { startSpinnerTicker } from "./spinner.js";
 import { Sidebar } from "./sidebar.js";
 import { Dashboard } from "./dashboard.js";
 import { confirmDialog } from "./confirm.js";
@@ -157,6 +159,70 @@ const sessions: SessionView[] = [
 
 const view = location.hash.replace("#", "") || "sidebar";
 
+// Live tickers, same as main.ts — the harness should breathe like the app
+// (elapsed labels count, working spinners spin) so captures look real.
+startElapsedTicker();
+startSpinnerTicker();
+
+// #projects — project mode: grouped tabs with the COMPACT 2-line rows (title +
+// one ellipsized meta line: ⏱ time-since-finish, per-tab loc, branch, panes).
+// Mirrors the shared-tree scenario the attribution work fixed: two done tabs in
+// one repo, each wearing ITS OWN +A −D instead of both wearing the union.
+const projectsList = [
+  { id: "p-ptp", name: "storefront-web", path: "C:\\dev\\storefront-web" },
+  { id: "p-gm", name: "home-tools", path: "C:\\dev\\home-tools" },
+];
+function projectTab(over: Partial<SessionView> & { id: string; title: string }): SessionView {
+  return {
+    shell: "pwsh",
+    projectId: "p-ptp",
+    worktreeBranch: "",
+    rootPane: leaf({ name: over.title, agentState: over.agentState ?? "done", branch: "main" }),
+    agentState: "done",
+    activityDetail: "",
+    branch: "main",
+    ports: [],
+    notification: null,
+    paneCount: 1,
+    waitingCount: 0,
+    workingCount: 0,
+    linesAdded: 0,
+    linesDeleted: 0,
+    filesChanged: 0,
+    ahead: 0,
+    turnStartMs: 0,
+    doneAtMs: 0,
+    lastActivity: "now",
+    ...over,
+  };
+}
+const projectSessions: SessionView[] = [
+  projectTab({
+    id: "s-tab1", title: "signup flow",
+    // colorIndex 0 is the untouched default (= untagged, no dot); use a real
+    // picked color so the T1 tag dot shows in captures.
+    rootPane: leaf({ name: "signup flow", agentState: "done", branch: "main", colorIndex: 5 }),
+    doneAtMs: Date.now() - 47_000, linesAdded: 143, linesDeleted: 131, filesChanged: 6,
+  }),
+  projectTab({
+    id: "s-tab2", title: "generate sitemap",
+    rootPane: leaf({ name: "generate sitemap", agentState: "done", branch: "main", colorIndex: 1 }),
+    doneAtMs: Date.now() - 31_000, linesAdded: 89, linesDeleted: 12, filesChanged: 3,
+    paneCount: 2, ahead: 2,
+  }),
+  projectTab({
+    id: "s-tab3", title: "fix perms audit",
+    rootPane: leaf({ name: "fix perms audit", agentState: "working", activityDetail: "editing hook.ts", branch: "main" }),
+    agentState: "working", activityDetail: "editing hook.ts",
+    workingCount: 1, turnStartMs: TWO_MIN_AGO, doneAtMs: 0,
+  }),
+  projectTab({
+    id: "s-tab4", title: "etl backfill", projectId: "p-gm",
+    rootPane: leaf({ name: "etl backfill", agentState: "done", branch: "dag-fixes" }),
+    branch: "dag-fixes", doneAtMs: FOUR_MIN_AGO, linesAdded: 52, linesDeleted: 18, filesChanged: 3,
+  }),
+];
+
 const list = document.getElementById("sidebar-scroll")!;
 const newBtn = document.getElementById("new-session-button")!;
 // "Recently closed" container — present in the real index.html; create a
@@ -169,10 +235,25 @@ if (!closedEl) {
   list.parentElement?.insertBefore(closedEl, list.nextSibling);
 }
 const NOW = Date.now();
-new Sidebar(list, newBtn, closedEl).render(sessions, "s-idle", [
-  { id: "c-1", title: "kanban refactor", paneCount: 3, resumableCount: 2, closedAtMs: NOW - 5 * 60_000 },
-  { id: "c-2", title: "docs site", paneCount: 1, resumableCount: 0, closedAtMs: NOW - 42 * 60_000 },
-]);
+if (view === "projects" || view === "projects-tip") {
+  const sb = new Sidebar(list, newBtn, closedEl);
+  sb.rerender = () => sb.render(projectSessions, "s-tab1", [], projectsList, "projects");
+  sb.rerender();
+  // #projects-tip: hold the first inactive tab's ⓘ "hovered" so the metrics
+  // tooltip is up when the screenshot fires (a real pointer can't hover in a
+  // headless capture).
+  if (view === "projects-tip")
+    setTimeout(() => {
+      document
+        .querySelector(".session-item__info")
+        ?.dispatchEvent(new MouseEvent("mouseenter"));
+    }, 80);
+} else {
+  new Sidebar(list, newBtn, closedEl).render(sessions, "s-idle", [
+    { id: "c-1", title: "kanban refactor", paneCount: 3, resumableCount: 2, closedAtMs: NOW - 5 * 60_000 },
+    { id: "c-2", title: "docs site", paneCount: 1, resumableCount: 0, closedAtMs: NOW - 42 * 60_000 },
+  ]);
+}
 
 const dash = new Dashboard(
   document.getElementById("dashboard")!,
