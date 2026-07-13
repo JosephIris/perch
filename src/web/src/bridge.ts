@@ -77,6 +77,14 @@ export type OutMessage =
   /* Pane cwd update from xterm's OSC 7 handler. Host uses it to auto-fill
    * the branch chip via `git rev-parse`. */
   | { type: "pane.cwd"; paneId: string; cwd: string }
+  /* State reconciliation: the page watched a pane's terminal buffer and it
+   * disagrees with the host's agent state. permissionVisible=false — the cc
+   * permission dialog left the screen (answered, denied, or Esc'd — exits
+   * that fire no hook); host demotes to an inferred "working". blockedVisible
+   * =true — a blocked dialog sits on a pane the host thinks is done; host
+   * promotes to "waiting" if that done was itself inferred. blockedVisible=
+   * false — the dialog behind an INFERRED waiting left; host unwinds it. */
+  | { type: "pane.probe"; paneId: string; permissionVisible?: boolean; blockedVisible?: boolean }
   /* URL pane layout — page reports a rect for the placeholder; host
    * sizes a real WebView2 control to match. First layout creates the
    * WebView2; subsequent layouts reposition/resize. */

@@ -125,6 +125,29 @@ public class StateProjectionTests
     }
 
     [Fact]
+    public void GitSignals_AttributedSameCwdPanesSumInsteadOfDedupe()
+    {
+        // The shared-tree case AFTER hook attribution: each pane's stats were
+        // already filtered to its own agent's touched files, so they're
+        // disjoint by construction. Deduping (largest-wins) here would drop
+        // one agent's real work; attributed panes sum.
+        var a = Pane(AgentState.Idle);
+        a.Cwd = @"C:\dev\repo";
+        a.DiffAttributed = true;
+        a.LinesAdded = 100; a.LinesDeleted = 90; a.FilesChanged = 3;
+        var b = Pane(AgentState.Idle);
+        b.Cwd = @"C:\dev\repo";
+        b.DiffAttributed = true;
+        b.LinesAdded = 43; b.LinesDeleted = 41; b.FilesChanged = 2;
+        var s = SessionWith(a, b);
+
+        var row = Project(s);
+        Assert.Equal(143, row.GetProperty("linesAdded").GetInt32());
+        Assert.Equal(131, row.GetProperty("linesDeleted").GetInt32());
+        Assert.Equal(5, row.GetProperty("filesChanged").GetInt32());
+    }
+
+    [Fact]
     public void GitSignals_DistinctCwdsStillSum()
     {
         // Panes in different working trees (e.g. worktree-per-pane) are

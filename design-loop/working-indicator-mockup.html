@@ -1,0 +1,646 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Working indicator — candidates</title>
+<style>
+  @font-face {
+    font-family: "Inter Variable";
+    src: url("./InterVariable.woff2") format("woff2-variations");
+    font-weight: 100 900;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: "Geist Mono";
+    src: url("./GeistMonoVariable.woff2") format("woff2-variations");
+    font-weight: 100 900;
+    font-display: swap;
+  }
+
+  :root {
+    /* mirrored from src/web/src/tokens.css */
+    --surface:        #181818;
+    --page:           #101010;
+    --subtle-2:       rgba(255,255,255,0.04);
+    --subtle-3:       rgba(255,255,255,0.08);
+    --stroke:         rgba(255,255,255,0.08);
+    --stroke-strong:  rgba(255,255,255,0.14);
+    --text-1:         rgba(255,255,255,0.92);
+    --text-2:         rgba(255,255,255,0.72);
+    --text-3:         rgba(255,255,255,0.5);
+    --accent:         #76B9ED;
+    --working:        #4cc2ff;
+    --done:           #6CCB5F;
+    --caution:        #FCE100;
+    --tag-0:          #76B9ED;
+    --tag-1:          #6CCB5F;
+    --font:           "Inter Variable", "Segoe UI Variable Text", "Segoe UI", sans-serif;
+    --mono:           "Geist Mono", "Cascadia Mono", monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--page);
+    color: var(--text-1);
+    font-family: var(--font);
+    font-size: 14px;
+    line-height: 1.4;
+    padding: 40px 48px 80px;
+  }
+  h1 { font-size: 20px; font-weight: 600; margin-bottom: 6px; }
+  h2 { font-size: 16px; font-weight: 600; margin: 40px 0 4px; }
+  .sub { color: var(--text-3); font-size: 12.5px; max-width: 68ch; margin-bottom: 20px; }
+
+  .grid { display: flex; flex-wrap: wrap; gap: 16px; }
+
+  .card {
+    width: 268px;
+    background: var(--surface);
+    border: 1px solid var(--stroke);
+    border-radius: 8px;
+    padding: 12px;
+  }
+  .card__label { font-size: 12.5px; font-weight: 600; color: var(--text-2); margin: 2px 2px 2px; }
+  .card__note  { font-size: 11px; color: var(--text-3); margin: 6px 2px 8px; min-height: 42px; }
+  .card__meta  { font-size: 10px; color: var(--text-3); margin: 8px 2px 0; opacity: .8; }
+
+  /* ── faithful sidebar-row chrome ──────────────────────────────────────── */
+  .rows { display: flex; flex-direction: column; gap: 2px; }
+  .row {
+    display: grid;
+    grid-template-columns: 20px minmax(0,1fr) auto;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 4px 8px;
+    border-radius: 4px;
+    position: relative;
+    overflow: hidden;
+  }
+  .row:hover { background: var(--subtle-2); }
+  .row--active { background: var(--subtle-3); }
+  .row__title {
+    font-size: 13px;
+    font-weight: 380;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    color: var(--text-1);
+  }
+  .row__title--tag0 { color: var(--tag-0); }
+  .row__title--tag1 { color: var(--tag-1); }
+  .row__slot { width: 20px; display: flex; align-items: center; justify-content: flex-start; }
+  .row__end {
+    font-size: 10px; color: var(--text-3);
+    font-variant-numeric: tabular-nums;
+    display: inline-flex; align-items: center; gap: 4px;
+  }
+  .row__meta {
+    grid-column: 2 / -1;
+    font-size: 10px; color: var(--text-3);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    margin-top: 1px;
+  }
+  .add { color: var(--done); }
+  .del { color: #FF99A4; }
+  .info {
+    width: 11px; height: 11px; border-radius: 50%;
+    border: 1px solid var(--text-3); opacity: .55;
+    font-size: 8px; color: var(--text-3);
+    display: inline-flex; align-items: center; justify-content: center;
+    flex: none;
+  }
+
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .dot--working { background: var(--working); }
+  .dot--done    { background: var(--done); }
+
+  /* ── A. scanner (cmux homage) ─────────────────────────────────────────── */
+  .scan {
+    width: 20px; height: 6px; border-radius: 3px;
+    background: rgba(76,194,255,0.10);
+    position: relative; flex: none;
+  }
+  .scan i {
+    position: absolute; top: 1px; left: 1px;
+    width: 4px; height: 4px; border-radius: 50%;
+    background: var(--working);
+    animation: scan 1.4s ease-in-out infinite alternate;
+  }
+  @keyframes scan { from { transform: translateX(0); } to { transform: translateX(14px); } }
+
+  /* ── B. breathing dot ─────────────────────────────────────────────────── */
+  .breathe { animation: breathe 1.6s ease-in-out infinite alternate; }
+  @keyframes breathe {
+    from { opacity: .45; transform: scale(0.82); }
+    to   { opacity: 1;   transform: scale(1.12); }
+  }
+
+  /* ── C. orbit arc ─────────────────────────────────────────────────────── */
+  .orbit { position: relative; width: 12px; height: 12px; flex: none; }
+  .orbit::before {
+    content: ""; position: absolute; inset: 0; border-radius: 50%;
+    border: 1.5px solid rgba(76,194,255,0.18);
+    border-top-color: var(--working);
+    animation: orbit 1.1s linear infinite;
+  }
+  .orbit::after {
+    content: ""; position: absolute; inset: 4px; border-radius: 50%;
+    background: var(--working); opacity: .65;
+  }
+  @keyframes orbit { to { transform: rotate(360deg); } }
+
+  /* ── D. equalizer ─────────────────────────────────────────────────────── */
+  .eq { display: flex; align-items: flex-end; gap: 2px; height: 10px; flex: none; }
+  .eq i { width: 2px; border-radius: 1px; background: var(--working); animation: eq 1.1s ease-in-out infinite alternate; }
+  .eq i:nth-child(1) { height: 4px; animation-delay: 0s; }
+  .eq i:nth-child(2) { height: 9px; animation-delay: .18s; }
+  .eq i:nth-child(3) { height: 6px; animation-delay: .36s; }
+  @keyframes eq { from { transform: scaleY(.4); } to { transform: scaleY(1); } }
+
+  /* ── E. title shimmer ─────────────────────────────────────────────────── */
+  .shimmer {
+    background: linear-gradient(90deg,
+      rgba(255,255,255,0.55) 20%, rgba(255,255,255,0.95) 50%, rgba(255,255,255,0.55) 80%);
+    background-size: 200% 100%;
+    -webkit-background-clip: text; background-clip: text;
+    color: transparent;
+    animation: shimmer 2.4s linear infinite;
+  }
+  @keyframes shimmer { from { background-position: 180% 0; } to { background-position: -20% 0; } }
+
+  /* ── F. braille spinner (terminal-style, JS frames) ───────────────────── */
+  .braille {
+    font-family: var(--mono); font-size: 11px; line-height: 1;
+    color: var(--working); flex: none; width: 10px;
+  }
+
+  /* ── G. hairline sweep ────────────────────────────────────────────────── */
+  .row--hairline::after {
+    content: ""; position: absolute; left: 8px; right: 8px; bottom: 0; height: 1px;
+    background: linear-gradient(90deg, transparent 0%,
+      rgba(76,194,255,0.0) 20%, rgba(76,194,255,0.7) 50%, rgba(76,194,255,0.0) 80%, transparent 100%);
+    background-size: 220% 100%;
+    animation: hairline 1.8s linear infinite;
+  }
+  @keyframes hairline { from { background-position: 160% 0; } to { background-position: -60% 0; } }
+
+  /* ── round 2: color-tag placements (title stays neutral) ─────────────── */
+  .tagdot {
+    width: 5px; height: 5px; border-radius: 50%;
+    flex: none; margin-left: 6px;
+    display: inline-block;
+  }
+  .titlewrap { display: inline-flex; align-items: center; min-width: 0; }
+  .titlewrap .row__title { min-width: 0; }
+
+  .tagtick {
+    width: 2.5px; height: 11px; border-radius: 1.25px;
+    flex: none; margin-right: 6px;
+  }
+  .tagsq {
+    width: 5px; height: 5px; border-radius: 1.5px;
+    flex: none; margin-right: 6px;
+  }
+  .ringdot {
+    width: 12px; height: 12px; border-radius: 50%;
+    border: 1.5px solid transparent;
+    display: flex; align-items: center; justify-content: center;
+    flex: none;
+  }
+  .ringdot i { width: 6px; height: 6px; border-radius: 50%; }
+
+  .t-blue  { background: var(--tag-0); }
+  .t-green { background: var(--tag-1); }
+  .r-blue  { border-color: var(--tag-0); }
+  .r-green { border-color: var(--tag-1); }
+
+  /* compositions */
+  .comp { width: 252px; }
+  .comp .hdr {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 13px; font-weight: 600; color: var(--text-2);
+    padding: 4px 6px 6px;
+  }
+  .comp .hdr .chev { color: var(--text-3); font-size: 9px; transform: translateY(-1px); }
+  .comp .hdr .count { color: var(--text-3); font-weight: 400; font-size: 11px; }
+  .comp .hdr .plus { margin-left: auto; color: var(--text-3); }
+  .tally { margin-top: 10px; font-size: 10px; color: var(--text-3); text-align: right; padding-right: 2px; }
+
+  .pick {
+    margin-top: 36px; max-width: 72ch;
+    border-left: 2px solid var(--accent);
+    padding: 2px 0 2px 14px;
+    color: var(--text-2); font-size: 13px;
+  }
+  .pick b { color: var(--text-1); }
+  kbd { font-family: var(--mono); font-size: 11px; color: var(--text-2); }
+</style>
+</head>
+<body>
+
+<h1>Sidebar tab rows — working indicator &amp; color tag</h1>
+<div class="sub">
+  Round 1 (below, kept for reference) picked the indicator: <b>F — terminal spinner</b>. Round 2 answers
+  the follow-up: the /color tag should stop tinting the title — where does a small color mark go instead?
+</div>
+
+<h2>Round 2 — color tag placement, title stays neutral</h2>
+<div class="sub">
+  Each card shows a blue-tagged tab, a green-tagged one (working, with the chosen spinner), and an
+  untagged one — a tag treatment has to look right when most tabs have no tag at all.
+</div>
+
+<div class="grid">
+
+  <div class="card">
+    <div class="card__label">T1 — Trailing dot <span style="color:var(--text-3);font-weight:400">(Finder-style)</span></div>
+    <div class="rows">
+      <div class="row">
+        <span class="row__slot"><span class="dot dot--done"></span></span>
+        <span class="titlewrap"><span class="row__title">coldstart auds</span><span class="tagdot t-blue"></span></span>
+        <span class="row__end"><span class="info">i</span></span>
+      </div>
+      <div class="row">
+        <span class="row__slot"><span class="braille" data-spinner>⠋</span></span>
+        <span class="titlewrap"><span class="row__title">generate tt/b4rec</span><span class="tagdot t-green"></span></span>
+        <span class="row__end" data-start="125">2m</span>
+      </div>
+      <div class="row">
+        <span class="row__slot"><span class="dot dot--done"></span></span>
+        <span class="row__title">fix perms audit</span>
+        <span class="row__end"><span class="info">i</span></span>
+      </div>
+    </div>
+    <div class="card__note">Reads as a label, not a state — it hugs the text like Finder’s tags. Untagged rows lose nothing. Survives ellipsis (dot stays pinned to the visible name).</div>
+    <div class="card__meta">adds 11px after the title · no new column</div>
+  </div>
+
+  <div class="card">
+    <div class="card__label">T2 — Leading tick</div>
+    <div class="rows">
+      <div class="row">
+        <span class="row__slot"><span class="dot dot--done"></span></span>
+        <span class="titlewrap"><span class="tagtick t-blue"></span><span class="row__title">coldstart auds</span></span>
+        <span class="row__end"><span class="info">i</span></span>
+      </div>
+      <div class="row">
+        <span class="row__slot"><span class="braille" data-spinner>⠋</span></span>
+        <span class="titlewrap"><span class="tagtick t-green"></span><span class="row__title">generate tt/b4rec</span></span>
+        <span class="row__end" data-start="125">2m</span>
+      </div>
+      <div class="row">
+        <span class="row__slot"><span class="dot dot--done"></span></span>
+        <span class="row__title">fix perms audit</span>
+        <span class="row__end"><span class="info">i</span></span>
+      </div>
+    </div>
+    <div class="card__note">Crisp and very visible. But it ragged-indents tagged vs untagged titles, and a colored vertical bar flirts with the “accent stripe = selection” vocabulary the app deliberately avoids.</div>
+    <div class="card__meta">adds 8.5px before the title · misaligns untagged titles</div>
+  </div>
+
+  <div class="card">
+    <div class="card__label">T3 — Ring around the state dot</div>
+    <div class="rows">
+      <div class="row">
+        <span class="row__slot"><span class="ringdot r-blue"><i class="dot--done" style="width:6px;height:6px;border-radius:50%"></i></span></span>
+        <span class="row__title">coldstart auds</span>
+        <span class="row__end"><span class="info">i</span></span>
+      </div>
+      <div class="row">
+        <span class="row__slot"><span class="ringdot r-green"><span class="braille" data-spinner style="width:auto">⠋</span></span></span>
+        <span class="row__title">generate tt/b4rec</span>
+        <span class="row__end" data-start="125">2m</span>
+      </div>
+      <div class="row">
+        <span class="row__slot"><span class="dot dot--done"></span></span>
+        <span class="row__title">fix perms audit</span>
+        <span class="row__end"><span class="info">i</span></span>
+      </div>
+    </div>
+    <div class="card__note">Zero extra width — tag and state share one glyph. But two meanings in 12px: the ring reads as focus/selection, and around the spinner it just looks busy.</div>
+    <div class="card__meta">adds 0px · overloads the state glyph</div>
+  </div>
+
+</div>
+
+<h2>Round 2 — the winner, composed</h2>
+<div class="sub">
+  Terminal spinner + trailing tag dot + neutral titles, in composition A from round 1 (active tab keeps its
+  metrics line; working rows are one line with a ticking elapsed; prose lives in the ⓘ tip).
+</div>
+
+<div class="grid">
+
+  <div class="card comp">
+    <div class="card__label">Proposed</div>
+    <div class="hdr"><span class="chev">▼</span> product-tools-prod <span class="count">3</span><span class="plus">+</span></div>
+    <div class="rows">
+      <div class="row row--active">
+        <span class="row__slot"><span class="dot dot--done"></span></span>
+        <span class="titlewrap"><span class="row__title">coldstart auds</span><span class="tagdot t-blue"></span></span>
+        <span></span>
+        <span class="row__meta">⏱ <span data-start="47">47s</span> · <span class="add">+143</span> <span class="del">−131</span> · ⎇ main</span>
+      </div>
+      <div class="row">
+        <span class="row__slot"><span class="braille" data-spinner>⠋</span></span>
+        <span class="titlewrap"><span class="row__title">generate tt/b4rec</span><span class="tagdot t-green"></span></span>
+        <span class="row__end" data-start="125">2m</span>
+      </div>
+      <div class="row">
+        <span class="row__slot"><span class="dot dot--done"></span></span>
+        <span class="row__title">fix perms audit</span>
+        <span class="row__end"><span class="info">i</span></span>
+      </div>
+    </div>
+    <div class="tally">3 tabs ≈ 67px</div>
+  </div>
+
+  <div class="card comp">
+    <div class="card__label">Same, with the tick instead</div>
+    <div class="hdr"><span class="chev">▼</span> product-tools-prod <span class="count">3</span><span class="plus">+</span></div>
+    <div class="rows">
+      <div class="row row--active">
+        <span class="row__slot"><span class="dot dot--done"></span></span>
+        <span class="titlewrap"><span class="tagtick t-blue"></span><span class="row__title">coldstart auds</span></span>
+        <span></span>
+        <span class="row__meta">⏱ <span data-start="47">47s</span> · <span class="add">+143</span> <span class="del">−131</span> · ⎇ main</span>
+      </div>
+      <div class="row">
+        <span class="row__slot"><span class="braille" data-spinner>⠋</span></span>
+        <span class="titlewrap"><span class="tagtick t-green"></span><span class="row__title">generate tt/b4rec</span></span>
+        <span class="row__end" data-start="125">2m</span>
+      </div>
+      <div class="row">
+        <span class="row__slot"><span class="dot dot--done"></span></span>
+        <span class="row__title">fix perms audit</span>
+        <span class="row__end"><span class="info">i</span></span>
+      </div>
+    </div>
+    <div class="tally">note the ragged left edge of the titles</div>
+  </div>
+
+</div>
+
+<div class="pick">
+  <b>My pick: T1, the trailing dot.</b> It keeps every title starting at the same x (T2’s tick ragged-indents
+  tagged vs untagged rows), it reads as a label rather than a state because it hugs the name instead of
+  sitting in the status column, and it’s the established vocabulary — Finder tags work exactly this way.
+  T3 saves 11px but spends your one glanceable glyph on two meanings at once.
+</div>
+
+<h2 style="margin-top:56px">Round 1 — indicator candidates <span style="color:var(--text-3);font-weight:400">(reference — F won)</span></h2>
+<div class="sub">
+  Replacing the <kbd>▸ editing hook.ts · 2m</kbd> prose line on working tabs. Every variant lives in the
+  20px dot column the row already has, so a working tab costs <b>zero extra lines</b>. Each card shows a
+  working tab above an at-rest one for contrast. Animations are live — judge them by how loud a column of
+  five would feel, not one.
+</div>
+
+<div class="grid">
+
+  <div class="card">
+    <div class="card__label">A — Scanner <span style="color:var(--text-3);font-weight:400">(cmux homage)</span></div>
+    <div class="rows">
+      <div class="row">
+        <span class="row__slot"><span class="scan"><i></i></span></span>
+        <span class="row__title row__title--tag1">generate tt/b4rec</span>
+        <span class="row__end" data-start="125">2m</span>
+      </div>
+      <div class="row">
+        <span class="row__slot"><span class="dot dot--done"></span></span>
+        <span class="row__title row__title--tag0">coldstart auds</span>
+        <span class="row__end"><span class="info">i</span></span>
+      </div>
+    </div>
+    <div class="card__note">Unmistakably “in motion”, reads at a glance from across the room. Horizontal travel is the eye-catchiest option here — five at once gets busy.</div>
+    <div class="card__meta">footprint: 20×6px, in the dot slot · loudness: ●●●○</div>
+  </div>
+
+  <div class="card">
+    <div class="card__label">B — Breathing dot</div>
+    <div class="rows">
+      <div class="row">
+        <span class="row__slot"><span class="dot dot--working breathe"></span></span>
+        <span class="row__title row__title--tag1">generate tt/b4rec</span>
+        <span class="row__end" data-start="125">2m</span>
+      </div>
+      <div class="row">
+        <span class="row__slot"><span class="dot dot--done"></span></span>
+        <span class="row__title row__title--tag0">coldstart auds</span>
+        <span class="row__end"><span class="info">i</span></span>
+      </div>
+    </div>
+    <div class="card__note">The calmest possible signal — the dot you already have, alive. Risk: a slow pulse can read as “notification” rather than “running”, and it’s subtle at 8px.</div>
+    <div class="card__meta">footprint: 0 (existing dot) · loudness: ●○○○</div>
+  </div>
+
+  <div class="card">
+    <div class="card__label">C — Orbit arc</div>
+    <div class="rows">
+      <div class="row">
+        <span class="row__slot"><span class="orbit"></span></span>
+        <span class="row__title row__title--tag1">generate tt/b4rec</span>
+        <span class="row__end" data-start="125">2m</span>
+      </div>
+      <div class="row">
+        <span class="row__slot"><span class="dot dot--done"></span></span>
+        <span class="row__title row__title--tag0">coldstart auds</span>
+        <span class="row__end"><span class="info">i</span></span>
+      </div>
+    </div>
+    <div class="card__note">A spinner, so the meaning is pre-learned: something is running. Rotation in a small ring is quieter than lateral travel, still clearly alive.</div>
+    <div class="card__meta">footprint: 12×12px, in the dot slot · loudness: ●●○○</div>
+  </div>
+
+  <div class="card">
+    <div class="card__label">D — Equalizer</div>
+    <div class="rows">
+      <div class="row">
+        <span class="row__slot"><span class="eq"><i></i><i></i><i></i></span></span>
+        <span class="row__title row__title--tag1">generate tt/b4rec</span>
+        <span class="row__end" data-start="125">2m</span>
+      </div>
+      <div class="row">
+        <span class="row__slot"><span class="dot dot--done"></span></span>
+        <span class="row__title row__title--tag0">coldstart auds</span>
+        <span class="row__end"><span class="info">i</span></span>
+      </div>
+    </div>
+    <div class="card__note">Distinctive and compact, “activity level” connotation. But it borrows audio-player vocabulary, and three staggered bars are the most animated pixels of any option.</div>
+    <div class="card__meta">footprint: 10×10px · loudness: ●●●○</div>
+  </div>
+
+  <div class="card">
+    <div class="card__label">E — Title shimmer</div>
+    <div class="rows">
+      <div class="row">
+        <span class="row__slot"><span class="dot dot--working"></span></span>
+        <span class="row__title shimmer">generate tt/b4rec</span>
+        <span class="row__end" data-start="125">2m</span>
+      </div>
+      <div class="row">
+        <span class="row__slot"><span class="dot dot--done"></span></span>
+        <span class="row__title row__title--tag0">coldstart auds</span>
+        <span class="row__end"><span class="info">i</span></span>
+      </div>
+    </div>
+    <div class="card__note">Zero added elements — the name itself breathes. Familiar from loading skeletons. Cost: it fights the /color title tint (shimmer needs to own the text color).</div>
+    <div class="card__meta">footprint: 0 · loudness: ●●○○ · conflicts with color tags</div>
+  </div>
+
+  <div class="card">
+    <div class="card__label">F — Terminal spinner</div>
+    <div class="rows">
+      <div class="row">
+        <span class="row__slot"><span class="braille" data-spinner>⠋</span></span>
+        <span class="row__title row__title--tag1">generate tt/b4rec</span>
+        <span class="row__end" data-start="125">2m</span>
+      </div>
+      <div class="row">
+        <span class="row__slot"><span class="dot dot--done"></span></span>
+        <span class="row__title row__title--tag0">coldstart auds</span>
+        <span class="row__end"><span class="info">i</span></span>
+      </div>
+    </div>
+    <div class="card__note">The braille spinner every CLI uses — including Claude Code itself, so the sidebar echoes what the pane is doing. Text-frame flicker is fast (80ms); can feel twitchy in chrome.</div>
+    <div class="card__meta">footprint: 10×11px · loudness: ●●○○ · needs JS frames</div>
+  </div>
+
+  <div class="card">
+    <div class="card__label">G — Hairline sweep</div>
+    <div class="rows">
+      <div class="row row--hairline">
+        <span class="row__slot"><span class="dot dot--working"></span></span>
+        <span class="row__title row__title--tag1">generate tt/b4rec</span>
+        <span class="row__end" data-start="125">2m</span>
+      </div>
+      <div class="row">
+        <span class="row__slot"><span class="dot dot--done"></span></span>
+        <span class="row__title row__title--tag0">coldstart auds</span>
+        <span class="row__end"><span class="info">i</span></span>
+      </div>
+    </div>
+    <div class="card__note">Indeterminate-progress vocabulary, elegant, stays out of the text. But a 1px moving light under a 21px row is easy to miss entirely — weakest glanceability.</div>
+    <div class="card__meta">footprint: 1px row underline · loudness: ●○○○</div>
+  </div>
+
+</div>
+
+<h2>Round 1 — the group as a whole <span style="color:var(--text-3);font-weight:400">(reference)</span></h2>
+<div class="sub">
+  Same three tabs composed three ways. The prose line is gone in A and B — the animated mark plus a ticking
+  elapsed carries “working”; the action text (“editing hook.ts”) moves into the ⓘ tip and the pane header,
+  where it always was. Scanner used as the stand-in indicator here.
+</div>
+
+<div class="grid">
+
+  <div class="card comp">
+    <div class="card__label">Today</div>
+    <div class="hdr"><span class="chev">▼</span> product-tools-prod <span class="count">3</span><span class="plus">+</span></div>
+    <div class="rows">
+      <div class="row row--active">
+        <span class="row__slot"><span class="dot dot--done"></span></span>
+        <span class="row__title row__title--tag0">coldstart auds</span>
+        <span></span>
+        <span class="row__meta">⏱ <span data-start="47">47s</span> · <span class="add">+143</span> <span class="del">−131</span> · ⎇ main</span>
+      </div>
+      <div class="row">
+        <span class="row__slot"><span class="dot dot--working"></span></span>
+        <span class="row__title row__title--tag1">generate tt/b4rec</span>
+        <span></span>
+        <span class="row__meta">▸ editing hook.ts · <span data-start="125">2m</span></span>
+      </div>
+      <div class="row">
+        <span class="row__slot"><span class="dot dot--done"></span></span>
+        <span class="row__title">fix perms audit</span>
+        <span class="row__end"><span class="info">i</span></span>
+      </div>
+    </div>
+    <div class="tally">3 tabs ≈ 88px</div>
+  </div>
+
+  <div class="card comp">
+    <div class="card__label">A — prose out, time stays</div>
+    <div class="hdr"><span class="chev">▼</span> product-tools-prod <span class="count">3</span><span class="plus">+</span></div>
+    <div class="rows">
+      <div class="row row--active">
+        <span class="row__slot"><span class="dot dot--done"></span></span>
+        <span class="row__title row__title--tag0">coldstart auds</span>
+        <span></span>
+        <span class="row__meta">⏱ <span data-start="47">47s</span> · <span class="add">+143</span> <span class="del">−131</span> · ⎇ main</span>
+      </div>
+      <div class="row">
+        <span class="row__slot"><span class="scan"><i></i></span></span>
+        <span class="row__title row__title--tag1">generate tt/b4rec</span>
+        <span class="row__end" data-start="125">2m</span>
+      </div>
+      <div class="row">
+        <span class="row__slot"><span class="dot dot--done"></span></span>
+        <span class="row__title">fix perms audit</span>
+        <span class="row__end"><span class="info">i</span></span>
+      </div>
+    </div>
+    <div class="tally">3 tabs ≈ 67px (−24%)</div>
+  </div>
+
+  <div class="card comp">
+    <div class="card__label">B — one line per tab, always</div>
+    <div class="hdr"><span class="chev">▼</span> product-tools-prod <span class="count">3</span><span class="plus">+</span></div>
+    <div class="rows">
+      <div class="row row--active">
+        <span class="row__slot"><span class="dot dot--done"></span></span>
+        <span class="row__title row__title--tag0">coldstart auds</span>
+        <span class="row__end"><span class="add">+143</span> <span class="del">−131</span></span>
+      </div>
+      <div class="row">
+        <span class="row__slot"><span class="scan"><i></i></span></span>
+        <span class="row__title row__title--tag1">generate tt/b4rec</span>
+        <span class="row__end" data-start="125">2m</span>
+      </div>
+      <div class="row">
+        <span class="row__slot"><span class="dot dot--done"></span></span>
+        <span class="row__title">fix perms audit</span>
+        <span class="row__end"><span class="info">i</span></span>
+      </div>
+    </div>
+    <div class="tally">3 tabs ≈ 63px (−28%) — active tab’s full metrics on hover only</div>
+  </div>
+
+</div>
+
+<div class="pick" style="border-left-color: var(--stroke-strong); color: var(--text-3)">
+  <b style="color:var(--text-2)">Round-1 pick, superseded by F winning:</b> composition A with the scanner (A), falling back to the orbit arc (C) if three-plus
+  simultaneous scanners feel restless in daily use. The scanner is the only mark that needs no learning
+  and honors the cmux lineage; confining it to the 20px dot slot keeps the homage without the noise. The
+  right-aligned ticking elapsed replaces the whole prose line — “what exactly is it doing” lives one hover
+  away in the ⓘ tip, and in the pane header you’re about to click anyway. I’d keep the active tab’s
+  metrics line (composition B’s hover-only metrics save 4px and cost a click — wrong trade for the one tab
+  you’re focused on).
+</div>
+
+<script>
+  // Braille spinner frames — same cadence CLIs use.
+  const FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
+  let f = 0;
+  setInterval(() => {
+    f = (f + 1) % FRAMES.length;
+    document.querySelectorAll("[data-spinner]").forEach(el => (el.textContent = FRAMES[f]));
+  }, 80);
+
+  // Ticking elapsed labels, so the mock reads live like the real sidebar.
+  const t0 = Date.now();
+  const fmt = s => (s < 60 ? s + "s" : Math.floor(s / 60) + "m");
+  setInterval(() => {
+    document.querySelectorAll("[data-start]").forEach(el => {
+      const base = parseInt(el.dataset.start, 10);
+      el.firstChild ?? el.append("");
+      const node = el.childNodes[el.childNodes.length - 1];
+      const text = fmt(base + Math.floor((Date.now() - t0) / 1000));
+      if (el.hasAttribute("data-start") && el.tagName !== "SPAN") return;
+      if (node.nodeType === 3) node.textContent = text; else el.textContent = text;
+    });
+  }, 1000);
+</script>
+
+</body>
+</html>

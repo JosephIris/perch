@@ -356,6 +356,62 @@ ul { list-style: none; padding: 0; margin: 0; }
   color: var(--color-caution);
 }
 
+/* Compact meta (projects-mode tab rows): everything on ONE block-flow line so
+ * the row is title + meta = 2 rows max. Block (not flex) because ellipsis has
+ * to engage on the line as a whole; items go inline and the renderer inserts
+ * literal " · " separators where flex gap used to space them. */
+.session-item__meta--compact {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 1px;
+  font-size: 10px;
+}
+.session-item__meta--compact .session-item__meta-item { display: inline; }
+/* ⓘ on an INACTIVE project tab — its metrics live in the hover tip, keeping
+ * the row to one line. Always rendered (a hover-revealed affordance is
+ * undiscoverable — same rule as .project-header__add), quiet by default,
+ * solid while hovered. */
+.session-item__info {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  align-self: center;
+  color: var(--color-text-tertiary);
+  opacity: 0.7;
+  transition: opacity var(--dur-fast) var(--ease-entry),
+              color var(--dur-fast) var(--ease-entry);
+}
+.session-item__info:hover {
+  opacity: 1;
+  color: var(--color-text-secondary);
+}
+/* The tip itself: one metrics line on the shared commits-pop surface. Undo the
+ * compact line's clamp — the panel sizes to the content, nothing to ellipsize. */
+.session-metrics-tip {
+  min-width: 0;
+  max-width: none;
+  padding: 6px var(--sp-12);
+}
+.session-metrics-tip .session-item__meta--compact {
+  overflow: visible;
+  text-overflow: clip;
+  margin-top: 0;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+/* The clock + count-up pair stays glued (inline-flex is still inline-level,
+ * so the line's single-ellipsis behavior is unaffected). Scoped under
+ * --compact to outrank the blanket display:inline above. */
+.session-item__meta--compact .session-item__meta-item--timer {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  vertical-align: -1px;
+}
+.session-item__timer-glyph { flex: 0 0 auto; }
+
 /* Notification line: colored leading character + text. Same lifetime as
  * NotificationText on the host. Compact — sits inside the row's pill. */
 .session-item__note {
@@ -1758,21 +1814,59 @@ ul { list-style: none; padding: 0; margin: 0; }
   margin: 2px 0 var(--sp-4) var(--sp-12);   /* indent reads as nesting */
 }
 .session-item--nested {
-  padding: 5px var(--sp-8);
+  padding: 3px var(--sp-8);
   border-color: transparent;
   border-radius: var(--r-input);
 }
+/* Nested rows drop a type step: the project header carries the identity, so
+ * the tab can afford 13px and still read first in its group. */
+.session-item--nested .session-item__title {
+  font-size: 13px;
+}
 .session-item--nested:hover { background: var(--color-subtle-secondary); }
-/* The tab's color tag, on the title — the SAME hue the host sets inside the
- * Claude session with /color, so a tab reads the same from the sidebar and from
- * its own prompt bar. On the title rather than a second dot: the row already has
- * a state dot, and two dots meaning different things is just noise. */
-.session-item--nested[data-color="0"] .session-item__title { color: var(--color-pane-tag-0); }
-.session-item--nested[data-color="1"] .session-item__title { color: var(--color-pane-tag-1); }
-.session-item--nested[data-color="2"] .session-item__title { color: var(--color-pane-tag-2); }
-.session-item--nested[data-color="3"] .session-item__title { color: var(--color-pane-tag-3); }
-.session-item--nested[data-color="4"] .session-item__title { color: var(--color-pane-tag-4); }
-.session-item--nested[data-color="5"] .session-item__title { color: var(--color-pane-tag-5); }
+/* The tab's /color tag: a small dot hugging the end of the name — label
+ * vocabulary (Finder tags), deliberately NOT a title tint (tinted titles made
+ * every row shout) and NOT in the status column (two dots meaning different
+ * things is noise). No rule for index 0: that's the untouched default, and an
+ * unmarked row is the point — see renderItem. */
+.session-item__tag {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+.session-item__tag[data-color="1"] { background: var(--color-pane-tag-1); }
+.session-item__tag[data-color="2"] { background: var(--color-pane-tag-2); }
+.session-item__tag[data-color="3"] { background: var(--color-pane-tag-3); }
+.session-item__tag[data-color="4"] { background: var(--color-pane-tag-4); }
+.session-item__tag[data-color="5"] { background: var(--color-pane-tag-5); }
+
+/* Working tab's braille spinner — cc's own glyphs, in the dot's 10px slot.
+ * Mono font so every frame has identical advance (no title jitter). */
+.session-item__spinner {
+  flex: 0 0 auto;
+  width: 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1;
+  color: var(--color-state-working);
+}
+
+/* Working tab's ticking elapsed, right edge — same grid cell as the
+ * hover-revealed close ✕, so it bows out as the ✕ arrives. */
+.session-item__chip {
+  grid-column: 3 / 4;
+  grid-row: 1;
+  align-self: center;
+  justify-self: end;
+  padding-right: 4px;
+  font-family: var(--font-small);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+  transition: opacity var(--dur-fast) var(--ease-entry);
+}
+.session-item:hover .session-item__chip { opacity: 0; }
 .session-item--nested.session-item--active {
   border-color: transparent;
   background: var(--color-subtle-tertiary);

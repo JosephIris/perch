@@ -137,8 +137,14 @@ internal static class StateProjection
         // can't be correlated, so each stays its own group (old behavior).
         // Different subdirs of one repo still read as distinct groups; rare,
         // and resolving them would need a git call in a pure projection.
+        // EXCEPT: a pane whose stats were hook-attributed (DiffAttributed —
+        // the shared-tree case, filtered to its own agent's touched files)
+        // is already disjoint from its siblings' by construction, so it keeps
+        // its own group and SUMS; deduping would drop real work.
         var diffLeaves = leaves
-            .GroupBy(p => string.IsNullOrEmpty(p.Cwd) ? "pane:" + p.Id.ToString("D") : "cwd:" + p.Cwd,
+            .GroupBy(p => p.DiffAttributed || string.IsNullOrEmpty(p.Cwd)
+                        ? "pane:" + p.Id.ToString("D")
+                        : "cwd:" + p.Cwd,
                      StringComparer.OrdinalIgnoreCase)
             .Select(g => g.OrderByDescending(p => p.LinesAdded + p.LinesDeleted).First())
             .ToArray();

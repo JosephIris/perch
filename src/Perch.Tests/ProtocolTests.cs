@@ -99,6 +99,24 @@ public class ProtocolTests
     }
 
     [Fact]
+    public void PaneProbe_EachObservationTravelsAlone()
+    {
+        // The page sends exactly one observation per message; the absent field
+        // must read null (not a defaulted false, which would LOOK like a
+        // "dialog gone" report and demote a blocked pane).
+        var perm = Round<PaneProbeMsg>(
+            $"{{\"type\":\"pane.probe\",\"paneId\":\"{G1}\",\"permissionVisible\":false}}");
+        Assert.Equal(Guid.Parse(G1), perm.PaneId);
+        Assert.False(perm.PermissionVisible);
+        Assert.Null(perm.BlockedVisible);
+
+        var blocked = Round<PaneProbeMsg>(
+            $"{{\"type\":\"pane.probe\",\"paneId\":\"{G1}\",\"blockedVisible\":true}}");
+        Assert.Null(blocked.PermissionVisible);
+        Assert.True(blocked.BlockedVisible);
+    }
+
+    [Fact]
     public void UrlPaneLayout()
     {
         var m = Round<UrlPaneLayoutMsg>(

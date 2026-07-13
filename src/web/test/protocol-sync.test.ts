@@ -29,6 +29,7 @@ const EXPECTED_TYPES = [
   "pane.in",
   "pane.move",
   "pane.moveDir",
+  "pane.probe",
   "pane.recolor",
   "pane.rename",
   "pane.resize",

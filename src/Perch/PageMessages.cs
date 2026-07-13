@@ -105,6 +105,22 @@ internal sealed record PaneCwdMsg
     public required string Cwd { get; init; }
 }
 
+/// Page-side state reconciliation: the page watched a pane's terminal buffer
+/// and it disagrees with the host's agent state. PermissionVisible=false —
+/// cc's permission dialog left the screen (the exits that fire no hook: Esc,
+/// deny-with-feedback; plus approve-then-slow-tool). BlockedVisible=true — a
+/// blocked dialog sits on a pane the host thinks is done. BlockedVisible=
+/// false — the dialog behind an inferred waiting left. Only the relevant
+/// field is sent; the handler treats each independently and only ever
+/// overrides INFERRED states (or Permission, whose exits are hook-less).
+/// See Pane.probeTick in pane.ts.
+internal sealed record PaneProbeMsg
+{
+    public required Guid PaneId { get; init; }
+    public bool? PermissionVisible { get; init; }
+    public bool? BlockedVisible { get; init; }
+}
+
 internal sealed record UrlPaneLayoutMsg
 {
     public required Guid PaneId { get; init; }

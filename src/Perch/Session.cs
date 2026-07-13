@@ -360,6 +360,21 @@ internal sealed class PaneNode
     /// since both anchor to the pane's cwd.
     [JsonIgnore] public IReadOnlySet<string>? UntrackedBaseline { get; set; }
 
+    /// Rel paths (cwd-relative, forward slashes — git's own path space) of
+    /// files this pane's agent reported editing via the post-tool-use hook.
+    /// Only consulted when ANOTHER agent pane shares this pane's cwd: then the
+    /// working tree's diff is the union of everyone's work and this set is what
+    /// splits it per tab. Cleared with the baseline; not persisted, so after a
+    /// restart a still-shared pane undercounts (shows only what it touches from
+    /// then on) rather than re-inflating to the union.
+    [JsonIgnore] public HashSet<string> TouchedFiles { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// True when the last stats refresh filtered this pane's loc to
+    /// TouchedFiles (the shared-tree case). StateProjection then SUMS same-cwd
+    /// panes instead of deduping them — attributed measurements are disjoint
+    /// by construction, and the dedupe would drop real work.
+    [JsonIgnore] public bool DiffAttributed { get; set; }
+
     /// Diff size since the agent's baseline (committed + uncommitted), and
     /// how many commits are ahead of upstream. Recomputed on the same git
     /// path as CommitCount; surface the "what it changed / what's unpushed"

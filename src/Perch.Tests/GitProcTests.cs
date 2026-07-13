@@ -253,6 +253,71 @@ public class GitProcTests
         finally { DeleteRepo(root); }
     }
 
+    /// Two agents in ONE working tree (projects-mode tabs without worktrees):
+    /// the whole-tree diff is the union of both agents' work, so each pane's
+    /// stats are filtered to the files ITS agent reported touching. The filter
+    /// must bound every term — uncommitted tracked edits, new untracked files,
+    /// and commits (a shared tree's baseline..HEAD holds the OTHER agent's
+    /// commits too, and they're all "authored here" by reflog).
+    [Fact]
+    public async Task SessionStats_PathFilterSplitsASharedTree()
+    {
+        var repo = await SetupRepoAsync();
+        if (repo is not (var dir, var baseline, var snapshot)) return; // no git on PATH
+        try
+        {
+            // Agent A edits tracked.txt (+1) and creates mine.txt (2 lines).
+            // Agent B creates theirs.txt (4 lines) and COMMITS other.txt (+3).
+            await File.AppendAllTextAsync(Path.Combine(dir, "tracked.txt"), "three\n");
+            await File.WriteAllTextAsync(Path.Combine(dir, "mine.txt"), "m1\nm2\n");
+            await File.WriteAllTextAsync(Path.Combine(dir, "theirs.txt"), "t1\nt2\nt3\nt4\n");
+            await File.WriteAllTextAsync(Path.Combine(dir, "other.txt"), "o1\no2\no3\n");
+            await Git("add other.txt", dir);
+            await Git("commit -q -m \"agent B work\"", dir);
+
+            var mineOnly = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                { "tracked.txt", "mine.txt" };
+            var stats = await GitProc.SessionStatsAsync(baseline, dir, snapshot, mineOnly);
+            Assert.NotNull(stats);
+            Assert.Equal(2, stats!.Value.Files);    // tracked.txt + mine.txt only
+            Assert.Equal(3, stats.Value.Added);     // 1 tracked + 2 untracked; none of B's 7
+            Assert.Equal(0, stats.Value.Deleted);
+            Assert.Equal(0, stats.Value.Commits);   // B's commit touched none of A's files
+
+            // And the unfiltered reading still sees everything — the solo-pane
+            // measurement is unchanged.
+            var union = await GitProc.SessionStatsAsync(baseline, dir, snapshot);
+            Assert.NotNull(union);
+            Assert.Equal(10, union!.Value.Added);   // 1 + 2 + 4 + 3
+            Assert.Equal(1, union.Value.Commits);
+        }
+        finally { DeleteRepo(dir); }
+    }
+
+    /// Under a path filter a commit counts only when it touched one of the
+    /// pane's own files — that's what keeps agent B's commits out of A's
+    /// commit chip in a shared tree.
+    [Fact]
+    public async Task SessionStats_PathFilterCountsOnlyCommitsTouchingOwnFiles()
+    {
+        var repo = await SetupRepoAsync();
+        if (repo is not (var dir, var baseline, var snapshot)) return; // no git on PATH
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(dir, "mine.txt"), "m1\nm2\n");
+            await Git("add mine.txt", dir);
+            await Git("commit -q -m \"agent A commit\"", dir);
+
+            var mineOnly = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "mine.txt" };
+            var stats = await GitProc.SessionStatsAsync(baseline, dir, snapshot, mineOnly);
+            Assert.NotNull(stats);
+            Assert.Equal(1, stats!.Value.Commits);
+            Assert.Equal(2, stats.Value.Added);
+            Assert.Equal(1, stats.Value.Files);
+        }
+        finally { DeleteRepo(dir); }
+    }
+
     /// Pushing must not erase the session: the agent's commits become reachable
     /// from the remote, so any "is it on a remote?" test would flip them to
     /// someone else's work and zero the chip. The reflog doesn't flip.

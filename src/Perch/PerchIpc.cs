@@ -27,6 +27,7 @@ internal sealed class PerchIpcServer : IDisposable
     public event Action<SendMessage>? OnSend;
     public event Action<OpenMessage>? OnOpen;
     public event Action<GitBaselineMessage>? OnGitBaseline;
+    public event Action<GitTouchedMessage>? OnGitTouched;
     public event Action<TitleMessage>? OnTitle;
     public event Action<NameResetMessage>? OnNameReset;
     public event Action<AgentMessage>? OnAgent;
@@ -135,6 +136,10 @@ internal sealed class PerchIpcServer : IDisposable
                     var gb = JsonSerializer.Deserialize<GitBaselineMessage>(json, IpcJson.Options);
                     if (gb != null) _dispatcher.BeginInvoke(() => OnGitBaseline?.Invoke(gb));
                     break;
+                case "git.touched":
+                    var gt = JsonSerializer.Deserialize<GitTouchedMessage>(json, IpcJson.Options);
+                    if (gt != null) _dispatcher.BeginInvoke(() => OnGitTouched?.Invoke(gt));
+                    break;
                 case "title":
                     var t = JsonSerializer.Deserialize<TitleMessage>(json, IpcJson.Options);
                     if (t != null) _dispatcher.BeginInvoke(() => OnTitle?.Invoke(t));
@@ -209,6 +214,14 @@ internal sealed record OpenMessage(
 /// time the pane's state changes.
 internal sealed record GitBaselineMessage(
     [property: JsonPropertyName("sha")] string Sha);
+
+/// Sent by the cc HookHandler after a file-editing tool runs (post-tool-use,
+/// Edit/Write/NotebookEdit), carrying the absolute path the agent touched.
+/// The host records it per pane so that when several agents share ONE working
+/// tree (projects-mode tabs without worktrees) each pane's loc chip can be
+/// filtered to its own agent's files instead of every tab wearing the union.
+internal sealed record GitTouchedMessage(
+    [property: JsonPropertyName("path")] string? Path);
 
 /// Sent by the cc HookHandler on Claude's first UserPromptSubmit. Carries the
 /// (already length-bounded) prompt text the host uses to auto-name a still-

@@ -137,8 +137,20 @@ internal static class GitProc
     /// fold-in is skipped entirely, because counting ambient pre-existing files
     /// inflated the chip by the repo's whole untracked footprint (+90k on a repo
     /// full of old scrape output). A momentary undercount is the better failure.
+    ///
+    /// <paramref name="pathFilter"/> restricts every term to the given rel
+    /// paths (git-style forward slashes, as numstat/ls-files report them).
+    /// Used when SEVERAL agents share one working tree (projects-mode tabs
+    /// without worktrees): the tree diff is the union of everyone's work, so
+    /// each pane counts only the files ITS agent reported touching. Under a
+    /// filter a commit ticks the count only when it touched a matching file —
+    /// a shared tree's `baseline..HEAD` contains the other agents' commits
+    /// too, and an unconditional count would bill them to everyone. Null (the
+    /// solo-pane case) keeps the whole-tree measurement, which also catches
+    /// files created by Bash commands that attribution can't see.
     public static async Task<GitSessionStats?> SessionStatsAsync(
-        string baselineSha, string cwd, IReadOnlySet<string>? baselineUntracked)
+        string baselineSha, string cwd, IReadOnlySet<string>? baselineUntracked,
+        IReadOnlySet<string>? pathFilter = null)
     {
         if (string.IsNullOrEmpty(baselineSha)) return null;
 
@@ -158,6 +170,7 @@ internal static class GitProc
         if (okLog && authored != null)
         {
             var mine = false;
+            var counted = false;   // this commit already ticked `commits` (filtered mode)
             foreach (var raw in log.Split('\n'))
             {
                 var line = raw.TrimEnd('\r');
@@ -167,13 +180,19 @@ internal static class GitProc
                     // reflog set decides whether it's ours or something a pull
                     // brought in. Merge commits emit no numstat rows, so an
                     // authored merge ticks the count and adds no lines.
+                    // Under a path filter the tick moves to the first MATCHING
+                    // row instead — in a shared tree "authored here" includes
+                    // the other agents' commits, and only the files tell whose.
                     mine = authored.Contains(line.Substring(1).Trim());
-                    if (mine) commits++;
+                    if (mine && pathFilter == null) commits++;
+                    counted = false;
                     continue;
                 }
                 if (!mine || line.Length == 0) continue;
                 if (TryNumstat(line, out var a, out var d, out var path))
                 {
+                    if (pathFilter != null && !pathFilter.Contains(path)) continue;
+                    if (pathFilter != null && !counted) { commits++; counted = true; }
                     added += a; deleted += d; paths.Add(path);
                 }
             }
@@ -188,6 +207,7 @@ internal static class GitProc
             {
                 if (TryNumstat(raw.TrimEnd('\r'), out var a, out var d, out var path))
                 {
+                    if (pathFilter != null && !pathFilter.Contains(path)) continue;
                     added += a; deleted += d; paths.Add(path);
                 }
             }
@@ -202,7 +222,7 @@ internal static class GitProc
         if (baselineUntracked != null)
         {
             int uFiles, uAdded;
-            (uOk, uFiles, uAdded) = await UntrackedStatsAsync(cwd, baselineUntracked);
+            (uOk, uFiles, uAdded) = await UntrackedStatsAsync(cwd, baselineUntracked, pathFilter);
             if (uOk) { files += uFiles; added += uAdded; }
         }
 
@@ -254,7 +274,7 @@ internal static class GitProc
     /// stall. Returns (ok, files, added); ok=false only when the enumeration
     /// itself fails (no repo / no git).
     private static async Task<(bool ok, int files, int added)> UntrackedStatsAsync(
-        string cwd, IReadOnlySet<string> knownAtBaseline)
+        string cwd, IReadOnlySet<string> knownAtBaseline, IReadOnlySet<string>? pathFilter = null)
     {
         const int MaxFiles = 1000;                 // cap the file count we tally
         const int MaxBytesPerFile = 2 << 20;       // sample ≤2 MiB of any one file
@@ -270,6 +290,7 @@ internal static class GitProc
         foreach (var rel in rels)
         {
             if (knownAtBaseline.Contains(rel)) continue;   // predates the session
+            if (pathFilter != null && !pathFilter.Contains(rel)) continue;   // another agent's file
             if (files >= MaxFiles) break;
             files++;
             if (budget <= 0) continue;             // out of IO budget: count file, skip lines
