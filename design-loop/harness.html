@@ -78,6 +78,23 @@
         </button>
       </div>
       <div id="sidebar-scroll" class="sidebar__scroll"></div>
+      <!-- Mirrors index.html so #cloud / #cloud-sidebar can be captured here. -->
+      <div id="cloud-area" class="cloud-area" hidden>
+        <div class="cloud-area__label">Cloud</div>
+        <button id="cloud-card" class="cloud-card" type="button" aria-label="Cloud resources">
+          <span class="cloud-card__head">
+            <span class="cloud-card__dot" aria-hidden="true"></span>
+            <span class="cloud-card__title" id="cloud-card-title"></span>
+            <span class="cloud-card__rate" id="cloud-card-rate"></span>
+          </span>
+          <span class="cloud-card__sub" id="cloud-card-sub"></span>
+          <span class="cloud-card__alert" id="cloud-card-alert" hidden>
+            <span class="cloud-card__alert-dot" aria-hidden="true"></span>
+            <span class="cloud-card__alert-text" id="cloud-card-alert-text"></span>
+            <span class="cloud-card__alert-cost" id="cloud-card-alert-cost"></span>
+          </span>
+        </button>
+      </div>
       <footer class="sidebar__footer">
         <button class="sidebar__identity" type="button" title="Perch" aria-label="Perch">
           <span class="sidebar__identity-text">

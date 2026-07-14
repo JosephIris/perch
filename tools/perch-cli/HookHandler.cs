@@ -187,6 +187,15 @@ internal static class HookHandler
                     Send(pipeName, new { type = "status", state = "working", detail = PrettyAction(root, tool!) });
                 break;
 
+            case "pre-bash":
+                // Registered with a "Bash" matcher (NOT the "" matcher that
+                // pre-tool-use would need) purely to stamp agent-attribution
+                // labels onto `gcloud ... create`. Deliberately silent otherwise:
+                // it emits no IPC and prints nothing for the overwhelming majority
+                // of Bash calls, so it can't resurrect the status-detail firehose
+                // that got PreToolUse disabled in the first place.
+                return StampGcloud(pipeName, root);
+
             case "post-tool-use":
                 // A tool just finished → the agent is actively working again.
                 // This is the ONLY hook that fires after a permission prompt is
@@ -215,6 +224,96 @@ internal static class HookHandler
         }
         return 0;
     }
+
+    /// PreToolUse(Bash): if the command creates a billable GCP resource, rewrite
+    /// it to carry agent-attribution labels, and tell the host so it can snapshot
+    /// the pane's name + task into the ledger (the hook itself can't know either —
+    /// it's a fresh process with no access to PaneNode).
+    ///
+    /// Prints Claude Code's `updatedInput` payload on stdout. We deliberately do
+    /// NOT return a permissionDecision: that would auto-approve every cloud
+    /// create, silently bypassing the user's permission prompt. We want to
+    /// rewrite the command, not to authorize it.
+    ///
+    /// Any failure here must leave the command untouched — a bookkeeping label is
+    /// never worth breaking the agent's actual work over.
+    private static int StampGcloud(string pipeName, JsonElement? root)
+    {
+        try
+        {
+            if (StringFrom(root, "tool_name") is not "Bash") return 0;
+            var command = ToolInputString(root, "command");
+            var kind = GcloudLabels.Detect(command);
+            if (kind == GcloudLabels.Kind.None) return 0;
+
+            var session = StringFrom(root, "session_id") ?? "";
+            var pane    = Environment.GetEnvironmentVariable("PERCH_PANE_ID") ?? "";
+            var owner   = Environment.GetEnvironmentVariable("USERNAME")
+                          ?? Environment.GetEnvironmentVariable("USER")
+                          ?? "";
+
+            var labels = new System.Collections.Generic.List<System.Collections.Generic.KeyValuePair<string, string>>();
+            // agent-owner is the HUMAN, and it's the filter key: without it, two
+            // people running Perch against the same project would see (and could
+            // delete) each other's machines.
+            if (owner.Length   > 0) labels.Add(new("agent-owner",   owner));
+            if (session.Length > 0) labels.Add(new("agent-session", session));
+            if (pane.Length    > 0) labels.Add(new("agent-pane",    pane));
+            if (labels.Count == 0) return 0;
+
+            var stamped = GcloudLabels.Stamp(command!, labels);
+            if (ReferenceEquals(stamped, command) || stamped == command) return 0;
+
+            // Let the host record what the label can't hold: the pane's name and
+            // the prompt behind this resource. Label values are capped at 63 chars
+            // of [a-z0-9_-], so a sentence simply cannot go there.
+            Send(pipeName, new
+            {
+                type = "cloud.stamped",
+                session,
+                kind = kind == GcloudLabels.Kind.Instance ? "instance" : "cluster",
+            });
+
+            // Echo back the whole tool_input with only `command` swapped, so we
+            // don't drop sibling fields (description, timeout, …).
+            var updated = new System.Collections.Generic.Dictionary<string, object?>();
+            if (root is JsonElement el && el.TryGetProperty("tool_input", out var ti)
+                && ti.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var p in ti.EnumerateObject())
+                    updated[p.Name] = p.Name == "command" ? stamped : JsonNode(p.Value);
+            }
+            updated["command"] = stamped;
+
+            Console.Out.Write(JsonSerializer.Serialize(new
+            {
+                hookSpecificOutput = new
+                {
+                    hookEventName = "PreToolUse",
+                    updatedInput = updated,
+                },
+            }, JsonOpts));
+            Console.Out.Flush();
+        }
+        catch (Exception ex)
+        {
+            // Never break the agent over a label.
+            Console.Error.WriteLine($"perch hooks: gcloud stamp failed: {ex.Message}");
+        }
+        return 0;
+    }
+
+    /// Re-materialize a JsonElement as something JsonSerializer will round-trip
+    /// faithfully, so echoing tool_input back doesn't mangle non-string fields.
+    private static object? JsonNode(JsonElement e) => e.ValueKind switch
+    {
+        JsonValueKind.String => e.GetString(),
+        JsonValueKind.Number => e.TryGetInt64(out var l) ? l : e.GetDouble(),
+        JsonValueKind.True   => true,
+        JsonValueKind.False  => false,
+        JsonValueKind.Null   => null,
+        _ => JsonSerializer.Deserialize<JsonElement>(e.GetRawText()),
+    };
 
     /// JSON helper: pulls a string property if present, optionally truncating.
     /// Claude payloads may carry the field at the root OR nested under a

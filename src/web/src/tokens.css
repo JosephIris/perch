@@ -136,6 +136,22 @@
   --color-caution:          #FCE100;
   --color-error:            #FF99A4;
 
+  /* Cloud — money being spent. A DIFFERENT AXIS from the agent-state palette
+   * below: an agent state says what a pane is doing; this says a machine is
+   * billing you. It needs its own class because the cloud area only EXISTS when
+   * something is running — so its resting state is "live and metered", never
+   * "neutral", and styling it as a dormant gray card would be a lie.
+   *
+   * Teal specifically because every other hue here is already claimed and would
+   * be misread: green = done, blue = working / accent / selection, yellow =
+   * caution, violet = pane-tag 5. Teal is the only one that can't collide.
+   *
+   * Escalation is: absent (nothing running, no color at all) → cloud (this) →
+   * caution (an orphan — the card leaves this class entirely). */
+  --color-cloud:            #5BC8AF;
+  --color-cloud-faint:      rgba(91, 200, 175, 0.09);
+  --color-cloud-hover:      rgba(91, 200, 175, 0.14);
+
   /* Status-dot palette. Drives the small colored circle on the left of
    * each session row (replacement for the old chip pill). One CSS variable
    * per agent state keeps the markup state-data-driven via

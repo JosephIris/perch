@@ -1,0 +1,283 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
+using System.Linq;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+
+namespace Perch;
+
+/// One billable thing the panel can show you and let you kill. A Dataproc
+/// cluster is ONE of these, not five — its member VMs are rolled up, because
+/// "delete this cluster" is the action you actually want and deleting the master
+/// VM out from under a live cluster is a way to make a mess.
+internal sealed record CloudResource(
+    string Id,               // stable key: cluster name, or "<zone>/<name>" for a VM
+    string Name,
+    string Kind,             // "instance" | "cluster"
+    string MachineType,
+    string Zone,
+    string Region,           // needed to delete a Dataproc cluster
+    int VmCount,
+    bool IsGpu,
+    long CreatedUnixMs,
+    double UsdPerHour,
+    bool PriceKnown,
+    string? Session,
+    string? PaneId,
+    // Joined from the ledger — the half a GCP label can't carry.
+    string? AgentName,
+    string? Task,
+    bool IsOrphan,
+    string? AgentState);     // live panes only: working / done / waiting …
+
+/// Asks GCP what is actually running, filtered server-side to resources this
+/// user's agents stamped. That filter is the whole trick: the project has 200+
+/// running instances, almost all of them production, and listing them all would
+/// bury the handful an agent actually made.
+///
+/// The entire feature no-ops when gcloud is absent or unauthenticated — no chip,
+/// no panel, no cost to anyone who doesn't drive GCP from an agent.
+internal sealed class CloudPoller
+{
+    /// Resolves a session id to a live pane's state, or null when the pane is
+    /// gone. This is the ONLY thing that decides orphan-vs-live, and it's
+    /// deliberately not time-based: an agent legitimately sits idle for 40
+    /// minutes while a cluster grinds, and flagging that would train the user to
+    /// ignore the panel.
+    public Func<string?, string?>? LookupPaneState { get; set; }
+
+    /// Session id → ledger entry (agent name + the prompt behind the machine).
+    public Func<string?, CloudLedger.Entry?>? LookupLedger { get; set; }
+
+    private static readonly char[] Slash = { '/' };
+    private bool? _available;
+
+    /// True once we've confirmed gcloud exists and has an active account.
+    /// Cached: a missing gcloud isn't going to appear mid-session, and we don't
+    /// want to pay for the probe on every poll.
+    public async Task<bool> IsAvailableAsync(CancellationToken ct = default)
+    {
+        if (_available is bool b) return b;
+        var (code, stdout, _) = await RunAsync("auth list --filter=status:ACTIVE --format=value(account)", 8000, ct);
+        _available = code == 0 && !string.IsNullOrWhiteSpace(stdout);
+        if (_available == false) Log.Info("CloudPoller: gcloud unavailable or not authenticated — cloud panel disabled");
+        return _available.Value;
+    }
+
+    public async Task<IReadOnlyList<CloudResource>> PollAsync(CancellationToken ct = default)
+    {
+        if (!await IsAvailableAsync(ct)) return Array.Empty<CloudResource>();
+
+        var owner = PerchCli.GcloudLabels.SanitizeValue(Environment.UserName);
+        if (owner.Length == 0) return Array.Empty<CloudResource>();
+
+        // Server-side filter on OUR label. Two things this buys us:
+        //   1. the 200-instance production fleet never crosses the wire, and
+        //   2. a teammate running Perch against the same project sees their
+        //      machines, not ours — so nobody deletes somebody else's cluster.
+        // TERMINATED instances are excluded: they've stopped billing compute,
+        // and showing them would make the panel a graveyard instead of a bill.
+        var filter = $"labels.agent-owner={owner} AND status!=TERMINATED";
+        var (code, stdout, stderr) = await RunAsync(
+            $"compute instances list --filter=\"{filter}\" --format=json", 30000, ct);
+
+        if (code != 0)
+        {
+            Log.Info($"CloudPoller: gcloud list failed ({code}): {stderr.Trim()}");
+            return Array.Empty<CloudResource>();
+        }
+
+        try { return Parse(stdout); }
+        catch (Exception ex) { Log.Error("CloudPoller.Parse", ex); return Array.Empty<CloudResource>(); }
+    }
+
+    /// Turns the raw instance list into resources, collapsing Dataproc VMs into
+    /// their cluster. Dataproc tags every VM it creates with
+    /// goog-dataproc-cluster-name, so one `compute instances list` covers both
+    /// resource kinds and we never need a second call per region.
+    internal IReadOnlyList<CloudResource> Parse(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        var vms = new List<Vm>();
+        foreach (var el in doc.RootElement.EnumerateArray())
+        {
+            var labels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (el.TryGetProperty("labels", out var lb) && lb.ValueKind == JsonValueKind.Object)
+                foreach (var p in lb.EnumerateObject())
+                    if (p.Value.ValueKind == JsonValueKind.String) labels[p.Name] = p.Value.GetString() ?? "";
+
+            var zone = LastSegment(Str(el, "zone"));
+            var mt = LastSegment(Str(el, "machineType"));
+            vms.Add(new Vm(
+                Name: Str(el, "name") ?? "",
+                Zone: zone ?? "",
+                MachineType: mt ?? "",
+                CreatedUnixMs: ParseTime(Str(el, "creationTimestamp")),
+                Cluster: labels.GetValueOrDefault("goog-dataproc-cluster-name"),
+                Session: labels.GetValueOrDefault("agent-session"),
+                PaneId: labels.GetValueOrDefault("agent-pane")));
+        }
+
+        var result = new List<CloudResource>();
+
+        // --- Dataproc clusters: one row per cluster ---
+        foreach (var grp in vms.Where(v => !string.IsNullOrEmpty(v.Cluster)).GroupBy(v => v.Cluster!))
+        {
+            var members = grp.ToList();
+            var first = members.OrderBy(m => m.CreatedUnixMs).First();
+            // Bill every member VM, each with Dataproc's per-vCPU premium on top.
+            var rate = members.Sum(m => CloudPricing.PerHour(m.MachineType, dataproc: true));
+            var known = members.All(m => CloudPricing.IsKnown(m.MachineType));
+            result.Add(Build(
+                id: $"cluster/{grp.Key}",
+                name: grp.Key,
+                kind: "cluster",
+                machineType: first.MachineType,
+                zone: first.Zone,
+                vmCount: members.Count,
+                // A cluster's clock starts with its FIRST vm — autoscaled workers
+                // that joined an hour ago must not make an old cluster look young.
+                createdUnixMs: members.Min(m => m.CreatedUnixMs),
+                rate: rate,
+                priceKnown: known,
+                session: first.Session,
+                paneId: first.PaneId));
+        }
+
+        // --- Plain VMs ---
+        foreach (var vm in vms.Where(v => string.IsNullOrEmpty(v.Cluster)))
+        {
+            result.Add(Build(
+                id: $"{vm.Zone}/{vm.Name}",
+                name: vm.Name,
+                kind: "instance",
+                machineType: vm.MachineType,
+                zone: vm.Zone,
+                vmCount: 1,
+                createdUnixMs: vm.CreatedUnixMs,
+                rate: CloudPricing.PerHour(vm.MachineType),
+                priceKnown: CloudPricing.IsKnown(vm.MachineType),
+                session: vm.Session,
+                paneId: vm.PaneId));
+        }
+
+        // Orphans first, then most expensive: the costliest mistake is the thing
+        // you should see without scrolling.
+        return result
+            .OrderByDescending(r => r.IsOrphan)
+            .ThenByDescending(r => r.UsdPerHour * Hours(r.CreatedUnixMs))
+            .ToList();
+    }
+
+    private CloudResource Build(string id, string name, string kind, string machineType, string zone,
+                                int vmCount, long createdUnixMs, double rate, bool priceKnown,
+                                string? session, string? paneId)
+    {
+        var state = LookupPaneState?.Invoke(session);
+        var led = LookupLedger?.Invoke(session);
+        return new CloudResource(
+            Id: id,
+            Name: name,
+            Kind: kind,
+            MachineType: machineType,
+            Zone: zone,
+            Region: RegionOf(zone),
+            VmCount: vmCount,
+            IsGpu: IsGpuType(machineType),
+            CreatedUnixMs: createdUnixMs,
+            UsdPerHour: rate,
+            PriceKnown: priceKnown,
+            Session: session,
+            PaneId: paneId,
+            AgentName: led?.AgentName,
+            Task: led?.Task,
+            // No live pane owns this session → nothing is using the machine.
+            IsOrphan: state == null,
+            AgentState: state);
+    }
+
+    private sealed record Vm(string Name, string Zone, string MachineType, long CreatedUnixMs,
+                             string? Cluster, string? Session, string? PaneId);
+
+    /// The GPU families. Used only to tag the row — the $/hr figure already tells
+    /// the real story, so this is a label, not an alarm.
+    private static bool IsGpuType(string? mt)
+        => mt != null && (mt.StartsWith("a2-", StringComparison.OrdinalIgnoreCase)
+                       || mt.StartsWith("a3-", StringComparison.OrdinalIgnoreCase)
+                       || mt.StartsWith("g2-", StringComparison.OrdinalIgnoreCase));
+
+    /// us-east5-b → us-east5. Dataproc deletes are region-scoped, not zone-scoped.
+    internal static string RegionOf(string? zone)
+    {
+        if (string.IsNullOrEmpty(zone)) return "";
+        var i = zone!.LastIndexOf('-');
+        return i > 0 ? zone.Substring(0, i) : zone;
+    }
+
+    private static double Hours(long createdUnixMs)
+    {
+        if (createdUnixMs <= 0) return 0;
+        var ms = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - createdUnixMs;
+        return ms <= 0 ? 0 : ms / 3_600_000.0;
+    }
+
+    private static string? Str(JsonElement el, string name)
+        => el.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+
+    /// gcloud returns fully-qualified URLs for zone/machineType.
+    private static string? LastSegment(string? url)
+    {
+        if (string.IsNullOrEmpty(url)) return url;
+        var i = url!.LastIndexOfAny(Slash);
+        return i >= 0 ? url.Substring(i + 1) : url;
+    }
+
+    private static long ParseTime(string? iso)
+        => DateTimeOffset.TryParse(iso, CultureInfo.InvariantCulture,
+                                   DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var dto)
+            ? dto.ToUnixTimeMilliseconds()
+            : 0;
+
+    /// Run gcloud off the UI thread. gcloud on Windows is a .cmd shim, so it has
+    /// to go through the shell.
+    internal static async Task<(int Code, string Stdout, string Stderr)> RunAsync(
+        string args, int timeoutMs, CancellationToken ct)
+    {
+        try
+        {
+            using var p = new Process
+            {
+                StartInfo = new ProcessStartInfo
+                {
+                    FileName = "cmd.exe",
+                    Arguments = $"/c gcloud {args}",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                },
+            };
+            if (!p.Start()) return (-1, "", "failed to start gcloud");
+
+            var stdout = p.StandardOutput.ReadToEndAsync();
+            var stderr = p.StandardError.ReadToEndAsync();
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(timeoutMs);
+            try { await p.WaitForExitAsync(timeout.Token); }
+            catch (OperationCanceledException)
+            {
+                try { p.Kill(entireProcessTree: true); } catch { }
+                return (-1, "", "gcloud timed out");
+            }
+            return (p.ExitCode, await stdout, await stderr);
+        }
+        catch (Exception ex)
+        {
+            Log.Error("CloudPoller.Run", ex);
+            return (-1, "", ex.Message);
+        }
+    }
+}

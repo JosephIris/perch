@@ -18,6 +18,7 @@ import { startSpinnerTicker } from "./spinner.js";
 import { confirmDialog } from "./confirm.js";
 import { RestoreProgress } from "./restore-progress.js";
 import { invalidateCommits } from "./commits.js";
+import { initCloud } from "./cloud-panel.js";
 import { setModelLimits } from "./model-menu.js";
 import type { PaneTreeView } from "./bridge.js";
 
@@ -39,6 +40,10 @@ const dashboard = new Dashboard($("dashboard"), $("dash-badge"));
 const toast = new Toast($("toast"));
 const restoreProgress = new RestoreProgress();
 const statusEl = $("status-text");
+
+// Cloud resources. Self-wiring: it owns its own chip + host listener, and stays
+// completely invisible unless the host actually reports running machines.
+initCloud();
 
 // Footer auto-update pill (hidden until the host reports a newer release).
 const updateBanner = $<HTMLButtonElement>("update-banner");

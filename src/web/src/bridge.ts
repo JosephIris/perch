@@ -160,7 +160,19 @@ export type OutMessage =
   /* Settings → "Check now": ask the host to check the feed right now. Unlike
    * the silent background checks, the host replies with an update.status so the
    * dialog can show the outcome (and still reveals the pill if one is found). */
-  | { type: "update.check" };
+  | { type: "update.check" }
+  /* Cloud panel opened/closed. Drives the poll cadence: every gcloud tick is a
+   * subprocess, so the host polls slowly (5 min) in the background and speeds up
+   * to 1 min only while you're actually looking at the panel. */
+  | { type: "cloud.panel"; open: boolean }
+  /* Refresh button in the panel header. */
+  | { type: "cloud.refresh" }
+  /* Delete one machine. `id` is the host's stable key ("cluster/<name>" or
+   * "<zone>/<name>"), never a bare name — a VM and a Dataproc cluster take
+   * different gcloud delete commands and confusing them strands the workers. */
+  | { type: "cloud.delete"; id: string }
+  /* "Delete all" in the orphan area. */
+  | { type: "cloud.deleteOrphans" };
 
 // ---- Incoming message shapes (host -> page) --------------------------------
 
@@ -463,7 +475,48 @@ export type InMessage =
    * → already on the latest (version = current); `available` → a newer release
    * exists (version = target; the pill is shown too); `error` → the check
    * failed; `unsupported` → this copy can't self-update (dev/portable). */
-  | { type: "update.status"; state: "uptodate" | "available" | "error" | "unsupported"; version?: string | null };
+  | { type: "update.status"; state: "uptodate" | "available" | "error" | "unsupported"; version?: string | null }
+  /* Every billable GCP resource this user's agents created and that is still
+   * running. Filtered server-side on the agent-owner label, so the ~200 unrelated
+   * production instances in the project never reach us. */
+  | CloudDataMessage;
+
+/** One machine (or one Dataproc cluster — a cluster is ONE row, not five). */
+export interface CloudResourceView {
+  /** Stable key. "cluster/<name>" or "<zone>/<name>". Pass back to cloud.delete. */
+  id: string;
+  name: string;
+  kind: "instance" | "cluster";
+  machineType: string;
+  zone: string;
+  /** Member VMs. >1 only for clusters. */
+  vmCount: number;
+  isGpu: boolean;
+  createdMs: number;
+  usdPerHour: number;
+  /** False when the machine type isn't in the price table. Render "—", NOT
+   * "$0.00": a confident zero next to a running A100 reads as "this is free". */
+  priceKnown: boolean;
+  /** From the ledger — the pane's name and the prompt that caused this machine.
+   * Absent if the ledger entry was lost, in which case the row still shows the
+   * machine and its cost, just not the reason for it. */
+  agentName?: string | null;
+  task?: string | null;
+  paneId?: string | null;
+  /** Nothing alive owns this machine: its pane was closed or its session ended.
+   * This is the whole point of the panel. */
+  isOrphan: boolean;
+  /** Live panes only: "working" | "done" | "waiting" | … */
+  agentState?: string | null;
+}
+
+export interface CloudDataMessage {
+  type: "cloud.data";
+  resources: CloudResourceView[];
+  /** Host clock at poll time — cost is computed page-side from (now - createdMs),
+   * so uptime keeps ticking between polls instead of freezing for 5 minutes. */
+  nowMs: number;
+}
 
 // ---- Implementation --------------------------------------------------------
 
