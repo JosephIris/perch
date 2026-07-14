@@ -100,6 +100,17 @@ public partial class MainWindow : FluentWindow
     // the first check; a no-op when this copy isn't a Velopack install.
     private UpdateService? _updates;
     private System.Windows.Threading.DispatcherTimer? _updateTimer;
+
+    // ---- Usage-limit awareness (model picker) ----------------------------
+    // Polls Claude's OAuth usage endpoint on a slow, self-throttled cadence and
+    // exposes per-model rate-limit state that the model menu uses to disable a
+    // maxed-out model and annotate its reset time. Designed for the data being
+    // usually ABSENT (the endpoint 429s today): when there's no snapshot every
+    // model stays enabled and nothing is annotated. Created in the constructor;
+    // kicked at page-ready and polled by a 5-minute timer (whose ticks the
+    // service no-ops until its own 10/30-minute gap elapses).
+    private UsageService? _usage;
+    private System.Windows.Threading.DispatcherTimer? _usageTimer;
     // When the last update check ran (UTC). Throttles the re-check we fire on
     // window activation so rapid alt-tabbing can't hammer the GitHub feed.
     private DateTime _lastUpdateCheckUtc = DateTime.MinValue;
@@ -128,6 +139,11 @@ public partial class MainWindow : FluentWindow
         _panes.NameReset += OnNameReset;
         _panes.AgentType += OnAgentType;
         _panes.AgentSession += OnAgentSession;
+        // Usage poller for the model picker. Subscribe once here; a new snapshot
+        // marshals back to the UI thread and re-pushes state so the menu picks
+        // up freshly-disabled models. PushState guards on the webview being up.
+        _usage = new UsageService();
+        _usage.Updated += () => Dispatcher.BeginInvoke(new Action(PushState));
         EnsurePaneNames();
         // Persist immediately on first launch so external tools (the perch
         // CLI, test harnesses) can read pane ids and pipe paths from disk
@@ -204,6 +220,8 @@ public partial class MainWindow : FluentWindow
         {
             _idleWatchdog?.Stop();
             _updateTimer?.Stop();
+            _usageTimer?.Stop();
+            _usage?.Dispose();
             _clipWatch?.Dispose();
             _control?.Dispose();
             _panes.Dispose();
@@ -472,6 +490,7 @@ public partial class MainWindow : FluentWindow
         .Add<PaneRenameMsg>("pane.rename", OnPaneRename)
         .Add<PaneRecolorMsg>("pane.recolor", OnPaneRecolor)
         .Add<PaneCwdMsg>("pane.cwd", OnPaneCwd)
+        .Add<PaneModelMsg>("pane.model", OnPaneModel)
         .Add<PaneProbeMsg>("pane.probe", OnPaneProbe)
         .Add<UrlPaneLayoutMsg>("urlpane.layout", m => _urlPaneCtrl?.OnLayout(m))
         .Add<PaneRef>("urlpane.dispose", m => _urlPaneCtrl?.OnDispose(m))
@@ -563,6 +582,20 @@ public partial class MainWindow : FluentWindow
             };
             _updateTimer.Tick += (_, _) => _ = CheckForUpdatesAsync();
             _updateTimer.Start();
+        }
+
+        // Kick the usage poll now that the page can receive a re-push, then poll
+        // every 5 minutes. The service's own throttle enforces the real 10/30-
+        // minute cadence — the timer just gives it a chance to become due.
+        _ = _usage?.RefreshIfDueAsync();
+        if (_usageTimer is null)
+        {
+            _usageTimer = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = TimeSpan.FromMinutes(5),
+            };
+            _usageTimer.Tick += (_, _) => _ = _usage?.RefreshIfDueAsync();
+            _usageTimer.Start();
         }
     }
 
@@ -881,6 +914,11 @@ public partial class MainWindow : FluentWindow
                 initialCommand = $"claude --resume {pane.ClaudeSessionId}";
                 NoteRestorePaneResuming(pane.Id);
             }
+            // Reassert the pane's model selection to disk so wrap-claude picks
+            // it up on the first `claude` in this shell (the temp file may have
+            // been reaped from %TEMP%, or this is a restored/respawned pane
+            // whose Model was persisted but whose file is gone). Empty clears it.
+            ClaudeModelState.Write(pane.Id, pane.Model);
             // Shell.BuildStartupCommandLine injects PERCH_PIPE / PERCH_PANE_ID
             // env vars per-pane so agents inside the shell can call back
             // into our IPC layer (stage 4 reactivates that pipe).
@@ -2130,6 +2168,15 @@ public partial class MainWindow : FluentWindow
                 if (ccName.Length == 0) ccName = "tab";
                 _pendingInitialCommand[s.Root.Id] = $"claude --session-id {sid} --name {ccName}";
                 _pendingCcColor[s.Root.Id] = CcColorNames[colorIndex % CcColorNames.Length];
+                // Creation-time model pick. Set on the PaneNode NOW — the PTY
+                // spawns lazily AFTER the PushState below (page renders → first
+                // pane.resize → SpawnPty), and SpawnPty writes the wrap-claude
+                // state file from pane.Model before starting the shell, so the
+                // very first `claude` launch in this tab gets --model. Clamped
+                // to the same allowlist as pane.model; anything else → default.
+                var modelAlias = (msg.Model ?? "").Trim().ToLowerInvariant();
+                if (modelAlias.Length > 0 && !ModelAliases.Contains(modelAlias)) modelAlias = "";
+                s.Root.Model = modelAlias;
             }
             else if (agent == "codex")
             {
@@ -2480,6 +2527,46 @@ public partial class MainWindow : FluentWindow
         PushState();
     }
 
+    // The CLI aliases the model menu offers (Default → ""). Any other value
+    // from a stale page is rejected so it can never become a --model / /model
+    // token we'd inject verbatim.
+    private static readonly HashSet<string> ModelAliases =
+        new(StringComparer.OrdinalIgnoreCase) { "fable", "opus", "sonnet", "haiku" };
+
+    // Per-pane Claude model pick from the pane header menu. Persist it, write
+    // the wrap-claude state file (read at the NEXT `claude` launch), and — when
+    // cc is already running here — type `/model <alias>` into the PTY so the
+    // switch takes effect on the live session too. Empty alias = account
+    // default: no --model at launch, and `/model default` for the live reset.
+    private void OnPaneModel(PaneModelMsg msg)
+    {
+        var sess = OwningSession(msg.PaneId);
+        if (sess == null) return;
+        var pane = AllLeaves(sess.Root).FirstOrDefault(p => p.Id == msg.PaneId);
+        if (pane == null) return;
+        var alias = (msg.Model ?? "").Trim().ToLowerInvariant();
+        if (alias.Length > 0 && !ModelAliases.Contains(alias)) return;
+
+        pane.Model = alias;
+        // wrap-claude reads this at the next launch; writing it here (not just
+        // at spawn) is what lets a change made mid-session reach a claude the
+        // user starts later in the same shell.
+        ClaudeModelState.Write(pane.Id, alias);
+        _store.Save();
+
+        // Live switch: cc exposes no flag to change model mid-session, only the
+        // `/model` slash command, so type it into the TUI (same mechanism as
+        // the /color choreography). Only when cc is actually running here —
+        // otherwise the stored selection just waits for the next launch.
+        if (pane.AgentType == "claude" && _panes.Has(pane.Id))
+        {
+            var cmd = alias.Length == 0 ? "/model default" : $"/model {alias}";
+            try { _panes.Write(pane.Id, System.Text.Encoding.UTF8.GetBytes(cmd + "\r")); }
+            catch (Exception ex) { Log.Info("PaneModel", $"live switch skipped: {ex.Message}"); }
+        }
+        PushState();
+    }
+
     // OSC 7 from the pane's shell — give us the cwd, we figure out the
     // branch. Cached per pane so we don't shell-out to git on every prompt
     // redraw (PowerShell fires OSC 7 on every Enter, even when cwd hasn't
@@ -2752,7 +2839,7 @@ public partial class MainWindow : FluentWindow
         {
             var snap = StateProjection.BuildSnapshot(
                 _store, _activePaneId, _settings.FontSize, _settings.OnboardingSeen,
-                _projects, _settings.SidebarMode);
+                _projects, _settings.SidebarMode, _usage?.CurrentLimits());
             Web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(snap));
         }
         catch (Exception ex) { Log.Error("PushState", ex); }

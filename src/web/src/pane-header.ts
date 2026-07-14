@@ -14,6 +14,7 @@
 
 import { send } from "./bridge.js";
 import type { PaneTreeView } from "./bridge.js";
+import { showModelMenu } from "./model-menu.js";
 
 export interface PaneHeader {
   root: HTMLElement;
@@ -28,6 +29,28 @@ export interface PaneHeader {
   /** Small badge naming the agent in this pane (CC / CX); hidden for a
    *  plain shell. */
   agentBadgeEl: HTMLElement;
+  /** Quiet clickable label showing this pane's Claude model selection; opens
+   *  the model menu. Shown only for Claude panes. */
+  modelEl: HTMLButtonElement;
+}
+
+/** Set the model chip: shows the pane's selected Claude model (or "default")
+ *  as a quiet clickable label, visible only for Claude panes. Stores the
+ *  current alias on the element so a click can open the menu marking it. */
+export function applyModelChip(
+  el: HTMLButtonElement,
+  agentType: string | undefined,
+  model: string | undefined
+) {
+  if (agentType !== "claude") {
+    el.style.display = "none";
+    el.dataset.model = "";
+    return;
+  }
+  const alias = model ?? "";
+  el.dataset.model = alias;
+  el.textContent = alias === "" ? "default" : alias;
+  el.style.display = "";
 }
 
 /** Set the agent-type badge: "CC" for Claude Code, "CX" for codex, hidden for
@@ -124,6 +147,23 @@ export function buildPaneHeader(paneId: string): PaneHeader {
   agentBadgeEl.draggable = false;
   root.appendChild(agentBadgeEl);
 
+  // Model label — quiet, clickable; opens the per-pane model menu. Hidden
+  // until applyModelChip shows it for a Claude pane. dataset.model carries the
+  // current alias so the menu opens with the right item checked.
+  const modelEl = document.createElement("button");
+  modelEl.type = "button";
+  modelEl.className = "pane__model";
+  modelEl.style.display = "none";
+  modelEl.draggable = false;
+  modelEl.dataset.model = "";
+  modelEl.title = "Claude model";
+  modelEl.setAttribute("aria-label", "Choose Claude model");
+  modelEl.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    showModelMenu(modelEl, paneId, modelEl.dataset.model ?? "");
+  });
+  root.appendChild(modelEl);
+
   // Branch chip (auto-detected from cwd via OSC 7 → git rev-parse) and
   // commit-count chip (cc-session baseline → git rev-list). Both empty by
   // default; applyLeafView toggles their visibility per pane state.
@@ -159,7 +199,7 @@ export function buildPaneHeader(paneId: string): PaneHeader {
   });
   root.appendChild(close);
 
-  return { root, colorDotEl, nameEl, stateDotEl, stateLabelEl, branchEl, commitsEl, agentBadgeEl };
+  return { root, colorDotEl, nameEl, stateDotEl, stateLabelEl, branchEl, commitsEl, agentBadgeEl, modelEl };
 }
 
 let openPicker: HTMLElement | null = null;

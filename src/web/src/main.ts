@@ -18,6 +18,7 @@ import { startSpinnerTicker } from "./spinner.js";
 import { confirmDialog } from "./confirm.js";
 import { RestoreProgress } from "./restore-progress.js";
 import { invalidateCommits } from "./commits.js";
+import { setModelLimits } from "./model-menu.js";
 import type { PaneTreeView } from "./bridge.js";
 
 // One shared 1Hz ticker keeps every "working · 2m" label live without
@@ -151,6 +152,8 @@ onMessage((msg) => {
       // briefly flashing the default 13px and then resizing on the next
       // tick. msg.prefs is always present (host always populates it).
       if (msg.prefs) workspace.applyPrefs(msg.prefs);
+      // Account-wide model limits for the per-pane model menu (usually empty).
+      setModelLimits(msg.modelLimits);
       maybeShowOnboarding(msg.prefs);
       renderSidebar();
       // Pass the full session list + active id: the workspace keeps a stage

@@ -78,7 +78,8 @@ internal static class StateProjection
     /// never has to ask.
     public static object BuildSnapshot(
         SessionStore store, Guid? activePaneId, int fontSize, bool onboardingSeen,
-        ProjectStore? projects = null, string sidebarMode = "sessions")
+        ProjectStore? projects = null, string sidebarMode = "sessions",
+        IReadOnlyList<ModelUsageLimit>? modelLimits = null)
     {
         return new
         {
@@ -86,6 +87,14 @@ internal static class StateProjection
             activeSessionId = store.ActiveSessionId?.ToString("D") ?? "",
             activePaneId    = activePaneId?.ToString("D") ?? "",
             prefs = new { fontSize, onboardingSeen, sidebarMode },
+            // Account-wide model rate limits (usually empty — the endpoint 429s).
+            // Only the AT-LIMIT models ship: the picker disables exactly these
+            // and annotates each with its reset time. Empty / absent → every
+            // model enabled, no annotations. Ferried with every push like prefs.
+            modelLimits = (modelLimits ?? Array.Empty<ModelUsageLimit>())
+                .Where(l => l.AtLimit)
+                .Select(l => new { alias = l.Alias, resetsAtMs = l.ResetsAtMs })
+                .ToArray(),
             // Registered repos, for the sidebar's project mode. Ferried with
             // every push like prefs — the list is tiny and the page then never
             // has to ask for it separately.
@@ -230,6 +239,10 @@ internal static class StateProjection
                 // Which agent runs here ("claude" / "codex" / "") — drives the
                 // small CC badge in the header.
                 agentType = node.AgentType,
+                // Per-pane Claude model selection ("fable"/"opus"/… or "" for
+                // account default) — drives the header's quiet model label and
+                // the checkmark in the model menu.
+                model = node.Model,
                 activityDetail = node.ActivityDetail,
                 branch = node.Branch,
                 ports  = node.Ports,

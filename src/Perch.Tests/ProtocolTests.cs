@@ -99,6 +99,17 @@ public class ProtocolTests
     }
 
     [Fact]
+    public void PaneModel()
+    {
+        var m = Round<PaneModelMsg>($"{{\"type\":\"pane.model\",\"paneId\":\"{G1}\",\"model\":\"opus\"}}");
+        Assert.Equal(Guid.Parse(G1), m.PaneId);
+        Assert.Equal("opus", m.Model);
+        // Empty string is the "account default" selection — must round-trip, not
+        // fail the required-field guard (it's present, just empty).
+        Assert.Equal("", Round<PaneModelMsg>($"{{\"type\":\"pane.model\",\"paneId\":\"{G1}\",\"model\":\"\"}}").Model);
+    }
+
+    [Fact]
     public void PaneProbe_EachObservationTravelsAlone()
     {
         // The page sends exactly one observation per message; the absent field
@@ -155,6 +166,10 @@ public class ProtocolTests
         Assert.Equal("loc diff fix", tab.Name);
         Assert.Equal("claude", tab.Agent);
         Assert.True(tab.Worktree);
+        // model is optional: absent → null (account default), present → the alias.
+        Assert.Null(tab.Model);
+        Assert.Equal("opus", Round<ProjectTabNewMsg>(
+            $"{{\"type\":\"project.tab.new\",\"projectId\":\"{G1}\",\"name\":\"t\",\"agent\":\"claude\",\"worktree\":false,\"model\":\"opus\"}}").Model);
 
         var upd = Round<ProjectUpdateMsg>(
             $"{{\"type\":\"project.update\",\"id\":\"{G1}\",\"seedPaths\":[\"src/web/node_modules\"]}}");

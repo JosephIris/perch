@@ -6,6 +6,7 @@
 // the session is labelled the same on the inside.
 
 import { send, type ProjectView } from "./bridge.js";
+import { MODEL_OPTIONS, modelLimitHint } from "./model-menu.js";
 
 let overlay: HTMLElement | null = null;
 
@@ -79,12 +80,65 @@ export function showNewTabDialog(project: ProjectView) {
       for (const other of buttons) other.setAttribute("aria-pressed", "false");
       b.setAttribute("aria-pressed", "true");
       syncWorktreeHint();
+      syncModelField();
     });
     seg.appendChild(b);
     return b;
   });
   agentField.appendChild(seg);
   card.appendChild(agentField);
+
+  // ── model (Claude only) ─────────────────────────────────────────────────
+  // Same segmented idiom as the agent picker; five short labels fit the card.
+  // Hidden for codex/shell — but the selection is kept, so toggling back to
+  // Claude restores it. Default preselected. A model at its usage limit is
+  // disabled, with a quiet hint line naming it and its reset time.
+  const modelField = document.createElement("div");
+  modelField.className = "newtab-field";
+  const modelText = document.createElement("span");
+  modelText.className = "newtab-field__label";
+  modelText.textContent = "Model";
+  modelField.appendChild(modelText);
+
+  let model = "";
+  const modelSeg = document.createElement("div");
+  modelSeg.className = "newtab-seg";
+  const limitNotes: string[] = [];
+  const modelButtons = MODEL_OPTIONS.map((m) => {
+    const limit = modelLimitHint(m.alias);
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "newtab-seg__btn";
+    b.textContent = m.label;
+    b.setAttribute("aria-pressed", String(m.alias === model));
+    if (limit !== null) {
+      b.disabled = true;
+      b.setAttribute("aria-disabled", "true");
+      limitNotes.push(`${m.label} — ${limit}`);
+    } else {
+      b.addEventListener("click", () => {
+        model = m.alias;
+        for (const other of modelButtons) other.setAttribute("aria-pressed", "false");
+        b.setAttribute("aria-pressed", "true");
+      });
+    }
+    modelSeg.appendChild(b);
+    return b;
+  });
+  modelField.appendChild(modelSeg);
+
+  if (limitNotes.length > 0) {
+    const limitHint = document.createElement("span");
+    limitHint.className = "newtab-field__hint";
+    limitHint.textContent = limitNotes.join(" · ");
+    modelField.appendChild(limitHint);
+  }
+  card.appendChild(modelField);
+
+  const syncModelField = () => {
+    modelField.style.display = agent === "claude" ? "" : "none";
+  };
+  syncModelField();
 
   // ── worktree ────────────────────────────────────────────────────────────
   // OFF by default. A worktree is a real folder on a new branch — the gentler
@@ -166,6 +220,9 @@ export function showNewTabDialog(project: ProjectView) {
       name,
       agent,
       worktree: wtCheck.checked,
+      // Only meaningful for Claude tabs; "" (Default) is omitted — absent and
+      // "" read identically host-side (account default).
+      ...(agent === "claude" && model ? { model } : {}),
     });
     closeNewTabDialog();
   };

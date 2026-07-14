@@ -27,6 +27,7 @@ const EXPECTED_TYPES = [
   "pane.cwd",
   "pane.focus",
   "pane.in",
+  "pane.model",
   "pane.move",
   "pane.moveDir",
   "pane.probe",

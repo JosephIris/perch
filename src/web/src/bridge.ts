@@ -74,6 +74,11 @@ export type OutMessage =
   /* Pane rename + color tag changes from the pane header chrome. */
   | { type: "pane.rename"; paneId: string; name: string }
   | { type: "pane.recolor"; paneId: string; colorIndex: number }
+  /* Per-pane Claude Code model pick from the header's model menu. `model` is a
+   * CLI alias ("fable"/"opus"/"sonnet"/"haiku") or "" for the account default.
+   * The host persists it, writes the wrap-claude state file (applied at the next
+   * launch), and types `/model <alias>` live when cc is already running. */
+  | { type: "pane.model"; paneId: string; model: string }
   /* Pane cwd update from xterm's OSC 7 handler. Host uses it to auto-fill
    * the branch chip via `git rev-parse`. */
   | { type: "pane.cwd"; paneId: string; cwd: string }
@@ -145,6 +150,9 @@ export type OutMessage =
       name: string;
       agent: "claude" | "codex" | "shell";
       worktree: boolean;
+      /* Claude model alias for the new tab ("fable"/"opus"/"sonnet"/"haiku");
+       * omitted / "" = account default. Only sent when agent is "claude". */
+      model?: string;
     }
   /* User clicked the footer update pill. Host downloads the pending Velopack
    * update and relaunches into it (the process is replaced on success). */
@@ -185,6 +193,11 @@ export type PaneTreeView =
       /* Which agent runs in this pane: "claude", "codex", or "" (shell).
        * Drives the small agent badge in the pane header. */
       agentType?: string;
+      /* Selected Claude model alias ("fable"/"opus"/"sonnet"/"haiku") or ""
+       * for the account default. Drives the header's quiet model label and the
+       * checkmark in the model menu. Optional so plain-shell / test leaves need
+       * not carry it. */
+      model?: string;
       activityDetail: string;
       branch: string;
       ports: number[];
@@ -297,6 +310,12 @@ export type StateMessage = {
    * onboardingSeen gates the first-launch welcome lightbox.
    * sidebarMode is which sidebar view is showing. */
   prefs: { fontSize: number; onboardingSeen?: boolean; sidebarMode?: SidebarMode };
+  /* Account-wide Claude model rate limits — only the AT-LIMIT models appear, so
+   * the model menu disables exactly these and annotates each with its reset
+   * time. Usually absent / empty (the usage endpoint 429s), which the menu
+   * reads as "every model enabled, no annotations". resetsAtMs is Unix-ms (the
+   * menu formats a local "resets 14:30") or null when the bucket had no reset. */
+  modelLimits?: { alias: string; resetsAtMs: number | null }[];
 };
 
 export type SidebarMode = "sessions" | "projects";
