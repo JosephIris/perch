@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
@@ -9,6 +10,17 @@ namespace Perch;
 /// The pane's session footprint: how much the agent changed since its baseline,
 /// committed AND uncommitted, plus how many commits it authored.
 internal readonly record struct GitSessionStats(int Files, int Added, int Deleted, int Commits);
+
+/// One file in the pane's session footprint. Same shape as GitCommitFile, but
+/// spanning the WHOLE session (authored commits + working tree + new untracked)
+/// rather than a single commit.
+internal sealed record GitSessionFile(string Path, int Added, int Deleted);
+
+/// The same footprint, itemized. SessionStatsAsync always built this set and
+/// then threw it away, keeping only `paths.Count` — the Inspector's Changes
+/// list is that discarded detail, at zero extra git calls.
+internal sealed record GitSessionDetail(
+    IReadOnlyList<GitSessionFile> Files, int Added, int Deleted, int Commits);
 
 /// One file touched by a commit, with its add/delete line counts. Binary
 /// files report 0/0 (git emits "-" for both, which we fold to 0).
@@ -152,14 +164,30 @@ internal static class GitProc
         string baselineSha, string cwd, IReadOnlySet<string>? baselineUntracked,
         IReadOnlySet<string>? pathFilter = null)
     {
+        var d = await SessionDetailAsync(baselineSha, cwd, baselineUntracked, pathFilter);
+        return d == null ? null : new GitSessionStats(d.Files.Count, d.Added, d.Deleted, d.Commits);
+    }
+
+    /// The itemized form, and the actual worker — SessionStatsAsync is just this
+    /// with the rows dropped. Same git commands, same accounting; the only
+    /// difference is that the per-path add/delete tallies survive the return.
+    public static async Task<GitSessionDetail?> SessionDetailAsync(
+        string baselineSha, string cwd, IReadOnlySet<string>? baselineUntracked,
+        IReadOnlySet<string>? pathFilter = null)
+    {
         if (string.IsNullOrEmpty(baselineSha)) return null;
 
         var authored = await AuthoredHereAsync(cwd);
         int added = 0, deleted = 0, commits = 0;
-        // Distinct paths, so a file touched by several commits (and again in the
-        // working tree) counts once — `files` is "how many files did this touch",
-        // not "how many file-edits happened".
-        var paths = new HashSet<string>(StringComparer.Ordinal);
+        // Keyed by path, so a file touched by several commits (and again in the
+        // working tree) is ONE row whose counts sum — `Files.Count` is "how many
+        // files did this touch", not "how many file-edits happened".
+        var paths = new Dictionary<string, (int Added, int Deleted)>(StringComparer.Ordinal);
+        void Bump(string path, int a, int dl)
+        {
+            paths.TryGetValue(path, out var cur);
+            paths[path] = (cur.Added + a, cur.Deleted + dl);
+        }
 
         // One `log` over the whole range, filtered in-process: cheaper than a
         // `show` per authored sha, and it can't blow the command-line limit.
@@ -193,7 +221,7 @@ internal static class GitProc
                 {
                     if (pathFilter != null && !pathFilter.Contains(path)) continue;
                     if (pathFilter != null && !counted) { commits++; counted = true; }
-                    added += a; deleted += d; paths.Add(path);
+                    added += a; deleted += d; Bump(path, a, d);
                 }
             }
         }
@@ -208,11 +236,10 @@ internal static class GitProc
                 if (TryNumstat(raw.TrimEnd('\r'), out var a, out var d, out var path))
                 {
                     if (pathFilter != null && !pathFilter.Contains(path)) continue;
-                    added += a; deleted += d; paths.Add(path);
+                    added += a; deleted += d; Bump(path, a, d);
                 }
             }
         }
-        var files = paths.Count;
 
         // `git diff` omits untracked files entirely, but for a "what changed"
         // signal they're the bulk of some work (new scripts, context notes).
@@ -221,15 +248,27 @@ internal static class GitProc
         var uOk = false;
         if (baselineUntracked != null)
         {
-            int uFiles, uAdded;
-            (uOk, uFiles, uAdded) = await UntrackedStatsAsync(cwd, baselineUntracked, pathFilter);
-            if (uOk) { files += uFiles; added += uAdded; }
+            var untracked = await UntrackedStatsAsync(cwd, baselineUntracked, pathFilter);
+            uOk = untracked != null;
+            foreach (var (path, lines) in untracked ?? new List<(string, int)>())
+            {
+                added += lines;
+                Bump(path, lines, 0);
+            }
         }
 
         // Nothing ran → not a repo (or no git). Report null so the caller leaves
         // the chip alone, rather than a misleading all-zeroes.
         if (!okLog && !okDiff && !uOk) return null;
-        return new GitSessionStats(files, added, deleted, commits);
+
+        // Biggest churn first — the file you most need to look at is the one
+        // the agent rewrote, not the one it added an import to.
+        var rows = paths
+            .Select(kv => new GitSessionFile(kv.Key, kv.Value.Added, kv.Value.Deleted))
+            .OrderByDescending(f => f.Added + f.Deleted)
+            .ThenBy(f => f.Path, StringComparer.Ordinal)
+            .ToList();
+        return new GitSessionDetail(rows, added, deleted, commits);
     }
 
     /// A `--numstat` row: "&lt;added&gt;\t&lt;deleted&gt;\t&lt;path&gt;", with "-" for binary
@@ -273,7 +312,7 @@ internal static class GitProc
     /// untracked tree so the refresh — which runs on every state change — can't
     /// stall. Returns (ok, files, added); ok=false only when the enumeration
     /// itself fails (no repo / no git).
-    private static async Task<(bool ok, int files, int added)> UntrackedStatsAsync(
+    private static async Task<List<(string Path, int Added)>?> UntrackedStatsAsync(
         string cwd, IReadOnlySet<string> knownAtBaseline, IReadOnlySet<string>? pathFilter = null)
     {
         const int MaxFiles = 1000;                 // cap the file count we tally
@@ -282,18 +321,17 @@ internal static class GitProc
 
         var (ok, stdout) = await RunAsync(
             "git", "ls-files --others --exclude-standard -z", cwd);
-        if (!ok) return (false, 0, 0);
+        if (!ok) return null;
 
         var rels = stdout.Split('\0', StringSplitOptions.RemoveEmptyEntries);
-        int files = 0, added = 0;
+        var found = new List<(string, int)>();
         var buf = new byte[8192];
         foreach (var rel in rels)
         {
             if (knownAtBaseline.Contains(rel)) continue;   // predates the session
             if (pathFilter != null && !pathFilter.Contains(rel)) continue;   // another agent's file
-            if (files >= MaxFiles) break;
-            files++;
-            if (budget <= 0) continue;             // out of IO budget: count file, skip lines
+            if (found.Count >= MaxFiles) break;
+            if (budget <= 0) { found.Add((rel, 0)); continue; }   // out of IO budget: count file, skip lines
             try
             {
                 var full = System.IO.Path.Combine(cwd, rel);
@@ -314,15 +352,15 @@ internal static class GitProc
                     }
                     if (binary) break;
                 }
-                if (binary) continue;              // counted as a file, 0 lines
+                if (binary) { found.Add((rel, 0)); continue; }   // counted as a file, 0 lines
                 // A final line with no trailing newline still counts as one,
                 // matching git numstat's no-newline-at-EOF accounting.
                 if (sawAny && !lastWasNl) lines++;
-                added += lines;
+                found.Add((rel, lines));
             }
-            catch { /* unreadable/vanished file: still counts as a changed file */ }
+            catch { found.Add((rel, 0)); }   // unreadable/vanished: still a changed file
         }
-        return (true, files, added);
+        return found;
     }
 
     /// Commits HEAD is ahead of its upstream (`@{upstream}..HEAD`) — the

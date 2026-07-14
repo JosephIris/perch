@@ -24,6 +24,7 @@ const EXPECTED_TYPES = [
   "cloud.panel",
   "cloud.refresh",
   "commits.request",
+  "inspector.request",
   "onboarding.seen",
   "pane.ack",
   "pane.chooser.choose",
