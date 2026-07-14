@@ -110,6 +110,7 @@ public partial class MainWindow : FluentWindow
     // kicked at page-ready and polled by a 5-minute timer (whose ticks the
     // service no-ops until its own 10/30-minute gap elapses).
     private UsageService? _usage;
+    private CloudController? _cloud;
     private System.Windows.Threading.DispatcherTimer? _usageTimer;
     // When the last update check ran (UTC). Throttles the re-check we fire on
     // window activation so rapid alt-tabbing can't hammer the GitHub feed.
@@ -139,11 +140,19 @@ public partial class MainWindow : FluentWindow
         _panes.NameReset += OnNameReset;
         _panes.AgentType += OnAgentType;
         _panes.AgentSession += OnAgentSession;
+        _panes.CloudStamped += OnCloudStamped;
         // Usage poller for the model picker. Subscribe once here; a new snapshot
         // marshals back to the UI thread and re-pushes state so the menu picks
         // up freshly-disabled models. PushState guards on the webview being up.
         _usage = new UsageService();
         _usage.Updated += () => Dispatcher.BeginInvoke(new Action(PushState));
+        // Cloud resources. Inert unless gcloud is installed and authenticated.
+        // LookupPaneState is the ONLY thing that decides orphan-vs-live: a machine
+        // whose agent session no longer maps to a live pane is one nothing is
+        // using. Deliberately not time-based — an agent legitimately waits an hour
+        // on a running cluster.
+        _cloud = new CloudController(Dispatcher, PostToPage, LookupPaneStateBySession);
+        _cloud.Start();
         EnsurePaneNames();
         // Persist immediately on first launch so external tools (the perch
         // CLI, test harnesses) can read pane ids and pipe paths from disk
@@ -516,7 +525,11 @@ public partial class MainWindow : FluentWindow
         .Add<ProjectUpdateMsg>("project.update", OnProjectUpdate)
         .Add<ProjectTabNewMsg>("project.tab.new", OnProjectTabNew)
         .Add("update.apply", OnUpdateApply)
-        .Add("update.check", OnUpdateCheckRequested);
+        .Add("update.check", OnUpdateCheckRequested)
+        .Add<CloudPanelMsg>("cloud.panel", m => _cloud?.SetPanelOpen(m.Open))
+        .Add("cloud.refresh", () => _ = _cloud?.RefreshAsync())
+        .Add<CloudDeleteMsg>("cloud.delete", m => _ = _cloud?.DeleteAsync(m.Id))
+        .Add("cloud.deleteOrphans", () => _ = _cloud?.DeleteOrphansAsync());
 
     private void OnWebMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
@@ -1277,6 +1290,46 @@ public partial class MainWindow : FluentWindow
         }
         MarkRestorePaneReady(paneId);
         ApplyPendingCcColor(paneId);
+    }
+
+    /// The PreToolUse hook just stamped agent labels onto a `gcloud ... create`
+    /// in this pane. Snapshot the pane's name and task into the ledger while the
+    /// pane still exists — the labels on the resource can only hold ids (63 chars
+    /// of [a-z0-9_-]), so this is the only place the sentence explaining the
+    /// machine can be recorded, and by the time it's an orphan the pane is gone.
+    private void OnCloudStamped(Session sess, Guid paneId, CloudStampedMessage msg)
+    {
+        var pane = FindPane(sess, paneId);
+        if (pane == null) return;
+        _cloud?.OnStamped(sess, pane, msg);
+    }
+
+    /// Claude session id → the agent state of the pane still running it, or null
+    /// if no live pane owns it. Null is what makes a cloud resource an orphan.
+    private string? LookupPaneStateBySession(string? session)
+    {
+        if (string.IsNullOrWhiteSpace(session)) return null;
+        foreach (var sess in _store.Sessions)
+        {
+            // A closed session's panes are not "live" even though the tree
+            // survives for restore — a machine whose tab you closed is exactly
+            // the thing we're trying to catch.
+            if (sess.ClosedAtUnixMs > 0) continue;
+            foreach (var pane in AllLeaves(sess.Root))
+                if (string.Equals(pane.ClaudeSessionId, session, StringComparison.OrdinalIgnoreCase))
+                    // Non-null is the signal "a live pane owns this machine" —
+                    // the state string itself is only for display.
+                    return pane.AgentState.ToString().ToLowerInvariant();
+        }
+        return null;
+    }
+
+    /// Post an arbitrary payload to the page. Shared by CloudController so it
+    /// doesn't need a WebView2 reference of its own.
+    private void PostToPage(object payload)
+    {
+        try { Web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(payload)); }
+        catch (Exception ex) { Log.Error("PostToPage", ex); }
     }
 
     // Set the tab's color INSIDE its Claude session, so the prompt bar matches

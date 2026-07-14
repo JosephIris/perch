@@ -129,7 +129,7 @@ internal static class ClaudeWrapper
         // Helper to keep the JSON structure readable. Each event maps to a
         // single hook entry calling our subcommand. timeout matches perch-mac's
         // values where they were specific; otherwise a 10s default.
-        object Hook(string eventName, int timeoutSec = 10, bool async = false)
+        object Hook(string eventName, int timeoutSec = 10, bool async = false, string matcher = "")
         {
             var hook = new System.Collections.Generic.Dictionary<string, object?>
             {
@@ -138,33 +138,46 @@ internal static class ClaudeWrapper
                 ["timeout"] = timeoutSec,
             };
             if (async) hook["async"] = true;
-            return new { matcher = "", hooks = new[] { hook } };
+            return new { matcher, hooks = new[] { hook } };
         }
 
-        // PreToolUse intentionally omitted: it fires for every tool call
-        // (Read/Grep/Edit/Bash/…) which during agentic work means many per
-        // second. The cycling detail string is noise rather than signal.
-        // HookHandler.cs still has a pre-tool-use case, so anyone wanting
-        // the firehose can re-add it here behind a setting later.
+        var hooks = new System.Collections.Generic.Dictionary<string, object>
+        {
+            ["SessionStart"]      = new[] { Hook("session-start") },
+            ["Stop"]              = new[] { Hook("stop") },
+            ["SubagentStop"]      = new[] { Hook("subagent-stop", async: true) },
+            ["SessionEnd"]        = new[] { Hook("session-end", timeoutSec: 1) },
+            ["Notification"]      = new[] { Hook("notification") },
+            ["UserPromptSubmit"]  = new[] { Hook("prompt-submit") },
+            // PostToolUse fires right after a tool executes — the only signal
+            // that arrives AFTER a permission prompt is answered (approving isn't
+            // a UserPromptSubmit). Without it a pane sticks on red "permission"
+            // until the turn's Stop. async so it never sits on the agent's
+            // critical path; the host coalesces the resulting working→working
+            // firehose (see OnAgentStatus).
+            ["PostToolUse"]       = new[] { Hook("post-tool-use", async: true) },
+        };
+
+        // PreToolUse is registered ONLY when gcloud is actually installed, and
+        // only to stamp agent labels onto `gcloud ... create`.
+        //
+        // Why the gate: this hook has to be SYNCHRONOUS (an async hook's stdout
+        // isn't read, so it couldn't rewrite the command), which puts a
+        // short-lived process on the critical path of EVERY Bash call. For
+        // someone who drives GCP from an agent that's a fair trade. For everyone
+        // else it would be pure latency for a hook that can never fire — so they
+        // don't get it at all.
+        //
+        // Note this is NOT the old `pre-tool-use` status reporter: that one needed
+        // the "" matcher, fired on every Read/Grep/Edit, and its cycling detail
+        // string was noise rather than signal. It stays unregistered.
+        if (BinResolver.FindOnPathSkippingSelf("gcloud") != null)
+            hooks["PreToolUse"] = new[] { Hook("pre-bash", timeoutSec: 5, matcher: "Bash") };
+
         var settings = new
         {
             preferredNotifChannel = "notifications_disabled",
-            hooks = new System.Collections.Generic.Dictionary<string, object>
-            {
-                ["SessionStart"]      = new[] { Hook("session-start") },
-                ["Stop"]              = new[] { Hook("stop") },
-                ["SubagentStop"]      = new[] { Hook("subagent-stop", async: true) },
-                ["SessionEnd"]        = new[] { Hook("session-end", timeoutSec: 1) },
-                ["Notification"]      = new[] { Hook("notification") },
-                ["UserPromptSubmit"]  = new[] { Hook("prompt-submit") },
-                // PostToolUse fires right after a tool executes — the only
-                // signal that arrives AFTER a permission prompt is answered
-                // (approving isn't a UserPromptSubmit). Without it a pane sticks
-                // on red "permission" until the turn's Stop. async so it never
-                // sits on the agent's critical path; the host coalesces the
-                // resulting working→working firehose (see OnAgentStatus).
-                ["PostToolUse"]       = new[] { Hook("post-tool-use", async: true) },
-            },
+            hooks,
         };
 
         return JsonSerializer.Serialize(settings, new JsonSerializerOptions

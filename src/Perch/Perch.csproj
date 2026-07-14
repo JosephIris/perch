@@ -26,6 +26,16 @@
     <Resource Include="Assets\perch.ico" />
   </ItemGroup>
 
+  <!-- Shared with perch-cli: the hook STAMPS agent labels onto a gcloud create,
+       and the host has to build a matching server-side filter to read them back.
+       Both sides must sanitize identically or the filter silently matches
+       nothing — so they compile the same file rather than each keeping a copy.
+       (A ProjectReference to perch-cli would drag in its self-contained win-x64
+       publish config; a linked source file avoids that.) -->
+  <ItemGroup>
+    <Compile Include="..\..\tools\perch-cli\GcloudLabels.cs" Link="GcloudLabels.cs" />
+  </ItemGroup>
+
   <!-- Perch.Tests exercises internal types (PaneTree, Session, the message
        DTOs) directly — the app is an exe, so internals are the API. -->
   <ItemGroup>

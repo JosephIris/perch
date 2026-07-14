@@ -32,6 +32,7 @@ internal sealed class PerchIpcServer : IDisposable
     public event Action<NameResetMessage>? OnNameReset;
     public event Action<AgentMessage>? OnAgent;
     public event Action<SessionMessage>? OnSession;
+    public event Action<CloudStampedMessage>? OnCloudStamped;
 
     private readonly CancellationTokenSource _cts = new();
     private readonly Dispatcher _dispatcher;
@@ -156,6 +157,10 @@ internal sealed class PerchIpcServer : IDisposable
                     var ses = JsonSerializer.Deserialize<SessionMessage>(json, IpcJson.Options);
                     if (ses != null) _dispatcher.BeginInvoke(() => OnSession?.Invoke(ses));
                     break;
+                case "cloud.stamped":
+                    var cs = JsonSerializer.Deserialize<CloudStampedMessage>(json, IpcJson.Options);
+                    if (cs != null) _dispatcher.BeginInvoke(() => OnCloudStamped?.Invoke(cs));
+                    break;
             }
         }
         catch (JsonException ex) { Log.Error("PerchIpc.Dispatch.Json", ex); }
@@ -249,3 +254,14 @@ internal sealed record AgentMessage(
 /// resumed run re-emits session-start with the same id.
 internal sealed record SessionMessage(
     [property: JsonPropertyName("id")] string? Id);
+
+/// Sent by the cc HookHandler (PreToolUse/Bash) the moment it stamps agent
+/// labels onto a `gcloud ... create`. The hook can only put JOIN KEYS on the
+/// resource — GCP label values are capped at 63 chars of [a-z0-9_-], so the
+/// pane's name and the prompt behind the machine cannot go there. This message
+/// is the host's cue to snapshot both into the ledger, keyed by session id, so
+/// that when the pane is long gone the panel can still say what the orphaned
+/// cluster was actually FOR.
+internal sealed record CloudStampedMessage(
+    [property: JsonPropertyName("session")] string? Session,
+    [property: JsonPropertyName("kind")] string? Kind);

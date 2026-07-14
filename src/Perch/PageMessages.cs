@@ -159,6 +159,21 @@ internal sealed record UiModeMsg
     public required string Mode { get; init; }
 }
 
+/// The cloud panel opened or closed. Drives the poll cadence — fast while you're
+/// looking at it, slow (5 min) otherwise, since every tick is a gcloud subprocess.
+internal sealed record CloudPanelMsg
+{
+    public required bool Open { get; init; }
+}
+
+/// Delete one cloud resource. `Id` is the poller's stable key — "cluster/<name>"
+/// or "<zone>/<name>" — never a raw resource name, because a VM and a Dataproc
+/// cluster of the same name take entirely different delete commands.
+internal sealed record CloudDeleteMsg
+{
+    public required string Id { get; init; }
+}
+
 internal sealed record ProjectAddMsg
 {
     public required string Path { get; init; }

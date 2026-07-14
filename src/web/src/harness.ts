@@ -21,6 +21,7 @@ import { showModelMenu, dismissModelMenu, setModelLimits } from "./model-menu.js
 import { showNewTabDialog } from "./new-tab-dialog.js";
 import { RestoreProgress } from "./restore-progress.js";
 import { openCommitsPopover, openCommitsLightbox } from "./commits-view.js";
+import { showCloudPanel, applyCloudData } from "./cloud-panel.js";
 import type { SessionView, PaneTreeView } from "./bridge.js";
 
 type Leaf = Extract<PaneTreeView, { kind: "leaf" }>;
@@ -428,4 +429,153 @@ if (view === "dashboard") {
   ]);
   rp.progress("p1", "ready");
   rp.progress("p2", "resuming");
+} else if (view === "cloud-sidebar" || view === "cloud-sidebar-calm") {
+  // #cloud-sidebar      — the CLOUD area with an orphan: escalated to caution,
+  //                       and grown an extra row.
+  // #cloud-sidebar-calm — everything attributed: the teal resting state. Note it
+  //                       is still COLORED, because the area existing at all
+  //                       means a machine is billing you.
+  const HOUR = 3_600_000;
+  const now = Date.now();
+  const base = {
+    kind: "instance" as const,
+    zone: "us-central1-a",
+    vmCount: 1,
+    priceKnown: true,
+    paneId: "3a91",
+    task: "Rebuild the search index for the v3 catalog",
+  };
+  const orphan = {
+    ...base,
+    id: "us-central1-a/build-runner-h1",
+    name: "build-runner-h1",
+    machineType: "a2-highgpu-1g",
+    isGpu: true,
+    createdMs: now - 52 * HOUR,
+    usdPerHour: 3.6733,
+    agentName: "build-sweep",
+    isOrphan: true,
+    agentState: null,
+  };
+  const live = {
+    ...base,
+    id: "cluster/batch-web-3a91",
+    name: "batch-web-3a91",
+    kind: "cluster" as const,
+    machineType: "n2-standard-8",
+    vmCount: 5,
+    isGpu: false,
+    createdMs: now - 4 * HOUR,
+    usdPerHour: 3.8,
+    agentName: "page-builder",
+    isOrphan: false,
+    agentState: "working",
+    task: "Resize product images to WebP for the summer sale",
+  };
+  applyCloudData({
+    type: "cloud.data",
+    nowMs: now,
+    resources: view === "cloud-sidebar-calm" ? [live] : [orphan, live],
+  });
+} else if (view === "cloud") {
+  // #cloud — the cloud panel with the four shapes that actually matter:
+  //   1. an orphaned GPU box (the expensive mistake this whole feature exists for)
+  //   2. an orphaned Dataproc cluster (one row, not N — and a different delete cmd)
+  //   3. a live cluster whose agent is still working
+  //   4. two machines from ONE agent, so the repeated "why" line is visible
+  // Plus a machine with no price on file, which must render "—" and never $0.00.
+  const HOUR = 3_600_000;
+  const now = Date.now();
+  showCloudPanel();
+  applyCloudData({
+    type: "cloud.data",
+    nowMs: now,
+    resources: [
+      {
+        id: "us-central1-a/build-runner-h1",
+        name: "build-runner-h1",
+        kind: "instance",
+        machineType: "a2-highgpu-1g",
+        zone: "us-central1-a",
+        vmCount: 1,
+        isGpu: true,
+        createdMs: now - 52 * HOUR,
+        usdPerHour: 3.6733,
+        priceKnown: true,
+        agentName: "build-sweep",
+        task: "Rebuild the search index for the v3 catalog, 10M rows",
+        paneId: "9f2c",
+        isOrphan: true,
+        agentState: null,
+      },
+      {
+        id: "cluster/batch-web-8f2c",
+        name: "batch-web-8f2c",
+        kind: "cluster",
+        machineType: "e2-standard-8",
+        zone: "us-east5-c",
+        vmCount: 3,
+        isGpu: false,
+        createdMs: now - 14.4 * HOUR,
+        usdPerHour: 1.89,
+        priceKnown: true,
+        agentName: "page-builder",
+        task: "Rebuild the product catalog from the export file",
+        paneId: "3a91",
+        isOrphan: true,
+        agentState: null,
+      },
+      {
+        id: "cluster/batch-web-3a91",
+        name: "batch-web-3a91",
+        kind: "cluster",
+        machineType: "n2-standard-8",
+        zone: "us-east5-c",
+        vmCount: 5,
+        isGpu: false,
+        createdMs: now - 0.63 * HOUR,
+        usdPerHour: 3.8,
+        priceKnown: true,
+        agentName: "page-builder",
+        task: "Resize product images to WebP for the summer sale, US only",
+        paneId: "3a91",
+        isOrphan: false,
+        agentState: "working",
+      },
+      {
+        id: "us-central1-a/test-runner-01",
+        name: "test-runner-01",
+        kind: "instance",
+        machineType: "a2-highgpu-1g",
+        zone: "us-central1-a",
+        vmCount: 1,
+        isGpu: true,
+        createdMs: now - 1.2 * HOUR,
+        usdPerHour: 3.6733,
+        priceKnown: true,
+        agentName: "nightly-report",
+        task: "Run the nightly report for the shopping app vs the July build",
+        paneId: "5b7d",
+        isOrphan: false,
+        agentState: "done",
+      },
+      {
+        id: "us-east5-b/exotic-1",
+        name: "exotic-1",
+        kind: "instance",
+        machineType: "c4-hypernova-99",
+        zone: "us-east5-b",
+        vmCount: 1,
+        isGpu: false,
+        createdMs: now - 2 * HOUR,
+        usdPerHour: 0,
+        priceKnown: false,
+        agentName: "nightly-report",
+        task: "Run the nightly report for the shopping app vs the July build",
+        paneId: "5b7d",
+        isOrphan: false,
+        agentState: "done",
+      },
+    ],
+  });
 }

@@ -178,6 +178,22 @@ public class ProtocolTests
     }
 
     [Fact]
+    public void CloudMessages_RoundTrip()
+    {
+        Assert.True(Round<CloudPanelMsg>("{\"type\":\"cloud.panel\",\"open\":true}").Open);
+        Assert.False(Round<CloudPanelMsg>("{\"type\":\"cloud.panel\",\"open\":false}").Open);
+
+        // The id is the host's stable key, NOT a bare resource name. A VM and a
+        // Dataproc cluster take different gcloud delete commands, and the "kind/"
+        // prefix is what keeps them apart — deleting a cluster as if it were a VM
+        // kills the master and strands the workers, still billing.
+        Assert.Equal("cluster/batch-web-8f2c",
+            Round<CloudDeleteMsg>("{\"type\":\"cloud.delete\",\"id\":\"cluster/batch-web-8f2c\"}").Id);
+        Assert.Equal("us-central1-a/build-runner-h1",
+            Round<CloudDeleteMsg>("{\"type\":\"cloud.delete\",\"id\":\"us-central1-a/build-runner-h1\"}").Id);
+    }
+
+    [Fact]
     public void SessionClose_RemoveWorktreeIsOptIn()
     {
         // Absent → null → the worktree is KEPT and the session is restorable.

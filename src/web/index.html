@@ -89,6 +89,32 @@
         <span class="update-banner__action">Restart</span>
       </button>
 
+      <!-- Cloud resources. Hidden entirely unless this user's agents have GCP
+           machines actually running (which needs gcloud installed AND
+           authenticated), so a user who doesn't drive GCP from an agent never
+           sees any of it.
+
+           Its mere PRESENCE means something is billing — hence the teal
+           --color-cloud class rather than a neutral card. Escalates to caution
+           and grows the alert row when a machine has no agent attached.
+           Click → the cloud panel. -->
+      <div id="cloud-area" class="cloud-area" hidden>
+        <div class="cloud-area__label">Cloud</div>
+        <button id="cloud-card" class="cloud-card" type="button" aria-label="Cloud resources">
+          <span class="cloud-card__head">
+            <span class="cloud-card__dot" aria-hidden="true"></span>
+            <span class="cloud-card__title" id="cloud-card-title"></span>
+            <span class="cloud-card__rate" id="cloud-card-rate"></span>
+          </span>
+          <span class="cloud-card__sub" id="cloud-card-sub"></span>
+          <span class="cloud-card__alert" id="cloud-card-alert" hidden>
+            <span class="cloud-card__alert-dot" aria-hidden="true"></span>
+            <span class="cloud-card__alert-text" id="cloud-card-alert-text"></span>
+            <span class="cloud-card__alert-cost" id="cloud-card-alert-cost"></span>
+          </span>
+        </button>
+      </div>
+
       <!-- Bottom row: app identity + settings. Mirrors Claude's user-info
            row at the bottom of the sidebar. The identity block is static;
            the gear opens the settings dialog. -->

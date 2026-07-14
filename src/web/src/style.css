@@ -114,7 +114,10 @@ ul { list-style: none; padding: 0; margin: 0; }
    * lands in an implicit `auto` track at the end, which silently shifts every
    * sibling up a row — the scroll list loses the 1fr and the row above it
    * inherits it, stretching into a dead gap. */
-  grid-template-rows: auto auto auto 1fr auto auto;
+  /* One entry per direct child, in order: mode toggle · new-session · dashboard ·
+   * scroll(1fr) · recently-closed · update-banner · cloud-area · footer. The 1fr
+   * MUST stay on the scroll list (4th) — see the warning above. */
+  grid-template-rows: auto auto auto 1fr auto auto auto auto;
   /* Explicit column is REQUIRED. Without it the single implicit column is an
    * `auto` track, which is treated as indefinite-width — so every `width:100%`
    * / `minmax(0,1fr)` / text-overflow:ellipsis inside the sidebar collapses to
@@ -3623,3 +3626,382 @@ body.show-dashboard .dashboard { display: flex; }
   cursor: default;
 }
 .card--empty:hover { background: transparent; }
+
+/* ── Cloud resources panel ──────────────────────────────────────────────────
+ * Hierarchy is INSTANCE → AGENT: the machine leads (it is what costs money and
+ * what you kill), and the agent explaining it hangs off line 2.
+ *
+ * The two areas differ in SHAPE, not only color — orphans are a contained
+ * tinted box, live machines are a bare list. Knock the yellow out entirely and
+ * you can still tell them apart, which is what keeps the split robust.
+ *
+ * z 50, alongside the other modal overlays (projects, dropdowns). */
+.cloud-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: start center;
+  padding: var(--sp-48) var(--sp-16);
+  background: rgba(0, 0, 0, 0.32);
+}
+
+.cloud {
+  width: 100%;
+  max-width: 600px;
+  background: var(--color-terminal-bg);
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--r-window);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.cloud__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  padding: var(--sp-8) var(--sp-12);
+  border-bottom: 1px solid var(--color-stroke);
+}
+.cloud__title { font-size: var(--type-body-size); font-weight: 600; }
+.cloud__sub {
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.cloud__spacer { flex: 1 1 auto; }
+.cloud__icon {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  border-radius: var(--r-input);
+  color: var(--color-text-tertiary);
+  transition: background var(--dur-fast) var(--ease-entry);
+}
+.cloud__icon:hover { background: var(--color-subtle-secondary); color: var(--color-text-secondary); }
+
+.cloud__body { padding: var(--sp-8); overflow-y: auto; max-height: 60vh; }
+
+.cloud__foot {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: var(--sp-4) var(--sp-12);
+  border-top: 1px solid var(--color-stroke);
+  font-family: var(--font-small);
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+}
+.cloud__foot svg { flex: 0 0 auto; opacity: 0.7; }
+.cloud__foot span { cursor: help; }
+
+/* Empty state — the only centered text in the panel. */
+.cloud__empty { padding: var(--sp-32) var(--sp-16); text-align: center; }
+.cloud__empty-title { font-size: var(--type-body-size); color: var(--color-text-secondary); }
+.cloud__empty-note {
+  margin-top: var(--sp-4);
+  margin-inline: auto;
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  max-width: 44ch;
+}
+
+/* ---- Areas ---- */
+.area { margin-bottom: var(--sp-12); }
+.area:last-child { margin-bottom: 0; }
+/* The ONLY contained surface in the panel: the block that means "act". */
+.area--orphans {
+  background: rgba(252, 225, 0, 0.045);
+  border-radius: var(--r-card);
+  padding: var(--sp-8);
+  margin-bottom: var(--sp-16);
+}
+.area__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  padding: 2px var(--sp-4) var(--sp-8);
+}
+.area__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-caution);
+  flex: 0 0 auto;
+}
+.area__title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  white-space: nowrap;
+}
+.area--live .area__title { color: var(--color-text-secondary); }
+.area__meta {
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.area__meta b { font-weight: 600; color: var(--color-text-primary); }
+.area__spacer { flex: 1 1 auto; }
+
+/* ---- Instance card ---- */
+.inst {
+  background: var(--color-layer);
+  border-radius: var(--r-pill);
+  padding: var(--sp-8) var(--sp-8) var(--sp-8) var(--sp-12);
+  margin-bottom: var(--sp-4);
+  transition: background var(--dur-fast) var(--ease-entry), opacity var(--dur-fast) var(--ease-entry);
+}
+.inst:last-child { margin-bottom: 0; }
+.inst:hover { background: var(--color-layer-alt); }
+.inst:hover .inst__kill { opacity: 1; }
+.inst--deleting { opacity: 0.4; pointer-events: none; }
+
+.inst__top {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto 18px;
+  align-items: center;
+  gap: var(--sp-8);
+}
+.inst__name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.inst__spec {
+  font-family: var(--font-small);
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.inst__cost {
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-align: right;
+}
+.inst__cost i {
+  font-style: normal;
+  font-weight: 400;
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+}
+
+/* Destructive intent appears on HOVER only, so the panel is not a wall of red
+ * at rest and the orphan dot stays the single alarm signal. */
+.inst__kill {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  border-radius: 3px;
+  color: var(--color-text-disabled);
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-entry), background var(--dur-fast) var(--ease-entry);
+}
+.inst__kill:hover { background: rgba(255, 153, 164, 0.12); color: var(--color-error); }
+.inst__kill:focus-visible { opacity: 1; outline: 1px solid var(--color-accent); }
+
+/* Line 2 — the agent that explains the machine above it. */
+.inst__why {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  min-width: 0;
+  margin-top: 2px;
+}
+.inst__dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: var(--color-state-idle);
+}
+.inst__dot[data-state="working"] { background: var(--color-state-working); }
+.inst__dot[data-state="done"] { background: var(--color-state-done); }
+.inst__dot[data-state="waiting"] { background: var(--color-state-waiting); }
+.inst__dot[data-state="permission"] { background: var(--color-state-permission); }
+.inst__dot[data-state="orphan"] { background: var(--color-caution); }
+.inst__agent {
+  font-family: var(--font-small);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+.inst__where {
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+.inst__task {
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+/* Type tag. Neutral on purpose: the $/hr figure already says "expensive", and a
+ * red GPU chip would compete with the orphan dot for the panel's one alarm. */
+.tag {
+  font-family: var(--font-small);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--color-subtle-tertiary);
+  color: var(--color-text-tertiary);
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.tag--gpu { background: var(--color-accent-faint); color: var(--color-accent); }
+
+.cloud-btn {
+  padding: 1px var(--sp-8);
+  border-radius: var(--r-input);
+  font-family: var(--font-small);
+  font-size: 10px;
+  border: 1px solid var(--color-stroke);
+  background: none;
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease-entry),
+    border-color var(--dur-fast) var(--ease-entry), color var(--dur-fast) var(--ease-entry);
+}
+.cloud-btn:hover {
+  background: rgba(255, 153, 164, 0.1);
+  border-color: rgba(255, 153, 164, 0.45);
+  color: var(--color-error);
+}
+
+/* ── Cloud: the sidebar area ────────────────────────────────────────────────
+ * Absent entirely when nothing is running — so a user with no gcloud never sees
+ * it, and its PRESENCE alone already means "a machine is billing you". That is
+ * why the resting state wears --color-cloud (teal) rather than a neutral card
+ * fill: a dormant-looking gray box would misrepresent what it means.
+ *
+ * Three states, and the middle one is the whole point:
+ *   absent   nothing running          → no color at all
+ *   cloud    running, all attributed  → teal
+ *   caution  a machine has no agent   → the card LEAVES its class for caution
+ *                                        and grows the alert row */
+.cloud-area { padding: 0 var(--sp-4) 0 0; }
+.cloud-area[hidden] { display: none; }
+.cloud-area__label {
+  font-family: var(--font-small);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+  padding: 0 var(--sp-8) var(--sp-4);
+}
+
+.cloud-card {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  cursor: pointer;
+  padding: var(--sp-8) var(--sp-12);
+  border-radius: var(--r-card);
+  background: var(--color-cloud-faint);
+  transition: background var(--dur-fast) var(--ease-entry);
+}
+.cloud-card:hover { background: var(--color-cloud-hover); }
+
+.cloud-card__head { display: flex; align-items: center; gap: var(--sp-8); }
+.cloud-card__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-cloud);
+  flex: 0 0 auto;
+}
+.cloud-card__title { font-size: 13px; font-weight: 600; color: var(--color-text-primary); }
+.cloud-card__rate {
+  font-family: var(--font-small);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-cloud);
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+.cloud-card__sub {
+  display: block;
+  /* Aligned under the title, past the dot + its gap. */
+  padding-left: calc(6px + var(--sp-8));
+  margin-top: 2px;
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Only rendered when orphans exist — the area physically GROWS when something
+ * needs you, which is the signal, not just a color change. */
+.cloud-card__alert {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  margin-top: var(--sp-8);
+  padding-top: var(--sp-8);
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+.cloud-card__alert[hidden] { display: none; }
+.cloud-card__alert-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-caution);
+  flex: 0 0 auto;
+}
+.cloud-card__alert-text {
+  font-family: var(--font-small);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.cloud-card__alert-cost {
+  font-family: var(--font-small);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-caution);
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Orphan present: the card leaves the cloud class entirely. */
+.cloud-card--orphan { background: rgba(252, 225, 0, 0.06); }
+.cloud-card--orphan:hover { background: rgba(252, 225, 0, 0.1); }
+.cloud-card--orphan .cloud-card__dot { background: var(--color-caution); }
+.cloud-card--orphan .cloud-card__rate { color: var(--color-caution); }

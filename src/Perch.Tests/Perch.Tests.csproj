@@ -26,4 +26,8 @@
     <ProjectReference Include="..\Perch\Perch.csproj" />
   </ItemGroup>
 
+  <!-- NOTE: GcloudLabels deliberately is NOT linked in here. Perch.csproj already
+       compiles it (host and hook must sanitize identically), and this project
+       references Perch — linking it again would define the type twice (CS0436). -->
+
 </Project>
