@@ -38,6 +38,30 @@ function aheadPaneId(s: SessionView): string | null {
   return (ls.find((l) => l.ahead === s.ahead && s.ahead > 0) ?? ls[0])?.paneId ?? null;
 }
 
+/** Accent "↑N ready to push" chip — hover shows the commit recap, click opens
+ *  the full lightbox. One builder for BOTH surfaces that wear it (a tab row's
+ *  meta line and the project group header) so the behavior can't drift.
+ *  `paneId` is the pane whose recap the count represents; without one the chip
+ *  is a plain, non-interactive count. */
+function aheadChip(ahead: number, paneId: string | null, extraClass = ""): HTMLElement {
+  const span = document.createElement("span");
+  span.className =
+    "session-item__meta-item session-item__meta-item--ahead" +
+    (extraClass ? ` ${extraClass}` : "");
+  span.textContent = `↑${ahead}`;
+  span.title = "Commits ready to push";
+  if (paneId) {
+    attachCommitsHover(span, paneId);
+    span.addEventListener("click", (ev) => {
+      // Both hosts are buttons (the row selects the session, the header
+      // toggles the fold) — keep the chip's click from also doing that.
+      ev.stopPropagation();
+      openCommitsLightbox(paneId);
+    });
+  }
+  return span;
+}
+
 export type ProjectGroup = { project: ProjectView; tabs: SessionView[] };
 
 /** Most-urgent state across a project's tabs — the same priority the host uses
@@ -338,7 +362,7 @@ export class Sidebar {
       const collapsed = this.collapsed.has(project.id);
       const animate = this.justToggled === project.id;
       frag.appendChild(
-        this.projectHeader(project, tabs.length, collapsed, aggregateState(tabs), animate)
+        this.projectHeader(project, tabs, collapsed, aggregateState(tabs), animate)
       );
       // Collapsed means collapsed — every tab folds away, including the active
       // one. Keeping the active tab visible under a closed chevron made the
@@ -388,11 +412,12 @@ export class Sidebar {
 
   private projectHeader(
     p: ProjectView,
-    tabCount: number,
+    tabs: SessionView[],
     collapsed: boolean,
     state: SessionView["agentState"],
     animate = false
   ): HTMLElement {
+    const tabCount = tabs.length;
     const row = document.createElement("div");
     row.className = "project-header";
     row.dataset.projectId = p.id;
@@ -467,6 +492,19 @@ export class Sidebar {
       this.rerender?.();
     });
     row.appendChild(toggle);
+
+    // Unpushed-commit sum across the project's tabs, at the trailing edge.
+    // The per-tab ↑N hides when a tab is inactive (metrics fold behind the
+    // hover-ⓘ) or the group is collapsed — this keeps "there's work ready to
+    // push in here" readable from the header line alone. The recap it opens
+    // is driven by the pane of the tab contributing the most unpushed
+    // commits (the recap is per-pane; the biggest contributor is the most
+    // useful single answer to "what's in there?"). Hidden when the sum is 0.
+    const aheadSum = tabs.reduce((n, t) => n + (t.ahead > 0 ? t.ahead : 0), 0);
+    if (aheadSum > 0) {
+      const top = tabs.reduce((a, b) => (b.ahead > a.ahead ? b : a));
+      row.appendChild(aheadChip(aheadSum, aheadPaneId(top), "project-header__ahead"));
+    }
 
     const add = document.createElement("button");
     add.type = "button";
@@ -597,7 +635,13 @@ export class Sidebar {
     // braille spinner cc draws in the pane, so the sidebar echoes the
     // terminal. The spinner replaces the dot in its own 10px slot: same
     // footprint, and "moving = running" needs no legend.
-    const working = compact && s.agentState === "working";
+    //
+    // "Working" here means ANY pane is working, not the aggregate state: the
+    // host ranks Done above Working (so a finished turn isn't hidden by a
+    // busy sibling), but a tab with a live pane must never read as at-rest.
+    // turnStartMs is projected from the earliest working pane, so the elapsed
+    // chip ticks correctly in this mixed case too.
+    const working = compact && (s.agentState === "working" || s.workingCount > 0);
     let statusEl: HTMLElement;
     if (working) {
       statusEl = spinnerSpan("session-item__spinner");
@@ -618,23 +662,10 @@ export class Sidebar {
     primary.appendChild(title);
     item.appendChild(primary);
 
-    // The tab's /color tag: a small dot hugging the end of the name
-    // (Finder-style label vocabulary), NOT a tint on the title — tinted
-    // titles made every row shout its color and fought legibility. Index 0
-    // is the untouched default, so it renders nothing; only a deliberately
-    // picked color earns a mark. (A user who deliberately picks blue — also
-    // index 0 — goes unmarked in the sidebar; the pane header still shows
-    // it. Distinguishing "default" from "chose blue" needs a host change,
-    // not worth it yet.)
-    if (compact) {
-      const color = leaves(s.rootPane)[0]?.colorIndex ?? 0;
-      if (color > 0) {
-        const tag = document.createElement("span");
-        tag.className = "session-item__tag";
-        tag.dataset.color = String(color);
-        primary.appendChild(tag);
-      }
-    }
+    // The tab's /color tag deliberately does NOT mark the sidebar row: we
+    // tried a title tint, a trailing dot (ellipsis swallowed it on long
+    // names), and a pre-title line — all noise next to an informative title.
+    // The color lives in the pane header (and cc's own theme) only.
 
     // Secondary metrics (state signal, loc, branch, panes — see buildMeta).
     // In compact (projects) mode only the ACTIVE tab spends a line on them:
@@ -824,6 +855,12 @@ export class Sidebar {
       // whole); flex gap doesn't apply there, so separate items with
       // literal dots instead.
       if (compact && meta.childNodes.length) meta.append(" · ");
+      if (mi.ahead) {
+        // Accent-blue, interactive "↑N ready to push" chip (shared builder —
+        // the project header wears the same chip for the group's sum).
+        meta.appendChild(aheadChip(mi.ahead, aheadPaneId(s)));
+        continue;
+      }
       const span = document.createElement("span");
       span.className =
         "session-item__meta-item" + (mi.alert ? " session-item__meta-item--alert" : "");
@@ -834,24 +871,6 @@ export class Sidebar {
         span.title = "Time since the agent finished";
         span.appendChild(timerIcon());
         span.appendChild(elapsedSpan(mi.sinceTimer));
-        meta.appendChild(span);
-        continue;
-      }
-      if (mi.ahead) {
-        // Accent-blue, interactive "↑N ready to push" chip.
-        span.classList.add("session-item__meta-item--ahead");
-        span.textContent = `↑${mi.ahead}`;
-        span.title = "Commits ready to push";
-        const pid = aheadPaneId(s);
-        if (pid) {
-          attachCommitsHover(span, pid);
-          span.addEventListener("click", (ev) => {
-            // The whole row is a button that selects the session — keep the
-            // click here from also navigating.
-            ev.stopPropagation();
-            openCommitsLightbox(pid);
-          });
-        }
         meta.appendChild(span);
         continue;
       }

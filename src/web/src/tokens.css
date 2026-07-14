@@ -40,6 +40,11 @@
 }
 
 :root {
+  /* Layout. Sidebar column width — a token (not a literal in #app's grid) per
+   * the constitution. Widened 240 → 264 (8px grid) so project-mode tab rows
+   * fit their title + meta + chips without crowding the ellipsis. */
+  --sidebar-width: 264px;
+
   /* Spacing (px). */
   --sp-4:  4px;
   --sp-8:  8px;

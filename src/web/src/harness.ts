@@ -202,16 +202,20 @@ function projectTab(over: Partial<SessionView> & { id: string; title: string }):
 const projectSessions: SessionView[] = [
   projectTab({
     id: "s-tab1", title: "signup flow",
-    // colorIndex 0 is the untouched default (= untagged, no dot); use a real
-    // picked color so the T1 tag dot shows in captures.
+    // colorIndex still set on fixtures (the pane header shows it); the
+    // sidebar row deliberately renders no color mark — see renderItem.
     rootPane: leaf({ name: "signup flow", agentState: "done", branch: "main", colorIndex: 5 }),
     doneAtMs: Date.now() - 47_000, linesAdded: 143, linesDeleted: 131, filesChanged: 6,
   }),
+  // The reported mixed-tab scenario: aggregate state is "done" (host ranks
+  // Done above Working) but ONE of the two panes is still working — the row
+  // must spin with a right-edge elapsed, not read "finished". turnStartMs is
+  // projected from the working pane, exactly as the host does.
   projectTab({
     id: "s-tab2", title: "generate sitemap",
     rootPane: leaf({ name: "generate sitemap", agentState: "done", branch: "main", colorIndex: 1 }),
     doneAtMs: Date.now() - 31_000, linesAdded: 89, linesDeleted: 12, filesChanged: 3,
-    paneCount: 2, ahead: 2,
+    paneCount: 2, ahead: 2, workingCount: 1, turnStartMs: TWO_MIN_AGO,
   }),
   projectTab({
     id: "s-tab3", title: "fix perms audit",
@@ -219,9 +223,11 @@ const projectSessions: SessionView[] = [
     agentState: "working", activityDetail: "editing hook.ts",
     workingCount: 1, turnStartMs: TWO_MIN_AGO, doneAtMs: 0,
   }),
+  // Long tagged title: proves the pre-title tag line survives the ellipsis
+  // (the old trailing dot was swallowed with the clipped text).
   projectTab({
-    id: "s-tab4", title: "etl backfill", projectId: "p-gm",
-    rootPane: leaf({ name: "etl backfill", agentState: "done", branch: "dag-fixes" }),
+    id: "s-tab4", title: "backfill the q3 sales report", projectId: "p-gm",
+    rootPane: leaf({ name: "etl backfill", agentState: "done", branch: "dag-fixes", colorIndex: 3 }),
     branch: "dag-fixes", doneAtMs: FOUR_MIN_AGO, linesAdded: 52, linesDeleted: 18, filesChanged: 3,
   }),
 ];
