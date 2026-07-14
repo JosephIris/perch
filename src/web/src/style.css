@@ -85,7 +85,7 @@ ul { list-style: none; padding: 0; margin: 0; }
  * uses the full window width. */
 #app {
   display: grid;
-  grid-template-columns: 240px 1fr;
+  grid-template-columns: var(--sidebar-width) 1fr;
   grid-template-rows: 1fr;
   grid-template-areas: "sidebar workspace";
   column-gap: var(--sp-8);
@@ -1910,23 +1910,6 @@ ul { list-style: none; padding: 0; margin: 0; }
   font-size: 13px;
 }
 .session-item--nested:hover { background: var(--color-subtle-secondary); }
-/* The tab's /color tag: a small dot hugging the end of the name — label
- * vocabulary (Finder tags), deliberately NOT a title tint (tinted titles made
- * every row shout) and NOT in the status column (two dots meaning different
- * things is noise). No rule for index 0: that's the untouched default, and an
- * unmarked row is the point — see renderItem. */
-.session-item__tag {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  flex: 0 0 auto;
-}
-.session-item__tag[data-color="1"] { background: var(--color-pane-tag-1); }
-.session-item__tag[data-color="2"] { background: var(--color-pane-tag-2); }
-.session-item__tag[data-color="3"] { background: var(--color-pane-tag-3); }
-.session-item__tag[data-color="4"] { background: var(--color-pane-tag-4); }
-.session-item__tag[data-color="5"] { background: var(--color-pane-tag-5); }
-
 /* Working tab's braille spinner — cc's own glyphs, in the dot's 10px slot.
  * Mono font so every frame has identical advance (no title jitter). */
 .session-item__spinner {
@@ -1956,6 +1939,18 @@ ul { list-style: none; padding: 0; margin: 0; }
 .session-item--nested.session-item--active {
   border-color: transparent;
   background: var(--color-subtle-tertiary);
+}
+
+/* Unpushed-commit sum across the project's tabs, at the header's trailing
+ * edge — visible even when the tabs are collapsed or their metrics sit behind
+ * the hover-ⓘ. Same accent chip vocabulary as the tab rows' ↑N (the shared
+ * --ahead class brings accent + hover underline); caption-sized so the header
+ * line stays calm. Hidden entirely (not rendered) when the sum is 0. */
+.project-header__ahead {
+  flex: none;
+  font-family: var(--font-small);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 
 .project-header__add {
