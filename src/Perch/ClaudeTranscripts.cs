@@ -38,6 +38,31 @@ internal static class ClaudeTranscripts
         catch { return true; }
     }
 
+    /// The transcript file for this session, or null if we can't find one.
+    /// Same two-step lookup as Exists — cwd-scoped path first, then a search
+    /// under projects/ (the sanitization rule has drifted across Claude
+    /// versions before, and a rename would silently blank the Inspector).
+    /// Unlike Exists, "unknown" here means null, not true: the Inspector has
+    /// nothing to show without a real path, so guessing helps no one.
+    public static string? Locate(string sessionId, string cwd)
+    {
+        try
+        {
+            var configDir = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR");
+            var baseDir = string.IsNullOrWhiteSpace(configDir)
+                ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude")
+                : configDir;
+            var projects = Path.Combine(baseDir, "projects");
+            if (!Directory.Exists(projects)) return null;
+            var scoped = Path.Combine(projects, SanitizeCwd(cwd), sessionId + ".jsonl");
+            if (File.Exists(scoped)) return scoped;
+            return Directory
+                .EnumerateFiles(projects, sessionId + ".jsonl", SearchOption.AllDirectories)
+                .FirstOrDefault();
+        }
+        catch { return null; }
+    }
+
     /// Claude's project-dir key: path separators and the drive colon become '-'
     /// (e.g. C:\Users\josep\dev-projects\cmux-win → C--Users-josep-dev-projects-cmux-win).
     public static string SanitizeCwd(string cwd)

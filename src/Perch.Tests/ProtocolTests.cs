@@ -235,12 +235,36 @@ public class ProtocolTests
             "{\"type\":\"settings.save\",\"projectScanRoots\":[]}").ProjectScanRoots!);
     }
 
+    // ---- Inspector rail ---------------------------------------------------
+
+    [Fact]
+    public void InspectorRequest_RoundTrips()
+    {
+        // inspector.request reuses PaneRef — same shape as commits.request.
+        Assert.Equal(Guid.Parse(G1), Round<PaneRef>($"{{\"type\":\"inspector.request\",\"paneId\":\"{G1}\"}}").PaneId);
+    }
+
+    [Fact]
+    public void PrefsSet_InspectorOpen_IsIndependentOfFontSize()
+    {
+        // Both fields are nullable so the page can update one without asserting
+        // the other — a font-size bump must not silently reopen a collapsed rail.
+        var railOnly = Round<PrefsSetMsg>("{\"type\":\"prefs.set\",\"inspectorOpen\":false}");
+        Assert.False(railOnly.InspectorOpen);
+        Assert.Null(railOnly.FontSize);
+
+        var fontOnly = Round<PrefsSetMsg>("{\"type\":\"prefs.set\",\"fontSize\":15}");
+        Assert.Equal(15, fontOnly.FontSize);
+        Assert.Null(fontOnly.InspectorOpen);
+    }
+
     // ---- Control-pipe leniencies (perch test ships flags as strings) ------
 
     [Fact]
     public void StringNumbersAndBools_AcceptedForControlPipe()
     {
         Assert.Equal(14, Round<PrefsSetMsg>("{\"fontSize\":\"14\"}").FontSize);
+        Assert.True(Round<PrefsSetMsg>("{\"inspectorOpen\":\"true\"}").InspectorOpen);
         Assert.True(Round<SettingsSaveMsg>("{\"resumeAgentsOnLaunch\":\"true\"}").ResumeAgentsOnLaunch);
         Assert.True(Round<ResumeDecisionMsg>("{\"accept\":\"true\"}").Accept);
     }

@@ -45,6 +45,11 @@
    * fit their title + meta + chips without crowding the ellipsis. */
   --sidebar-width: 264px;
 
+  /* Inspector rail (right column). 336 = 42×8, on the grid. Wider than the
+   * sidebar because it carries prose, not one-line labels — at 264 the journal
+   * beats wrap every four words and the work rows ellipsize their targets. */
+  --inspector-width: 336px;
+
   /* Spacing (px). */
   --sp-4:  4px;
   --sp-8:  8px;
@@ -189,6 +194,13 @@
    * 0.22 demotes primary text (0.92 white) to ~secondary prominence
    * (0.92 × 0.78 ≈ 0.72) — "background reading", not "disabled". */
   --color-pane-dim-scrim:   rgba(0, 0, 0, 0.22);
+
+  /* Scrollbar. WebView2 is Chromium, so ::-webkit-scrollbar applies. Overlay
+   * weight — no track, thumb only, inset via a transparent border so it floats
+   * instead of sitting in a gutter. The default Chromium bar is a light-mode
+   * artifact that reads as a bug on our surfaces. */
+  --color-scroll-thumb:       rgba(255, 255, 255, 0.12);
+  --color-scroll-thumb-hover: rgba(255, 255, 255, 0.24);
 
   /* Motion. Win11 entry curve. */
   --ease-entry:   cubic-bezier(0.0, 0.0, 0.0, 1.0);

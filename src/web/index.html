@@ -145,6 +145,46 @@
 
     <main id="workspace" class="workspace"></main>
 
+    <!-- Inspector rail. Follows the focused pane and answers "what has this
+         agent actually done and said?" without scrolling the terminal. An
+         in-flow third grid column (not an overlay) so it can't cover the
+         workspace; #app collapses the column to 0 when it's hidden.
+         Populated entirely by inspector.ts — the markup here is just the
+         shell and the mount points, same split as the sidebar. -->
+    <aside id="inspector" class="inspector" aria-label="Inspector">
+      <div class="inspector__head">
+        <div class="inspector__following">
+          <span id="inspector-tag" class="inspector__tag" aria-hidden="true"></span>
+          <span id="inspector-name" class="inspector__name"></span>
+        </div>
+        <button id="inspector-quiet" class="inspector__btn" type="button"
+                aria-pressed="false" title="Hide the agent's work — prose only">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none"
+               stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
+            <line x1="3" y1="4.5" x2="13" y2="4.5"/>
+            <line x1="3" y1="8" x2="13" y2="8"/>
+            <line x1="3" y1="11.5" x2="9" y2="11.5"/>
+          </svg>
+        </button>
+        <button id="inspector-close" class="inspector__btn" type="button"
+                title="Hide inspector (Ctrl+Shift+B)">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none"
+               stroke="currentColor" stroke-width="1.4"
+               stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="6.5,4 10.5,8 6.5,12"/>
+          </svg>
+        </button>
+      </div>
+      <div id="inspector-changes" class="inspector__changes"></div>
+      <div class="inspector__body">
+        <div id="inspector-stream" class="inspector__stream scroll" data-feed></div>
+        <button id="inspector-jump" class="inspector__jump" type="button">
+          &#8595; Jump to latest
+        </button>
+      </div>
+      <div id="inspector-vitals" class="inspector__vitals"></div>
+    </aside>
+
     <!-- Dashboard: full-window attention view. Hidden until opened via the
          ▦ button or Ctrl+Shift+A. Rendered entirely by dashboard.ts. -->
     <section id="dashboard" class="dashboard" aria-hidden="true"></section>
@@ -168,6 +208,7 @@
         <li><kbd>S</kbd><span>split down</span></li>
         <li><kbd>W</kbd><span>close pane</span></li>
         <li><kbd>E</kbd><span>even out panes</span></li>
+        <li><kbd>B</kbd><span>toggle inspector</span></li>
         <li><kbd>&larr;&uarr;&darr;&rarr;</kbd><span>move pane</span></li>
       </ul>
     </div>

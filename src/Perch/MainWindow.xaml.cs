@@ -39,6 +39,11 @@ public partial class MainWindow : FluentWindow
     // control pipe. Built once in the constructor (BuildRouter).
     private readonly MessageRouter _router;
 
+    // Parses each agent pane's Claude transcript for the Inspector rail.
+    // Stateful on purpose: it tails by byte offset, so re-reading a pane after
+    // the agent has appended a few rows costs only those rows.
+    private readonly TranscriptReader _transcripts = new();
+
     // Watches the OS clipboard so we can push its text to the page (see
     // SyncClipboardToWeb), making right-click paste synchronous instead of a
     // stall-prone navigator.clipboard.readText() in the webview.
@@ -514,6 +519,7 @@ public partial class MainWindow : FluentWindow
         .Add<UrlOpenMsg>("url.open", OnUrlOpen)
         .Add<PrefsSetMsg>("prefs.set", OnPrefsSet)
         .Add<PaneRef>("commits.request", OnCommitsRequest)
+        .Add<PaneRef>("inspector.request", OnInspectorRequest)
         .Add("settings.request", OnSettingsRequest)
         .Add<SettingsSaveMsg>("settings.save", OnSettingsSave)
         .Add("onboarding.seen", OnOnboardingSeen)
@@ -1286,6 +1292,10 @@ public partial class MainWindow : FluentWindow
         if (id != null && pane.ClaudeSessionId != id)
         {
             pane.ClaudeSessionId = id;
+            // A new session is a DIFFERENT transcript. Drop the parsed tail, or
+            // the Inspector would keep showing the previous agent's journal
+            // (and bill its tokens to this one) until the pane closed.
+            _transcripts.Forget(paneId);
             _store.Save();
         }
         MarkRestorePaneReady(paneId);
@@ -1903,6 +1913,11 @@ public partial class MainWindow : FluentWindow
                 dirty = true;
             }
         }
+        if (msg.InspectorOpen is bool open && _settings.InspectorOpen != open)
+        {
+            _settings.InspectorOpen = open;
+            dirty = true;
+        }
         if (dirty) _settings.Save();
     }
 
@@ -1963,6 +1978,86 @@ public partial class MainWindow : FluentWindow
             Web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(payload));
         }
         catch (Exception ex) { Log.Error("OnCommitsRequest", ex); }
+    }
+
+    // Page asked for the Inspector rail's contents for a pane. Three sources,
+    // one reply:
+    //   • the transcript  → the journal/activity stream + vitals
+    //   • git             → the per-file change list (SessionDetailAsync; the
+    //                       detail SessionStatsAsync already computed and threw
+    //                       away, so this adds no git calls beyond the ahead
+    //                       count the commits popover already runs)
+    //   • nothing         → a shell pane; the page shows its empty state
+    //
+    // Deliberately request/reply rather than riding the `state` snapshot: that
+    // snapshot is re-serialized IN FULL on every PostToolUse-driven change, and
+    // a few hundred journal rows per pane would make a hot path quadratic.
+    // Resolve pane state on the UI thread first (we must not touch it after the
+    // await), then do the IO off-thread. Mirrors OnCommitsRequest.
+    private async void OnInspectorRequest(PaneRef msg)
+    {
+        var id = msg.PaneId;
+        var sess = OwningSession(id);
+        var pane = sess == null ? null : AllLeaves(sess.Root).FirstOrDefault(p => p.Id == id);
+        if (pane == null) return;
+
+        _paneCwd.TryGetValue(id, out var c);
+        var cwd = c ?? pane.Cwd ?? "";
+        var sessionId = pane.ClaudeSessionId;
+        var baseline = pane.CommitBaseline;
+        var untracked = pane.UntrackedBaseline;
+        // Same attribution rule the LOC chip uses: when several agents share one
+        // working tree, each pane counts only the files ITS agent reported
+        // touching, so the Changes list can't bill you for a neighbour's work.
+        var filter = pane.DiffAttributed
+            ? new HashSet<string>(pane.TouchedFiles, StringComparer.OrdinalIgnoreCase)
+            : null;
+
+        try
+        {
+            var data = _transcripts.Read(id, sessionId, cwd);
+            var detail = string.IsNullOrEmpty(cwd)
+                ? null
+                : await GitProc.SessionDetailAsync(baseline, cwd, untracked, filter);
+
+            var payload = new
+            {
+                type = "inspector.data",
+                paneId = id.ToString("D"),
+                hasAgent = data != null,
+                events = (data?.Events ?? Array.Empty<InspectorEvent>()).Select(e => new
+                {
+                    kind = e.Kind,
+                    ts = e.Ts,
+                    text = e.Text,
+                    verb = e.Verb,
+                    target = e.Target,
+                    note = e.Note,
+                    repeat = e.Repeat,
+                }).ToArray(),
+                vitals = data?.Vitals is { } v ? new
+                {
+                    model = v.Model,
+                    inputTokens = v.InputTokens,
+                    outputTokens = v.OutputTokens,
+                    cacheReadTokens = v.CacheReadTokens,
+                    cacheWriteTokens = v.CacheWriteTokens,
+                    costUsd = v.CostUsd,
+                    contextTokens = v.ContextTokens,
+                    contextMax = v.ContextMax,
+                } : null,
+                files = (detail?.Files ?? Array.Empty<GitSessionFile>()).Select(f => new
+                {
+                    path = f.Path,
+                    added = f.Added,
+                    deleted = f.Deleted,
+                }).ToArray(),
+                added = detail?.Added ?? 0,
+                deleted = detail?.Deleted ?? 0,
+            };
+            Web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(payload));
+        }
+        catch (Exception ex) { Log.Error("OnInspectorRequest", ex); }
     }
 
     // ── Window placement ────────────────────────────────────────────────────
@@ -2892,7 +2987,7 @@ public partial class MainWindow : FluentWindow
         {
             var snap = StateProjection.BuildSnapshot(
                 _store, _activePaneId, _settings.FontSize, _settings.OnboardingSeen,
-                _projects, _settings.SidebarMode, _usage?.CurrentLimits());
+                _projects, _settings.SidebarMode, _usage?.CurrentLimits(), _settings.InspectorOpen);
             Web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(snap));
         }
         catch (Exception ex) { Log.Error("PushState", ex); }

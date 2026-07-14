@@ -19,6 +19,7 @@ import { confirmDialog } from "./confirm.js";
 import { RestoreProgress } from "./restore-progress.js";
 import { invalidateCommits } from "./commits.js";
 import { initCloud } from "./cloud-panel.js";
+import { initInspector, toggleInspector } from "./inspector.js";
 import { setModelLimits } from "./model-menu.js";
 import type { PaneTreeView } from "./bridge.js";
 
@@ -44,6 +45,12 @@ const statusEl = $("status-text");
 // Cloud resources. Self-wiring: it owns its own chip + host listener, and stays
 // completely invisible unless the host actually reports running machines.
 initCloud();
+
+// Inspector rail (right column). Same self-wiring shape: owns its DOM, listens
+// for `state` itself to follow the focused pane, and fetches its own data via
+// inspector.request. Open by default; the host ferries the persisted state in
+// prefs.inspectorOpen on the first push.
+initInspector();
 
 // Footer auto-update pill (hidden until the host reports a newer release).
 const updateBanner = $<HTMLButtonElement>("update-banner");
@@ -351,6 +358,14 @@ window.addEventListener("keydown", (ev) => {
     case "KeyE":
       // Even out panes: reset every split to equal sizing.
       workspace.distributeEven();
+      ev.preventDefault(); ev.stopPropagation();
+      break;
+    case "KeyB":
+      // Inspector rail. Deliberately mirrors Ctrl+B (left sidebar): B is "the
+      // rail on the left", Ctrl+Shift+B is "the rail on the right". NOT
+      // Ctrl+Shift+I — Chromium binds that to DevTools at the browser level, so
+      // preventDefault here wouldn't stop it and both would fire.
+      toggleInspector();
       ev.preventDefault(); ev.stopPropagation();
       break;
     // Ctrl+Shift+arrows: move the active pane within its split. The host

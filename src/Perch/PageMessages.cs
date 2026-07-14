@@ -225,6 +225,9 @@ internal sealed record UrlOpenMsg
 internal sealed record PrefsSetMsg
 {
     public int? FontSize { get; init; }
+    /// Whether the Inspector rail is showing. Nullable so the page can send a
+    /// font-size-only update without also asserting a rail state.
+    public bool? InspectorOpen { get; init; }
 }
 
 internal sealed record SettingsSaveMsg

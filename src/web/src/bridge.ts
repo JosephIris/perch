@@ -95,13 +95,23 @@ export type OutMessage =
    * WebView2; subsequent layouts reposition/resize. */
   | { type: "urlpane.layout"; paneId: string; url: string; x: number; y: number; w: number; h: number }
   | { type: "urlpane.dispose"; paneId: string }
-  /* User preferences (terminal font size, etc.) — host persists to
-   * Settings.cs so it survives restart. */
-  | { type: "prefs.set"; fontSize?: number }
+  /* User preferences (terminal font size, Inspector rail open/closed) — host
+   * persists to Settings.cs so they survive restart. Each field is optional so
+   * the page can update one without asserting the other. */
+  | { type: "prefs.set"; fontSize?: number; inspectorOpen?: boolean }
   /* Recap: page asks the host for the unpushed-commit list behind a pane's
    * "↑N" chip (the hover tooltip / lightbox open lazily fetch it). Host
    * replies with a commits.data message for the same paneId. */
   | { type: "commits.request"; paneId: string }
+  /* Inspector rail: page asks the host for everything it shows about one pane
+   * — the transcript-derived journal/activity stream, the per-file change list,
+   * and the vitals. Host replies with inspector.data for the same paneId.
+   *
+   * Request/reply rather than riding `state`: the state snapshot is
+   * re-serialized in full on every agent status change (several times a second
+   * under load), and a few hundred journal rows per pane would make that hot
+   * path quadratic for data only ONE pane's rail ever displays. */
+  | { type: "inspector.request"; paneId: string }
   /* Settings dialog: page asks the host for current settings + the list
    * of detected shells, host replies with a settings.data message. */
   | { type: "settings.request" }
@@ -321,7 +331,13 @@ export type StateMessage = {
    * applied to new Panes; existing panes follow it too on every state.
    * onboardingSeen gates the first-launch welcome lightbox.
    * sidebarMode is which sidebar view is showing. */
-  prefs: { fontSize: number; onboardingSeen?: boolean; sidebarMode?: SidebarMode };
+  prefs: {
+    fontSize: number;
+    onboardingSeen?: boolean;
+    sidebarMode?: SidebarMode;
+    /* Whether the Inspector rail is showing. Open by default. */
+    inspectorOpen?: boolean;
+  };
   /* Account-wide Claude model rate limits — only the AT-LIMIT models appear, so
    * the model menu disables exactly these and annotates each with its reset
    * time. Usually absent / empty (the usage endpoint 429s), which the menu
@@ -380,6 +396,59 @@ export type CommitsDataMessage = {
   commits: CommitView[];
 };
 
+/* One row of the Inspector's stream. Three kinds, one ordered list:
+ *   "prompt" — what you asked (a real user turn; slash-command noise stripped)
+ *   "beat"   — what the agent SAID (an assistant text block)
+ *   "work"   — what the agent DID (a tool call)
+ * The rail renders beats as the spine and work as dimmed connective tissue, so
+ * one list drives both the narrative and the activity views.
+ *
+ * `repeat` > 1 means a RUN of identical consecutive calls was folded into this
+ * row ("Read perch.log ×6"). That's the thrash signal — the cheapest way to
+ * see an agent spinning without reading a word. */
+export type InspectorEventView = {
+  kind: "prompt" | "beat" | "work";
+  ts: string;
+  text: string;
+  verb: string;
+  target: string;
+  note: string;
+  repeat: number;
+};
+
+/* What the pane is costing. `contextTokens / contextMax` is the number that
+ * matters on a Claude subscription (there's no bill — only headroom);
+ * `costUsd` is the API-equivalent estimate, and is 0 for a model we have no
+ * published rate for (we'd rather show nothing than a made-up figure). */
+export type InspectorVitalsView = {
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  costUsd: number;
+  contextTokens: number;
+  contextMax: number;
+};
+
+export type InspectorFileView = { path: string; added: number; deleted: number };
+
+/* Reply to inspector.request. hasAgent=false means the pane has no Claude
+ * session (a plain shell, or an agent that hasn't started one yet) — the rail
+ * shows its empty state rather than a misleading zeroed-out journal. `files`
+ * can still be populated in that case: a shell pane in a repo has git changes
+ * even with nothing to narrate. */
+export type InspectorDataMessage = {
+  type: "inspector.data";
+  paneId: string;
+  hasAgent: boolean;
+  events: InspectorEventView[];
+  vitals: InspectorVitalsView | null;
+  files: InspectorFileView[];
+  added: number;
+  deleted: number;
+};
+
 /* Reply to settings.request. shells is the host's detected-shell list;
  * cmd is the command line to store as defaultShell. defaultCwdResolved is
  * what an empty defaultCwd falls back to (shown as the input placeholder
@@ -425,6 +494,7 @@ export type InMessage =
   | ToastMessage
   | SettingsDataMessage
   | CommitsDataMessage
+  | InspectorDataMessage
   | ProjectsCandidatesMessage
   | { type: "host.error"; message: string }
   /* One-time launch prompt: N saved Claude sessions can be reopened. The page

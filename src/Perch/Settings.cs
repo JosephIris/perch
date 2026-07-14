@@ -38,6 +38,12 @@ public sealed class Settings
     /// Persisted so the sidebar comes back the way you left it.
     public string SidebarMode { get; set; } = "sessions";
 
+    /// Whether the right-hand Inspector rail is showing. Open by default — the
+    /// rail is the answer to "what has this agent actually done?", and a
+    /// feature you have to discover a shortcut for is a feature nobody uses.
+    /// Persisted, so collapsing it is a decision that sticks.
+    public bool InspectorOpen { get; set; } = true;
+
     /// Parent folders searched (ONE level deep) for repos to offer as projects.
     /// A list, not a single root, because a dev machine keeps code in several
     /// places — work repos here, side projects there. Empty by default: we

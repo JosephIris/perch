@@ -1,0 +1,904 @@
+<title>perch — Inspector rail mockup</title>
+
+<style>
+  /* ── perch tokens (verbatim from src/web/src/tokens.css) ──────────────── */
+  :root {
+    --sidebar-width: 264px;
+    --inspector-width: 336px;          /* NEW token — 42×8, on the grid */
+
+    --sp-4: 4px;  --sp-8: 8px;  --sp-12: 12px; --sp-16: 16px;
+    --sp-24: 24px; --sp-32: 32px; --sp-48: 48px;
+
+    --r-input: 4px; --r-pill: 6px; --r-card: 8px; --r-window: 12px;
+
+    --font-text:  "Inter Variable", "Segoe UI Variable Text", "Segoe UI", sans-serif;
+    --font-small: "Inter Variable", "Segoe UI Variable Small", "Segoe UI", sans-serif;
+    --font-mono:  "Geist Mono Variable", "Cascadia Code", "Cascadia Mono", Consolas, monospace;
+
+    --type-caption-size: 12px;
+    --type-body-size: 14px;
+    --type-body-line: 1.4;
+
+    --color-sidebar-surface: #181818;
+    --color-sidebar-stroke: rgba(255,255,255,0.04);
+    --color-subtle-secondary: rgba(255,255,255,0.04);
+    --color-subtle-tertiary: rgba(255,255,255,0.08);
+    --color-stroke: rgba(255,255,255,0.08);
+    --color-stroke-strong: rgba(255,255,255,0.14);
+
+    --color-text-primary: rgba(255,255,255,0.92);
+    --color-text-secondary: rgba(255,255,255,0.72);
+    --color-text-tertiary: rgba(255,255,255,0.5);
+    --color-text-disabled: rgba(255,255,255,0.34);
+
+    --color-accent: #76B9ED;
+    --color-accent-soft: rgba(118,185,237,0.4);
+    --color-accent-faint: rgba(118,185,237,0.14);
+
+    --color-success: #6CCB5F;
+    --color-caution: #FCE100;
+    --color-error: #FF99A4;
+
+    --color-state-working: #4cc2ff;
+    --color-state-done: var(--color-success);
+
+    --color-pane-tag-0: #76B9ED;
+    --color-pane-tag-1: #6CCB5F;
+
+    --color-terminal-bg: #1f1f1f;
+    --color-terminal-fg: rgba(255,255,255,0.92);
+    --color-pane-dim-scrim: rgba(0,0,0,0.22);
+
+    /* NEW — custom dark scrollbar. WebView2 is Chromium, so the ::-webkit-
+       scrollbar pseudo-elements are available. Overlay-weight, no track. */
+    --color-scroll-thumb:       rgba(255,255,255,0.12);
+    --color-scroll-thumb-hover: rgba(255,255,255,0.24);
+
+    --ease-entry: cubic-bezier(0,0,0,1);
+    --dur-fast: 150ms;
+    --dur-normal: 200ms;
+
+    --page-bg: #101114;
+  }
+
+  * { box-sizing: border-box; }
+
+  /* `hidden` is only `display:none` in the UA sheet, so ANY class-level
+   * display rule (.panel-wrap{flex}, .icon-btn{grid}) silently beats it and
+   * the element stays visible. Make the attribute authoritative. */
+  [hidden] { display: none !important; }
+
+  body {
+    margin: 0;
+    background: var(--page-bg);
+    color: var(--color-text-primary);
+    font-family: var(--font-text);
+    font-size: var(--type-body-size);
+    line-height: var(--type-body-line);
+    -webkit-font-smoothing: antialiased;
+    display: flex; flex-direction: column; align-items: center;
+    gap: var(--sp-24);
+    padding: var(--sp-32) var(--sp-16) var(--sp-48);
+    min-height: 100vh;
+  }
+
+  /* ── custom dark scrollbar — applied to every scroll surface ──────────── */
+  .scroll { overflow-y: auto; scrollbar-color: var(--color-scroll-thumb) transparent; scrollbar-width: thin; }
+  .scroll::-webkit-scrollbar { width: 10px; }
+  .scroll::-webkit-scrollbar-track { background: transparent; }
+  .scroll::-webkit-scrollbar-thumb {
+    background: var(--color-scroll-thumb);
+    border-radius: 5px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  .scroll::-webkit-scrollbar-thumb:hover {
+    background: var(--color-scroll-thumb-hover);
+    background-clip: content-box;
+  }
+  .scroll::-webkit-scrollbar-corner { background: transparent; }
+
+  /* ── caption + mode switch ────────────────────────────────────────────── */
+  .top { width: 100%; max-width: 1320px; display: flex; align-items: flex-end; gap: var(--sp-24); }
+  .caption { flex: 1; min-width: 0; }
+  .caption__title { font-size: var(--type-body-size); font-weight: 600; color: var(--color-text-secondary); margin: 0 0 var(--sp-4); }
+  .caption__sub { font-size: var(--type-caption-size); color: var(--color-text-disabled); margin: 0; max-width: 72ch; }
+
+  .switch { flex: none; display: flex; gap: var(--sp-4); padding: var(--sp-4); background: var(--color-sidebar-surface); border-radius: var(--r-card); }
+  .switch__btn {
+    appearance: none; border: 0; background: none; cursor: pointer;
+    font-family: inherit; font-size: var(--type-caption-size); font-weight: 500;
+    padding: var(--sp-8) var(--sp-16);
+    border-radius: var(--r-pill);
+    color: var(--color-text-tertiary);
+  }
+  .switch__btn:hover { background: var(--color-subtle-secondary); color: var(--color-text-secondary); }
+  .switch__btn[aria-pressed="true"] { background: var(--color-subtle-tertiary); color: var(--color-text-primary); }
+  .switch__btn:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 1px; }
+
+  /* ── window ───────────────────────────────────────────────────────────── */
+  .window {
+    width: 100%; max-width: 1320px; height: 720px;
+    display: flex; flex-direction: column;
+    border-radius: var(--r-window); overflow: hidden;
+    box-shadow: 0 24px 64px rgba(0,0,0,0.55);
+    background: #141414;
+  }
+  .titlebar {
+    height: 40px; flex: none; display: flex; align-items: center;
+    padding-left: var(--sp-16);
+    font-size: var(--type-caption-size); color: var(--color-text-tertiary);
+    border-bottom: 1px solid var(--color-sidebar-stroke);
+  }
+  .titlebar__spacer { flex: 1; }
+  .titlebar__btn { width: 46px; height: 40px; display: grid; place-items: center; font-size: 10px; }
+
+  #app {
+    flex: 1; min-height: 0;
+    display: grid;
+    grid-template-columns: var(--sidebar-width) 1fr var(--inspector-width);
+    grid-template-areas: "sidebar workspace inspector";
+    column-gap: var(--sp-8);
+    padding: 0 var(--sp-8) var(--sp-8);
+  }
+
+  /* ── left sidebar ─────────────────────────────────────────────────────── */
+  .sidebar {
+    grid-area: sidebar; min-height: 0; display: flex; flex-direction: column;
+    background: var(--color-sidebar-surface); border-radius: var(--r-card);
+    padding: var(--sp-8);
+  }
+  .sidebar__action {
+    display: flex; align-items: center; gap: var(--sp-8);
+    padding: var(--sp-8) var(--sp-12); border-radius: var(--r-pill);
+    color: var(--color-text-secondary); font-weight: 380;
+  }
+  .sidebar__action:hover { background: var(--color-subtle-secondary); }
+  .section-label {
+    font-family: var(--font-small); font-size: 11px; font-weight: 500;
+    color: var(--color-text-disabled);
+    padding: var(--sp-16) var(--sp-12) var(--sp-4);
+  }
+  .sidebar__list { flex: 1; min-height: 0; }
+  .session-item {
+    display: grid; grid-template-columns: 10px minmax(0,1fr) auto;
+    align-items: center; gap: var(--sp-8);
+    padding: var(--sp-8) var(--sp-12); border-radius: var(--r-pill);
+  }
+  .session-item:hover { background: var(--color-subtle-secondary); }
+  .session-item--active { background: var(--color-subtle-tertiary); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .dot--working { background: var(--color-state-working); }
+  .dot--done { background: var(--color-state-done); }
+  .dot--idle { border: 1px solid var(--color-text-disabled); }
+  .session-item__body { min-width: 0; }
+  .session-item__title { font-weight: 380; color: var(--color-text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .session-item__meta { font-family: var(--font-small); font-size: var(--type-caption-size); color: var(--color-text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .session-item__loc { font-family: var(--font-small); font-size: 11px; font-variant-numeric: tabular-nums; color: var(--color-text-disabled); }
+  .sidebar__identity {
+    display: flex; align-items: center; gap: var(--sp-8);
+    padding: var(--sp-12) var(--sp-12) var(--sp-8); margin-top: var(--sp-8);
+    border-top: 1px solid var(--color-sidebar-stroke);
+  }
+  .sidebar__identity-mark { width: 24px; height: 24px; border-radius: var(--r-input); background: var(--color-subtle-tertiary); display: grid; place-items: center; font-size: 11px; color: var(--color-text-secondary); }
+  .sidebar__identity-name { font-size: var(--type-caption-size); color: var(--color-text-secondary); display: block; }
+  .sidebar__identity-sub { font-size: 11px; color: var(--color-text-disabled); }
+
+  /* ── workspace ────────────────────────────────────────────────────────── */
+  .workspace { grid-area: workspace; min-width: 0; min-height: 0; display: flex; gap: var(--sp-8); }
+  .pane {
+    flex: 1; min-width: 0; display: flex; flex-direction: column;
+    background: var(--color-terminal-bg); border-radius: var(--r-card);
+    border: 1px solid transparent; overflow: hidden; position: relative;
+  }
+  .pane--active { border-color: var(--color-stroke-strong); }
+  .pane--dim::after { content: ""; position: absolute; inset: 0; background: var(--color-pane-dim-scrim); pointer-events: none; }
+  .pane__header {
+    flex: none; display: flex; align-items: center; gap: var(--sp-8);
+    padding: var(--sp-8) var(--sp-12);
+    font-size: var(--type-caption-size); color: var(--color-text-tertiary);
+    border-bottom: 1px solid var(--color-sidebar-stroke);
+  }
+  .pane__tag { width: 8px; height: 8px; border-radius: 2px; }
+  .pane__name { color: var(--color-text-secondary); }
+  .pane__spacer { flex: 1; }
+  .pane__term {
+    flex: 1; min-height: 0; overflow: hidden; padding: var(--sp-12);
+    font-family: var(--font-mono); font-size: 12.5px; line-height: 1.5;
+    color: var(--color-terminal-fg); white-space: pre-wrap;
+  }
+  .t-dim { color: var(--color-text-tertiary); }
+  .t-accent { color: var(--color-accent); }
+  .t-green { color: var(--color-success); }
+  .t-add { color: var(--color-success); }
+  .t-del { color: var(--color-error); }
+
+  /* ══ THE RAIL ═════════════════════════════════════════════════════════ */
+  .inspector {
+    grid-area: inspector; min-height: 0;
+    display: flex; flex-direction: column;
+    background: var(--color-sidebar-surface);
+    border-radius: var(--r-card); overflow: hidden;
+  }
+  .inspector__head {
+    flex: none; display: flex; align-items: center; gap: var(--sp-4);
+    padding: var(--sp-12) var(--sp-8) var(--sp-8) var(--sp-12);
+  }
+  .inspector__following { min-width: 0; flex: 1; display: flex; align-items: center; gap: var(--sp-8); }
+  .inspector__pane-tag { width: 8px; height: 8px; border-radius: 2px; background: var(--color-pane-tag-0); flex: none; }
+  .inspector__pane-name { font-size: var(--type-caption-size); color: var(--color-text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .icon-btn {
+    flex: none; width: 24px; height: 24px; display: grid; place-items: center;
+    border: 0; background: none; padding: 0; border-radius: var(--r-input);
+    color: var(--color-text-disabled); font-size: 11px; cursor: pointer;
+    font-family: var(--font-small);
+  }
+  .icon-btn:hover { background: var(--color-subtle-secondary); color: var(--color-text-secondary); }
+  .icon-btn:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 1px; }
+  .icon-btn[aria-pressed="true"] { color: var(--color-accent); background: var(--color-accent-faint); }
+
+  .panel-wrap { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; }
+  .panel { flex: 1; min-height: 0; padding: var(--sp-8); }
+  .panel[hidden] { display: none; }
+
+  /* stick-to-latest affordance */
+  .jump {
+    position: absolute; left: 50%; bottom: var(--sp-12);
+    transform: translateX(-50%) translateY(4px);
+    display: flex; align-items: center; gap: var(--sp-4);
+    padding: var(--sp-4) var(--sp-12);
+    border-radius: 999px;
+    background: rgba(40,40,40,0.92);
+    backdrop-filter: blur(20px) saturate(180%);
+    border: 1px solid var(--color-stroke);
+    color: var(--color-text-secondary);
+    font-family: var(--font-small); font-size: 11px; font-weight: 500;
+    cursor: pointer;
+    opacity: 0; pointer-events: none;
+    transition: opacity var(--dur-fast) var(--ease-entry), transform var(--dur-fast) var(--ease-entry);
+  }
+  .jump--on { opacity: 1; pointer-events: auto; transform: translateX(-50%) translateY(0); }
+
+  /* ── tabs (variant A) ─────────────────────────────────────────────────── */
+  .tabs { flex: none; display: flex; gap: var(--sp-4); padding: 0 var(--sp-8); border-bottom: 1px solid var(--color-sidebar-stroke); }
+  .tab {
+    appearance: none; border: 0; background: none; position: relative; cursor: pointer;
+    padding: var(--sp-8) var(--sp-8) var(--sp-12);
+    font-family: inherit; font-size: var(--type-caption-size); font-weight: 380;
+    color: var(--color-text-tertiary);
+  }
+  .tab:hover { color: var(--color-text-secondary); }
+  .tab:focus-visible { outline: 1px solid var(--color-accent); outline-offset: -2px; border-radius: var(--r-input); }
+  .tab[aria-selected="true"] { color: var(--color-text-primary); font-weight: 500; }
+  .tab[aria-selected="true"]::after {
+    content: ""; position: absolute; left: var(--sp-8); right: var(--sp-8); bottom: 0;
+    height: 2px; background: var(--color-accent); border-radius: 1px;
+  }
+  .tab__count { margin-left: var(--sp-4); font-variant-numeric: tabular-nums; color: var(--color-text-disabled); }
+
+  /* ── shared rows ──────────────────────────────────────────────────────── */
+  .turn__prompt {
+    display: flex; gap: var(--sp-8);
+    padding: var(--sp-8) var(--sp-12);
+    background: var(--color-subtle-secondary);
+    border-radius: var(--r-pill);
+  }
+  .turn__caret { color: var(--color-text-disabled); flex: none; }
+  .turn__prompt-text { font-size: var(--type-caption-size); color: var(--color-text-secondary); font-weight: 500; }
+
+  .beat { display: grid; grid-template-columns: 40px 1fr; gap: var(--sp-8); padding: var(--sp-8) var(--sp-12); border-radius: var(--r-pill); }
+  .beat:hover { background: var(--color-subtle-secondary); }
+  .beat__time { font-family: var(--font-small); font-size: 11px; font-variant-numeric: tabular-nums; color: var(--color-text-disabled); padding-top: 2px; }
+  .beat__text { font-size: var(--type-caption-size); color: var(--color-text-secondary); }
+  .beat--live .beat__text { color: var(--color-text-primary); }
+
+  .file-row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: var(--sp-8); padding: var(--sp-8) var(--sp-12); border-radius: var(--r-pill); }
+  .file-row:hover { background: var(--color-subtle-secondary); }
+  .file-row__path { min-width: 0; font-size: var(--type-caption-size); color: var(--color-text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; }
+  .file-row__loc { flex: none; font-family: var(--font-small); font-size: 11px; font-variant-numeric: tabular-nums; display: flex; gap: var(--sp-4); }
+
+  .subhead { font-family: var(--font-small); font-size: 11px; font-weight: 500; color: var(--color-text-disabled); padding: var(--sp-16) var(--sp-12) var(--sp-4); }
+  .summary { display: flex; align-items: baseline; gap: var(--sp-8); padding: var(--sp-8) var(--sp-12) var(--sp-12); font-size: var(--type-caption-size); color: var(--color-text-tertiary); font-variant-numeric: tabular-nums; }
+  .summary__files { color: var(--color-text-secondary); }
+
+  .commit-row { padding: var(--sp-8) var(--sp-12); border-radius: var(--r-pill); }
+  .commit-row:hover { background: var(--color-subtle-secondary); }
+  .commit-row__subject { font-size: var(--type-caption-size); color: var(--color-text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .commit-row__meta { font-family: var(--font-small); font-size: 11px; color: var(--color-text-disabled); font-variant-numeric: tabular-nums; }
+
+  .act { display: grid; grid-template-columns: 40px 40px 1fr auto; align-items: baseline; gap: var(--sp-8); padding: var(--sp-4) var(--sp-12); border-radius: var(--r-input); }
+  .act:hover { background: var(--color-subtle-secondary); }
+  .act__time { font-family: var(--font-small); font-size: 11px; font-variant-numeric: tabular-nums; color: var(--color-text-disabled); }
+  .act__verb { font-family: var(--font-small); font-size: 11px; font-weight: 500; color: var(--color-text-tertiary); }
+  .act__target { min-width: 0; font-family: var(--font-mono); font-size: 11.5px; color: var(--color-text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .act__note { font-family: var(--font-small); font-size: 11px; font-variant-numeric: tabular-nums; color: var(--color-text-disabled); white-space: nowrap; }
+  .act--repeat { background: rgba(252,225,0,0.05); }
+  .act__repeat-chip { font-family: var(--font-small); font-size: 10px; font-weight: 600; color: var(--color-caution); background: rgba(252,225,0,0.10); border-radius: 3px; padding: 1px 4px; }
+
+  /* ══ UNIFIED (variant B) ══════════════════════════════════════════════ */
+
+  /* Changes collapses to a single sticky strip at the top of the scroll. */
+  .changes-strip {
+    flex: none;
+    border-bottom: 1px solid var(--color-sidebar-stroke);
+  }
+  .changes-strip__bar {
+    width: 100%;
+    display: grid; grid-template-columns: 12px 1fr auto; align-items: center; gap: var(--sp-8);
+    padding: var(--sp-8) var(--sp-12);
+    appearance: none; border: 0; background: none; cursor: pointer;
+    font-family: inherit; text-align: left;
+  }
+  .changes-strip__bar:hover { background: var(--color-subtle-secondary); }
+  .changes-strip__bar:focus-visible { outline: 1px solid var(--color-accent); outline-offset: -2px; }
+  .changes-strip__caret { color: var(--color-text-disabled); font-size: 9px; transition: transform var(--dur-fast) var(--ease-entry); }
+  .changes-strip__bar[aria-expanded="true"] .changes-strip__caret { transform: rotate(90deg); }
+  .changes-strip__label { font-size: var(--type-caption-size); color: var(--color-text-secondary); font-variant-numeric: tabular-nums; }
+  .changes-strip__loc { font-family: var(--font-small); font-size: 11px; font-variant-numeric: tabular-nums; display: flex; gap: var(--sp-8); align-items: center; }
+  .changes-strip__ahead { color: var(--color-text-disabled); }
+  .changes-strip__body { padding-bottom: var(--sp-8); }
+  .changes-strip__body[hidden] { display: none; }
+
+  /* the stream: prose is the spine, work is the connective tissue */
+  .stream__turn { padding: var(--sp-8) 0 var(--sp-12); }
+
+  .work {
+    display: grid; grid-template-columns: 40px 12px 1fr auto;
+    align-items: baseline; gap: var(--sp-8);
+    padding: 2px var(--sp-12);
+    border-radius: var(--r-input);
+  }
+  .work:hover { background: var(--color-subtle-secondary); }
+  .work__time { font-family: var(--font-small); font-size: 10px; font-variant-numeric: tabular-nums; color: transparent; }
+  .work:hover .work__time { color: var(--color-text-disabled); }
+  .work__rail { color: rgba(255,255,255,0.16); font-size: 10px; text-align: center; }
+  .work__what { min-width: 0; display: flex; gap: var(--sp-4); align-items: baseline; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .work__verb { font-family: var(--font-small); font-size: 10.5px; font-weight: 500; color: var(--color-text-disabled); flex: none; }
+  .work__target { font-family: var(--font-mono); font-size: 11px; color: var(--color-text-tertiary); overflow: hidden; text-overflow: ellipsis; }
+  .work__note { font-family: var(--font-small); font-size: 10px; font-variant-numeric: tabular-nums; color: var(--color-text-disabled); white-space: nowrap; }
+  .work--repeat .work__target { color: var(--color-caution); }
+
+  .stream--quiet .work { display: none; }     /* the "hide work" density toggle */
+
+  /* ── vitals ───────────────────────────────────────────────────────────── */
+  .vitals {
+    flex: none; display: flex; align-items: center; gap: var(--sp-8);
+    padding: var(--sp-8) var(--sp-12);
+    border-top: 1px solid var(--color-sidebar-stroke);
+    font-family: var(--font-small); font-size: 11px;
+    font-variant-numeric: tabular-nums; color: var(--color-text-disabled);
+  }
+  .vitals__sep { color: rgba(255,255,255,0.16); }
+  .vitals__model { color: var(--color-text-tertiary); }
+  .vitals__spacer { flex: 1; }
+  .vitals__ctx { display: inline-flex; align-items: center; gap: var(--sp-4); }
+  .ctx-bar { width: 32px; height: 3px; border-radius: 2px; background: rgba(255,255,255,0.10); overflow: hidden; }
+  .ctx-bar__fill { height: 100%; width: 26%; background: var(--color-text-tertiary); display: block; }
+
+  /* ── notes below ──────────────────────────────────────────────────────── */
+  .legend { width: 100%; max-width: 1320px; display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: var(--sp-16); }
+  .legend__card { border: 1px solid var(--color-stroke); border-radius: var(--r-card); padding: var(--sp-16); }
+  .legend__h { font-size: var(--type-caption-size); font-weight: 600; color: var(--color-text-secondary); margin: 0 0 var(--sp-8); }
+  .legend__p { font-size: var(--type-caption-size); color: var(--color-text-disabled); margin: 0 0 var(--sp-8); }
+  .legend__p:last-child { margin-bottom: 0; }
+  .legend__p strong { color: var(--color-text-tertiary); font-weight: 600; }
+
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="top">
+  <div class="caption">
+    <p class="caption__title">perch — Inspector rail</p>
+    <p class="caption__sub">
+      Two layouts for the same data. <strong>Tabbed</strong> keeps Journal / Changes / Activity separate.
+      <strong>Unified</strong> collapses all three into one scroll: prose is the spine, tool calls are dimmed
+      connective tissue between beats, and Changes becomes a sticky expandable strip. Both stick to latest —
+      scroll up to see the "jump to latest" pill. Content is real data from an actual perch transcript.
+    </p>
+  </div>
+  <div class="switch" role="group" aria-label="Layout">
+    <button class="switch__btn" id="m-tabbed"  aria-pressed="false">Tabbed</button>
+    <button class="switch__btn" id="m-unified" aria-pressed="true">Unified</button>
+  </div>
+</div>
+
+<div class="window">
+  <div class="titlebar">
+    <span>perch</span>
+    <span class="titlebar__spacer"></span>
+    <span class="titlebar__btn">&#9472;</span>
+    <span class="titlebar__btn">&#9633;</span>
+    <span class="titlebar__btn">&#10005;</span>
+  </div>
+
+  <div id="app">
+    <aside class="sidebar">
+      <div class="sidebar__action"><span style="color:var(--color-text-disabled)">+</span><span>New session</span></div>
+      <div class="section-label">NEEDS YOU</div>
+      <div class="sidebar__list">
+        <div class="session-item">
+          <span class="dot" style="background:var(--color-caution)"></span>
+          <span class="session-item__body">
+            <span class="session-item__title">kanban-drag</span>
+            <span class="session-item__meta">waiting &middot; feat/drag</span>
+          </span>
+          <span class="session-item__loc">+84</span>
+        </div>
+        <div class="section-label" style="padding-top:var(--sp-12)">ACTIVE</div>
+        <div class="session-item session-item--active">
+          <span class="dot dot--working"></span>
+          <span class="session-item__body">
+            <span class="session-item__title">perch</span>
+            <span class="session-item__meta">working &middot; main</span>
+          </span>
+          <span class="session-item__loc">+412</span>
+        </div>
+        <div class="session-item">
+          <span class="dot dot--working"></span>
+          <span class="session-item__body">
+            <span class="session-item__title">sim-fix</span>
+            <span class="session-item__meta">working &middot; wt/sim-fix</span>
+          </span>
+          <span class="session-item__loc">+37</span>
+        </div>
+        <div class="session-item">
+          <span class="dot dot--done"></span>
+          <span class="session-item__body">
+            <span class="session-item__title">docs-pass</span>
+            <span class="session-item__meta">done &middot; main</span>
+          </span>
+          <span class="session-item__loc">&#8593;2</span>
+        </div>
+        <div class="session-item">
+          <span class="dot dot--idle"></span>
+          <span class="session-item__body">
+            <span class="session-item__title">scratch</span>
+            <span class="session-item__meta">pwsh</span>
+          </span>
+        </div>
+      </div>
+      <div class="sidebar__identity">
+        <span class="sidebar__identity-mark">P</span>
+        <span>
+          <span class="sidebar__identity-name">perch</span>
+          <span class="sidebar__identity-sub">main &middot; 5 sessions</span>
+        </span>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <section class="pane pane--active">
+        <header class="pane__header">
+          <span class="pane__tag" style="background:var(--color-pane-tag-0)"></span>
+          <span class="pane__name">claude &middot; perch</span>
+          <span class="pane__spacer"></span><span>main</span>
+        </header>
+        <div class="pane__term">
+<span class="t-dim">&#9679;</span> <span class="t-accent">Running&hellip;</span> <span class="t-dim">(4m 12s &middot; esc to interrupt)</span>
+
+  <span class="t-dim">Update(</span>src/Perch/GitProc.cs<span class="t-dim">)</span>
+  <span class="t-dim">&#9500;</span> Updated with <span class="t-add">96 additions</span> and <span class="t-del">12 removals</span>
+
+  <span class="t-dim">Bash(</span>dotnet test src/Perch.Tests<span class="t-dim">)</span>
+  <span class="t-dim">&#9500;</span> <span class="t-green">Passed!</span> 61 tests, 0 failed
+
+  <span class="t-dim">Update(</span>src/Perch/StateProjection.cs<span class="t-dim">)</span>
+  <span class="t-dim">&#9500;</span> Updated with <span class="t-add">24 additions</span> and <span class="t-del">9 removals</span>
+
+<span class="t-accent">&gt;</span> <span class="t-dim">&#9608;</span>
+        </div>
+      </section>
+
+      <section class="pane pane--dim">
+        <header class="pane__header">
+          <span class="pane__tag" style="background:var(--color-pane-tag-1)"></span>
+          <span class="pane__name">claude &middot; sim-fix</span>
+          <span class="pane__spacer"></span><span>wt/sim-fix</span>
+        </header>
+        <div class="pane__term">
+<span class="t-dim">&#9679;</span> <span class="t-accent">Running&hellip;</span> <span class="t-dim">(58s)</span>
+
+  <span class="t-dim">Read(</span>src/sim/Clock.ts<span class="t-dim">)</span>
+  <span class="t-dim">&#9500;</span> Read 140 lines
+
+  <span class="t-dim">Grep(</span>"tickRate"<span class="t-dim">)</span>
+  <span class="t-dim">&#9500;</span> Found 6 matches in 3 files
+
+<span class="t-accent">&gt;</span> <span class="t-dim">&#9608;</span>
+        </div>
+      </section>
+    </main>
+
+    <!-- ══ RAIL ═════════════════════════════════════════════════════════ -->
+    <aside class="inspector" aria-label="Inspector">
+      <div class="inspector__head">
+        <div class="inspector__following">
+          <span class="inspector__pane-tag"></span>
+          <span class="inspector__pane-name">claude &middot; perch</span>
+        </div>
+        <button class="icon-btn" id="quiet-btn" aria-pressed="false" title="Hide work — prose only">&#9776;</button>
+        <button class="icon-btn" id="pin-btn" aria-pressed="false" title="Pin to this pane">&#128204;</button>
+        <button class="icon-btn" title="Hide inspector">&#10005;</button>
+      </div>
+
+      <!-- ── UNIFIED ───────────────────────────────────────────────────── -->
+      <div id="unified" class="panel-wrap">
+        <div class="changes-strip">
+          <button class="changes-strip__bar" id="chg-bar" aria-expanded="false" aria-controls="chg-body">
+            <span class="changes-strip__caret">&#9654;</span>
+            <span class="changes-strip__label">7 files changed</span>
+            <span class="changes-strip__loc">
+              <span class="t-add">+412</span><span class="t-del">&minus;89</span>
+              <span class="changes-strip__ahead">&#8593;2</span>
+            </span>
+          </button>
+          <div class="changes-strip__body" id="chg-body" hidden>
+            <div class="file-row">
+              <span class="file-row__path">&#8206;src/Perch/MainWindow.xaml.cs</span>
+              <span class="file-row__loc"><span class="t-add">+140</span><span class="t-del">&minus;38</span></span>
+            </div>
+            <div class="file-row">
+              <span class="file-row__path">&#8206;src/Perch/GitProc.cs</span>
+              <span class="file-row__loc"><span class="t-add">+96</span><span class="t-del">&minus;12</span></span>
+            </div>
+            <div class="file-row">
+              <span class="file-row__path">&#8206;src/Perch.Tests/GitProcTests.cs</span>
+              <span class="file-row__loc"><span class="t-add">+87</span></span>
+            </div>
+            <div class="file-row">
+              <span class="file-row__path">&#8206;src/Perch/Session.cs</span>
+              <span class="file-row__loc"><span class="t-add">+31</span><span class="t-del">&minus;4</span></span>
+            </div>
+            <div class="file-row">
+              <span class="file-row__path">&#8206;src/Perch/StateProjection.cs</span>
+              <span class="file-row__loc"><span class="t-add">+24</span><span class="t-del">&minus;9</span></span>
+            </div>
+            <div class="file-row">
+              <span class="file-row__path">&#8206;src/web/src/sidebar.ts</span>
+              <span class="file-row__loc"><span class="t-add">+22</span><span class="t-del">&minus;16</span></span>
+            </div>
+            <div class="file-row">
+              <span class="file-row__path">&#8206;src/web/src/bridge.ts</span>
+              <span class="file-row__loc"><span class="t-add">+12</span><span class="t-del">&minus;10</span></span>
+            </div>
+            <div class="subhead">READY TO PUSH</div>
+            <div class="commit-row">
+              <div class="commit-row__subject">fix(recap): count only new-since-baseline untracked loc</div>
+              <div class="commit-row__meta">449fb4f &middot; 2h ago &middot; <span class="t-add">+178</span> <span class="t-del">&minus;43</span></div>
+            </div>
+            <div class="commit-row">
+              <div class="commit-row__subject">fix(git): seed pane cwd at spawn so agent panes get signals</div>
+              <div class="commit-row__meta">dcec566 &middot; 1h ago &middot; <span class="t-add">+64</span> <span class="t-del">&minus;9</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel scroll stream" id="stream" data-feed>
+          <div class="stream__turn">
+            <div class="turn__prompt">
+              <span class="turn__caret">&gt;</span>
+              <span class="turn__prompt-text">bogus LOC reported again, not sure what's wrong, you can check the current running session</span>
+            </div>
+
+            <div class="beat">
+              <span class="beat__time">17:47</span>
+              <span class="beat__text">I'll look into the bogus LOC report. Let me start by checking my memory notes on the running app's data locations.</span>
+            </div>
+            <div class="work"><span class="work__time">17:47</span><span class="work__rail">&#9474;</span>
+              <span class="work__what"><span class="work__verb">Read</span><span class="work__target">MEMORY.md</span></span>
+              <span class="work__note">12 ln</span></div>
+            <div class="work"><span class="work__time">17:48</span><span class="work__rail">&#9474;</span>
+              <span class="work__what"><span class="work__verb">Bash</span><span class="work__target">Get-Process Perch</span></span>
+              <span class="work__note">1 match</span></div>
+
+            <div class="beat">
+              <span class="beat__time">17:48</span>
+              <span class="beat__text">The installed Perch app (PID 40700) is running. Let me look at its session data and recent log entries.</span>
+            </div>
+            <div class="work work--repeat"><span class="work__time">17:49</span><span class="work__rail">&#9474;</span>
+              <span class="work__what"><span class="work__verb">Read</span><span class="work__target">perch.log &times;6</span></span>
+              <span class="work__note">2.1k ln</span></div>
+            <div class="work"><span class="work__time">17:52</span><span class="work__rail">&#9474;</span>
+              <span class="work__what"><span class="work__verb">Read</span><span class="work__target">sessions.json</span></span>
+              <span class="work__note">318 ln</span></div>
+
+            <div class="beat">
+              <span class="beat__time">17:53</span>
+              <span class="beat__text">Both layers of the bug are now visible. Let me also check the control IPC &mdash; maybe I can query the live state directly.</span>
+            </div>
+            <div class="work"><span class="work__time">17:54</span><span class="work__rail">&#9474;</span>
+              <span class="work__what"><span class="work__verb">Grep</span><span class="work__target">"untracked"</span></span>
+              <span class="work__note">7 files</span></div>
+
+            <div class="beat">
+              <span class="beat__time">17:55</span>
+              <span class="beat__text">Found it. The LOC isn't miscounted &mdash; it's counting the wrong things. Pre-existing untracked files get folded in at session start, and two panes on the same cwd each claim the whole tree.</span>
+            </div>
+          </div>
+
+          <div class="stream__turn">
+            <div class="turn__prompt">
+              <span class="turn__caret">&gt;</span>
+              <span class="turn__prompt-text">implement both fixes</span>
+            </div>
+
+            <div class="beat">
+              <span class="beat__time">19:25</span>
+              <span class="beat__text">I'll implement both fixes. First let me read the relevant code in full &mdash; Session.cs (pane node) and StateProjection.cs.</span>
+            </div>
+            <div class="work"><span class="work__time">19:25</span><span class="work__rail">&#9474;</span>
+              <span class="work__what"><span class="work__verb">Task</span><span class="work__target">Explore &mdash; map LOC plumbing</span></span>
+              <span class="work__note">42 tools</span></div>
+            <div class="work"><span class="work__time">19:25</span><span class="work__rail">&#9474;</span>
+              <span class="work__what"><span class="work__verb">Read</span><span class="work__target">Session.cs</span></span>
+              <span class="work__note">414 ln</span></div>
+            <div class="work"><span class="work__time">19:26</span><span class="work__rail">&#9474;</span>
+              <span class="work__what"><span class="work__verb">Read</span><span class="work__target">StateProjection.cs</span></span>
+              <span class="work__note">286 ln</span></div>
+
+            <div class="beat">
+              <span class="beat__time">19:27</span>
+              <span class="beat__text">Now the GitProc changes: a snapshot enumerator and baseline-relative untracked counting.</span>
+            </div>
+            <div class="work"><span class="work__time">19:27</span><span class="work__rail">&#9474;</span>
+              <span class="work__what"><span class="work__verb">Edit</span><span class="work__target">GitProc.cs</span></span>
+              <span class="work__note"><span class="t-add">+96</span> <span class="t-del">&minus;12</span></span></div>
+
+            <div class="beat">
+              <span class="beat__time">19:29</span>
+              <span class="beat__text">Now the tests. Let me first check how the test project references the app's internals.</span>
+            </div>
+            <div class="work"><span class="work__time">19:29</span><span class="work__rail">&#9474;</span>
+              <span class="work__what"><span class="work__verb">Read</span><span class="work__target">Perch.Tests.csproj</span></span>
+              <span class="work__note">28 ln</span></div>
+            <div class="work"><span class="work__time">19:30</span><span class="work__rail">&#9474;</span>
+              <span class="work__what"><span class="work__verb">Bash</span><span class="work__target">dotnet build src/Perch</span></span>
+              <span class="work__note t-green">ok</span></div>
+
+            <div class="beat">
+              <span class="beat__time">19:31</span>
+              <span class="beat__text">The assertions passed &mdash; the failure is cleanup: git marks object files read-only, so Directory.Delete fails.</span>
+            </div>
+            <div class="work work--repeat"><span class="work__time">19:31</span><span class="work__rail">&#9474;</span>
+              <span class="work__what"><span class="work__verb">Edit</span><span class="work__target">GitProcTests.cs &times;4</span></span>
+              <span class="work__note"><span class="t-add">+87</span></span></div>
+            <div class="work"><span class="work__time">19:32</span><span class="work__rail">&#9474;</span>
+              <span class="work__what"><span class="work__verb">Bash</span><span class="work__target">dotnet test src/Perch.Tests</span></span>
+              <span class="work__note t-green">61 passed</span></div>
+            <div class="work"><span class="work__time">19:32</span><span class="work__rail">&#9474;</span>
+              <span class="work__what"><span class="work__verb">Edit</span><span class="work__target">StateProjection.cs</span></span>
+              <span class="work__note"><span class="t-add">+24</span> <span class="t-del">&minus;9</span></span></div>
+
+            <div class="beat beat--live">
+              <span class="beat__time">19:32</span>
+              <span class="beat__text">All 61 tests pass (including the 4 new ones). The change has a real runtime surface, so let me verify it end-to-end.</span>
+            </div>
+          </div>
+        </div>
+
+        <button class="jump" data-for="stream">&#8595; Jump to latest</button>
+      </div>
+
+      <!-- ── TABBED ────────────────────────────────────────────────────── -->
+      <div id="tabbed" class="panel-wrap" hidden>
+        <div class="tabs" role="tablist">
+          <button class="tab" role="tab" aria-selected="true"  aria-controls="p-journal"  id="t-journal">Journal<span class="tab__count">9</span></button>
+          <button class="tab" role="tab" aria-selected="false" aria-controls="p-changes"  id="t-changes">Changes<span class="tab__count">7</span></button>
+          <button class="tab" role="tab" aria-selected="false" aria-controls="p-activity" id="t-activity">Activity<span class="tab__count">144</span></button>
+        </div>
+
+        <div class="panel scroll" role="tabpanel" id="p-journal" aria-labelledby="t-journal" data-feed>
+          <div class="stream__turn">
+            <div class="turn__prompt"><span class="turn__caret">&gt;</span><span class="turn__prompt-text">bogus LOC reported again, not sure what's wrong, you can check the current running session</span></div>
+            <div class="beat"><span class="beat__time">17:47</span><span class="beat__text">I'll look into the bogus LOC report. Let me start by checking my memory notes on the running app's data locations.</span></div>
+            <div class="beat"><span class="beat__time">17:48</span><span class="beat__text">The installed Perch app (PID 40700) is running. Let me look at its session data and recent log entries.</span></div>
+            <div class="beat"><span class="beat__time">17:53</span><span class="beat__text">Both layers of the bug are now visible. Let me also check the control IPC &mdash; maybe I can query the live state directly.</span></div>
+            <div class="beat"><span class="beat__time">17:55</span><span class="beat__text">Found it. The LOC isn't miscounted &mdash; it's counting the wrong things. Pre-existing untracked files get folded in at session start, and two panes on the same cwd each claim the whole tree.</span></div>
+          </div>
+          <div class="stream__turn">
+            <div class="turn__prompt"><span class="turn__caret">&gt;</span><span class="turn__prompt-text">implement both fixes</span></div>
+            <div class="beat"><span class="beat__time">19:25</span><span class="beat__text">I'll implement both fixes. First let me read the relevant code in full &mdash; Session.cs (pane node) and StateProjection.cs.</span></div>
+            <div class="beat"><span class="beat__time">19:27</span><span class="beat__text">Now the GitProc changes: a snapshot enumerator and baseline-relative untracked counting.</span></div>
+            <div class="beat"><span class="beat__time">19:29</span><span class="beat__text">Now the tests. Let me first check how the test project references the app's internals.</span></div>
+            <div class="beat"><span class="beat__time">19:31</span><span class="beat__text">The assertions passed &mdash; the failure is cleanup: git marks object files read-only, so Directory.Delete fails.</span></div>
+            <div class="beat beat--live"><span class="beat__time">19:32</span><span class="beat__text">All 61 tests pass (including the 4 new ones). The change has a real runtime surface, so let me verify it end-to-end.</span></div>
+          </div>
+        </div>
+
+        <div class="panel scroll" role="tabpanel" id="p-changes" aria-labelledby="t-changes" hidden>
+          <div class="summary">
+            <span class="summary__files">7 files</span>
+            <span class="t-add">+412</span><span class="t-del">&minus;89</span>
+          </div>
+          <div class="file-row"><span class="file-row__path">&#8206;src/Perch/MainWindow.xaml.cs</span><span class="file-row__loc"><span class="t-add">+140</span><span class="t-del">&minus;38</span></span></div>
+          <div class="file-row"><span class="file-row__path">&#8206;src/Perch/GitProc.cs</span><span class="file-row__loc"><span class="t-add">+96</span><span class="t-del">&minus;12</span></span></div>
+          <div class="file-row"><span class="file-row__path">&#8206;src/Perch.Tests/GitProcTests.cs</span><span class="file-row__loc"><span class="t-add">+87</span></span></div>
+          <div class="file-row"><span class="file-row__path">&#8206;src/Perch/Session.cs</span><span class="file-row__loc"><span class="t-add">+31</span><span class="t-del">&minus;4</span></span></div>
+          <div class="file-row"><span class="file-row__path">&#8206;src/Perch/StateProjection.cs</span><span class="file-row__loc"><span class="t-add">+24</span><span class="t-del">&minus;9</span></span></div>
+          <div class="file-row"><span class="file-row__path">&#8206;src/web/src/sidebar.ts</span><span class="file-row__loc"><span class="t-add">+22</span><span class="t-del">&minus;16</span></span></div>
+          <div class="file-row"><span class="file-row__path">&#8206;src/web/src/bridge.ts</span><span class="file-row__loc"><span class="t-add">+12</span><span class="t-del">&minus;10</span></span></div>
+          <div class="subhead">READY TO PUSH &nbsp;&#8593;2</div>
+          <div class="commit-row">
+            <div class="commit-row__subject">fix(recap): count only new-since-baseline untracked loc</div>
+            <div class="commit-row__meta">449fb4f &middot; 2h ago &middot; <span class="t-add">+178</span> <span class="t-del">&minus;43</span></div>
+          </div>
+          <div class="commit-row">
+            <div class="commit-row__subject">fix(git): seed pane cwd at spawn so agent panes get signals</div>
+            <div class="commit-row__meta">dcec566 &middot; 1h ago &middot; <span class="t-add">+64</span> <span class="t-del">&minus;9</span></div>
+          </div>
+        </div>
+
+        <div class="panel scroll" role="tabpanel" id="p-activity" aria-labelledby="t-activity" data-feed hidden>
+          <div class="act"><span class="act__time">17:47</span><span class="act__verb">Read</span><span class="act__target">MEMORY.md</span><span class="act__note">12 ln</span></div>
+          <div class="act"><span class="act__time">17:48</span><span class="act__verb">Bash</span><span class="act__target">Get-Process Perch</span><span class="act__note">1 match</span></div>
+          <div class="act act--repeat"><span class="act__time">17:49</span><span class="act__verb">Read</span><span class="act__target">perch.log</span><span class="act__note"><span class="act__repeat-chip">&times;6</span></span></div>
+          <div class="act"><span class="act__time">17:52</span><span class="act__verb">Read</span><span class="act__target">sessions.json</span><span class="act__note">318 ln</span></div>
+          <div class="act"><span class="act__time">17:54</span><span class="act__verb">Grep</span><span class="act__target">"untracked"</span><span class="act__note">7 files</span></div>
+          <div class="act"><span class="act__time">19:25</span><span class="act__verb">Task</span><span class="act__target">Explore — map LOC plumbing</span><span class="act__note">42 tools</span></div>
+          <div class="act"><span class="act__time">19:25</span><span class="act__verb">Read</span><span class="act__target">Session.cs</span><span class="act__note">414 ln</span></div>
+          <div class="act"><span class="act__time">19:26</span><span class="act__verb">Read</span><span class="act__target">StateProjection.cs</span><span class="act__note">286 ln</span></div>
+          <div class="act"><span class="act__time">19:27</span><span class="act__verb">Edit</span><span class="act__target">GitProc.cs</span><span class="act__note"><span class="t-add">+96</span> <span class="t-del">&minus;12</span></span></div>
+          <div class="act"><span class="act__time">19:29</span><span class="act__verb">Read</span><span class="act__target">Perch.Tests.csproj</span><span class="act__note">28 ln</span></div>
+          <div class="act"><span class="act__time">19:30</span><span class="act__verb">Bash</span><span class="act__target">dotnet build src/Perch</span><span class="act__note t-green">ok</span></div>
+          <div class="act act--repeat"><span class="act__time">19:31</span><span class="act__verb">Edit</span><span class="act__target">GitProcTests.cs</span><span class="act__note"><span class="act__repeat-chip">&times;4</span></span></div>
+          <div class="act"><span class="act__time">19:31</span><span class="act__verb">Bash</span><span class="act__target">dotnet test src/Perch.Tests</span><span class="act__note t-del">1 failed</span></div>
+          <div class="act"><span class="act__time">19:32</span><span class="act__verb">Bash</span><span class="act__target">dotnet test src/Perch.Tests</span><span class="act__note t-green">61 passed</span></div>
+          <div class="act"><span class="act__time">19:32</span><span class="act__verb">Edit</span><span class="act__target">StateProjection.cs</span><span class="act__note"><span class="t-add">+24</span> <span class="t-del">&minus;9</span></span></div>
+        </div>
+
+        <button class="jump" data-for="p-journal">&#8595; Jump to latest</button>
+      </div>
+
+      <div class="vitals">
+        <span class="vitals__model">fable-5</span>
+        <span class="vitals__sep">&middot;</span><span>$0.94</span>
+        <span class="vitals__sep">&middot;</span><span>4m 12s</span>
+        <span class="vitals__spacer"></span>
+        <span class="vitals__ctx" title="context used">
+          <span class="ctx-bar"><span class="ctx-bar__fill"></span></span><span>26%</span>
+        </span>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<div class="legend">
+  <div class="legend__card">
+    <p class="legend__h">Why Unified might win</p>
+    <p class="legend__p">
+      The interleave gives you <strong>causality</strong> the tabs can't: "Found it &mdash; it's counting the
+      wrong things" sits directly under six reads of <code>perch.log</code>. You see the conclusion and the
+      evidence in one glance.
+    </p>
+    <p class="legend__p">
+      One scroll, one scrollbar, no mode-switching to answer "what's it up to". The <strong>&#9776; button</strong>
+      in the rail header hides the work rows &mdash; that's your Journal tab, as a density toggle rather than a tab.
+    </p>
+  </div>
+  <div class="legend__card">
+    <p class="legend__h">Why Tabbed might win</p>
+    <p class="legend__p">
+      Activity is <strong>144 rows to Journal's 25</strong>. Interleaved, the prose gets outnumbered ~6:1 and the
+      narrative you actually wanted starts to drown &mdash; exactly the "hard to scroll and follow" problem, just
+      one level less noisy.
+    </p>
+    <p class="legend__p">
+      Changes is a <em>state</em> (what the tree looks like now), not an <em>event</em>. Cramming it into a
+      chronological feed as a collapsed strip is a compromise; a tab lets it just be a list.
+    </p>
+  </div>
+  <div class="legend__card">
+    <p class="legend__h">Behavior in both</p>
+    <p class="legend__p">
+      <strong>Custom scrollbar</strong> &mdash; 10px, no track, thumb at 12% white &rarr; 24% on hover. Two new tokens.
+    </p>
+    <p class="legend__p">
+      <strong>Stick to latest</strong> &mdash; pinned to the bottom by default; scrolling up releases the pin and
+      raises the jump pill. New content while unpinned doesn't yank you.
+    </p>
+    <p class="legend__p">
+      <strong>Keep all history</strong> &mdash; yes. Your biggest transcript ever (5.8&nbsp;MB) extracts to just
+      296 beats + 342 tool calls. There's no budget worth spending here.
+    </p>
+  </div>
+</div>
+
+<script>
+  // ── layout switch ────────────────────────────────────────────────────────
+  const modes = { tabbed: document.getElementById("tabbed"), unified: document.getElementById("unified") };
+  const modeBtns = { tabbed: document.getElementById("m-tabbed"), unified: document.getElementById("m-unified") };
+  const quietBtn = document.getElementById("quiet-btn");
+
+  function setMode(name) {
+    for (const [k, el] of Object.entries(modes)) {
+      el.hidden = k !== name;
+      modeBtns[k].setAttribute("aria-pressed", String(k === name));
+    }
+    quietBtn.hidden = name !== "unified";      // the density toggle only means something in unified
+    stickAll();
+  }
+  modeBtns.tabbed.addEventListener("click", () => setMode("tabbed"));
+  modeBtns.unified.addEventListener("click", () => setMode("unified"));
+
+  // ── density toggle: hide the work rows → pure prose ───────────────────────
+  quietBtn.addEventListener("click", () => {
+    const on = quietBtn.getAttribute("aria-pressed") === "true";
+    quietBtn.setAttribute("aria-pressed", String(!on));
+    quietBtn.title = on ? "Hide work — prose only" : "Show work";
+    document.getElementById("stream").classList.toggle("stream--quiet", !on);
+    stickAll();
+  });
+
+  // ── Changes strip expand ─────────────────────────────────────────────────
+  const chgBar = document.getElementById("chg-bar");
+  chgBar.addEventListener("click", () => {
+    const open = chgBar.getAttribute("aria-expanded") === "true";
+    chgBar.setAttribute("aria-expanded", String(!open));
+    document.getElementById("chg-body").hidden = open;
+  });
+
+  // ── tabs ─────────────────────────────────────────────────────────────────
+  const tabs = Array.from(document.querySelectorAll(".tab"));
+  const jumpFor = (wrap) => wrap.querySelector(".jump");
+
+  function selectTab(tab) {
+    tabs.forEach((t) => {
+      const on = t === tab;
+      t.setAttribute("aria-selected", String(on));
+      document.getElementById(t.getAttribute("aria-controls")).hidden = !on;
+    });
+    jumpFor(modes.tabbed).dataset.for = tab.getAttribute("aria-controls");
+    stickAll();
+  }
+  tabs.forEach((t) => {
+    t.addEventListener("click", () => selectTab(t));
+    t.addEventListener("keydown", (e) => {
+      const i = tabs.indexOf(t);
+      if (e.key === "ArrowRight") { const n = tabs[(i + 1) % tabs.length]; n.focus(); selectTab(n); }
+      if (e.key === "ArrowLeft")  { const n = tabs[(i - 1 + tabs.length) % tabs.length]; n.focus(); selectTab(n); }
+    });
+  });
+
+  // ── stick-to-latest ──────────────────────────────────────────────────────
+  // Only FEEDS stick to the bottom (the stream, Journal, Activity — they grow
+  // at the end). Changes is a LIST, not a feed: it opens at the top, and never
+  // shows a jump pill. Scrolling a feed up unpins it and raises the pill; new
+  // content arriving while unpinned must never yank the viewport.
+  const NEAR = 24;
+  const isFeed = (el) => el.hasAttribute("data-feed");
+
+  function isNearBottom(el) {
+    return el.scrollHeight - el.scrollTop - el.clientHeight < NEAR;
+  }
+
+  function wireScroll(el) {
+    if (!isFeed(el)) return;
+    el.addEventListener("scroll", () => {
+      const pill = jumpFor(el.closest(".panel-wrap"));
+      if (!pill || pill.dataset.for !== el.id) return;
+      pill.classList.toggle("jump--on", !isNearBottom(el));
+    });
+  }
+
+  function stickAll() {
+    document.querySelectorAll(".panel.scroll").forEach((el) => {
+      if (el.offsetParent === null) return;             // hidden — skip
+      el.scrollTop = isFeed(el) ? el.scrollHeight : 0;
+      const pill = jumpFor(el.closest(".panel-wrap"));
+      if (pill) pill.classList.remove("jump--on");
+    });
+  }
+
+  document.querySelectorAll(".panel.scroll").forEach(wireScroll);
+
+  document.querySelectorAll(".jump").forEach((pill) => {
+    pill.addEventListener("click", () => {
+      const el = document.getElementById(pill.dataset.for);
+      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+      pill.classList.remove("jump--on");
+    });
+  });
+
+  setMode("unified");
+</script>
