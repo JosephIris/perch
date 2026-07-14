@@ -16,6 +16,9 @@ import { Dashboard } from "./dashboard.js";
 import { confirmDialog } from "./confirm.js";
 import { showPaneChooser } from "./pane-chooser.js";
 import { buildPaneFooter, applyPaneFooter } from "./pane-footer.js";
+import { buildPaneHeader, applyModelChip, applyAgentBadge } from "./pane-header.js";
+import { showModelMenu, dismissModelMenu, setModelLimits } from "./model-menu.js";
+import { showNewTabDialog } from "./new-tab-dialog.js";
 import { RestoreProgress } from "./restore-progress.js";
 import { openCommitsPopover, openCommitsLightbox } from "./commits-view.js";
 import type { SessionView, PaneTreeView } from "./bridge.js";
@@ -261,6 +264,55 @@ const dash = new Dashboard(
 );
 dash.render(sessions);
 
+// #modelmenu — the per-pane Claude model picker: mock pane headers wearing the
+// quiet model chip, plus the flyout in both states (no usage data — the normal
+// case — and Fable at its weekly limit, disabled with a reset hint). The left
+// menu is a DOM clone of the real flyout (the module allows one live menu at a
+// time); the right one is live, so opening this page in a browser is clickable.
+if (view === "modelmenu") {
+  const stage = document.getElementById("workspace")!;
+  stage.style.cssText = "display:flex;gap:32px;padding:24px;align-items:flex-start;";
+  const mk = (label: string, name: string, model: string) => {
+    const wrap = document.createElement("div");
+    wrap.style.cssText = "flex:1 1 0;font:11px var(--font-small,sans-serif);color:rgba(255,255,255,0.4)";
+    const cap = document.createElement("div");
+    cap.textContent = label;
+    cap.style.cssText = "margin-bottom:4px";
+    const pane = document.createElement("div");
+    pane.className = "pane pane--active";
+    pane.style.cssText = "height:96px";
+    const header = buildPaneHeader("demo-" + name);
+    header.nameEl.textContent = name;
+    applyAgentBadge(header.agentBadgeEl, "claude");
+    applyModelChip(header.modelEl, "claude", model);
+    // applyLeafView hides these when empty in the real app; the mock skips it.
+    header.branchEl.style.display = "none";
+    header.commitsEl.style.display = "none";
+    const term = document.createElement("div");
+    term.className = "pane__term";
+    term.style.cssText = "display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,0.25)";
+    term.textContent = "terminal";
+    pane.append(header.root, term);
+    wrap.append(cap, pane);
+    stage.appendChild(wrap);
+    return header;
+  };
+  const a = mk("no usage data (the normal case)", "api refactor", "fable");
+  const b = mk("fable at its weekly limit", "etl backfill", "");
+  setTimeout(() => {
+    showModelMenu(a.modelEl, "demo-a", "fable");
+    const live = document.querySelector(".model-menu");
+    if (live) {
+      const clone = live.cloneNode(true) as HTMLElement;
+      dismissModelMenu();
+      document.body.appendChild(clone);
+    }
+    setModelLimits([{ alias: "fable", resetsAtMs: Date.now() + 9 * 3600_000 }]);
+    showModelMenu(b.modelEl, "demo-b", "");
+    (document.activeElement as HTMLElement | null)?.blur?.();
+  }, 80);
+}
+
 // #panefooter — mock .pane shells (no xterm) exercising every footer state, so
 // the per-pane status bar can be screenshotted offline. Active panes show the
 // focus-gated git stats; inactive ones don't.
@@ -301,6 +353,20 @@ if (view === "panefooter") {
     wrap.append(cap, pane);
     stage.appendChild(wrap);
   }
+}
+
+// #newtab — the "New tab in <project>" dialog with the creation-time model
+// field: Claude preselected (so the Model row is visible), Default checked,
+// and Fable at its weekly limit so the disabled segment + its "resets HH:MM"
+// hint line show in a capture. Limits must be set BEFORE the dialog opens —
+// the field reads them at build time, same as the flyout reads them at open.
+if (view === "newtab") {
+  setModelLimits([{ alias: "fable", resetsAtMs: Date.now() + 9 * 3600_000 }]);
+  showNewTabDialog({
+    id: "p-ptp",
+    name: "product-tools-prod",
+    path: "C:\\dev\\product-tools-prod",
+  });
 }
 
 if (view === "panechooser") {

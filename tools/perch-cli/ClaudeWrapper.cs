@@ -49,6 +49,18 @@ internal static class ClaudeWrapper
             var path = WriteHooksFile();
             psi.ArgumentList.Add("--settings");
             psi.ArgumentList.Add(path);
+
+            // Per-pane model selection: the host drops the chosen CLI alias in a
+            // temp file keyed by PERCH_PANE_ID whenever the user picks one, and
+            // re-reads it here at every launch (an env var frozen at shell spawn
+            // couldn't follow a mid-session change). Added BEFORE passthrough so
+            // an explicit user `--model X` on the command line still wins.
+            var model = ReadModelAlias();
+            if (!string.IsNullOrEmpty(model))
+            {
+                psi.ArgumentList.Add("--model");
+                psi.ArgumentList.Add(model!);
+            }
         }
         foreach (var a in passthroughArgs) psi.ArgumentList.Add(a);
 
@@ -68,6 +80,27 @@ internal static class ClaudeWrapper
     /// The first claude binary on PATH that is NOT inside the wrapper's own
     /// directory (so the claude.cmd shim doesn't resolve to itself).
     private static string? FindRealClaude() => BinResolver.FindOnPathSkippingSelf("claude");
+
+    /// Read the host-written per-pane model alias from
+    /// %TEMP%\perch-claude-model-&lt;PERCH_PANE_ID&gt;.txt. Returns null when unset.
+    /// Validated to a single safe token so a corrupt/stale file can never inject
+    /// extra arguments into the real claude invocation.
+    private static string? ReadModelAlias()
+    {
+        try
+        {
+            var paneId = Environment.GetEnvironmentVariable("PERCH_PANE_ID");
+            if (string.IsNullOrEmpty(paneId)) return null;
+            var path = Path.Combine(Path.GetTempPath(), $"perch-claude-model-{paneId}.txt");
+            if (!File.Exists(path)) return null;
+            var alias = File.ReadAllText(path).Trim();
+            if (alias.Length == 0 || alias.Length > 40) return null;
+            foreach (var c in alias)
+                if (!(char.IsLetterOrDigit(c) || c is '-' or '_' or '.')) return null;
+            return alias;
+        }
+        catch { return null; }
+    }
 
     /// Writes the hooks JSON to a per-pane temp file and returns the path.
     /// Idempotent: overwriting the same file each time the wrapper runs in

@@ -12,7 +12,7 @@ import { b64ToBytes, bytesToB64, send } from "./bridge.js";
 import type { PaneTreeView } from "./bridge.js";
 import { cachedClipboardText, setCachedClipboardText } from "./clipboard.js";
 import { showLinkMenu } from "./link-menu.js";
-import { buildPaneHeader, applyChips, applyAgentBadge } from "./pane-header.js";
+import { buildPaneHeader, applyChips, applyAgentBadge, applyModelChip } from "./pane-header.js";
 import { buildPaneFooter, applyPaneFooter, type PaneFooter } from "./pane-footer.js";
 import { attachTooltip } from "./tooltip.js";
 import { permissionDialogVisible, blockedDialogVisible } from "./perm-probe.js";
@@ -54,6 +54,7 @@ export class Pane {
   private readonly branchEl: HTMLElement;
   private readonly commitsEl: HTMLElement;
   private readonly agentBadgeEl: HTMLElement;
+  private readonly modelEl: HTMLButtonElement;
   private readonly footer: PaneFooter;
   private readonly termHost: HTMLElement;
   private readonly term: Terminal;
@@ -95,6 +96,7 @@ export class Pane {
     this.branchEl     = header.branchEl;
     this.commitsEl    = header.commitsEl;
     this.agentBadgeEl = header.agentBadgeEl;
+    this.modelEl      = header.modelEl;
     this.nameEl.textContent = name;
     // Custom hover tooltip on the name: the full first-prompt the label was
     // cut from, or a rename hint when there's no prompt behind the name.
@@ -419,6 +421,7 @@ export class Pane {
     this.element.dataset.state = leaf.agentState;
     applyChips(this.branchEl, this.commitsEl, leaf, this.isActive);
     applyAgentBadge(this.agentBadgeEl, leaf.agentType);
+    applyModelChip(this.modelEl, leaf.agentType, leaf.model);
     applyPaneFooter(this.footer, leaf, this.isActive);
     this.syncProbe(leaf);
   }

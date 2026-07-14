@@ -266,6 +266,17 @@ internal sealed class PaneNode
     /// ended session and we want the last id to stick.
     public string? ClaudeSessionId { get; set; }
 
+    /// Per-pane Claude Code model alias ("fable" | "opus" | "sonnet" | "haiku"),
+    /// or "" for the account default. PERSISTED so the selection survives a
+    /// restart/respawn. At launch the `wrap-claude` shim appends `--model
+    /// <alias>` when this is non-empty; the value reaches the shim through a
+    /// tiny per-pane temp file (ClaudeModelState) rather than an env var,
+    /// because the user can change it AFTER the pane's shell was spawned and a
+    /// frozen env var couldn't follow. Set from the pane header's model picker
+    /// (pane.model); when cc is already running the host also types `/model
+    /// <alias>` into the PTY so the switch applies live.
+    public string Model { get; set; } = "";
+
     /// User- or auto-assigned name used by `perch focus/send/open` to address
     /// the pane from inside an agent. Persisted so addressing stays stable
     /// across restarts. Only leaves carry names; the field is ignored on

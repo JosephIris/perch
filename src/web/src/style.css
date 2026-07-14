@@ -896,6 +896,28 @@ ul { list-style: none; padding: 0; margin: 0; }
   background: var(--color-accent-faint);
 }
 
+/* Model label — quiet, clickable text showing the pane's Claude model
+ * selection ("default" / "opus" / …). Default-foreground, no color-coding
+ * (CLAUDE.md: surface the selection subtly). Opens the model menu on click. */
+.pane__model {
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  padding: 1px 6px;
+  border-radius: var(--r-input);
+  line-height: 1.4;
+  white-space: nowrap;
+  flex: 0 0 auto;
+  transition: background var(--dur-fast) var(--ease-entry),
+              color var(--dur-fast) var(--ease-entry);
+}
+.pane__model:hover,
+.pane__model:focus-visible {
+  color: var(--color-text-secondary);
+  background: var(--color-subtle-secondary);
+  outline: none;
+}
+
 .pane__state-label {
   font-family: var(--font-small);
   font-size: 11px;
@@ -1109,6 +1131,70 @@ ul { list-style: none; padding: 0; margin: 0; }
   white-space: nowrap;
 }
 .link-menu__hint {
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  flex: 0 0 auto;
+  padding-left: var(--sp-12);
+}
+
+/* --- Model menu ---------------------------------------------------------
+ * Per-pane Claude model picker. Same frosted flyout family as the link-menu;
+ * a leading check column marks the current selection, and a maxed-out model is
+ * disabled with a quiet "resets HH:MM" hint. */
+.model-menu {
+  position: fixed;
+  display: flex;
+  flex-direction: column;
+  min-width: 180px;
+  padding: var(--sp-4);
+  border-radius: var(--r-card);
+  background: rgba(28, 28, 28, 0.96);
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  border: 1px solid var(--color-stroke);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  z-index: 30;
+  font-family: var(--font-text);
+  color: var(--color-text-primary);
+}
+.model-menu__item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  width: 100%;
+  padding: 6px var(--sp-8);
+  border-radius: var(--r-input);
+  color: var(--color-text-primary);
+  font-weight: 380;
+  font-size: 13px;
+  text-align: left;
+  transition: background var(--dur-fast) var(--ease-entry);
+}
+.model-menu__item:hover,
+.model-menu__item:focus-visible {
+  background: var(--color-subtle-secondary);
+  outline: none;
+}
+.model-menu__item--disabled {
+  color: var(--color-text-disabled);
+  cursor: default;
+}
+.model-menu__item--disabled:hover,
+.model-menu__item--disabled:focus-visible {
+  background: none;
+}
+.model-menu__check {
+  flex: 0 0 auto;
+  color: var(--color-text-secondary);
+}
+.model-menu__label {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.model-menu__hint {
   font-family: var(--font-small);
   font-size: 11px;
   color: var(--color-text-tertiary);
@@ -2619,6 +2705,13 @@ ul { list-style: none; padding: 0; margin: 0; }
   background: var(--color-subtle-tertiary);
   color: var(--color-text-primary);
 }
+/* A model at its usage limit: quiet, non-interactive. The reset time lives in
+ * the field's hint line, not the button. */
+.newtab-seg__btn:disabled {
+  color: var(--color-text-disabled);
+  cursor: default;
+}
+.newtab-seg__btn:disabled:hover { color: var(--color-text-disabled); }
 .newtab-seg__btn:focus-visible {
   outline: 1px solid var(--color-accent);
   outline-offset: -1px;

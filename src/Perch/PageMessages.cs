@@ -105,6 +105,16 @@ internal sealed record PaneCwdMsg
     public required string Cwd { get; init; }
 }
 
+/// Per-pane Claude Code model pick from the pane header's model menu. Model is
+/// a CLI alias ("fable"/"opus"/"sonnet"/"haiku") or "" for the account default.
+/// The host clamps anything else, persists it on the pane, writes the wrap-claude
+/// state file, and — when cc is already running — types `/model <alias>` live.
+internal sealed record PaneModelMsg
+{
+    public required Guid PaneId { get; init; }
+    public required string Model { get; init; }
+}
+
 /// Page-side state reconciliation: the page watched a pane's terminal buffer
 /// and it disagrees with the host's agent state. PermissionVisible=false —
 /// cc's permission dialog left the screen (the exits that fire no hook: Esc,
@@ -173,6 +183,10 @@ internal sealed record ProjectTabNewMsg
     public string? Agent { get; init; }
     /// Cut a git worktree for this tab. Null/false → open in the repo itself.
     public bool? Worktree { get; init; }
+    /// Claude model alias for the new tab ("fable"/"opus"/"sonnet"/"haiku").
+    /// Null/absent/"" → account default. Only meaningful when Agent is
+    /// "claude"; the host clamps unknown values to default.
+    public string? Model { get; init; }
 }
 
 internal sealed record SessionRenameMsg
