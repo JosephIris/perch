@@ -264,6 +264,9 @@ internal sealed record PrefsSetMsg
     /// Wide layout mode: both side rails widen, terminal narrows. Nullable so
     /// the page can update one pref without asserting the others.
     public bool? WideLayout { get; init; }
+    /// Local panel "Perch only" filter — count/show only servers Perch started.
+    /// Nullable so the page can update one pref without asserting the others.
+    public bool? LocalPerchOnly { get; init; }
 }
 
 internal sealed record SettingsSaveMsg

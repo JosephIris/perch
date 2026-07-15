@@ -103,7 +103,7 @@ export type OutMessage =
   /* User preferences (terminal font size, Inspector rail open/closed, wide
    * layout mode) — host persists to Settings.cs so they survive restart. Each
    * field is optional so the page can update one without asserting the others. */
-  | { type: "prefs.set"; fontSize?: number; inspectorOpen?: boolean; wideLayout?: boolean }
+  | { type: "prefs.set"; fontSize?: number; inspectorOpen?: boolean; wideLayout?: boolean; localPerchOnly?: boolean }
   /* Recap: page asks the host for the unpushed-commit list behind a pane's
    * "↑N" chip (the hover tooltip / lightbox open lazily fetch it). Host
    * replies with a commits.data message for the same paneId. */
@@ -360,6 +360,9 @@ export type StateMessage = {
     /* Wide layout: both side rails widen and the terminal gives up the room.
      * Off (Compact) by default. */
     wideLayout?: boolean;
+    /* Local panel "Perch only" filter: count/show only servers Perch started,
+     * hiding the "other" (started-outside-Perch) bucket. Off by default. */
+    localPerchOnly?: boolean;
   };
   /* Account-wide Claude model rate limits — only the AT-LIMIT models appear, so
    * the model menu disables exactly these and annotates each with its reset

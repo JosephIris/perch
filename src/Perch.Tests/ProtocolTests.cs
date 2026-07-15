@@ -286,6 +286,21 @@ public class ProtocolTests
     }
 
     [Fact]
+    public void PrefsSet_LocalPerchOnly_IsIndependentOfTheOtherPrefs()
+    {
+        // The local panel's "Perch only" filter sends only localPerchOnly — it must
+        // not disturb the other prefs riding in the same bag.
+        var perchOnly = Round<PrefsSetMsg>("{\"type\":\"prefs.set\",\"localPerchOnly\":true}");
+        Assert.True(perchOnly.LocalPerchOnly);
+        Assert.Null(perchOnly.FontSize);
+        Assert.Null(perchOnly.InspectorOpen);
+        Assert.Null(perchOnly.WideLayout);
+
+        // And it round-trips as a string over the control pipe, like the others.
+        Assert.True(Round<PrefsSetMsg>("{\"localPerchOnly\":\"true\"}").LocalPerchOnly);
+    }
+
+    [Fact]
     public void SidebarReorder_RoundTrips()
     {
         var m = Round<SidebarReorderMsg>(

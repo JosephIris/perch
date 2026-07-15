@@ -50,6 +50,13 @@ public sealed class Settings
     /// the opt-in for when the rails are where you're spending your attention.
     public bool WideLayout { get; set; } = false;
 
+    /// Local dev-servers panel: count/show only servers Perch started, hiding the
+    /// "other" bucket (loopback listeners started outside Perch). Off by default —
+    /// the panel shows everything listening, which is the honest resting state;
+    /// this is the opt-in for "only the ones I launched here". Persisted so the
+    /// filter sticks across launches.
+    public bool LocalPerchOnly { get; set; } = false;
+
     /// Parent folders searched (ONE level deep) for repos to offer as projects.
     /// A list, not a single root, because a dev machine keeps code in several
     /// places — work repos here, side projects there. Empty by default: we
