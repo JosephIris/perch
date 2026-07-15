@@ -185,6 +185,28 @@ internal sealed record CloudDeleteMsg
     public required string Id { get; init; }
 }
 
+/// The local dev-servers panel opened or closed. Drives the scan cadence — fast
+/// while you're looking at it, slow otherwise, since every scan is a subprocess.
+internal sealed record LocalPanelMsg
+{
+    public required bool Open { get; init; }
+}
+
+/// Kill one local server. `Pid` is the exact owning process id from the scan —
+/// never a name, because a stale dev server and a real service can share a
+/// process name, and killing by name is how you take down the wrong one.
+internal sealed record LocalKillMsg
+{
+    public required int Pid { get; init; }
+}
+
+/// Open http://localhost:&lt;Port&gt; in the system browser. Host-side so it lands in
+/// the real default browser, not a webview popup.
+internal sealed record LocalOpenMsg
+{
+    public required int Port { get; init; }
+}
+
 internal sealed record ProjectAddMsg
 {
     public required string Path { get; init; }

@@ -187,7 +187,22 @@ export type OutMessage =
    * different gcloud delete commands and confusing them strands the workers. */
   | { type: "cloud.delete"; id: string }
   /* "Delete all" in the orphan area. */
-  | { type: "cloud.deleteOrphans" };
+  | { type: "cloud.deleteOrphans" }
+  /* Local dev-servers panel opened/closed. Drives scan cadence: a port scan is
+   * cheap but still a subprocess, so the host scans slowly in the background and
+   * speeds up while you're actually looking at the panel. */
+  | { type: "local.panel"; open: boolean }
+  /* Rescan button in the panel header. */
+  | { type: "local.refresh" }
+  /* Open http://localhost:<port> in the system browser — host-side, so it lands
+   * in the real default browser, not a webview popup. */
+  | { type: "local.open"; port: number }
+  /* Kill one server by its EXACT pid (never by name — a stale dev server and a
+   * real service can share a process name). The host kills the tree so
+   * npm → node children go with it. */
+  | { type: "local.kill"; pid: number }
+  /* "Kill all" in the lingering area — every server whose owning pane is gone. */
+  | { type: "local.killLingering" };
 
 // ---- Incoming message shapes (host -> page) --------------------------------
 
@@ -559,7 +574,11 @@ export type InMessage =
   /* Every billable GCP resource this user's agents created and that is still
    * running. Filtered server-side on the agent-owner label, so the ~200 unrelated
    * production instances in the project never reach us. */
-  | CloudDataMessage;
+  | CloudDataMessage
+  /* Every loopback server listening right now: dev servers you started, plus any
+   * that outlived the pane that spawned them. Only appears while something is
+   * actually listening. */
+  | LocalDataMessage;
 
 /** One machine (or one Dataproc cluster — a cluster is ONE row, not five). */
 export interface CloudResourceView {
@@ -595,6 +614,43 @@ export interface CloudDataMessage {
   resources: CloudResourceView[];
   /** Host clock at poll time — cost is computed page-side from (now - createdMs),
    * so uptime keeps ticking between polls instead of freezing for 5 minutes. */
+  nowMs: number;
+}
+
+/** One loopback server listening right now — a dev server you started, or one
+ * that outlived the pane that spawned it. */
+export interface LocalResourceView {
+  /** Stable key "<port>/<pid>". Pass pid to local.kill, port to local.open. */
+  id: string;
+  port: number;
+  pid: number;
+  /** Listen address: "127.0.0.1" | "::1" | "0.0.0.0". */
+  addr: string;
+  /** Best-effort framework label ("Vite", "Next", "Flask", …), else the runtime
+   * ("Node", "Python", …). Cosmetic — the port + command carry the real weight. */
+  framework: string;
+  /** Cleaned command tail, e.g. "npm run dev". Cosmetic. */
+  command: string;
+  /** Process start (host clock). Uptime is computed page-side from nowMs so it
+   * keeps ticking between scans. */
+  startedMs: number;
+  /** live = a still-open pane owns it; lingering = its pane closed but the port
+   * is still held (the whole point of the panel); other = listening but Perch
+   * never launched it (started by hand elsewhere). */
+  kind: "live" | "lingering" | "other";
+  /** live: the owning pane's name. lingering: the pane that used to own it. */
+  paneName?: string | null;
+  paneId?: string | null;
+  /** live panes only: "working" | "done" | "waiting" | … */
+  agentState?: string | null;
+  /** lingering only: when it lost its owning pane (host clock). */
+  closedMs?: number | null;
+}
+
+export interface LocalDataMessage {
+  type: "local.data";
+  servers: LocalResourceView[];
+  /** Host clock at scan time — uptime ticks page-side from (now - startedMs). */
   nowMs: number;
 }
 

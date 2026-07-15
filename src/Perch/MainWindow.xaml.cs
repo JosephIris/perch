@@ -134,6 +134,7 @@ public partial class MainWindow : FluentWindow
     // service no-ops until its own 10/30-minute gap elapses).
     private UsageService? _usage;
     private CloudController? _cloud;
+    private LocalController? _local;
     private System.Windows.Threading.DispatcherTimer? _usageTimer;
     // When the last update check ran (UTC). Throttles the re-check we fire on
     // window activation so rapid alt-tabbing can't hammer the GitHub feed.
@@ -176,6 +177,12 @@ public partial class MainWindow : FluentWindow
         // on a running cluster.
         _cloud = new CloudController(Dispatcher, PostToPage, LookupPaneStateBySession);
         _cloud.Start();
+        // Local dev servers. No auth to probe — a port scan is always available —
+        // so this is always on, but invisible until something is listening. The
+        // snapshot of live pane pids is taken on THIS (UI) thread each scan, so
+        // attribution never reads session/pane state off-thread.
+        _local = new LocalController(Dispatcher, PostToPage, SnapshotLivePanes);
+        _local.Start();
         EnsurePaneNames();
         // Persist immediately on first launch so external tools (the perch
         // CLI, test harnesses) can read pane ids and pipe paths from disk
@@ -554,7 +561,12 @@ public partial class MainWindow : FluentWindow
         .Add<CloudPanelMsg>("cloud.panel", m => _cloud?.SetPanelOpen(m.Open))
         .Add("cloud.refresh", () => _ = _cloud?.RefreshAsync())
         .Add<CloudDeleteMsg>("cloud.delete", m => _ = _cloud?.DeleteAsync(m.Id))
-        .Add("cloud.deleteOrphans", () => _ = _cloud?.DeleteOrphansAsync());
+        .Add("cloud.deleteOrphans", () => _ = _cloud?.DeleteOrphansAsync())
+        .Add<LocalPanelMsg>("local.panel", m => _local?.SetPanelOpen(m.Open))
+        .Add("local.refresh", () => _ = _local?.RefreshAsync())
+        .Add<LocalOpenMsg>("local.open", m => OpenLocalUrl(m.Port))
+        .Add<LocalKillMsg>("local.kill", m => _ = _local?.KillAsync(m.Pid))
+        .Add("local.killLingering", () => _ = _local?.KillLingeringAsync());
 
     private void OnWebMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
@@ -1354,6 +1366,41 @@ public partial class MainWindow : FluentWindow
                     return pane.AgentState.ToString().ToLowerInvariant();
         }
         return null;
+    }
+
+    /// Live panes' root shell pids, snapshotted on the UI thread for the local
+    /// server scan. A dev server started in a pane is a descendant of that pane's
+    /// shell, so its pid is how the scan attributes the server back to the pane —
+    /// and its ABSENCE from this list is how a server is found to have outlived
+    /// the pane that spawned it (lingering).
+    private IReadOnlyList<PaneProc> SnapshotLivePanes()
+    {
+        var list = new List<PaneProc>();
+        foreach (var sess in _store.Sessions)
+        {
+            if (sess.ClosedAtUnixMs > 0) continue;
+            foreach (var pane in AllLeaves(sess.Root))
+                if (_panes.TryGet(pane.Id, out var pty) && pty.ProcessId > 0)
+                    list.Add(new PaneProc(
+                        pty.ProcessId,
+                        pane.Id.ToString("N"),
+                        pane.Name ?? "",
+                        pane.AgentState.ToString().ToLowerInvariant()));
+        }
+        return list;
+    }
+
+    /// Open a localhost URL in the system default browser. Host-side (not a
+    /// webview navigation) so it lands in the real browser, not a chrome popup.
+    private static void OpenLocalUrl(int port)
+    {
+        if (port <= 0 || port > 65535) return;
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
+                $"http://localhost:{port}/") { UseShellExecute = true });
+        }
+        catch (Exception ex) { Log.Error("local.open", ex); }
     }
 
     /// Post an arbitrary payload to the page. Shared by CloudController so it

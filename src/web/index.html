@@ -115,6 +115,29 @@
         </button>
       </div>
 
+      <!-- Local dev servers. Hidden until something is actually listening on
+           loopback, so a session with no dev server running never sees it.
+           Amber (--color-local): a server on YOUR machine — a different axis
+           from cloud's teal (remote + metered). Escalates to caution and grows
+           the alert row when a server outlives the pane that spawned it.
+           Click → the local servers panel. -->
+      <div id="local-area" class="local-area" hidden>
+        <div class="local-area__label">Local</div>
+        <button id="local-card" class="local-card" type="button" aria-label="Local dev servers">
+          <span class="local-card__head">
+            <span class="local-card__dot" aria-hidden="true"></span>
+            <span class="local-card__title" id="local-card-title"></span>
+            <span class="local-card__port" id="local-card-port"></span>
+          </span>
+          <span class="local-card__sub" id="local-card-sub"></span>
+          <span class="local-card__alert" id="local-card-alert" hidden>
+            <span class="local-card__alert-dot" aria-hidden="true"></span>
+            <span class="local-card__alert-text" id="local-card-alert-text"></span>
+            <span class="local-card__alert-meta" id="local-card-alert-meta"></span>
+          </span>
+        </button>
+      </div>
+
       <!-- Bottom row: app identity + settings. Mirrors Claude's user-info
            row at the bottom of the sidebar. The identity block is static;
            the gear opens the settings dialog. -->

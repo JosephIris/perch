@@ -194,6 +194,19 @@ public class ProtocolTests
     }
 
     [Fact]
+    public void LocalMessages_RoundTrip()
+    {
+        Assert.True(Round<LocalPanelMsg>("{\"type\":\"local.panel\",\"open\":true}").Open);
+        Assert.False(Round<LocalPanelMsg>("{\"type\":\"local.panel\",\"open\":false}").Open);
+
+        // Kill targets an exact pid, never a process name — a stale dev server
+        // and a real service routinely share the name "node.exe".
+        Assert.Equal(8821, Round<LocalKillMsg>("{\"type\":\"local.kill\",\"pid\":8821}").Pid);
+        // Open targets a port; the URL is built host-side.
+        Assert.Equal(5173, Round<LocalOpenMsg>("{\"type\":\"local.open\",\"port\":5173}").Port);
+    }
+
+    [Fact]
     public void SessionClose_RemoveWorktreeIsOptIn()
     {
         // Absent → null → the worktree is KEPT and the session is restorable.
