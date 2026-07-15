@@ -59,6 +59,7 @@ const EXPECTED_TYPES = [
   "session.select",
   "settings.request",
   "settings.save",
+  "sidebar.reorder",
   "ui.mode",
   "update.apply",
   "update.check",

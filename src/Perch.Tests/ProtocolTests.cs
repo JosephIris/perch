@@ -272,6 +272,17 @@ public class ProtocolTests
         Assert.True(Round<PrefsSetMsg>("{\"wideLayout\":\"true\"}").WideLayout);
     }
 
+    [Fact]
+    public void SidebarReorder_RoundTrips()
+    {
+        var m = Round<SidebarReorderMsg>(
+            "{\"type\":\"sidebar.reorder\",\"kind\":\"tab\",\"movedId\":\"a\",\"targetId\":\"b\",\"edge\":\"after\"}");
+        Assert.Equal("tab", m.Kind);
+        Assert.Equal("a", m.MovedId);
+        Assert.Equal("b", m.TargetId);
+        Assert.Equal("after", m.Edge);
+    }
+
     // ---- Control-pipe leniencies (perch test ships flags as strings) ------
 
     [Fact]
