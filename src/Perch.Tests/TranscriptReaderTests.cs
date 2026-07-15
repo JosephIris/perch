@@ -130,6 +130,65 @@ public sealed class TranscriptReaderTests : IDisposable
     }
 
     [Fact]
+    public void InjectedUserRows_AreNotPrompts_OnlyTypedTurnsAre()
+    {
+        // Claude Code writes a lot of `user` rows the user never typed: image-paste
+        // markers and skill/command bodies (isMeta), and task-completion
+        // notifications / system turns (origin.kind != "human"). Rendered in full
+        // they flood the journal — a single task-notification is ~8 KB of XML.
+        // Only a genuinely typed turn becomes a prompt.
+        WriteTranscript(
+            // an image-paste marker
+            """{"type":"user","isMeta":true,"timestamp":"2026-07-03T17:40:00Z","message":{"content":"[Image: source: C:\\img\\1.png]"}}""",
+            // a task-completion notification injected as a user turn
+            """{"type":"user","origin":{"kind":"task-notification"},"promptSource":"system","timestamp":"2026-07-03T17:41:00Z","message":{"content":"<task-notification>done</task-notification>"}}""",
+            // a skill body injected under a tool use
+            """{"type":"user","isMeta":true,"timestamp":"2026-07-03T17:42:00Z","message":{"content":"Approach this as the design lead at a small studio."}}""",
+            // the one thing the user actually typed
+            """{"type":"user","origin":{"kind":"human"},"promptSource":"typed","timestamp":"2026-07-03T17:47:00Z","message":{"content":"scope the loc to the agent edits"}}""",
+            Assistant(TextBlock));
+
+        var d = Read(new TranscriptReader());
+
+        var prompts = d.Events.Where(e => e.Kind == "prompt").ToList();
+        Assert.Single(prompts);
+        Assert.Equal("scope the loc to the agent edits", prompts[0].Text);
+    }
+
+    [Fact]
+    public void MissingOriginMetadata_ReadsAsHuman_SoOlderTranscriptsKeepTheirPrompts()
+    {
+        // Older transcripts carry no origin/promptSource/isMeta. A missing signal
+        // must read as "human", or every prompt in an old transcript would vanish.
+        WriteTranscript(UserText("older transcript prompt"), Assistant(TextBlock));
+
+        var prompts = Read(new TranscriptReader()).Events.Where(e => e.Kind == "prompt").ToList();
+        Assert.Single(prompts);
+        Assert.Equal("older transcript prompt", prompts[0].Text);
+    }
+
+    [Fact]
+    public void InterruptTurns_GetTheirOwnKind_NotPrompt()
+    {
+        // Esc / Ctrl-C records a "[Request interrupted …]" user turn. It's an
+        // alarm, not a prompt — the rail paints it red — so it's classified
+        // apart. Two variants: bare, and "…for tool use".
+        WriteTranscript(
+            UserText("do the thing"),
+            UserText("[Request interrupted by user]"),
+            UserText("[Request interrupted by user for tool use]"),
+            Assistant(TextBlock));
+
+        var d = Read(new TranscriptReader());
+
+        Assert.Equal(
+            new[] { "prompt", "interrupt", "interrupt", "beat" },
+            d.Events.Select(e => e.Kind));
+        // Text is preserved verbatim; the page drops the brackets at render time.
+        Assert.Equal("[Request interrupted by user]", d.Events[1].Text);
+    }
+
+    [Fact]
     public void SubagentRows_AreSkipped()
     {
         // A fan-out session's sidechain rows are the MAJORITY of the file (129 of

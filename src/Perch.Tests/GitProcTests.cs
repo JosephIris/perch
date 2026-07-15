@@ -156,6 +156,48 @@ public class GitProcTests
     }
 
     [Fact]
+    public async Task SessionStats_WorkingTreeFilterExcludesYourHandEdits_ButKeepsAgentCreatedFiles()
+    {
+        // THE loc-attribution bug: a file YOU hand-edit lands in `diff HEAD` right
+        // beside the agent's edits, indistinguishable to git. Scoping ONLY the
+        // uncommitted-tracked term to the agent's touched set drops your edit while
+        // the agent's edit — and a file it created (untracked, whole) — still count.
+        var repo = await SetupRepoAsync();
+        if (repo is not (var dir, var baseline0, _)) return; // no git on PATH
+        try
+        {
+            // Two tracked files at the baseline: one the agent edits, one you do.
+            await File.WriteAllTextAsync(Path.Combine(dir, "human.txt"), "h1\nh2\n");
+            await Git("add human.txt", dir);
+            await Git("commit -q -m add-human", dir);
+            var (ok, sha) = await Git("rev-parse HEAD", dir);
+            Assert.True(ok);
+            var baseline = sha.Trim();
+            var snapshot = new HashSet<string>(
+                (await GitProc.UntrackedFilesAsync(dir))!, StringComparer.Ordinal);
+
+            // Agent edits tracked.txt (+1) and creates generated.txt (+2, e.g. via
+            // Bash). YOU hand-edit human.txt (+1). Only tracked.txt is attributed.
+            await File.AppendAllTextAsync(Path.Combine(dir, "tracked.txt"), "agent\n");
+            await File.AppendAllTextAsync(Path.Combine(dir, "human.txt"), "you\n");
+            await File.WriteAllTextAsync(Path.Combine(dir, "generated.txt"), "g1\ng2\n");
+
+            var touched = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "tracked.txt" };
+            var stats = await GitProc.SessionStatsAsync(
+                baseline, dir, snapshot, pathFilter: null, workingTreeFilter: touched);
+            Assert.NotNull(stats);
+            Assert.Equal(2, stats!.Value.Files);   // tracked.txt + generated.txt, NOT human.txt
+            Assert.Equal(3, stats.Value.Added);    // 1 agent edit + 2 agent-created; your +1 excluded
+
+            // Without the filter (the old solo-pane behavior) your hand-edit inflates it.
+            var whole = await GitProc.SessionStatsAsync(baseline, dir, snapshot);
+            Assert.Equal(3, whole!.Value.Files);   // + human.txt
+            Assert.Equal(4, whole.Value.Added);    // + your line
+        }
+        finally { DeleteRepo(dir); }
+    }
+
+    [Fact]
     public async Task SessionStats_NullSnapshotSkipsUntrackedEntirely()
     {
         var repo = await SetupRepoAsync();

@@ -160,11 +160,20 @@ internal static class GitProc
     /// too, and an unconditional count would bill them to everyone. Null (the
     /// solo-pane case) keeps the whole-tree measurement, which also catches
     /// files created by Bash commands that attribution can't see.
+    ///
+    /// <paramref name="workingTreeFilter"/> restricts ONLY the uncommitted
+    /// tracked term (`diff HEAD`) to the given paths, independent of
+    /// <paramref name="pathFilter"/>. The working tree is the one place a
+    /// human's own hand-edits sit right next to the agent's, indistinguishable
+    /// to git — so we scope that term to the files the agent's edit tools
+    /// reported touching (git.touched) even for a SOLO pane, while committed and
+    /// new-untracked work stay whole (so the agent's commits and the files its
+    /// Bash commands created still count). Null falls back to pathFilter.
     public static async Task<GitSessionStats?> SessionStatsAsync(
         string baselineSha, string cwd, IReadOnlySet<string>? baselineUntracked,
-        IReadOnlySet<string>? pathFilter = null)
+        IReadOnlySet<string>? pathFilter = null, IReadOnlySet<string>? workingTreeFilter = null)
     {
-        var d = await SessionDetailAsync(baselineSha, cwd, baselineUntracked, pathFilter);
+        var d = await SessionDetailAsync(baselineSha, cwd, baselineUntracked, pathFilter, workingTreeFilter);
         return d == null ? null : new GitSessionStats(d.Files.Count, d.Added, d.Deleted, d.Commits);
     }
 
@@ -173,7 +182,7 @@ internal static class GitProc
     /// difference is that the per-path add/delete tallies survive the return.
     public static async Task<GitSessionDetail?> SessionDetailAsync(
         string baselineSha, string cwd, IReadOnlySet<string>? baselineUntracked,
-        IReadOnlySet<string>? pathFilter = null)
+        IReadOnlySet<string>? pathFilter = null, IReadOnlySet<string>? workingTreeFilter = null)
     {
         if (string.IsNullOrEmpty(baselineSha)) return null;
 
@@ -227,7 +236,12 @@ internal static class GitProc
         }
 
         // Uncommitted tracked work. `diff HEAD` (not `diff`) so staged-but-
-        // uncommitted edits count too.
+        // uncommitted edits count too. This is the one term a human's own
+        // hand-edits leak into — git can't tell them from the agent's — so it's
+        // scoped to the agent's git.touched set (workingTreeFilter) when given,
+        // even for a solo pane. Falls back to pathFilter (the shared-tree split)
+        // when no dedicated working-tree filter is set.
+        var wtFilter = workingTreeFilter ?? pathFilter;
         var (okDiff, wt) = await RunAsync("git", "-c core.quotepath=false diff --numstat HEAD", cwd);
         if (okDiff)
         {
@@ -235,7 +249,7 @@ internal static class GitProc
             {
                 if (TryNumstat(raw.TrimEnd('\r'), out var a, out var d, out var path))
                 {
-                    if (pathFilter != null && !pathFilter.Contains(path)) continue;
+                    if (wtFilter != null && !wtFilter.Contains(path)) continue;
                     added += a; deleted += d; Bump(path, a, d);
                 }
             }

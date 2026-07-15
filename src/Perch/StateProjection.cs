@@ -79,14 +79,15 @@ internal static class StateProjection
     public static object BuildSnapshot(
         SessionStore store, Guid? activePaneId, int fontSize, bool onboardingSeen,
         ProjectStore? projects = null, string sidebarMode = "sessions",
-        IReadOnlyList<ModelUsageLimit>? modelLimits = null, bool inspectorOpen = true)
+        IReadOnlyList<ModelUsageLimit>? modelLimits = null, bool inspectorOpen = true,
+        bool wideLayout = false)
     {
         return new
         {
             type = "state",
             activeSessionId = store.ActiveSessionId?.ToString("D") ?? "",
             activePaneId    = activePaneId?.ToString("D") ?? "",
-            prefs = new { fontSize, onboardingSeen, sidebarMode, inspectorOpen },
+            prefs = new { fontSize, onboardingSeen, sidebarMode, inspectorOpen, wideLayout },
             // Account-wide model rate limits (usually empty — the endpoint 429s).
             // Only the AT-LIMIT models ship: the picker disables exactly these
             // and annotates each with its reset time. Empty / absent → every

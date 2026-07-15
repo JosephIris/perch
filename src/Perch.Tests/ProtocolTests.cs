@@ -258,6 +258,20 @@ public class ProtocolTests
         Assert.Null(fontOnly.InspectorOpen);
     }
 
+    [Fact]
+    public void PrefsSet_WideLayout_IsIndependentOfTheOtherPrefs()
+    {
+        // The width-mode toggle sends only wideLayout — it must not disturb the
+        // font size or the rail's open state riding in the same pref bag.
+        var wideOnly = Round<PrefsSetMsg>("{\"type\":\"prefs.set\",\"wideLayout\":true}");
+        Assert.True(wideOnly.WideLayout);
+        Assert.Null(wideOnly.FontSize);
+        Assert.Null(wideOnly.InspectorOpen);
+
+        // And it round-trips as a string over the control pipe, like the others.
+        Assert.True(Round<PrefsSetMsg>("{\"wideLayout\":\"true\"}").WideLayout);
+    }
+
     // ---- Control-pipe leniencies (perch test ships flags as strings) ------
 
     [Fact]

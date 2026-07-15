@@ -87,6 +87,12 @@ public partial class MainWindow : FluentWindow
     /// to be typed into the TUI — and only once cc is actually listening, which
     /// its session-start hook tells us.
     private readonly Dictionary<Guid, string> _pendingCcColor = new();
+
+    // Per-pane debounce for typing the pending /color into cc. Armed by the
+    // session-start hook (ApplyPendingCcColor); each PTY output chunk resets it
+    // (PostPaneOut); it fires when cc's first paint QUIETS — reader attached and
+    // idle — which is faster than a fixed wait and won't type mid-boot.
+    private readonly Dictionary<Guid, System.Windows.Threading.DispatcherTimer> _ccColorTimers = new();
     // Panes shown in the restore-progress lightbox → whether the pane has
     // reported "alive again" (its resumed session-start hook fired). Empty when
     // no restore is in flight. _restoreTimeout force-completes a batch whose
@@ -1345,25 +1351,54 @@ public partial class MainWindow : FluentWindow
     // Set the tab's color INSIDE its Claude session, so the prompt bar matches
     // the sidebar dot. cc exposes no flag for this — only the `/color` slash
     // command — so it has to be typed into the TUI, which means waiting until cc
-    // is actually listening. The session-start hook is that proof: it fires from
-    // inside the running session, so the input is up by definition.
+    // is actually listening AND has finished its first paint (type into the raw
+    // PTY mid-boot and it can land before cc's reader is attached, and be lost).
     //
-    // The small delay is for the TUI's first paint; typing into the raw PTY the
-    // instant the hook lands can land before cc's reader is attached and be
-    // dropped. One-shot: drained on use, so a later /clear (which re-fires
-    // session-start) doesn't re-type it.
+    // The session-start hook proves the session is up; from there we wait for
+    // cc's first paint to QUIET instead of a fixed delay. Each PTY output chunk
+    // resets a short debounce (PostPaneOut → StartCcColorTimer); when output
+    // stops, the timer types the color. That tracks the machine — quick on a fast
+    // paint, patient on a slow one — where the old fixed 700ms was both too slow
+    // on a fast box and occasionally too early on a loaded one. One-shot:
+    // _pendingCcColor is drained on the write (FlushCcColor), so a later /clear
+    // (which re-fires session-start) doesn't re-type it.
     private void ApplyPendingCcColor(Guid paneId)
     {
-        if (!_pendingCcColor.Remove(paneId, out var color)) return;
-        _ = System.Threading.Tasks.Task.Run(async () =>
+        // Marshal to the UI thread: this fires from the IPC pipe thread, and the
+        // DispatcherTimer + its dictionaries live on the UI thread with PostPaneOut.
+        Dispatcher.InvokeAsync(() =>
         {
-            await System.Threading.Tasks.Task.Delay(700);
-            await Dispatcher.InvokeAsync(() =>
-            {
-                try { _panes.Write(paneId, System.Text.Encoding.UTF8.GetBytes($"/color {color}\r")); }
-                catch (Exception ex) { Log.Info("CcColor", $"skipped: {ex.Message}"); }
-            });
+            if (_pendingCcColor.ContainsKey(paneId)) StartCcColorTimer(paneId);
         });
+    }
+
+    // (Re)start the quiet-debounce that types the pending /color. Created lazily
+    // per pane; the initial Start() means it still fires when cc emits no further
+    // output after session-start. UI thread only.
+    private void StartCcColorTimer(Guid paneId)
+    {
+        if (!_ccColorTimers.TryGetValue(paneId, out var timer))
+        {
+            timer = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(150),
+            };
+            timer.Tick += (_, _) => FlushCcColor(paneId);
+            _ccColorTimers[paneId] = timer;
+        }
+        timer.Stop();
+        timer.Start();
+    }
+
+    // Type `/color <name>\r` into the pane once cc's paint has settled. Runs on
+    // the UI thread (timer tick / PostPaneOut), so no dispatch. Guarded: the pane
+    // may have closed between the last output chunk and this tick.
+    private void FlushCcColor(Guid paneId)
+    {
+        if (_ccColorTimers.Remove(paneId, out var timer)) timer.Stop();
+        if (!_pendingCcColor.Remove(paneId, out var color)) return;
+        try { _panes.Write(paneId, System.Text.Encoding.UTF8.GetBytes($"/color {color}\r")); }
+        catch (Exception ex) { Log.Info("CcColor", $"skipped: {ex.Message}"); }
     }
 
     // New Claude session in a terminal pane (fresh launch after ctrl+c twice,
@@ -1525,12 +1560,20 @@ public partial class MainWindow : FluentWindow
             if (shared)
                 pathFilter = new HashSet<string>(pane.TouchedFiles, StringComparer.OrdinalIgnoreCase);
         }
+        // The uncommitted working-tree diff is the one term a human's own
+        // hand-edits land in — git can't tell them from the agent's — so scope
+        // THAT term to the files the agent's edit tools reported touching, for
+        // EVERY pane, not just shared trees. Committed + new-untracked work stay
+        // whole (pathFilter), so the agent's commits and the files its Bash
+        // commands created still count. Empty until the agent's first edit, which
+        // correctly reads as 0 tracked loc rather than crediting your hand-edits.
+        var touched = new HashSet<string>(pane.TouchedFiles, StringComparer.OrdinalIgnoreCase);
         // Run the git queries concurrently off the UI thread — they're
         // independent and each is a fast plumbing command. The commit count and
         // the loc size come from one walk (SessionStatsAsync) so they can't
         // disagree about what counts as this session's work.
         var statsT = hasBaseline
-            ? GitProc.SessionStatsAsync(baseline, cwd, pane.UntrackedBaseline, pathFilter)
+            ? GitProc.SessionStatsAsync(baseline, cwd, pane.UntrackedBaseline, pathFilter, touched)
             : System.Threading.Tasks.Task.FromResult<GitSessionStats?>(null);
         var aheadT = GitProc.AheadAsync(cwd);
         await System.Threading.Tasks.Task.WhenAll(statsT, aheadT);
@@ -1918,6 +1961,11 @@ public partial class MainWindow : FluentWindow
             _settings.InspectorOpen = open;
             dirty = true;
         }
+        if (msg.WideLayout is bool wide && _settings.WideLayout != wide)
+        {
+            _settings.WideLayout = wide;
+            dirty = true;
+        }
         if (dirty) _settings.Save();
     }
 
@@ -2012,13 +2060,18 @@ public partial class MainWindow : FluentWindow
         var filter = pane.DiffAttributed
             ? new HashSet<string>(pane.TouchedFiles, StringComparer.OrdinalIgnoreCase)
             : null;
+        // Same working-tree scoping as the LOC chip (RefreshGitStatsAsync): the
+        // Changes list restricts the uncommitted diff to the agent's own edits,
+        // so a file YOU hand-edited doesn't show up as the agent's change.
+        // Committed + new-untracked work stay whole.
+        var touched = new HashSet<string>(pane.TouchedFiles, StringComparer.OrdinalIgnoreCase);
 
         try
         {
             var data = _transcripts.Read(id, sessionId, cwd);
             var detail = string.IsNullOrEmpty(cwd)
                 ? null
-                : await GitProc.SessionDetailAsync(baseline, cwd, untracked, filter);
+                : await GitProc.SessionDetailAsync(baseline, cwd, untracked, filter, touched);
 
             var payload = new
             {
@@ -2987,7 +3040,8 @@ public partial class MainWindow : FluentWindow
         {
             var snap = StateProjection.BuildSnapshot(
                 _store, _activePaneId, _settings.FontSize, _settings.OnboardingSeen,
-                _projects, _settings.SidebarMode, _usage?.CurrentLimits(), _settings.InspectorOpen);
+                _projects, _settings.SidebarMode, _usage?.CurrentLimits(), _settings.InspectorOpen,
+                _settings.WideLayout);
             Web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(snap));
         }
         catch (Exception ex) { Log.Error("PushState", ex); }
@@ -3008,6 +3062,9 @@ public partial class MainWindow : FluentWindow
                 Web.CoreWebView2?.PostWebMessageAsJson(payload);
             }
             catch (Exception ex) { Log.Error("PostPaneOut", ex); }
+
+            // cc is still painting → hold the pending /color until output quiets.
+            if (_ccColorTimers.ContainsKey(paneId)) StartCcColorTimer(paneId);
         });
     }
 

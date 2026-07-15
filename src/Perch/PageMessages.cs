@@ -228,6 +228,9 @@ internal sealed record PrefsSetMsg
     /// Whether the Inspector rail is showing. Nullable so the page can send a
     /// font-size-only update without also asserting a rail state.
     public bool? InspectorOpen { get; init; }
+    /// Wide layout mode: both side rails widen, terminal narrows. Nullable so
+    /// the page can update one pref without asserting the others.
+    public bool? WideLayout { get; init; }
 }
 
 internal sealed record SettingsSaveMsg

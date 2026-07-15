@@ -95,10 +95,10 @@ export type OutMessage =
    * WebView2; subsequent layouts reposition/resize. */
   | { type: "urlpane.layout"; paneId: string; url: string; x: number; y: number; w: number; h: number }
   | { type: "urlpane.dispose"; paneId: string }
-  /* User preferences (terminal font size, Inspector rail open/closed) — host
-   * persists to Settings.cs so they survive restart. Each field is optional so
-   * the page can update one without asserting the other. */
-  | { type: "prefs.set"; fontSize?: number; inspectorOpen?: boolean }
+  /* User preferences (terminal font size, Inspector rail open/closed, wide
+   * layout mode) — host persists to Settings.cs so they survive restart. Each
+   * field is optional so the page can update one without asserting the others. */
+  | { type: "prefs.set"; fontSize?: number; inspectorOpen?: boolean; wideLayout?: boolean }
   /* Recap: page asks the host for the unpushed-commit list behind a pane's
    * "↑N" chip (the hover tooltip / lightbox open lazily fetch it). Host
    * replies with a commits.data message for the same paneId. */
@@ -337,6 +337,9 @@ export type StateMessage = {
     sidebarMode?: SidebarMode;
     /* Whether the Inspector rail is showing. Open by default. */
     inspectorOpen?: boolean;
+    /* Wide layout: both side rails widen and the terminal gives up the room.
+     * Off (Compact) by default. */
+    wideLayout?: boolean;
   };
   /* Account-wide Claude model rate limits — only the AT-LIMIT models appear, so
    * the model menu disables exactly these and annotates each with its reset
@@ -396,10 +399,11 @@ export type CommitsDataMessage = {
   commits: CommitView[];
 };
 
-/* One row of the Inspector's stream. Three kinds, one ordered list:
- *   "prompt" — what you asked (a real user turn; slash-command noise stripped)
- *   "beat"   — what the agent SAID (an assistant text block)
- *   "work"   — what the agent DID (a tool call)
+/* One row of the Inspector's stream. Four kinds, one ordered list:
+ *   "prompt"    — what you asked (a real user turn; slash-command noise stripped)
+ *   "beat"      — what the agent SAID (an assistant text block)
+ *   "work"      — what the agent DID (a tool call)
+ *   "interrupt" — a turn you STOPPED (Esc / Ctrl-C); painted red as an alarm
  * The rail renders beats as the spine and work as dimmed connective tissue, so
  * one list drives both the narrative and the activity views.
  *
@@ -407,7 +411,7 @@ export type CommitsDataMessage = {
  * row ("Read perch.log ×6"). That's the thrash signal — the cheapest way to
  * see an agent spinning without reading a word. */
 export type InspectorEventView = {
-  kind: "prompt" | "beat" | "work";
+  kind: "prompt" | "beat" | "work" | "interrupt";
   ts: string;
   text: string;
   verb: string;

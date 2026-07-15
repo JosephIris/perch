@@ -182,10 +182,32 @@ function renderChanges(host: HTMLElement, data: InspectorDataMessage, open: bool
 }
 
 function renderEvent(e: InspectorEventView, i: number): HTMLElement {
+  if (e.kind === "interrupt") {
+    // You hit Esc / Ctrl-C. Painted as an alarm — red row, "!" badge — so a
+    // stopped turn is obvious at a glance instead of hiding as another prompt.
+    // The brackets on "[Request interrupted …]" are dropped now that the badge
+    // carries the meaning.
+    const it = el("div", "turn-interrupt");
+    it.appendChild(elText("span", "turn-interrupt__mark", "!"));
+    it.appendChild(elText("span", "turn-interrupt__text", e.text.replace(/^\[|\]$/g, "")));
+    return it;
+  }
+
   if (e.kind === "prompt") {
-    const p = el("div", "turn-prompt");
+    // Clamped like a beat. A pasted spec runs dozens of lines, and unclamped it
+    // turns the prompt header into a wall that buries the turn hanging off it —
+    // the same "can't scan it" failure the clamp on beats exists to prevent. Show
+    // ~4 lines with a chevron to open it in place; expansion is keyed by index
+    // (the event list is append-only) so it survives the poll re-render.
+    const p = el("div", expanded.has(i) ? "turn-prompt turn-prompt--open" : "turn-prompt");
+    p.dataset.i = String(i);
     p.appendChild(elText("span", "turn-prompt__caret", ">"));
     p.appendChild(elText("span", "turn-prompt__text", e.text));
+    p.appendChild(el("span", "turn-prompt__chev"));
+    p.addEventListener("click", () => {
+      const open = p.classList.toggle("turn-prompt--open");
+      if (open) expanded.add(i); else expanded.delete(i);
+    });
     return p;
   }
 
@@ -241,14 +263,21 @@ function renderStream(host: HTMLElement, data: InspectorDataMessage): void {
   data.events.forEach((ev, i) => frag.appendChild(renderEvent(ev, i)));
   host.appendChild(frag);
 
-  // Only a beat that ACTUALLY overflows gets the expand affordance. We can't
-  // know that before layout, so mark them after insertion — a short beat that
-  // showed a "there's more" chevron and then did nothing would be a small lie.
+  // Only a beat/prompt that ACTUALLY overflows gets the expand affordance. We
+  // can't know that before layout, so mark them after insertion — a short one
+  // that showed a "there's more" chevron and then did nothing would be a small
+  // lie.
   for (const b of host.querySelectorAll<HTMLElement>(".beat")) {
     const t = b.querySelector<HTMLElement>(".beat__text");
     if (!t) continue;
     b.classList.toggle("beat--clamped",
       !b.classList.contains("beat--open") && t.scrollHeight > t.clientHeight + 2);
+  }
+  for (const p of host.querySelectorAll<HTMLElement>(".turn-prompt")) {
+    const t = p.querySelector<HTMLElement>(".turn-prompt__text");
+    if (!t) continue;
+    p.classList.toggle("turn-prompt--clamped",
+      !p.classList.contains("turn-prompt--open") && t.scrollHeight > t.clientHeight + 2);
   }
 }
 
@@ -310,13 +339,16 @@ const NEAR_BOTTOM_PX = 24;
 
 let paneId: string | null = null;
 let paneName = "";
-let paneColor = 0;
 let changesOpen = false;
 /** Indices of beats the user opened. Kept outside the render so a poll tick
  *  can't slam a message shut mid-read; cleared on pane change, since indices
  *  mean nothing across transcripts. */
 const expanded = new Set<number>();
-let quiet = false;
+/** Which journal kinds are shown. Global (like the quiet toggle this replaces)
+ *  and session-only. Interrupts ride with "user" — they're your action. Applied
+ *  as CSS classes on the stream, so a toggle never re-renders or refetches. */
+const shown = { user: true, claude: true, actions: true };
+type FilterCat = keyof typeof shown;
 let pollTimer: number | null = null;
 let skeletonTimer: number | null = null;
 
@@ -328,7 +360,9 @@ let changesEl: HTMLElement;
 let streamEl: HTMLElement;
 let vitalsEl: HTMLElement;
 let jumpEl: HTMLButtonElement;
-let quietBtn: HTMLButtonElement;
+let allBtn: HTMLButtonElement;
+const filterBtns: HTMLButtonElement[] = [];
+const filterCounts: Record<string, HTMLElement> = {};
 
 const isNearBottom = (e: HTMLElement) =>
   e.scrollHeight - e.scrollTop - e.clientHeight < NEAR_BOTTOM_PX;
@@ -342,6 +376,7 @@ function apply(data: InspectorDataMessage): void {
 
   renderChanges(changesEl, data, changesOpen);
   renderStream(streamEl, data);
+  updateFilterCounts();
   renderVitals(vitalsEl, data);
 
   if (pinned) streamEl.scrollTop = streamEl.scrollHeight;
@@ -387,13 +422,13 @@ function setPane(id: string | null, name: string, color: number, live: boolean):
   if (changed) {
     expanded.clear();          // indices are per-transcript; they don't carry over
     paneName = name;
-    paneColor = color;
     nameEl.textContent = name;
     tagEl.style.background = `var(--color-pane-tag-${color % 6})`;
     tagEl.hidden = id === null;
     if (!id) {
       changesEl.replaceChildren();
       renderStream(streamEl, empty(""));
+      updateFilterCounts();
       vitalsEl.hidden = true;
     } else {
       load(id, /* swap */ true);
@@ -464,6 +499,32 @@ export function toggleInspector(): void {
   setOpen(!open, /* persist */ true);
 }
 
+// ---- Filters ---------------------------------------------------------------
+
+/** Reflect `shown` onto the stream: the hide classes drive the CSS, chip
+ *  aria-pressed drives the visuals. "All" is pressed only when every kind is on;
+ *  the stream gets an empty-filter marker when none is. Pure class toggling — no
+ *  re-render — so it stays instant even mid-poll. */
+function applyFilters(): void {
+  streamEl.classList.toggle("inspector__stream--hide-user", !shown.user);
+  streamEl.classList.toggle("inspector__stream--hide-claude", !shown.claude);
+  streamEl.classList.toggle("inspector__stream--hide-actions", !shown.actions);
+  for (const btn of filterBtns)
+    btn.setAttribute("aria-pressed", String(shown[btn.dataset.cat as FilterCat]));
+  allBtn.setAttribute("aria-pressed", String(shown.user && shown.claude && shown.actions));
+  streamEl.classList.toggle("inspector__stream--empty-filter",
+    !shown.user && !shown.claude && !shown.actions);
+}
+
+/** Chip counts are TOTALS per kind (querySelectorAll matches hidden rows too),
+ *  so they tell you what each filter would reveal, not what's showing now. */
+function updateFilterCounts(): void {
+  filterCounts.user.textContent =
+    String(streamEl.querySelectorAll(".turn-prompt, .turn-interrupt").length);
+  filterCounts.claude.textContent = String(streamEl.querySelectorAll(".beat").length);
+  filterCounts.actions.textContent = String(streamEl.querySelectorAll(".work").length);
+}
+
 // ---- Init ------------------------------------------------------------------
 
 export function initInspector(): void {
@@ -481,19 +542,30 @@ export function initInspector(): void {
   streamEl = $("inspector-stream");
   vitalsEl = $("inspector-vitals");
   jumpEl = $<HTMLButtonElement>("inspector-jump");
-  quietBtn = $<HTMLButtonElement>("inspector-quiet");
 
   $("inspector-close").addEventListener("click", () => toggleInspector());
 
-  quietBtn.addEventListener("click", () => {
-    quiet = !quiet;
-    quietBtn.setAttribute("aria-pressed", String(quiet));
-    quietBtn.title = quiet ? "Show the agent's work" : "Hide the agent's work — prose only";
-    // Hiding work is pure CSS — no re-render, no refetch. This IS the
-    // prose-only journal, as a density toggle rather than a tab.
-    streamEl.classList.toggle("inspector__stream--quiet", quiet);
+  // Journal filter chips. Each toggles its kind; "All" flips everything on, or
+  // clears it when everything's already on. Toggling scrolls back to latest so
+  // the newest visible row stays in view.
+  allBtn = $<HTMLButtonElement>("filter-all");
+  (["user", "claude", "actions"] as FilterCat[]).forEach((cat) => {
+    const btn = $<HTMLButtonElement>(`filter-${cat}`);
+    btn.addEventListener("click", () => {
+      shown[cat] = !shown[cat];
+      applyFilters();
+      streamEl.scrollTop = streamEl.scrollHeight;
+    });
+    filterBtns.push(btn);
+    filterCounts[cat] = $(`filter-count-${cat}`);
+  });
+  allBtn.addEventListener("click", () => {
+    const target = !(shown.user && shown.claude && shown.actions);
+    shown.user = shown.claude = shown.actions = target;
+    applyFilters();
     streamEl.scrollTop = streamEl.scrollHeight;
   });
+  applyFilters();
 
   streamEl.addEventListener("scroll", () => {
     jumpEl.classList.toggle("inspector__jump--on", !isNearBottom(streamEl));
