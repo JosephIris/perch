@@ -4160,6 +4160,50 @@ body.show-dashboard .dashboard { display: flex; }
   transition: background var(--dur-fast) var(--ease-entry);
 }
 .lpanel__icon:hover { background: var(--color-subtle-secondary); color: var(--color-text-secondary); }
+
+/* Header "Perch only" filter — a framed checkbox, not an on/off pill. The frame
+ * is always drawn in the accent; its center fills only when the filter is live,
+ * so the resting state reads "available" and the active state "engaged". */
+.lpanel__filter {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-8);
+  padding: var(--sp-4) var(--sp-8);
+  border: 0;
+  background: none;
+  cursor: pointer;
+  border-radius: var(--r-input);
+  color: var(--color-text-tertiary);
+  transition: background var(--dur-fast) var(--ease-entry),
+              color var(--dur-fast) var(--ease-entry);
+}
+.lpanel__filter:hover { background: var(--color-subtle-secondary); }
+.lpanel__filter:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 1px; }
+.lpanel__filter[aria-checked="true"] { color: var(--color-text-secondary); }
+.lpanel__filter-box {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  border-radius: var(--r-input);
+  border: 1.5px solid var(--color-accent);
+  display: grid;
+  place-items: center;
+}
+.lpanel__filter-box::after {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 1px;
+  background: var(--color-accent);
+  transform: scale(0);
+  transition: transform var(--dur-fast) var(--ease-entry);
+}
+.lpanel__filter[aria-checked="true"] .lpanel__filter-box::after { transform: scale(1); }
+.lpanel__filter-label {
+  font-family: var(--font-small);
+  font-size: 11px;
+  white-space: nowrap;
+}
 .lpanel__body { padding: var(--sp-8); overflow-y: auto; max-height: 60vh; }
 .lpanel__foot {
   display: flex;

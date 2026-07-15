@@ -20,6 +20,11 @@ let latest: CloudResourceView[] = [];
 /** Rows the user has asked to delete — greyed until the next poll drops them. */
 const deleting = new Set<string>();
 let tick: number | null = null;
+/** Per-row refreshers for the wall-clock text (cost + uptime), rebuilt on every
+ *  structural render. The 1s heartbeat runs these to keep cost accruing WITHOUT
+ *  replacing the list DOM — a full rebuild each second dropped :hover for a
+ *  frame, which is what made the hovered row's highlight blink. */
+let liveUpdaters: Array<() => void> = [];
 
 // ---------------------------------------------------------------- formatting
 
@@ -114,11 +119,14 @@ function renderInstance(r: CloudResourceView): HTMLElement {
   const chip = el("span", "tag" + (tag.gpu ? " tag--gpu" : ""), tag.text);
   top.appendChild(chip);
   top.appendChild(el("span", "inst__name", r.name));
-  top.appendChild(el("span", "inst__spec", specLine(r)));
+  const spec = el("span", "inst__spec", specLine(r));
+  top.appendChild(spec);
 
   const cost = el("span", "inst__cost");
+  let costNode: Text | null = null;
   if (r.priceKnown) {
-    cost.appendChild(document.createTextNode(money(costSoFar(r))));
+    costNode = document.createTextNode(money(costSoFar(r)));
+    cost.appendChild(costNode);
     cost.appendChild(el("i", undefined, ` /${rate(r.usdPerHour)}`));
   } else {
     // Unknown machine type. An honest blank beats a fabricated $0.00.
@@ -126,6 +134,13 @@ function renderInstance(r: CloudResourceView): HTMLElement {
     cost.title = `No price on file for ${r.machineType}`;
   }
   top.appendChild(cost);
+
+  // Wall-clock text refreshed in place by the 1s heartbeat: uptime (in specLine)
+  // and the accruing cost. No-op for a priced-unknown row (its cost is static).
+  liveUpdaters.push(() => {
+    spec.textContent = specLine(r);
+    if (costNode) costNode.textContent = money(costSoFar(r));
+  });
 
   const kill = el("button", "inst__kill") as HTMLButtonElement;
   kill.innerHTML = KILL_SVG;
@@ -173,7 +188,17 @@ function areaHead(title: string, count: number, spent: number, orphans: boolean)
   return head;
 }
 
+/** Register a live refresher for an area head's "$X spent" total, which accrues
+ *  in wall-clock between polls just like the per-row costs. */
+function registerSpent(head: HTMLElement, group: CloudResourceView[]): void {
+  const b = head.querySelector("b");
+  if (b) liveUpdaters.push(() => {
+    b.textContent = money(group.reduce((n, r) => n + costSoFar(r), 0));
+  });
+}
+
 function renderBody(): HTMLElement {
+  liveUpdaters = [];
   const body = el("div", "cloud__body");
 
   if (latest.length === 0) {
@@ -193,24 +218,28 @@ function renderBody(): HTMLElement {
 
   if (orphans.length) {
     const area = el("div", "area area--orphans");
-    area.appendChild(areaHead(
+    const head = areaHead(
       "No agent attached",
       orphans.length,
       orphans.reduce((n, r) => n + costSoFar(r), 0),
       true,
-    ));
+    );
+    area.appendChild(head);
+    registerSpent(head, orphans);
     orphans.forEach((r) => area.appendChild(renderInstance(r)));
     body.appendChild(area);
   }
 
   if (live.length) {
     const area = el("div", "area area--live");
-    area.appendChild(areaHead(
+    const head = areaHead(
       "Running for an agent",
       live.length,
       live.reduce((n, r) => n + costSoFar(r), 0),
       false,
-    ));
+    );
+    area.appendChild(head);
+    registerSpent(head, live);
     live.forEach((r) => area.appendChild(renderInstance(r)));
     body.appendChild(area);
   }
@@ -218,6 +247,8 @@ function renderBody(): HTMLElement {
   return body;
 }
 
+/** Structural rebuild — only on new poll data or a delete. Replaces the list
+ *  wholesale, which is fine because it happens on an EVENT, not a timer. */
 function rerender(): void {
   if (!overlay) return;
   const card = overlay.querySelector(".cloud");
@@ -232,6 +263,14 @@ function rerender(): void {
       ? `${latest.length} running · ${rate(burn)}/hr`
       : "nothing running";
   }
+}
+
+/** The 1s heartbeat: refresh only the wall-clock-derived text (cost + uptime) in
+ *  place. Keeping the existing DOM rather than replaceChild is what stops the
+ *  hovered row's highlight from blinking once a second. */
+function retick(): void {
+  if (!overlay) return;
+  for (const fn of liveUpdaters) fn();
 }
 
 // ---------------------------------------------------------------- actions
@@ -336,9 +375,10 @@ export function showCloudPanel(): void {
   };
   window.addEventListener("keydown", esc);
 
-  // Cost and uptime are derived from wall-clock, so redraw once a second while
-  // open — otherwise a machine's cost sits frozen between 60s polls.
-  tick = window.setInterval(rerender, 1000);
+  // Cost and uptime are derived from wall-clock, so refresh once a second while
+  // open — otherwise a machine's cost sits frozen between 60s polls. retick (not
+  // rerender) so the hovered row survives the tick.
+  tick = window.setInterval(retick, 1000);
 
   send({ type: "cloud.panel", open: true });
   rerender();

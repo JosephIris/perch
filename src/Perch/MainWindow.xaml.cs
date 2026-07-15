@@ -2038,6 +2038,11 @@ public partial class MainWindow : FluentWindow
             _settings.WideLayout = wide;
             dirty = true;
         }
+        if (msg.LocalPerchOnly is bool perchOnly && _settings.LocalPerchOnly != perchOnly)
+        {
+            _settings.LocalPerchOnly = perchOnly;
+            dirty = true;
+        }
         if (dirty) _settings.Save();
     }
 
@@ -3195,7 +3200,7 @@ public partial class MainWindow : FluentWindow
             var snap = StateProjection.BuildSnapshot(
                 _store, _activePaneId, _settings.FontSize, _settings.OnboardingSeen,
                 _projects, _settings.SidebarMode, _usage?.CurrentLimits(), _settings.InspectorOpen,
-                _settings.WideLayout);
+                _settings.WideLayout, _settings.LocalPerchOnly);
             Web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(snap));
         }
         catch (Exception ex) { Log.Error("PushState", ex); }

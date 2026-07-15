@@ -19,6 +19,20 @@ let latest: LocalResourceView[] = [];
 /** Pids the user asked to kill — greyed until the next scan drops them. */
 const deleting = new Set<number>();
 let tick: number | null = null;
+/** "Perch only" filter: when on, the "other" bucket (loopback listeners Perch
+ *  never launched) is dropped from counts and the list. Mirrored from the host
+ *  pref on every state push and persisted back on toggle. */
+let perchOnly = false;
+/** Per-row refreshers for the wall-clock text (uptime, "closed Xm ago"), rebuilt
+ *  on every structural render. The 1s heartbeat runs these to keep those strings
+ *  live WITHOUT replacing the list DOM — a full rebuild each second dropped
+ *  :hover for a frame, which is what made the hovered row's highlight blink. */
+let liveUpdaters: Array<() => void> = [];
+
+/** The servers that count toward the panel + sidebar card. */
+function visibleServers(): LocalResourceView[] {
+  return perchOnly ? latest.filter((s) => s.kind !== "other") : latest;
+}
 
 // ---------------------------------------------------------------- formatting
 
@@ -91,7 +105,8 @@ function renderServer(s: LocalResourceView): HTMLElement {
   top.appendChild(el("span", "ltag", s.framework));
   top.appendChild(el("span", "lsrv__port", `:${s.port}`));
   top.appendChild(el("span", "lsrv__cmd", s.command));
-  top.appendChild(el("span", "lsrv__spec", `pid ${s.pid} · ${uptime(s.startedMs)}`));
+  const spec = el("span", "lsrv__spec", `pid ${s.pid} · ${uptime(s.startedMs)}`);
+  top.appendChild(spec);
 
   const open = el("button", "lsrv__act lsrv__open") as HTMLButtonElement;
   open.innerHTML = OPEN_SVG;
@@ -115,9 +130,17 @@ function renderServer(s: LocalResourceView): HTMLElement {
   const wdot = el("span", "lsrv__wdot");
   wdot.dataset.state = dot;
   why.appendChild(wdot);
-  why.appendChild(el("span", "lsrv__where", where));
+  const whereEl = el("span", "lsrv__where", where);
+  why.appendChild(whereEl);
   if (state) why.appendChild(el("span", "lsrv__state", state));
   card.appendChild(why);
+
+  // Wall-clock text refreshed in place by the 1s heartbeat (see liveUpdaters):
+  // uptime for every row, plus a lingering row's "closed Xm ago".
+  liveUpdaters.push(() => {
+    spec.textContent = `pid ${s.pid} · ${uptime(s.startedMs)}`;
+    if (s.kind === "lingering") whereEl.textContent = whereFor(s).where;
+  });
   return card;
 }
 
@@ -145,31 +168,45 @@ function areaHead(
 }
 
 function renderBody(): HTMLElement {
+  liveUpdaters = [];
   const body = el("div", "lpanel__body");
 
-  if (latest.length === 0) {
+  const vis = visibleServers();
+  if (vis.length === 0) {
+    // Tell the two empties apart: genuinely nothing listening, vs. everything
+    // filtered out because it started outside Perch (with the way back).
+    const otherHidden = perchOnly && latest.some((s) => s.kind === "other");
     const empty = el("div", "lpanel__empty");
-    empty.appendChild(el("div", "lpanel__empty-title", "Nothing listening"));
-    empty.appendChild(el(
-      "div",
-      "lpanel__empty-note",
-      "Dev servers you start in a pane show up here — with a link to open them and a button to kill any that outlive their tab.",
+    empty.appendChild(el("div", "lpanel__empty-title",
+      otherHidden ? "Nothing you started here" : "Nothing listening"));
+    empty.appendChild(el("div", "lpanel__empty-note", otherHidden
+      ? `${latest.length} server${latest.length === 1 ? "" : "s"} listening, but started outside Perch. ` +
+        `Turn off “Perch only” to see ${latest.length === 1 ? "it" : "them"}.`
+      : "Dev servers you start in a pane show up here — with a link to open them and a button to kill any that outlive their tab.",
     ));
     body.appendChild(empty);
     return body;
   }
 
-  const linger = latest.filter((s) => s.kind === "lingering");
-  const live = latest.filter((s) => s.kind === "live");
-  const other = latest.filter((s) => s.kind === "other");
+  const linger = vis.filter((s) => s.kind === "lingering");
+  const live = vis.filter((s) => s.kind === "live");
+  const other = vis.filter((s) => s.kind === "other");
 
   if (linger.length) {
     const area = el("div", "larea larea--linger");
-    area.appendChild(areaHead("Still listening, no pane", linger.length, {
+    const head = areaHead("Still listening, no pane", linger.length, {
       linger: true,
       meta: `held since ${ago(Math.max(...linger.map((s) => s.closedMs ?? 0)))}`,
       onKillAll: () => void confirmKillLingering(linger.length),
-    }));
+    });
+    area.appendChild(head);
+    // The "held since" clock ticks in place with the rows below it.
+    const meta = head.querySelector<HTMLElement>(".larea__meta");
+    if (meta) liveUpdaters.push(() => {
+      meta.textContent =
+        `${linger.length} server${linger.length === 1 ? "" : "s"} · ` +
+        `held since ${ago(Math.max(...linger.map((s) => s.closedMs ?? 0)))}`;
+    });
     linger.forEach((s) => area.appendChild(renderServer(s)));
     body.appendChild(area);
   }
@@ -191,20 +228,36 @@ function renderBody(): HTMLElement {
   return body;
 }
 
+/** The header sub-line count. Reads the filtered set so it agrees with the list
+ *  and the sidebar card. */
+function updateSub(): void {
+  const sub = overlay?.querySelector(".lpanel__sub");
+  if (!sub) return;
+  const vis = visibleServers();
+  const linger = vis.filter((s) => s.kind === "lingering").length;
+  sub.textContent = vis.length
+    ? `${vis.length} listening${linger ? ` · ${linger} lingering` : ""}`
+    : "nothing listening";
+}
+
+/** Structural rebuild — only on new data, a kill, or a filter flip. Replaces the
+ *  list wholesale, which is fine because it happens on an EVENT, not a timer. */
 function rerender(): void {
   if (!overlay) return;
   const card = overlay.querySelector(".lpanel");
   const old = overlay.querySelector(".lpanel__body");
   if (!card || !old) return;
   card.replaceChild(renderBody(), old);
+  updateSub();
+}
 
-  const sub = overlay.querySelector(".lpanel__sub");
-  if (sub) {
-    const linger = latest.filter((s) => s.kind === "lingering").length;
-    sub.textContent = latest.length
-      ? `${latest.length} listening${linger ? ` · ${linger} lingering` : ""}`
-      : "nothing listening";
-  }
+/** The 1s heartbeat: refresh only the wall-clock-derived text in place. Keeping
+ *  the existing DOM (rather than replaceChild) is what stops the hovered row's
+ *  highlight from blinking once a second. */
+function retick(): void {
+  if (!overlay) return;
+  updateSub();
+  for (const fn of liveUpdaters) fn();
 }
 
 // ---------------------------------------------------------------- actions
@@ -241,6 +294,49 @@ async function confirmKillLingering(count: number): Promise<void> {
   send({ type: "local.killLingering" });
 }
 
+// ---------------------------------------------------------------- perch-only filter
+
+/** The header's framed-checkbox filter. Accent frame always; its center fills
+ *  only when "Perch only" is live — a hollow box that solidifies, not an on/off
+ *  pill, so it reads as "narrow to mine" rather than a mode switch. */
+function makeFilterToggle(): HTMLElement {
+  const btn = el("button", "lpanel__filter") as HTMLButtonElement;
+  btn.type = "button";
+  btn.setAttribute("role", "switch");
+  btn.setAttribute("aria-checked", String(perchOnly));
+  btn.title = "Count only servers Perch started (hide ones started elsewhere)";
+  const box = el("span", "lpanel__filter-box");
+  box.setAttribute("aria-hidden", "true");
+  btn.appendChild(box);
+  btn.appendChild(el("span", "lpanel__filter-label", "Perch only"));
+  btn.addEventListener("click", () => togglePerchOnly());
+  return btn;
+}
+
+function syncFilterToggle(): void {
+  overlay?.querySelector(".lpanel__filter")?.setAttribute("aria-checked", String(perchOnly));
+}
+
+/** User flipped the filter: repaint the panel + sidebar, and persist so it
+ *  survives the panel closing and the app restarting. */
+function togglePerchOnly(): void {
+  perchOnly = !perchOnly;
+  syncFilterToggle();
+  rerender();
+  updateSidebar();
+  send({ type: "prefs.set", localPerchOnly: perchOnly });
+}
+
+/** Reflect the host's persisted pref (arrives on every state push). No persist
+ *  and no work when it already matches — otherwise every push would repaint. */
+function applyPerchOnlyPref(next: boolean): void {
+  if (next === perchOnly) return;
+  perchOnly = next;
+  syncFilterToggle();
+  rerender();
+  updateSidebar();
+}
+
 // ---------------------------------------------------------------- lifecycle
 
 export function applyLocalData(msg: LocalDataMessage): void {
@@ -273,6 +369,7 @@ export function showLocalPanel(): void {
   head.appendChild(el("span", "lpanel__title", "Local"));
   head.appendChild(el("span", "lpanel__sub", "…"));
   head.appendChild(el("span", "lpanel__spacer"));
+  head.appendChild(makeFilterToggle());
 
   const refresh = el("button", "lpanel__icon") as HTMLButtonElement;
   refresh.setAttribute("aria-label", "Rescan");
@@ -305,9 +402,9 @@ export function showLocalPanel(): void {
   };
   window.addEventListener("keydown", esc);
 
-  // Uptime + "closed Xm ago" are wall-clock derived, so redraw once a second
-  // while open rather than freezing between scans.
-  tick = window.setInterval(rerender, 1000);
+  // Uptime + "closed Xm ago" are wall-clock derived, so refresh once a second
+  // while open. retick (not rerender) so the hovered row survives the tick.
+  tick = window.setInterval(retick, 1000);
 
   send({ type: "local.panel", open: true });
   rerender();
@@ -324,33 +421,44 @@ function updateSidebar(): void {
   const card = document.getElementById("local-card");
   if (!area || !card) return;
 
+  // Presence tracks the RAW set, not the filter: even when "Perch only" hides
+  // everything, the card must stay so the panel — and the toggle inside it —
+  // remain reachable.
   if (latest.length === 0) {
     area.hidden = true;
     return;
   }
   area.hidden = false;
 
-  const linger = latest.filter((s) => s.kind === "lingering");
-  const live = latest.filter((s) => s.kind === "live");
+  const vis = visibleServers();
+  const linger = vis.filter((s) => s.kind === "lingering");
+  const live = vis.filter((s) => s.kind === "live");
+  // Filter on, but nothing of ours is up (only "other" servers listening).
+  const noneOfOurs = perchOnly && vis.length === 0;
 
   const title = document.getElementById("local-card-title");
   const portEl = document.getElementById("local-card-port");
   const sub = document.getElementById("local-card-sub");
-  if (title) title.textContent = `${latest.length} server${latest.length === 1 ? "" : "s"}`;
+  if (title) title.textContent = noneOfOurs
+    ? "No Perch servers"
+    : `${vis.length} server${vis.length === 1 ? "" : "s"}`;
 
-  // Trailing port: the newest live server's, else the newest of anything.
+  // Trailing port: the newest live server's, else the newest of anything shown.
   if (portEl) {
-    const pick = (live.length ? live : latest)
+    const pick = (live.length ? live : vis)
       .slice()
       .sort((a, b) => b.startedMs - a.startedMs)[0];
     portEl.textContent = pick ? `:${pick.port}` : "";
   }
 
   if (sub) {
-    // Distinct frameworks, plus a lingering count if any.
-    const fw = [...new Set(latest.map((s) => s.framework))].slice(0, 3);
-    const bits = fw.length ? [fw.join(" · ")] : ["listening"];
-    sub.textContent = bits.join(" · ");
+    if (noneOfOurs) {
+      sub.textContent = `${latest.length} started outside Perch`;
+    } else {
+      // Distinct frameworks of the shown set.
+      const fw = [...new Set(vis.map((s) => s.framework))].slice(0, 3);
+      sub.textContent = fw.length ? fw.join(" · ") : "listening";
+    }
   }
 
   card.classList.toggle("local-card--linger", linger.length > 0);
@@ -366,13 +474,19 @@ function updateSidebar(): void {
 
   card.title = linger.length
     ? `${linger.length} server${linger.length === 1 ? "" : "s"} still listening with no pane`
-    : `${latest.length} local server${latest.length === 1 ? "" : "s"} listening`;
+    : noneOfOurs
+      ? `${latest.length} local server${latest.length === 1 ? "" : "s"} listening, none started by Perch`
+      : `${vis.length} local server${vis.length === 1 ? "" : "s"} listening`;
 }
 
 export function initLocal(): void {
   document.getElementById("local-card")?.addEventListener("click", () => showLocalPanel());
   onMessage((msg) => {
     if (msg.type === "local.data") applyLocalData(msg);
+    // The "Perch only" filter rides in prefs on every state push, like the
+    // Inspector's open state — mirror it so a toggle in one window (or a restart)
+    // is reflected here.
+    else if (msg.type === "state") applyPerchOnlyPref(msg.prefs?.localPerchOnly ?? false);
   });
   // Uptime + "closed Xm ago" on the sidebar would otherwise sit frozen between
   // scans. Cheap, and only while servers actually exist.
