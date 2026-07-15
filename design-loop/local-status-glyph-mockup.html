@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Perch · Local — soft frame → solid amber</title>
+
+<style>
+@font-face { font-family:"Inter Variable"; src:url("./InterVariable.woff2") format("woff2-variations"); font-weight:100 900; font-style:normal; font-display:block; }
+@font-face { font-family:"Geist Mono Variable"; src:url("./GeistMonoVariable.woff2") format("woff2-variations"); font-weight:100 900; font-style:normal; font-display:block; }
+
+:root {
+  --sp-4:4px; --sp-8:8px; --sp-12:12px; --sp-16:16px; --sp-24:24px; --sp-32:32px; --sp-48:48px;
+  --r-input:4px; --r-pill:6px; --r-card:8px;
+  --font-text:"Inter Variable","Segoe UI Variable Text","Segoe UI",sans-serif;
+  --font-small:"Inter Variable","Segoe UI Variable Small","Segoe UI",sans-serif;
+  --font-mono:"Geist Mono Variable","Cascadia Code",Consolas,monospace;
+  --color-sidebar-surface:#181818;
+  --color-layer:rgba(255,255,255,0.04); --color-stroke:rgba(255,255,255,0.08);
+  --color-text-primary:rgba(255,255,255,0.92); --color-text-secondary:rgba(255,255,255,0.72);
+  --color-text-tertiary:rgba(255,255,255,0.5); --color-text-disabled:rgba(255,255,255,0.34);
+  --color-caution:#FCE100;
+
+  /* ONE amber — the app's #E8A04C. No second colour anywhere.
+     0 servers : soft amber FRAME only (no fill).
+     >=1 server: the amber FILL only, border removed so there's no darker rim —
+                 the frame IS the fill, one uniform colour edge to edge. */
+  --amber-frame:rgba(232,160,76,0.38);   /* the "no servers" outline */
+  --amber-fill:rgba(232,160,76,0.42);    /* the live fill; border goes transparent */
+  --amber-port:#E8A04C;
+  --ease-entry:cubic-bezier(0,0,0,1); --dur-fast:150ms;
+}
+* { box-sizing:border-box; }
+html,body { margin:0; }
+body { background:#0e0e10; color:var(--color-text-primary); font-family:var(--font-text);
+  font-size:14px; line-height:1.4; -webkit-font-smoothing:antialiased; padding:var(--sp-32) var(--sp-24) var(--sp-48); }
+button { font:inherit; color:inherit; background:none; border:0; padding:0; margin:0; cursor:pointer; }
+
+.wrap { max-width:820px; margin:0 auto; }
+.page-title { font-size:20px; font-weight:600; margin:0 0 var(--sp-4); letter-spacing:-0.01em; }
+.page-lede { font-size:13px; color:var(--color-text-secondary); margin:0 0 var(--sp-24); max-width:64ch; }
+.page-lede b { color:var(--amber-port); font-weight:600; }
+
+.demobar { display:flex; align-items:center; gap:var(--sp-12); margin:0 0 var(--sp-32);
+  padding:var(--sp-8) var(--sp-12); background:var(--color-layer); border-radius:var(--r-card);
+  border:1px solid var(--color-stroke); width:fit-content; }
+.demobar span { font-family:var(--font-small); font-size:11px; color:var(--color-text-tertiary); }
+.demobtn { padding:var(--sp-4) var(--sp-12); border-radius:var(--r-input); border:1px solid var(--color-stroke);
+  font-family:var(--font-small); font-size:12px; color:var(--color-text-secondary); }
+.demobtn:hover { border-color:var(--amber-med); color:var(--amber-port); }
+
+h2.sec { font-size:12px; font-weight:600; letter-spacing:.04em; text-transform:uppercase;
+  color:var(--color-text-tertiary); margin:0 0 var(--sp-12); }
+
+/* the card — frame + fill are the SAME amber value at all times.
+   none  : soft frame, no fill.
+   live  : medium frame + medium fill (equal) → one solid amber surface. */
+.lcard { width:100%; text-align:left; display:block; border-radius:var(--r-card);
+  padding:var(--sp-8) var(--sp-12);
+  border:1px solid var(--amber-frame); background:transparent;
+  transition:background var(--dur-fast) var(--ease-entry), border-color var(--dur-fast) var(--ease-entry); }
+/* live: border removed (transparent) so the fill is the ONLY amber — no rim,
+   frame and fill are literally one colour. */
+.lcard.live { border-color:transparent; background:var(--amber-fill); }
+.lcard__head { display:flex; align-items:center; gap:var(--sp-8); }
+.lcard__title { font-size:13px; font-weight:600; }
+.lcard__port { font-family:var(--font-mono); font-size:12px; font-weight:600; color:var(--amber-port);
+  margin-left:auto; font-variant-numeric:tabular-nums; }
+.lcard.live .lcard__port { color:var(--color-text-primary); }
+.lcard__port.muted { color:var(--color-text-disabled); }
+.lcard__sub { font-family:var(--font-small); font-size:11px; color:var(--color-text-tertiary); margin-top:2px; }
+.lcard.live .lcard__sub { color:var(--color-text-secondary); }
+
+.cols { display:flex; gap:var(--sp-32); flex-wrap:wrap; align-items:flex-start; }
+.col { display:flex; flex-direction:column; gap:var(--sp-8); }
+.sidebar { background:var(--color-sidebar-surface); border-radius:var(--r-card);
+  padding:var(--sp-12) var(--sp-8); display:flex; flex-direction:column; gap:var(--sp-8); width:264px; }
+.arealabel { font-family:var(--font-small); font-size:11px; font-weight:600; letter-spacing:.04em;
+  text-transform:uppercase; color:var(--color-text-tertiary); padding:0 var(--sp-4); }
+.cap { font-family:var(--font-small); font-size:11px; color:var(--color-text-tertiary); padding:0 var(--sp-4); }
+.cap b { color:var(--color-text-secondary); font-weight:600; }
+
+.note { margin-top:var(--sp-32); padding:var(--sp-16); background:var(--color-layer);
+  border:1px solid var(--color-stroke); border-radius:var(--r-card); }
+.note h3 { font-size:12px; font-weight:600; letter-spacing:.04em; text-transform:uppercase;
+  color:var(--color-text-tertiary); margin:0 0 var(--sp-8); }
+.note p { font-size:13px; color:var(--color-text-secondary); margin:var(--sp-4) 0; }
+.note b { color:var(--color-text-primary); font-weight:600; }
+@media (prefers-reduced-motion: reduce) { .lcard { transition:none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="page-title">Local · soft frame → solid amber</div>
+  <p class="page-lede">
+    One amber (the app's <b>#E8A04C</b>), same hue for frame and fill, always. <b>No Perch servers</b> → a soft amber
+    frame, empty inside. <b>A Perch server is live</b> → the frame steps up and the inside fills with the <b>same</b> amber,
+    so the whole card reads as one solid colour.
+  </p>
+
+  <div class="demobar">
+    <span>Try it —</span>
+    <button class="demobtn" id="flip" type="button">A Perch server goes live ▸</button>
+  </div>
+
+  <h2 class="sec">The two states</h2>
+  <div class="cols">
+    <div class="col">
+      <div class="sidebar">
+        <div class="arealabel">Local</div>
+        <button class="lcard" type="button">
+          <span class="lcard__head"><span class="lcard__title">No Perch servers</span><span class="lcard__port muted">—</span></span>
+          <span class="lcard__sub">2 started outside Perch</span>
+        </button>
+      </div>
+      <div class="cap"><b>0 servers</b> · soft frame, no fill</div>
+    </div>
+
+    <div class="col">
+      <div class="sidebar">
+        <div class="arealabel">Local</div>
+        <button class="lcard live" type="button">
+          <span class="lcard__head"><span class="lcard__title">2 servers</span><span class="lcard__port">:5173</span></span>
+          <span class="lcard__sub">Vite · Next</span>
+        </button>
+      </div>
+      <div class="cap"><b>≥1 server</b> · one amber fill, no rim</div>
+    </div>
+
+    <div class="col">
+      <div class="sidebar">
+        <div class="arealabel">Local</div>
+        <button class="lcard" id="demo" type="button">
+          <span class="lcard__head"><span class="lcard__title" data-title>No Perch servers</span><span class="lcard__port muted" data-port>—</span></span>
+          <span class="lcard__sub" data-sub>2 started outside Perch</span>
+        </button>
+      </div>
+      <div class="cap">live toggle — hit the button above</div>
+    </div>
+  </div>
+
+  <div class="note">
+    <h3>This the one?</h3>
+    <p>No servers → a soft amber <b>frame only</b>. A live server → the amber <b>fill only</b>, border removed so there's no darker rim — one uniform amber, edge to edge. Same hue throughout. If the fill wants to be a touch stronger or softer, I'll nudge the alpha.</p>
+    <p><b>Lingering</b> (a server that outlived its pane): leave it in this same amber, or let it carry the yellow caution accent it has today?</p>
+  </div>
+
+</div>
+
+<script>
+  const flip = document.getElementById("flip");
+  const demo = document.getElementById("demo");
+  let live = false;
+  flip.addEventListener("click", () => {
+    live = !live;
+    demo.classList.toggle("live", live);
+    demo.querySelector("[data-title]").textContent = live ? "2 servers" : "No Perch servers";
+    const port = demo.querySelector("[data-port]");
+    port.textContent = live ? ":5173" : "—"; port.classList.toggle("muted", !live);
+    demo.querySelector("[data-sub]").textContent = live ? "Vite · Next" : "2 started outside Perch";
+    flip.textContent = live ? "The last Perch server exits ▸" : "A Perch server goes live ▸";
+  });
+</script>
+</body>
+</html>
