@@ -143,6 +143,13 @@ export class Sidebar {
    *  you actually clicked. */
   private justToggled: string | null = null;
 
+  /** In-flight sidebar drag (a project header or a tab row), or null. */
+  private drag: { kind: "project" | "tab"; id: string; el: HTMLElement } | null = null;
+
+  /** Last mode rendered — a Sessions ⇄ Projects flip plays a soft cross-fade of
+   *  the list (null until the first render, so launch doesn't animate). */
+  private lastMode: SidebarMode | null = null;
+
   constructor(listEl: HTMLElement, newSessionBtn: HTMLElement, closedEl: HTMLElement) {
     this.listEl = listEl;
     this.newSessionBtn = newSessionBtn;
@@ -151,6 +158,14 @@ export class Sidebar {
     this.newSessionBtn.addEventListener("click", () => {
       send({ type: "session.new" });
     });
+
+    // Drag-reorder for projects + tabs. Delegated on the (stable) list container
+    // so it survives the full re-render on every state push; rows just set
+    // `draggable` and their id/projectId data attributes.
+    this.listEl.addEventListener("dragstart", (ev) => this.onDragStart(ev));
+    this.listEl.addEventListener("dragover", (ev) => this.onDragOver(ev));
+    this.listEl.addEventListener("drop", (ev) => this.onDrop(ev));
+    this.listEl.addEventListener("dragend", () => this.onDragEnd());
 
     try {
       const raw = localStorage.getItem(COLLAPSED_KEY);
@@ -168,6 +183,81 @@ export class Sidebar {
     }
   }
 
+  // ---- Drag-reorder ---------------------------------------------------------
+
+  private onDragStart(ev: DragEvent) {
+    const t = ev.target as HTMLElement;
+    const tab = t.closest<HTMLElement>(".session-item--nested");
+    const proj = t.closest<HTMLElement>(".project-header");
+    const el = tab ?? proj;
+    if (!el) return;
+    const kind: "project" | "tab" = tab ? "tab" : "project";
+    const id = tab ? tab.dataset.sessionId : proj!.dataset.projectId;
+    if (!id) return;
+    this.drag = { kind, id, el };
+    el.classList.add("sidebar-dragging");
+    if (ev.dataTransfer) {
+      ev.dataTransfer.effectAllowed = "move";
+      ev.dataTransfer.setData("text/plain", id);
+    }
+  }
+
+  private onDragOver(ev: DragEvent) {
+    const target = this.dropTarget(ev.target as HTMLElement);
+    if (!target) { this.clearDropMarks(); return; }
+    ev.preventDefault();
+    if (ev.dataTransfer) ev.dataTransfer.dropEffect = "move";
+    this.mark(target, this.edgeOf(target, ev));
+  }
+
+  private onDrop(ev: DragEvent) {
+    const d = this.drag;
+    const target = this.dropTarget(ev.target as HTMLElement);
+    this.clearDropMarks();
+    if (!d || !target) return;
+    ev.preventDefault();
+    const targetId = d.kind === "project" ? target.dataset.projectId : target.dataset.sessionId;
+    if (!targetId) return;
+    send({ type: "sidebar.reorder", kind: d.kind, movedId: d.id, targetId, edge: this.edgeOf(target, ev) });
+  }
+
+  private onDragEnd() {
+    this.drag?.el.classList.remove("sidebar-dragging");
+    this.drag = null;
+    this.clearDropMarks();
+  }
+
+  /** The row under the pointer that's a valid drop for the current drag: same
+   *  kind, not itself, and (for tabs) a sibling in the SAME project — a reorder
+   *  must never re-file a tab into another project. */
+  private dropTarget(from: HTMLElement): HTMLElement | null {
+    const d = this.drag;
+    if (!d) return null;
+    const target = from.closest<HTMLElement>(
+      d.kind === "project" ? ".project-header" : ".session-item--nested");
+    if (!target || target === d.el) return null;
+    if (d.kind === "tab") {
+      const a = d.el.dataset.projectId ?? "";
+      if (a === "" || a !== (target.dataset.projectId ?? "")) return null;
+    }
+    return target;
+  }
+
+  private edgeOf(el: HTMLElement, ev: DragEvent): "before" | "after" {
+    const r = el.getBoundingClientRect();
+    return ev.clientY - r.top < r.height / 2 ? "before" : "after";
+  }
+
+  private mark(el: HTMLElement, edge: "before" | "after") {
+    this.clearDropMarks();
+    el.classList.add(edge === "before" ? "drop-before" : "drop-after");
+  }
+
+  private clearDropMarks() {
+    for (const e of this.listEl.querySelectorAll(".drop-before, .drop-after"))
+      e.classList.remove("drop-before", "drop-after");
+  }
+
   render(
     sessions: SessionView[],
     activeId: string,
@@ -176,8 +266,11 @@ export class Sidebar {
     mode: SidebarMode = "sessions"
   ) {
     this.renderClosed(closed);
+    const modeChanged = this.lastMode !== null && mode !== this.lastMode;
+    this.lastMode = mode;
     if (mode === "projects") {
       this.listEl.replaceChildren(this.renderProjects(sessions, activeId, projects));
+      this.playModeSwap(modeChanged);
       return;
     }
     // Partition by derived state. permission (+ the reserved "waiting") want
@@ -223,6 +316,17 @@ export class Sidebar {
     }
 
     this.listEl.replaceChildren(frag);
+    this.playModeSwap(modeChanged);
+  }
+
+  /** Soft cross-fade when the Sessions ⇄ Projects mode flips. Restarts the
+   *  keyframe by removing + reflowing before re-adding. */
+  private playModeSwap(changed: boolean) {
+    if (!changed) return;
+    const el = this.listEl;
+    el.classList.remove("sidebar__scroll--swap");
+    void el.offsetWidth;
+    el.classList.add("sidebar__scroll--swap");
   }
 
   // "Recently closed" list, pinned above the identity footer. Each row
@@ -404,7 +508,11 @@ export class Sidebar {
       const needsNote =
         s.agentState === "waiting" || s.agentState === "permission";
       const item = this.renderItem(s, s.id === activeId, needsNote, nested);
-      if (nested) item.classList.add("session-item--nested");
+      if (nested) {
+        item.classList.add("session-item--nested");
+        item.draggable = true;                          // drag-reorder within its project
+        item.dataset.projectId = s.projectId ?? "";     // constrains drops to same-project siblings
+      }
       list.appendChild(item);
     }
     return list;
@@ -421,6 +529,7 @@ export class Sidebar {
     const row = document.createElement("div");
     row.className = "project-header";
     row.dataset.projectId = p.id;
+    row.draggable = true;   // drag-reorder handle for the whole group
 
     // The header body is the collapse toggle. A button (not the whole row) so
     // the "+" stays independently clickable and keyboard-reachable.

@@ -52,6 +52,11 @@ export type OutMessage =
    * (Ctrl+Shift+arrows). left/right reorder a side-by-side split, up/down a
    * stacked one; perpendicular / edge is a no-op host-side. */
   | { type: "pane.moveDir"; paneId: string; dir: "left" | "right" | "up" | "down" }
+  /* Sidebar drag-reorder: place movedId before/after targetId. kind "project"
+   * reorders the project groups; kind "tab" reorders a session within its
+   * project (targetId must be a sibling tab in the same project). Host reorders
+   * the backing array and persists. */
+  | { type: "sidebar.reorder"; kind: "project" | "tab"; movedId: string; targetId: string; edge: "before" | "after" }
   /* `projectId` files the new tab under a project and opens it in that repo.
    * Omitted (the plain "New session" button) → unfiled, default cwd. */
   | { type: "session.new"; shell?: string; projectId?: string }

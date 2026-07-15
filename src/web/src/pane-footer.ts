@@ -100,7 +100,9 @@ export function applyPaneFooter(f: PaneFooter, leaf: Leaf, active: boolean): voi
   if (active && leaf.ahead > 0) {
     // Clickable: opens the unpushed-commit recap anchored to the chip.
     const a = chip("chip chip--ahead", `↑${leaf.ahead}`);
-    a.title = "Commits ready to push — click for recap";
+    // No native `title` — its OS tooltip collided with our custom hover popover
+    // (which already carries the "↑N ready to push" header). The popover opens on
+    // hover/click; a second Windows tooltip on top of it was just noise.
     a.addEventListener("click", (ev) => {
       ev.stopPropagation();
       openCommitsPopover(a, leaf.paneId);

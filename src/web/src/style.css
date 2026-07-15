@@ -1852,6 +1852,16 @@ ul { list-style: none; padding: 0; margin: 0; }
   margin-top: var(--sp-8);
   padding-right: var(--sp-4);
 }
+
+/* Drag-reorder (projects + tabs). The dragged row dims; the drop target shows a
+ * 2px accent line on the edge the item will land on. Inset box-shadow follows
+ * the row's radius and needs no extra element in the flow. */
+.project-header.sidebar-dragging,
+.session-item--nested.sidebar-dragging { opacity: 0.4; }
+.project-header.drop-before,
+.session-item--nested.drop-before { box-shadow: inset 0 2px 0 var(--color-accent); }
+.project-header.drop-after,
+.session-item--nested.drop-after { box-shadow: inset 0 -2px 0 var(--color-accent); }
 .project-header__toggle {
   flex: 1;
   min-width: 0;
@@ -2305,8 +2315,8 @@ ul { list-style: none; padding: 0; margin: 0; }
   animation: settings-page-in var(--dur-normal) var(--ease-entry);
 }
 @keyframes settings-page-in {
-  from { opacity: 0; transform: translateY(6px); }
-  to   { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; transform: translateY(6px) scale(0.992); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
 }
 .settings-page--closing {
   animation: settings-fade-out var(--dur-fast) var(--ease-exit);
@@ -3256,9 +3266,36 @@ ul { list-style: none; padding: 0; margin: 0; }
   from { transform: scale(0.6); opacity: 0; }
   to   { transform: scale(1); opacity: 1; }
 }
+/* Soft cross-fade when the sidebar flips Sessions ⇄ Projects (played by
+ * Sidebar.playModeSwap on a mode change only, never on a routine state push). */
+.sidebar__scroll--swap { animation: sidebar-swap-in var(--dur-normal) var(--ease-entry); }
+@keyframes sidebar-swap-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Inspector journal — rows appended since the last poll fade+rise in, so live
+ * work arrives softly instead of popping. Only NEW rows carry .row-enter (set in
+ * renderStream), so the list doesn't re-cascade every tick. */
+.beat.row-enter,
+.work.row-enter,
+.skill.row-enter,
+.turn-prompt.row-enter,
+.turn-interrupt.row-enter { animation: inspector-row-in var(--dur-normal) var(--ease-entry); }
+@keyframes inspector-row-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .restore-spinner { animation: none; }
   .restore-check { animation: none; }
+  .sidebar__scroll--swap,
+  .beat.row-enter,
+  .work.row-enter,
+  .skill.row-enter,
+  .turn-prompt.row-enter,
+  .turn-interrupt.row-enter { animation: none; }
 }
 
 .restore-card__foot {

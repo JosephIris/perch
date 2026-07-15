@@ -87,6 +87,17 @@ internal sealed record PaneMoveDirMsg
     public required string Dir { get; init; }
 }
 
+/// Sidebar drag-reorder: place MovedId immediately before/after TargetId.
+/// Kind "project" reorders project groups; "tab" reorders a session within its
+/// project. Ids are Guid strings (parsed leniently against the store).
+internal sealed record SidebarReorderMsg
+{
+    public required string Kind { get; init; }      // "project" | "tab"
+    public required string MovedId { get; init; }
+    public required string TargetId { get; init; }
+    public required string Edge { get; init; }      // "before" | "after"
+}
+
 internal sealed record PaneRenameMsg
 {
     public required Guid PaneId { get; init; }

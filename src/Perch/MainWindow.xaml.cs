@@ -519,6 +519,7 @@ public partial class MainWindow : FluentWindow
         .Add<ResizeSplitMsg>("pane.resizeSplit", OnPaneResizeSplit)
         .Add<PaneMoveMsg>("pane.move", OnPaneMove)
         .Add<PaneMoveDirMsg>("pane.moveDir", OnPaneMoveDir)
+        .Add<SidebarReorderMsg>("sidebar.reorder", OnSidebarReorder)
         .Add<PaneRenameMsg>("pane.rename", OnPaneRename)
         .Add<PaneRecolorMsg>("pane.recolor", OnPaneRecolor)
         .Add<PaneCwdMsg>("pane.cwd", OnPaneCwd)
@@ -2023,9 +2024,18 @@ public partial class MainWindow : FluentWindow
         }
         try
         {
-            var commits = string.IsNullOrEmpty(cwd)
-                ? null
-                : await GitProc.UnpushedCommitsAsync(cwd, baseline);
+            // Fetch the list AND the accurate ahead count together. The list is
+            // display-capped (max 50); the count is the true rev-list total, so a
+            // >50-unpushed branch still shows an honest "↑N".
+            var commitsT = string.IsNullOrEmpty(cwd)
+                ? System.Threading.Tasks.Task.FromResult<IReadOnlyList<GitCommit>?>(null)
+                : GitProc.UnpushedCommitsAsync(cwd, baseline);
+            var aheadT = string.IsNullOrEmpty(cwd)
+                ? System.Threading.Tasks.Task.FromResult<int?>(0)
+                : GitProc.AheadAsync(cwd);
+            await System.Threading.Tasks.Task.WhenAll(commitsT, aheadT);
+            var commits = await commitsT;
+            var freshAhead = await aheadT;
             var list = (commits ?? new List<GitCommit>()).Select(cm => new
             {
                 sha = cm.ShortSha,
@@ -2037,14 +2047,26 @@ public partial class MainWindow : FluentWindow
                 inSession = cm.InSession,
                 files = cm.Files.Select(f => new { path = f.Path, added = f.Added, deleted = f.Deleted }).ToArray(),
             }).ToArray();
+            var ahead = freshAhead ?? list.Length;
             var payload = new
             {
                 type = "commits.data",
                 paneId = id.ToString("D"),
-                ahead = list.Length,
+                ahead,
                 commits = list,
             };
             Web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(payload));
+
+            // The footer chip renders the cached pane.Ahead, which goes stale when
+            // the agent pushes without a status change to trigger a git refresh —
+            // so the chip could read "↑6" while this live hover reads "↑2". This
+            // fetch is the moment to reconcile them: correct pane.Ahead and push,
+            // so the chip snaps to the hover's (accurate) count.
+            if (freshAhead is int a)
+                await Dispatcher.InvokeAsync(() =>
+                {
+                    if (pane != null && pane.Ahead != a) { pane.Ahead = a; PushState(); }
+                });
         }
         catch (Exception ex) { Log.Error("OnCommitsRequest", ex); }
     }
@@ -3049,6 +3071,45 @@ public partial class MainWindow : FluentWindow
         _activePaneId = msg.PaneId;
         _store.Save();
         PushState();
+    }
+
+    // Sidebar drag-reorder — projects among projects, or a tab among its
+    // project's siblings. Order is purely array position (no order field), so we
+    // splice the backing collection and persist; the page re-renders from the
+    // pushed state. Ids compared as Guids so the wire format can't bite us.
+    private void OnSidebarReorder(SidebarReorderMsg msg)
+    {
+        if (!Guid.TryParse(msg.MovedId, out var moved) ||
+            !Guid.TryParse(msg.TargetId, out var target) || moved == target) return;
+        var after = string.Equals(msg.Edge, "after", StringComparison.Ordinal);
+        var changed = msg.Kind switch
+        {
+            "project" => ReorderProjects(moved, target, after),
+            "tab"     => ReorderTabs(moved, target, after),
+            _         => false,
+        };
+        if (changed) PushState();
+    }
+
+    private bool ReorderProjects(Guid moved, Guid target, bool after)
+    {
+        var list = _projects?.Projects;
+        if (list == null || !SidebarReorder.Move(list, p => p.Id, moved, target, after)) return false;
+        _projects!.Save();
+        return true;
+    }
+
+    private bool ReorderTabs(Guid moved, Guid target, bool after)
+    {
+        var c = _store.Sessions;
+        // Only shuffle a tab among siblings in the SAME project — a reorder must
+        // never silently re-file a tab into another project.
+        var mv = c.FirstOrDefault(s => s.Id == moved);
+        var tg = c.FirstOrDefault(s => s.Id == target);
+        if (mv == null || tg == null || mv.ProjectId != tg.ProjectId) return false;
+        if (!SidebarReorder.Move(c, s => s.Id, moved, target, after)) return false;
+        _store.Save();
+        return true;
     }
 
     // ---- Host → page push ------------------------------------------------

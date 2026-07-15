@@ -269,12 +269,22 @@ function renderStream(host: HTMLElement, data: InspectorDataMessage): void {
       ? "The agent hasn't said anything yet."
       : "Start Claude here and its work shows up in this rail."));
     host.appendChild(e);
+    prevEventCount = 0;
     return;
   }
 
   const frag = document.createDocumentFragment();
-  data.events.forEach((ev, i) => frag.appendChild(renderEvent(ev, i)));
+  // Only rows appended SINCE the last render animate in. The stream is re-created
+  // every poll, so without this gate the whole list would re-cascade each tick; a
+  // freshly-shown pane (prevEventCount 0) shows its history at rest.
+  const fresh = prevEventCount;
+  data.events.forEach((ev, i) => {
+    const row = renderEvent(ev, i);
+    if (fresh > 0 && i >= fresh) row.classList.add("row-enter");
+    frag.appendChild(row);
+  });
   host.appendChild(frag);
+  prevEventCount = data.events.length;
 
   // Only a beat/prompt that ACTUALLY overflows gets the expand affordance. We
   // can't know that before layout, so mark them after insertion — a short one
@@ -357,6 +367,9 @@ let changesOpen = false;
  *  can't slam a message shut mid-read; cleared on pane change, since indices
  *  mean nothing across transcripts. */
 const expanded = new Set<number>();
+/** Event count at the last render — rows beyond it are "new" and animate in.
+ *  Reset on pane change so switching in doesn't cascade the whole history. */
+let prevEventCount = 0;
 /** Which journal kinds are shown. Global (like the quiet toggle this replaces)
  *  and session-only. Interrupts ride with "user" — they're your action. Applied
  *  as CSS classes on the stream, so a toggle never re-renders or refetches. */
@@ -434,6 +447,7 @@ function setPane(id: string | null, name: string, color: number, live: boolean):
 
   if (changed) {
     expanded.clear();          // indices are per-transcript; they don't carry over
+    prevEventCount = 0;        // don't animate a switched-in pane's whole history
     paneName = name;
     nameEl.textContent = name;
     tagEl.style.background = `var(--color-pane-tag-${color % 6})`;
