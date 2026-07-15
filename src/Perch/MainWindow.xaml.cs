@@ -31,6 +31,18 @@ public partial class MainWindow : FluentWindow
     // dropped Stop self-heals quickly.
     private static readonly long IdleDemoteTicks = (long)(8.0 * System.Diagnostics.Stopwatch.Frequency);
 
+    // A REAL resize fires SIGWINCH and the TUI redraws — genuine PTY output the
+    // idle watchdog would read as renewed activity and use to re-promote a
+    // silence-demoted (Done, inferred) pane back to Working. 6126482 stopped
+    // NO-OP resizes from doing this; this covers the remaining case: a real
+    // resize when you first show a tab, or after the window/layout changed while
+    // it was hidden. We stamp the resize time and refuse to promote on output
+    // that lands within RedrawWindowTicks of it — that output IS the redraw, not
+    // the agent. Genuine activity keeps printing past the window and still
+    // promotes. Keyed by pane; a stale entry only ever holds the last resize.
+    private static readonly long RedrawWindowTicks = System.Diagnostics.Stopwatch.Frequency; // ~1s
+    private readonly Dictionary<Guid, long> _lastResizeTicks = new();
+
     private System.Windows.Threading.DispatcherTimer? _idleWatchdog;
 
     private ControlIpcServer? _control;
@@ -1164,8 +1176,11 @@ public partial class MainWindow : FluentWindow
                     changed = true;
                     Log.Info("IdleWatchdog", $"pane={pane.Id:N} working->done (output-silent)");
                 }
-                else if (pane.AgentState == AgentState.Done && pane.StateInferred && !silent)
+                else if (pane.AgentState == AgentState.Done && pane.StateInferred && !silent
+                         && (!_lastResizeTicks.TryGetValue(pane.Id, out var rz)
+                             || last - rz > RedrawWindowTicks))
                 {
+                    // Not a resize's redraw — real output resumed. Walk it back.
                     pane.AgentState = AgentState.Working;
                     // Stays inferred — it's still a watchdog guess until a hook
                     // says otherwise. Restart the turn clock for the new spell.
@@ -1761,6 +1776,12 @@ public partial class MainWindow : FluentWindow
             Log.Info($"Pane.resize.skip pane={id:N} cols={cols} rows={rows}");
             return;
         }
+
+        // Note when this pane was resized so the watchdog can tell the resize's
+        // redraw from real agent output (see RedrawWindowTicks). Stamped for every
+        // resize — a deduped no-op costs nothing here, and a real one is exactly
+        // the redraw we must not read as "the agent resumed".
+        _lastResizeTicks[id] = System.Diagnostics.Stopwatch.GetTimestamp();
 
         // Lazy spawn: first valid pane.resize for a pane creates its
         // ConPty at the page's measured size, so PowerShell's banner is

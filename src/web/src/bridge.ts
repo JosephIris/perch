@@ -404,6 +404,7 @@ export type CommitsDataMessage = {
  *   "beat"      — what the agent SAID (an assistant text block)
  *   "work"      — what the agent DID (a tool call)
  *   "interrupt" — a turn you STOPPED (Esc / Ctrl-C); painted red as an alarm
+ *   "skill"     — the agent invoked a Skill; its own kind, coloured violet
  * The rail renders beats as the spine and work as dimmed connective tissue, so
  * one list drives both the narrative and the activity views.
  *
@@ -411,7 +412,7 @@ export type CommitsDataMessage = {
  * row ("Read perch.log ×6"). That's the thrash signal — the cheapest way to
  * see an agent spinning without reading a word. */
 export type InspectorEventView = {
-  kind: "prompt" | "beat" | "work" | "interrupt";
+  kind: "prompt" | "beat" | "work" | "interrupt" | "skill";
   ts: string;
   text: string;
   verb: string;

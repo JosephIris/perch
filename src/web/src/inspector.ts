@@ -230,6 +230,19 @@ function renderEvent(e: InspectorEventView, i: number): HTMLElement {
     return b;
   }
 
+  if (e.kind === "skill") {
+    // A skill invocation — coloured violet and glyph-marked so a packaged
+    // capability reads apart from the dim tool-call texture around it.
+    const s = el("div", "skill");
+    s.appendChild(elText("span", "skill__time", hhmm(e.ts)));
+    s.appendChild(elText("span", "skill__glyph", "◆"));
+    const what = el("span", "skill__what");
+    what.appendChild(elText("span", "skill__verb", "Skill"));
+    if (e.target) what.appendChild(elText("span", "skill__target", e.target));
+    s.appendChild(what);
+    return s;
+  }
+
   // work — deliberately quiet. It reads as texture, not content: your eye skips
   // it and lands on the beats, but it's there the moment you want to know what
   // actually happened between two of them.
@@ -347,7 +360,7 @@ const expanded = new Set<number>();
 /** Which journal kinds are shown. Global (like the quiet toggle this replaces)
  *  and session-only. Interrupts ride with "user" — they're your action. Applied
  *  as CSS classes on the stream, so a toggle never re-renders or refetches. */
-const shown = { user: true, claude: true, actions: true };
+const shown = { user: true, claude: true, actions: true, skill: true };
 type FilterCat = keyof typeof shown;
 let pollTimer: number | null = null;
 let skeletonTimer: number | null = null;
@@ -509,11 +522,12 @@ function applyFilters(): void {
   streamEl.classList.toggle("inspector__stream--hide-user", !shown.user);
   streamEl.classList.toggle("inspector__stream--hide-claude", !shown.claude);
   streamEl.classList.toggle("inspector__stream--hide-actions", !shown.actions);
+  streamEl.classList.toggle("inspector__stream--hide-skill", !shown.skill);
   for (const btn of filterBtns)
     btn.setAttribute("aria-pressed", String(shown[btn.dataset.cat as FilterCat]));
-  allBtn.setAttribute("aria-pressed", String(shown.user && shown.claude && shown.actions));
-  streamEl.classList.toggle("inspector__stream--empty-filter",
-    !shown.user && !shown.claude && !shown.actions);
+  const vals = Object.values(shown);
+  allBtn.setAttribute("aria-pressed", String(vals.every(Boolean)));
+  streamEl.classList.toggle("inspector__stream--empty-filter", !vals.some(Boolean));
 }
 
 /** Chip counts are TOTALS per kind (querySelectorAll matches hidden rows too),
@@ -523,6 +537,7 @@ function updateFilterCounts(): void {
     String(streamEl.querySelectorAll(".turn-prompt, .turn-interrupt").length);
   filterCounts.claude.textContent = String(streamEl.querySelectorAll(".beat").length);
   filterCounts.actions.textContent = String(streamEl.querySelectorAll(".work").length);
+  filterCounts.skill.textContent = String(streamEl.querySelectorAll(".skill").length);
 }
 
 // ---- Init ------------------------------------------------------------------
@@ -549,7 +564,7 @@ export function initInspector(): void {
   // clears it when everything's already on. Toggling scrolls back to latest so
   // the newest visible row stays in view.
   allBtn = $<HTMLButtonElement>("filter-all");
-  (["user", "claude", "actions"] as FilterCat[]).forEach((cat) => {
+  (["user", "claude", "actions", "skill"] as FilterCat[]).forEach((cat) => {
     const btn = $<HTMLButtonElement>(`filter-${cat}`);
     btn.addEventListener("click", () => {
       shown[cat] = !shown[cat];
@@ -560,8 +575,8 @@ export function initInspector(): void {
     filterCounts[cat] = $(`filter-count-${cat}`);
   });
   allBtn.addEventListener("click", () => {
-    const target = !(shown.user && shown.claude && shown.actions);
-    shown.user = shown.claude = shown.actions = target;
+    const target = !Object.values(shown).every(Boolean);
+    for (const k of Object.keys(shown) as FilterCat[]) shown[k] = target;
     applyFilters();
     streamEl.scrollTop = streamEl.scrollHeight;
   });

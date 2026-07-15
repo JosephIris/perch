@@ -205,7 +205,6 @@
            aria-label="Filter the journal">
         <button id="filter-all" class="inspector__filter inspector__filter--all"
                 type="button" aria-pressed="true" title="Show everything (or clear all)">All</button>
-        <span class="inspector__filters-spacer"></span>
         <button id="filter-user" class="inspector__filter" type="button"
                 data-cat="user" aria-pressed="true" title="Your messages">
           <span class="inspector__filter-glyph" aria-hidden="true">&gt;</span>You<span
@@ -220,6 +219,11 @@
                 data-cat="actions" aria-pressed="true" title="Tool calls">
           <span class="inspector__filter-glyph" aria-hidden="true">&#9474;</span>Actions<span
                 id="filter-count-actions" class="inspector__filter-count"></span>
+        </button>
+        <button id="filter-skill" class="inspector__filter inspector__filter--skill" type="button"
+                data-cat="skill" aria-pressed="true" title="Skills the agent used">
+          <span class="inspector__filter-glyph" aria-hidden="true">&#9670;</span>Skills<span
+                id="filter-count-skill" class="inspector__filter-count"></span>
         </button>
       </div>
       <div id="inspector-vitals" class="inspector__vitals"></div>

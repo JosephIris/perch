@@ -13,6 +13,7 @@ namespace Perch;
 ///   "beat"      — what the agent SAID (an assistant `text` block)
 ///   "work"      — what the agent DID (an assistant `tool_use` block)
 ///   "interrupt" — a turn YOU stopped (Esc / Ctrl-C); the rail paints it red
+///   "skill"     — the agent invoked a Skill; its own kind, coloured violet
 /// The page renders beats as the spine and work as dimmed connective tissue,
 /// so one list drives both the narrative and the activity views.
 ///
@@ -223,7 +224,11 @@ internal sealed class TranscriptReader
                     if (verb.Length == 0) break;
                     block.TryGetProperty("input", out var input);
                     var (target, note) = ToolTarget(verb, input);
-                    tail.Events.Add(new InspectorEvent("work", ts, "", verb, target, note, 1));
+                    // A skill invocation is its own kind — the agent reaching for
+                    // a packaged capability, worth seeing (and filtering) apart
+                    // from ordinary tool calls, and coloured for it in the rail.
+                    tail.Events.Add(new InspectorEvent(
+                        verb == "Skill" ? "skill" : "work", ts, "", verb, target, note, 1));
                     break;
             }
         }
@@ -305,6 +310,7 @@ internal sealed class TranscriptReader
             "Task"      => (Clip(Str(input, "description"), 40), ""),
             "WebFetch"  => (Clip(Str(input, "url"), 50), ""),
             "WebSearch" => (Clip(Str(input, "query"), 40), ""),
+            "Skill"     => (Str(input, "skill"), ""),
             "TodoWrite" => ("todos", ""),
             _           => ("", ""),
         };

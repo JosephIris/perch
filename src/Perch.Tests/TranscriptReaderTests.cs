@@ -189,6 +189,24 @@ public sealed class TranscriptReaderTests : IDisposable
     }
 
     [Fact]
+    public void SkillInvocation_IsItsOwnKind_TargetingTheSkillName()
+    {
+        // A Skill tool_use is its own kind (violet in the rail, filterable apart
+        // from ordinary tool calls), with the skill name as the target so you can
+        // see WHICH skill ran now that its (isMeta) body is filtered out.
+        WriteTranscript(Assistant("""
+            {"type":"tool_use","name":"Skill","input":{"skill":"recap-ml-experiment"}},
+            {"type":"tool_use","name":"Read","input":{"file_path":"/a/x.cs"}}
+            """));
+
+        var d = Read(new TranscriptReader());
+
+        Assert.Equal(new[] { "skill", "work" }, d.Events.Select(e => e.Kind));
+        Assert.Equal("Skill", d.Events[0].Verb);
+        Assert.Equal("recap-ml-experiment", d.Events[0].Target);
+    }
+
+    [Fact]
     public void SubagentRows_AreSkipped()
     {
         // A fan-out session's sidechain rows are the MAJORITY of the file (129 of
