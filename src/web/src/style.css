@@ -4417,14 +4417,25 @@ body.show-dashboard .dashboard { display: flex; }
   display: block;
   width: 100%;
   text-align: left;
-  border: 0;
+  /* Resting state: no live Perch server. A soft amber frame, empty inside. The
+   * 1px border stays through every state (transparent when filled) so the card
+   * never shifts size. */
+  border: 1px solid var(--color-local-frame);
   cursor: pointer;
   padding: var(--sp-8) var(--sp-12);
   border-radius: var(--r-card);
-  background: var(--color-local-faint);
-  transition: background var(--dur-fast) var(--ease-entry);
+  background: transparent;
+  transition: background var(--dur-fast) var(--ease-entry),
+    border-color var(--dur-fast) var(--ease-entry);
 }
-.local-card:hover { background: var(--color-local-hover); }
+.local-card:hover { background: var(--color-local-faint); }
+/* A Perch server is live → one uniform amber fill, edge to edge. Border goes
+ * transparent so a translucent edge can't double over the fill into a darker
+ * rim — the frame IS the fill, a single colour. */
+.local-card--live { border-color: transparent; background: var(--color-local-fill); }
+.local-card--live:hover { background: var(--color-local-fill-hover); }
+.local-card--live .local-card__port { color: var(--color-text-primary); }
+.local-card--live .local-card__sub { color: var(--color-text-secondary); }
 .local-card__head { display: flex; align-items: center; gap: var(--sp-8); }
 .local-card__dot { width: 6px; height: 6px; border-radius: 50%; background: var(--color-local); flex: 0 0 auto; }
 .local-card__title { font-size: 13px; font-weight: 600; color: var(--color-text-primary); }
@@ -4472,7 +4483,9 @@ body.show-dashboard .dashboard { display: flex; }
   font-variant-numeric: tabular-nums;
 }
 /* A server has outlived its pane: the card leaves the amber class for caution. */
-.local-card--linger { background: rgba(252, 225, 0, 0.06); }
+/* A server outlived its pane → escalate off the amber axis to caution: drop the
+ * amber frame, wash the card in caution. Same "fill, no rim" idea, other hue. */
+.local-card--linger { border-color: transparent; background: rgba(252, 225, 0, 0.06); }
 .local-card--linger:hover { background: rgba(252, 225, 0, 0.1); }
 .local-card--linger .local-card__dot { background: var(--color-caution); }
 .local-card--linger .local-card__port { color: var(--color-caution); }

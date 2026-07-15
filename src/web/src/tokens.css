@@ -175,6 +175,13 @@
   --color-local:            #E8A04C;
   --color-local-faint:      rgba(232, 160, 76, 0.10);
   --color-local-hover:      rgba(232, 160, 76, 0.16);
+  /* Sidebar card, outline↔fill. Same amber hue, two weights. No live Perch
+   * server (only "other"/lingering listeners) → a soft amber FRAME, empty
+   * inside. A live Perch server → one uniform amber FILL, with the border
+   * dropped so there's no darker rim: the frame IS the fill. */
+  --color-local-frame:      rgba(232, 160, 76, 0.38);
+  --color-local-fill:       rgba(232, 160, 76, 0.42);
+  --color-local-fill-hover: rgba(232, 160, 76, 0.52);
 
   /* Status-dot palette. Drives the small colored circle on the left of
    * each session row (replacement for the old chip pill). One CSS variable

@@ -462,6 +462,10 @@ function updateSidebar(): void {
   }
 
   card.classList.toggle("local-card--linger", linger.length > 0);
+  // Outline↔fill: the card fills with amber only when a Perch server is actually
+  // live (a pane owns it). Lingering escalates to caution and takes precedence,
+  // so the fill and the caution wash never fight over the same card.
+  card.classList.toggle("local-card--live", linger.length === 0 && live.length > 0);
 
   const alert = document.getElementById("local-card-alert");
   const alertText = document.getElementById("local-card-alert-text");
