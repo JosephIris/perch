@@ -8,10 +8,11 @@ using System.Text.Json;
 
 namespace Perch;
 
-/// One row in the Inspector's stream. Three kinds, one ordered list:
-///   "prompt" — what YOU asked (a real user turn, slash-command noise stripped)
-///   "beat"   — what the agent SAID (an assistant `text` block)
-///   "work"   — what the agent DID (an assistant `tool_use` block)
+/// One row in the Inspector's stream. Four kinds, one ordered list:
+///   "prompt"    — what YOU asked (a real user turn, slash-command noise stripped)
+///   "beat"      — what the agent SAID (an assistant `text` block)
+///   "work"      — what the agent DID (an assistant `tool_use` block)
+///   "interrupt" — a turn YOU stopped (Esc / Ctrl-C); the rail paints it red
 /// The page renders beats as the spine and work as dimmed connective tissue,
 /// so one list drives both the narrative and the activity views.
 ///
@@ -175,9 +176,24 @@ internal sealed class TranscriptReader
 
         if (type == "user")
         {
+            // Only a genuinely TYPED turn becomes a prompt. Claude Code injects a
+            // lot of rows as type "user" that the user never typed — image-paste
+            // markers and skill/command bodies (isMeta), and task-completion
+            // notifications / system turns (origin.kind != "human"). Rendered in
+            // full they flood the journal (a single task-notification is ~8 KB of
+            // XML), so they're dropped here on metadata rather than by guessing at
+            // their prose. Absent metadata (older transcripts) reads as human, so
+            // their prompts still show; UserPrompt's text filters stay as the
+            // backstop for tool_results and slash-command scaffolding.
+            if (IsInjected(root)) return;
             var prompt = UserPrompt(msg);
-            if (prompt != null)
-                tail.Events.Add(new InspectorEvent("prompt", ts, prompt, "", "", "", 1));
+            if (prompt == null) return;
+            // An interrupt (Esc / Ctrl-C) is recorded as a "[Request interrupted
+            // …]" user turn — bare, or "…for tool use". It reads as an alarm, not
+            // a prompt, so it gets its own kind and the rail paints it red.
+            var kind = prompt.StartsWith("[Request interrupted", StringComparison.Ordinal)
+                ? "interrupt" : "prompt";
+            tail.Events.Add(new InspectorEvent(kind, ts, prompt, "", "", "", 1));
             return;
         }
         if (type != "assistant") return;
@@ -211,6 +227,27 @@ internal sealed class TranscriptReader
                     break;
             }
         }
+    }
+
+    /// A `type:"user"` row the user did NOT type: an isMeta row (an image-paste
+    /// marker, or a skill/command body injected under a tool use) or a turn whose
+    /// origin isn't a human (task-completion notifications, system turns). Both
+    /// signals are absent on a genuine typed prompt AND on older transcripts, so
+    /// a missing signal reads as "human" and the prompt still renders.
+    private static bool IsInjected(JsonElement root)
+    {
+        if (root.TryGetProperty("isMeta", out var meta) && meta.ValueKind == JsonValueKind.True)
+            return true;
+        if (root.TryGetProperty("promptSource", out var ps) &&
+            ps.ValueKind == JsonValueKind.String &&
+            string.Equals(ps.GetString(), "system", StringComparison.Ordinal))
+            return true;
+        if (root.TryGetProperty("origin", out var origin) &&
+            origin.ValueKind == JsonValueKind.Object &&
+            origin.TryGetProperty("kind", out var kind) &&
+            kind.ValueKind == JsonValueKind.String)
+            return !string.Equals(kind.GetString(), "human", StringComparison.Ordinal);
+        return false;
     }
 
     /// A real user turn, or null. Two things masquerade as one:

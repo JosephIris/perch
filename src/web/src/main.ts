@@ -129,6 +129,28 @@ function toggleSidebar() {
   // No explicit refit needed here.
 }
 
+// ── Panel width mode (compact | standard) ───────────────────────────────────
+// Toggles #app.app--wide, which swaps the two width tokens so both rails widen.
+// Applied optimistically on click (so it feels instant) and persisted via
+// prefs.wideLayout; the host ferries it back in every state push. Panes resize
+// off their ResizeObserver when the grid columns change — no explicit refit,
+// same contract as the sidebar collapse.
+const layoutCompact = $<HTMLButtonElement>("layout-compact");
+const layoutStandard = $<HTMLButtonElement>("layout-standard");
+function applyLayout(wide: boolean) {
+  appEl.classList.toggle("app--wide", wide);
+  layoutCompact.setAttribute("aria-pressed", String(!wide));
+  layoutStandard.setAttribute("aria-pressed", String(wide));
+}
+layoutCompact.addEventListener("click", () => {
+  applyLayout(false);
+  send({ type: "prefs.set", wideLayout: false });
+});
+layoutStandard.addEventListener("click", () => {
+  applyLayout(true);
+  send({ type: "prefs.set", wideLayout: true });
+});
+
 let lastState: StateMessage | null = null;
 
 // Auto-open the welcome lightbox once per launch on a fresh install. The host
@@ -164,6 +186,10 @@ onMessage((msg) => {
       // briefly flashing the default 13px and then resizing on the next
       // tick. msg.prefs is always present (host always populates it).
       if (msg.prefs) workspace.applyPrefs(msg.prefs);
+      // Reflect the persisted panel-width mode before panes render, so a
+      // freshly-launched app opens at the right widths instead of flashing
+      // Compact and then widening on the next tick.
+      applyLayout(msg.prefs?.wideLayout ?? false);
       // Account-wide model limits for the per-pane model menu (usually empty).
       setModelLimits(msg.modelLimits);
       maybeShowOnboarding(msg.prefs);

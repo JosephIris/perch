@@ -44,6 +44,12 @@ public sealed class Settings
     /// Persisted, so collapsing it is a decision that sticks.
     public bool InspectorOpen { get; set; } = true;
 
+    /// Wide layout mode: both side rails (session list + Inspector) widen and the
+    /// terminal gives up the room. Off (Compact) by default — Compact maximizes
+    /// the terminal, which is the right default for heads-down work; Standard is
+    /// the opt-in for when the rails are where you're spending your attention.
+    public bool WideLayout { get; set; } = false;
+
     /// Parent folders searched (ONE level deep) for repos to offer as projects.
     /// A list, not a single root, because a dev machine keeps code in several
     /// places — work repos here, side projects there. Empty by default: we

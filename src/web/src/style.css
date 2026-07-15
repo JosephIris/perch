@@ -117,6 +117,15 @@ ul { list-style: none; padding: 0; margin: 0; }
 #app.app--sidebar-collapsed.app--inspector-collapsed {
   grid-template-columns: 0 1fr 0;
 }
+/* Standard (wide) layout mode. Both side rails widen and the terminal gives up
+ * the room; Compact (the default tokens, 264/336) maximizes the terminal. It's
+ * just the two width tokens — every grid rule above reads them via var(), so the
+ * collapse variants and the animated grid-template-columns transition all follow
+ * for free. */
+#app.app--wide {
+  --sidebar-width: 320px;
+  --inspector-width: 480px;
+}
 
 /* --- Sidebar ------------------------------------------------------------
  * Layout mirrors Claude desktop: top-of-sidebar action(s) ("New session"),
@@ -1390,6 +1399,39 @@ ul { list-style: none; padding: 0; margin: 0; }
   color: var(--color-text-secondary);
 }
 .sidebar__settings:focus-visible {
+  outline: 1px solid var(--color-accent-soft);
+  outline-offset: -1px;
+}
+/* Panel-width segmented toggle, sat between the identity block and the gear.
+ * Same language as the sidebar mode switch (.sidebar__mode): a subtle-fill
+ * container, the active segment lifted to the stronger subtle fill. Icon-only so
+ * it stays compact in a 264px rail; each segment carries a title tooltip. */
+.sidebar__density {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--r-pill);
+  background: var(--color-subtle-secondary);
+}
+.sidebar__density-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--r-input);
+  color: var(--color-text-tertiary);
+  transition:
+    background var(--dur-fast) var(--ease-entry),
+    color var(--dur-fast) var(--ease-entry);
+}
+.sidebar__density-btn:hover { color: var(--color-text-primary); }
+.sidebar__density-btn[aria-pressed="true"] {
+  background: var(--color-subtle-tertiary);
+  color: var(--color-text-primary);
+}
+.sidebar__density-btn:focus-visible {
   outline: 1px solid var(--color-accent-soft);
   outline-offset: -1px;
 }
@@ -4231,10 +4273,73 @@ body.show-dashboard .dashboard { display: flex; }
 }
 .inspector__stream > .turn-prompt:first-child { margin-top: 0; }
 .turn-prompt__caret { flex: none; color: var(--color-text-disabled); }
+/* Clamped to 4 lines like a beat — a pasted spec can be dozens of lines and,
+ * unclamped, the prompt header becomes a wall that buries its own turn. Click to
+ * open in place; the chevron only shows once the text actually overflows. */
 .turn-prompt__text {
+  flex: 1;
+  min-width: 0;
   font-size: var(--type-caption-size);
   font-weight: 500;
   color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  overflow: hidden;
+}
+.turn-prompt--open .turn-prompt__text {
+  -webkit-line-clamp: unset;
+  overflow: visible;
+}
+.turn-prompt--clamped,
+.turn-prompt--open { cursor: pointer; }
+/* Chevron at the end, bottom-aligned so it reads as "there's more below". Hidden
+ * until we know the text overflows (turn-prompt--clamped, set after layout). */
+.turn-prompt__chev {
+  flex: none;
+  align-self: flex-end;
+  display: none;
+  font-size: 10px;
+  line-height: var(--type-body-line);
+  color: var(--color-text-tertiary);
+}
+.turn-prompt__chev::before { content: "\2304"; }          /* ⌄ */
+.turn-prompt--open .turn-prompt__chev::before { content: "\2303"; }   /* ⌃ */
+.turn-prompt--clamped .turn-prompt__chev,
+.turn-prompt--open .turn-prompt__chev { display: block; }
+
+/* Interrupt — a turn you stopped (Esc / Ctrl-C). The one alarm in the stream:
+ * error-tinted fill and a filled "!" badge so a halted turn is unmissable while
+ * scanning, where a plain prompt row would let it slip past. Error-tint rgba
+ * mirrors how .work--repeat tints its caution rows. */
+.turn-interrupt {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  margin: var(--sp-8) var(--sp-8) var(--sp-4);
+  padding: 6px var(--sp-12);
+  border-radius: var(--r-pill);
+  background: rgba(255, 153, 164, 0.10);
+}
+.turn-interrupt__mark {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--color-error);
+  color: var(--color-sidebar-surface);
+  font-family: var(--font-small);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+.turn-interrupt__text {
+  font-size: var(--type-caption-size);
+  font-weight: 500;
+  color: var(--color-error);
   overflow-wrap: anywhere;
 }
 
@@ -4373,8 +4478,24 @@ body.show-dashboard .dashboard { display: flex; }
   white-space: nowrap;
 }
 
-/* Prose-only. This IS the "Journal" view — a density toggle, not a tab. */
-.inspector__stream--quiet .work { display: none; }
+/* Filter the stream by kind. Pure show/hide driven by the filter bar — no
+ * re-render. Hiding actions IS the old prose-only view. Interrupts ride with
+ * "user" (they're your action). */
+.inspector__stream--hide-user .turn-prompt,
+.inspector__stream--hide-user .turn-interrupt,
+.inspector__stream--hide-claude .beat,
+.inspector__stream--hide-actions .work { display: none; }
+/* Every kind toggled off — the stream is empty by choice, so say so rather than
+ * leave a blank rail that reads as a bug. */
+.inspector__stream--empty-filter::after {
+  content: "All filters off";
+  display: block;
+  padding: var(--sp-24) var(--sp-16);
+  text-align: center;
+  font-family: var(--font-small);
+  font-size: 12px;
+  color: var(--color-text-disabled);
+}
 
 /* --- Stick to latest --- */
 
@@ -4472,6 +4593,52 @@ body.show-dashboard .dashboard { display: flex; }
  * are not; an unknown model prices at 0 host-side and the chip is omitted
  * entirely rather than showing a made-up number.
  */
+
+/* Journal filter bar — under the stream, above vitals. Category chips wear the
+ * accent when active (You / Claude / Actions); "All" is a quieter reset that
+ * lifts to the neutral subtle fill, not the accent, since it isn't a category. */
+.inspector__filters {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: var(--sp-8);
+  border-top: 1px solid var(--color-sidebar-stroke);
+}
+.inspector__filters-spacer { flex: 1; }
+.inspector__filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px var(--sp-8);
+  border-radius: var(--r-pill);
+  font-family: var(--font-small);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-text-tertiary);
+  transition:
+    background var(--dur-fast) var(--ease-entry),
+    color var(--dur-fast) var(--ease-entry);
+}
+.inspector__filter:hover {
+  background: var(--color-subtle-secondary);
+  color: var(--color-text-secondary);
+}
+.inspector__filter:focus-visible {
+  outline: 1px solid var(--color-accent-soft);
+  outline-offset: 1px;
+}
+.inspector__filter[aria-pressed="true"] {
+  background: var(--color-accent-faint);
+  color: var(--color-accent);
+}
+.inspector__filter-glyph { width: 8px; text-align: center; font-size: 10px; opacity: 0.9; }
+.inspector__filter-count { font-variant-numeric: tabular-nums; opacity: 0.6; }
+.inspector__filter--all { color: var(--color-text-disabled); }
+.inspector__filter--all[aria-pressed="true"] {
+  background: var(--color-subtle-tertiary);
+  color: var(--color-text-secondary);
+}
 
 .inspector__vitals {
   flex: none;
