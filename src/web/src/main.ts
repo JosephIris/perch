@@ -19,6 +19,7 @@ import { confirmDialog } from "./confirm.js";
 import { RestoreProgress } from "./restore-progress.js";
 import { invalidateCommits } from "./commits.js";
 import { initCloud } from "./cloud-panel.js";
+import { initLocal } from "./local-panel.js";
 import { initInspector, toggleInspector } from "./inspector.js";
 import { setModelLimits } from "./model-menu.js";
 import type { PaneTreeView } from "./bridge.js";
@@ -45,6 +46,11 @@ const statusEl = $("status-text");
 // Cloud resources. Self-wiring: it owns its own chip + host listener, and stays
 // completely invisible unless the host actually reports running machines.
 initCloud();
+
+// Local dev servers. Same self-wiring shape as cloud, one axis over: it owns its
+// own sidebar card + host listener and stays invisible until something is
+// actually listening on loopback.
+initLocal();
 
 // Inspector rail (right column). Same self-wiring shape: owns its DOM, listens
 // for `state` itself to follow the focused pane, and fetches its own data via

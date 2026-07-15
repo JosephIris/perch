@@ -161,6 +161,21 @@
   --color-cloud-faint:      rgba(91, 200, 175, 0.09);
   --color-cloud-hover:      rgba(91, 200, 175, 0.14);
 
+  /* Local dev servers — a listener on YOUR machine, a DIFFERENT axis from cloud.
+   * Cloud teal = remote + metered; local amber = warm, on your desk, not billing.
+   * The two "resource" cards can show at once in the sidebar, so their hues must
+   * be unmistakable side by side — teal vs amber is a cool/warm split that reads
+   * as remote/local at a glance.
+   *
+   * Amber overlaps pane-tag-3 orange in raw hue, but pane tags are user-assigned
+   * worktree marks on pane headers, never sidebar status — so they never sit
+   * next to this card. Escalation mirrors cloud: absent (nothing listening) →
+   * local (amber, serving) → caution (a server outlived its pane — "lingering").
+   * The escalation to caution reads because amber→yellow is a real hue jump. */
+  --color-local:            #E8A04C;
+  --color-local-faint:      rgba(232, 160, 76, 0.10);
+  --color-local-hover:      rgba(232, 160, 76, 0.16);
+
   /* Status-dot palette. Drives the small colored circle on the left of
    * each session row (replacement for the old chip pill). One CSS variable
    * per agent state keeps the markup state-data-driven via

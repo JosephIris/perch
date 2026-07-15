@@ -4101,6 +4101,338 @@ body.show-dashboard .dashboard { display: flex; }
 .cloud-card--orphan .cloud-card__dot { background: var(--color-caution); }
 .cloud-card--orphan .cloud-card__rate { color: var(--color-caution); }
 
+/* ══ Local dev servers ══════════════════════════════════════════════════════
+ * Sibling of the cloud panel, one axis over: cloud is remote + metered (teal),
+ * local is your own machine (amber). Structure is deliberately the same so the
+ * two read as a family — but the classes are namespaced (.lpanel/.lsrv/.larea)
+ * so neither can break the other. Each row has TWO actions the cloud panel
+ * doesn't: open (↗ the URL) and kill (× the pid).
+ *
+ * Three buckets, and the first is the whole point:
+ *   lingering  a server outlived its pane   → contained caution box, sorted first
+ *   live       an open pane owns it         → bare list, amber accents
+ *   other      Perch didn't launch it       → bare list, dimmed */
+.local-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: start center;
+  padding: var(--sp-48) var(--sp-16);
+  background: rgba(0, 0, 0, 0.32);
+}
+
+.lpanel {
+  width: 100%;
+  max-width: 600px;
+  background: var(--color-terminal-bg);
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--r-window);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.lpanel__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  padding: var(--sp-8) var(--sp-12);
+  border-bottom: 1px solid var(--color-stroke);
+}
+.lpanel__title { font-size: var(--type-body-size); font-weight: 600; }
+.lpanel__sub {
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.lpanel__spacer { flex: 1 1 auto; }
+.lpanel__icon {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  border-radius: var(--r-input);
+  color: var(--color-text-tertiary);
+  transition: background var(--dur-fast) var(--ease-entry);
+}
+.lpanel__icon:hover { background: var(--color-subtle-secondary); color: var(--color-text-secondary); }
+.lpanel__body { padding: var(--sp-8); overflow-y: auto; max-height: 60vh; }
+.lpanel__foot {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: var(--sp-4) var(--sp-12);
+  border-top: 1px solid var(--color-stroke);
+  font-family: var(--font-small);
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+}
+.lpanel__empty { padding: var(--sp-32) var(--sp-16); text-align: center; }
+.lpanel__empty-title { font-size: var(--type-body-size); color: var(--color-text-secondary); }
+.lpanel__empty-note {
+  margin-top: var(--sp-4);
+  margin-inline: auto;
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  max-width: 44ch;
+}
+
+/* ---- Areas ---- */
+.larea { margin-bottom: var(--sp-12); }
+.larea:last-child { margin-bottom: 0; }
+/* The one contained surface: the block that means "act". */
+.larea--linger {
+  background: rgba(252, 225, 0, 0.045);
+  border-radius: var(--r-card);
+  padding: var(--sp-8);
+  margin-bottom: var(--sp-16);
+}
+.larea__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  padding: 2px var(--sp-4) var(--sp-8);
+}
+.larea__dot { width: 6px; height: 6px; border-radius: 50%; background: var(--color-caution); flex: 0 0 auto; }
+.larea__title { font-size: 12px; font-weight: 600; color: var(--color-text-primary); white-space: nowrap; }
+.larea--live .larea__title,
+.larea--other .larea__title { color: var(--color-text-secondary); }
+.larea--other { opacity: 0.85; }
+.larea__meta {
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.larea__meta b { font-weight: 600; color: var(--color-text-primary); }
+.larea__spacer { flex: 1 1 auto; }
+
+/* ---- Server row ---- */
+.lsrv {
+  background: var(--color-layer);
+  border-radius: var(--r-pill);
+  padding: var(--sp-8) var(--sp-8) var(--sp-8) var(--sp-12);
+  margin-bottom: var(--sp-4);
+  transition: background var(--dur-fast) var(--ease-entry), opacity var(--dur-fast) var(--ease-entry);
+}
+.lsrv:last-child { margin-bottom: 0; }
+.lsrv:hover { background: var(--color-layer-alt); }
+.lsrv:hover .lsrv__act { opacity: 1; }
+.lsrv--linger { box-shadow: inset 2px 0 0 var(--color-caution); }
+.lsrv--deleting { opacity: 0.4; pointer-events: none; }
+
+.lsrv__top {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: var(--sp-8);
+}
+/* The PORT is the identity — mono, amber, the thing you scan for. */
+.lsrv__port {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-local);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.lsrv--linger .lsrv__port { color: var(--color-caution); }
+.lsrv__cmd {
+  font-family: var(--font-small);
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.lsrv__spec {
+  font-family: var(--font-small);
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+/* Actions appear on hover only, so the panel isn't a wall of icons at rest. */
+.lsrv__act {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  border-radius: 3px;
+  color: var(--color-text-disabled);
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-entry), background var(--dur-fast) var(--ease-entry),
+    color var(--dur-fast) var(--ease-entry);
+}
+.lsrv__open:hover { background: var(--color-local-faint); color: var(--color-local); }
+.lsrv__kill:hover { background: rgba(255, 153, 164, 0.12); color: var(--color-error); }
+.lsrv__act:focus-visible { opacity: 1; outline: 1px solid var(--color-accent); }
+
+/* Line 2 — who owns it. */
+.lsrv__why {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  min-width: 0;
+  margin-top: 2px;
+}
+.lsrv__wdot { width: 5px; height: 5px; border-radius: 50%; flex: 0 0 auto; background: var(--color-state-idle); }
+.lsrv__wdot[data-state="working"] { background: var(--color-state-working); }
+.lsrv__wdot[data-state="done"] { background: var(--color-state-done); }
+.lsrv__wdot[data-state="waiting"] { background: var(--color-state-waiting); }
+.lsrv__wdot[data-state="permission"] { background: var(--color-state-permission); }
+.lsrv__wdot[data-state="linger"] { background: var(--color-caution); }
+.lsrv__wdot[data-state="other"] { background: var(--color-text-disabled); }
+.lsrv__where {
+  font-family: var(--font-small);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+.lsrv__state {
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+.lsrv__task {
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+/* Framework tag. Neutral — the port + command already say what it is. */
+.ltag {
+  font-family: var(--font-small);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--color-subtle-tertiary);
+  color: var(--color-text-tertiary);
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.lbtn {
+  padding: 1px var(--sp-8);
+  border-radius: var(--r-input);
+  font-family: var(--font-small);
+  font-size: 10px;
+  border: 1px solid var(--color-stroke);
+  background: none;
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease-entry),
+    border-color var(--dur-fast) var(--ease-entry), color var(--dur-fast) var(--ease-entry);
+}
+.lbtn:hover {
+  background: rgba(255, 153, 164, 0.1);
+  border-color: rgba(255, 153, 164, 0.45);
+  color: var(--color-error);
+}
+
+/* ── Local: the sidebar area ─────────────────────────────────────────────────
+ * Absent when nothing is listening; amber when servers are up; caution when one
+ * has outlived its pane (the card grows the alert row, so what needs you changes
+ * the card's SIZE, not just its color). */
+.local-area { padding: 0 var(--sp-4) 0 0; }
+.local-area[hidden] { display: none; }
+.local-area__label {
+  font-family: var(--font-small);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+  padding: 0 var(--sp-8) var(--sp-4);
+}
+
+.local-card {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  cursor: pointer;
+  padding: var(--sp-8) var(--sp-12);
+  border-radius: var(--r-card);
+  background: var(--color-local-faint);
+  transition: background var(--dur-fast) var(--ease-entry);
+}
+.local-card:hover { background: var(--color-local-hover); }
+.local-card__head { display: flex; align-items: center; gap: var(--sp-8); }
+.local-card__dot { width: 6px; height: 6px; border-radius: 50%; background: var(--color-local); flex: 0 0 auto; }
+.local-card__title { font-size: 13px; font-weight: 600; color: var(--color-text-primary); }
+.local-card__port {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-local);
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+.local-card__sub {
+  display: block;
+  padding-left: calc(6px + var(--sp-8));
+  margin-top: 2px;
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.local-card__alert {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  margin-top: var(--sp-8);
+  padding-top: var(--sp-8);
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+.local-card__alert[hidden] { display: none; }
+.local-card__alert-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--color-caution); flex: 0 0 auto; }
+.local-card__alert-text {
+  font-family: var(--font-small);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.local-card__alert-meta {
+  font-family: var(--font-small);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-caution);
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+/* A server has outlived its pane: the card leaves the amber class for caution. */
+.local-card--linger { background: rgba(252, 225, 0, 0.06); }
+.local-card--linger:hover { background: rgba(252, 225, 0, 0.1); }
+.local-card--linger .local-card__dot { background: var(--color-caution); }
+.local-card--linger .local-card__port { color: var(--color-caution); }
+
 /* --- Inspector rail ------------------------------------------------------
  *
  * The right column. Recessed tone (same surface as the sidebar), so the
