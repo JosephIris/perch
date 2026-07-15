@@ -1663,7 +1663,10 @@ public partial class MainWindow : FluentWindow
                 var attributed = pathFilter != null;
                 if (pane.DiffAttributed != attributed) { pane.DiffAttributed = attributed; changed = true; }
             }
-            if (ahead is int a && pane.Ahead != a) { pane.Ahead = a; changed = true; }
+            // Reconcile the WHOLE repo, not just this pane: a sibling pane on the
+            // same tree that pushed without a status change of its own would keep
+            // the Max-based ↑N chip inflated. Passive path — no hover needed.
+            if (ahead is int a && ReconcileAheadForCwd(cwd, a)) changed = true;
             if (changed) PushState();
         });
     }
@@ -2056,6 +2059,26 @@ public partial class MainWindow : FluentWindow
     // touch app state off the UI thread after the await), then shell out to
     // git off-thread and reply with a commits.data message. Mirrors
     // settings.request/.data.
+    /// Snap every pane that shares this repo (same cwd) to a freshly-measured
+    /// ahead count. The sidebar's ↑N is a Max across a session's panes, so one
+    /// stale sibling — a pane that pushed without a status change to trigger its
+    /// own git refresh — keeps the chip inflated even after the pane you're
+    /// looking at is corrected. Same cwd ⇒ same `@{upstream}..HEAD` ⇒ same ahead,
+    /// so reconciling them together is safe. Returns whether anything changed.
+    /// UI thread only (touches session/pane state).
+    private bool ReconcileAheadForCwd(string cwd, int ahead)
+    {
+        if (string.IsNullOrEmpty(cwd)) return false;
+        var changed = false;
+        foreach (var s in _store.Sessions)
+            foreach (var p in AllLeaves(s.Root))
+                if (p.Ahead != ahead
+                    && _paneCwd.TryGetValue(p.Id, out var pc)
+                    && string.Equals(pc, cwd, StringComparison.OrdinalIgnoreCase))
+                { p.Ahead = ahead; changed = true; }
+        return changed;
+    }
+
     private async void OnCommitsRequest(PaneRef msg)
     {
         var id = msg.PaneId;
@@ -2112,7 +2135,9 @@ public partial class MainWindow : FluentWindow
             if (freshAhead is int a)
                 await Dispatcher.InvokeAsync(() =>
                 {
-                    if (pane != null && pane.Ahead != a) { pane.Ahead = a; PushState(); }
+                    // Fan out to every same-repo pane, not just the hovered one —
+                    // otherwise the Max-based chip keeps a stale sibling's count.
+                    if (ReconcileAheadForCwd(cwd, a)) PushState();
                 });
         }
         catch (Exception ex) { Log.Error("OnCommitsRequest", ex); }

@@ -49,8 +49,10 @@ function aheadChip(ahead: number, paneId: string | null, extraClass = ""): HTMLE
     "session-item__meta-item session-item__meta-item--ahead" +
     (extraClass ? ` ${extraClass}` : "");
   span.textContent = `↑${ahead}`;
-  span.title = "Commits ready to push";
   if (paneId) {
+    // Rich hover (the commit recap card) + click (the lightbox). No native
+    // `title` here: it would pop the OS tooltip "Commits ready to push" ON TOP
+    // of the custom hover card — two overlapping popups for one chip.
     attachCommitsHover(span, paneId);
     span.addEventListener("click", (ev) => {
       // Both hosts are buttons (the row selects the session, the header
@@ -58,6 +60,10 @@ function aheadChip(ahead: number, paneId: string | null, extraClass = ""): HTMLE
       ev.stopPropagation();
       openCommitsLightbox(paneId);
     });
+  } else {
+    // A plain, non-interactive count (no pane to recap) — the native tooltip is
+    // then the only affordance, and there's no custom hover for it to fight.
+    span.title = "Commits ready to push";
   }
   return span;
 }
