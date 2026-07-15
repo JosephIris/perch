@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Perch · localhost servers — color + panel</title>
+
+<style>
+@font-face { font-family:"Inter Variable"; src:url("./InterVariable.woff2") format("woff2-variations"); font-weight:100 900; font-style:normal; font-display:block; }
+@font-face { font-family:"Geist Mono Variable"; src:url("./GeistMonoVariable.woff2") format("woff2-variations"); font-weight:100 900; font-style:normal; font-display:block; }
+
+/* ---- Tokens (verbatim from src/web/src/tokens.css) ---- */
+:root {
+  --sp-4:4px; --sp-8:8px; --sp-12:12px; --sp-16:16px; --sp-24:24px; --sp-32:32px;
+  --r-input:4px; --r-pill:6px; --r-card:8px; --r-window:12px;
+  --sidebar-width:264px;
+  --font-text:"Inter Variable","Segoe UI Variable Text","Segoe UI",sans-serif;
+  --font-small:"Inter Variable","Segoe UI Variable Small","Segoe UI",sans-serif;
+  --font-mono:"Geist Mono Variable","Cascadia Code",Consolas,monospace;
+  --type-body-size:14px; --type-body-line:1.4;
+  --color-sidebar-surface:#181818;
+  --color-layer:rgba(255,255,255,0.04); --color-layer-alt:rgba(255,255,255,0.06);
+  --color-subtle-secondary:rgba(255,255,255,0.04); --color-subtle-tertiary:rgba(255,255,255,0.08);
+  --color-stroke:rgba(255,255,255,0.08); --color-stroke-strong:rgba(255,255,255,0.14);
+  --color-text-primary:rgba(255,255,255,0.92); --color-text-secondary:rgba(255,255,255,0.72);
+  --color-text-tertiary:rgba(255,255,255,0.5); --color-text-disabled:rgba(255,255,255,0.34);
+  --color-accent:#76B9ED; --color-accent-faint:rgba(118,185,237,0.14);
+  --color-success:#6CCB5F; --color-caution:#FCE100; --color-error:#FF99A4;
+  --color-state-working:#4cc2ff; --color-state-done:var(--color-success);
+  --color-cloud:#5BC8AF; --color-cloud-faint:rgba(91,200,175,0.09); --color-cloud-hover:rgba(91,200,175,0.14);
+  --ease-entry:cubic-bezier(0,0,0,1); --dur-fast:150ms;
+}
+* { box-sizing:border-box; }
+html,body { margin:0; }
+body {
+  background:#0e0e10; color:var(--color-text-primary); font-family:var(--font-text);
+  font-size:var(--type-body-size); line-height:var(--type-body-line);
+  -webkit-font-smoothing:antialiased; padding:var(--sp-24) var(--sp-16) var(--sp-32);
+}
+button { font:inherit; color:inherit; background:none; border:0; padding:0; margin:0; cursor:pointer; }
+
+.page-title { max-width:1120px; margin:0 auto var(--sp-4); font-size:20px; font-weight:600; }
+.page-lede  { max-width:1120px; margin:0 auto var(--sp-24); font-size:12px; color:var(--color-text-tertiary); }
+.page-lede code { font-family:var(--font-mono); color:var(--color-text-secondary); }
+
+/* ================= COLUMNS (the color comparison) ================= */
+.cols { display:flex; gap:var(--sp-24); justify-content:center; flex-wrap:wrap; align-items:flex-start;
+  max-width:1120px; margin:0 auto; }
+.col { width:var(--sidebar-width); }
+.col h2 { font-size:13px; font-weight:600; color:var(--color-text-secondary); margin:0 0 var(--sp-4); }
+.col .why { font-family:var(--font-small); font-size:11px; color:var(--color-text-tertiary);
+  margin:0 0 var(--sp-12); min-height:56px; }
+.col .why b { color:var(--color-text-secondary); font-weight:600; }
+.swatch { display:inline-block; width:10px; height:10px; border-radius:3px; vertical-align:-1px; margin-right:6px; }
+.rec { display:inline-block; font-family:var(--font-small); font-size:9px; font-weight:700; letter-spacing:.05em;
+  text-transform:uppercase; color:var(--color-cloud); border:1px solid rgba(91,200,175,.4);
+  border-radius:3px; padding:0 4px; margin-left:6px; vertical-align:1px; }
+
+/* ---- the mini sidebar ---- */
+.sidebar { background:var(--color-sidebar-surface); border-radius:var(--r-card);
+  padding:var(--sp-8) var(--sp-4) var(--sp-8) var(--sp-8); display:flex; flex-direction:column; gap:var(--sp-8); }
+.seclabel { font-family:var(--font-small); font-size:11px; font-weight:600; letter-spacing:.04em;
+  text-transform:uppercase; color:var(--color-text-tertiary); padding:0 var(--sp-8) var(--sp-4); }
+.item { display:flex; align-items:center; gap:var(--sp-8); padding:var(--sp-8) var(--sp-12); border-radius:var(--r-pill); }
+.item__dot { width:6px; height:6px; border-radius:50%; flex:0 0 auto; }
+.item__title { font-size:14px; font-weight:500; }
+.item__meta { font-family:var(--font-small); font-size:12px; color:var(--color-text-tertiary); margin-left:auto; }
+.gap { height:var(--sp-8); }
+
+/* ---- a resource card (shared shell, hue-driven) — used for both Cloud and Local ----
+ * Cloud is driven by --cloud; Local by --local. Same geometry so the two read as
+ * siblings stacked in the sidebar. */
+.card { padding:var(--sp-8) var(--sp-12); border-radius:var(--r-card);
+  background:var(--hue-faint); transition:background var(--dur-fast) var(--ease-entry); width:100%; text-align:left; }
+.card:hover { background:var(--hue-hover); }
+.card__head { display:flex; align-items:center; gap:var(--sp-8); }
+.card__dot { width:6px; height:6px; border-radius:50%; background:var(--hue); flex:0 0 auto; }
+.card__title { font-size:13px; font-weight:600; }
+.card__trail { font-family:var(--font-mono); font-size:12px; color:var(--hue); margin-left:auto;
+  font-variant-numeric:tabular-nums; font-weight:600; }
+.card__sub { font-family:var(--font-small); font-size:11px; color:var(--color-text-tertiary);
+  margin-top:2px; padding-left:14px; }
+/* escalation row — lingering (local) / orphan (cloud). Caution, borrowed shape. */
+.card__alert { display:flex; align-items:center; gap:var(--sp-8); margin-top:var(--sp-8);
+  padding-top:var(--sp-8); border-top:1px solid rgba(255,255,255,0.07); }
+.card__alert-dot { width:6px; height:6px; border-radius:50%; background:var(--color-caution); flex:0 0 auto; }
+.card__alert-text { font-family:var(--font-small); font-size:11px; font-weight:600; color:var(--color-text-primary); }
+.card__alert-meta { font-family:var(--font-small); font-size:11px; font-weight:600; color:var(--color-caution);
+  margin-left:auto; font-variant-numeric:tabular-nums; }
+
+/* Cloud is fixed teal. Local hue swaps per column. */
+.cloud-hue { --hue:var(--color-cloud); --hue-faint:var(--color-cloud-faint); --hue-hover:var(--color-cloud-hover); }
+.amber   { --hue:#E8A04C; --hue-faint:rgba(232,160,76,0.10); --hue-hover:rgba(232,160,76,0.16); }
+.magenta { --hue:#CE7AD4; --hue-faint:rgba(206,122,212,0.10); --hue-hover:rgba(206,122,212,0.16); }
+.peri    { --hue:#8B84E8; --hue-faint:rgba(139,132,232,0.10); --hue-hover:rgba(139,132,232,0.16); }
+
+/* ================= EXPANDED PANEL ================= */
+.panel-wrap { max-width:600px; margin:var(--sp-32) auto 0; }
+.panel-cap { font-size:13px; font-weight:600; color:var(--color-text-secondary); margin:0 0 var(--sp-12); }
+.panel-cap span { font-weight:400; color:var(--color-text-tertiary); font-size:11px; }
+
+.local { --hue:#E8A04C; --hue-faint:rgba(232,160,76,0.10);   /* recommended hue baked in */
+  width:100%; background:#1c1c1c; border:1px solid var(--color-stroke); border-radius:var(--r-window);
+  display:flex; flex-direction:column; overflow:hidden; }
+.local__head { display:flex; align-items:center; gap:var(--sp-8); padding:var(--sp-8) var(--sp-12);
+  border-bottom:1px solid var(--color-stroke); }
+.local__title { font-size:14px; font-weight:600; }
+.local__sub { font-family:var(--font-small); font-size:11px; color:var(--color-text-tertiary);
+  font-variant-numeric:tabular-nums; }
+.local__spacer { flex:1 1 auto; }
+.local__icon { width:22px; height:22px; display:grid; place-items:center; border-radius:var(--r-input);
+  color:var(--color-text-tertiary); transition:background var(--dur-fast) var(--ease-entry); }
+.local__icon:hover { background:var(--color-subtle-secondary); color:var(--color-text-secondary); }
+.local__body { padding:var(--sp-8); }
+
+.area { margin-bottom:var(--sp-12); }
+.area:last-child { margin-bottom:0; }
+.area--linger { background:rgba(252,225,0,0.045); border-radius:var(--r-card);
+  padding:var(--sp-8); margin-bottom:var(--sp-16); }
+.area__head { display:flex; align-items:center; gap:var(--sp-8); padding:2px var(--sp-4) var(--sp-8); }
+.area__dot { width:6px; height:6px; border-radius:50%; background:var(--color-caution); flex:0 0 auto; }
+.area__title { font-size:12px; font-weight:600; color:var(--color-text-primary); white-space:nowrap; }
+.area--live .area__title { color:var(--color-text-secondary); }
+.area__meta { font-family:var(--font-small); font-size:11px; color:var(--color-text-tertiary);
+  font-variant-numeric:tabular-nums; white-space:nowrap; }
+.area__meta b { font-weight:600; color:var(--color-text-primary); }
+.area__spacer { flex:1 1 auto; }
+
+/* ---- a server row ----
+ *   line 1: [tag] :port · command · pid · uptime ........... [open] [kill]
+ *   line 2: ● pane N · state · "the command that started it"
+ * PORT is the identity (like the machine name in cloud) → mono, hue-colored.
+ */
+.srv { background:var(--color-layer); border-radius:var(--r-pill);
+  padding:var(--sp-8) var(--sp-8) var(--sp-8) var(--sp-12); margin-bottom:var(--sp-4);
+  transition:background var(--dur-fast) var(--ease-entry); }
+.srv:last-child { margin-bottom:0; }
+.srv:hover { background:var(--color-layer-alt); }
+.srv:hover .srv__act { opacity:1; }
+.srv--linger { box-shadow:inset 2px 0 0 var(--color-caution); }
+
+.srv__top { display:grid; grid-template-columns:auto auto minmax(0,1fr) auto auto auto; align-items:center; gap:var(--sp-8); }
+.srv__port { font-family:var(--font-mono); font-size:13px; font-weight:600; color:var(--hue);
+  font-variant-numeric:tabular-nums; white-space:nowrap; }
+.srv__cmd { font-family:var(--font-small); font-size:10px; color:var(--color-text-tertiary);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+.srv__spec { font-family:var(--font-small); font-size:10px; color:var(--color-text-tertiary);
+  white-space:nowrap; font-variant-numeric:tabular-nums; }
+.srv__act { width:20px; height:20px; display:grid; place-items:center; border-radius:3px;
+  color:var(--color-text-disabled); opacity:0;
+  transition:opacity var(--dur-fast) var(--ease-entry), background var(--dur-fast), color var(--dur-fast); }
+.srv__open:hover { background:var(--hue-faint); color:var(--hue); }
+.srv__kill:hover { background:rgba(255,153,164,0.12); color:var(--color-error); }
+.srv__act:focus-visible { opacity:1; outline:1px solid var(--color-accent); }
+
+.srv__why { display:flex; align-items:center; gap:var(--sp-8); min-width:0; margin-top:2px; }
+.srv__wdot { width:5px; height:5px; border-radius:50%; flex:0 0 auto; background:var(--color-state-working); }
+.srv__wdot--done { background:var(--color-state-done); }
+.srv__wdot--idle { background:var(--color-text-disabled); }
+.srv__wdot--linger { background:var(--color-caution); }
+.srv__where { font-family:var(--font-small); font-size:11px; font-weight:600; color:var(--color-text-secondary);
+  white-space:nowrap; flex:0 0 auto; }
+.srv__state { font-family:var(--font-small); font-size:11px; color:var(--color-text-tertiary); white-space:nowrap; flex:0 0 auto; }
+.srv__task { font-family:var(--font-small); font-size:11px; color:var(--color-text-tertiary);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; flex:1 1 auto; }
+
+.tag { font-family:var(--font-small); font-size:9px; font-weight:600; letter-spacing:.04em;
+  text-transform:uppercase; padding:1px 5px; border-radius:3px;
+  background:var(--color-subtle-tertiary); color:var(--color-text-tertiary); flex:0 0 auto; white-space:nowrap; }
+
+.local__foot { display:flex; align-items:center; gap:var(--sp-4); padding:var(--sp-4) var(--sp-12);
+  border-top:1px solid var(--color-stroke); font-family:var(--font-small); font-size:10px; color:var(--color-text-tertiary); }
+.btn { padding:1px var(--sp-8); border-radius:var(--r-input); font-family:var(--font-small); font-size:10px;
+  border:1px solid var(--color-stroke); color:var(--color-text-secondary); white-space:nowrap;
+  transition:background var(--dur-fast), border-color var(--dur-fast), color var(--dur-fast); }
+.btn:hover { background:rgba(255,153,164,0.10); border-color:rgba(255,153,164,0.45); color:var(--color-error); }
+</style>
+</head>
+<body>
+
+<div class="page-title">Localhost servers — pick a color, then the panel</div>
+<div class="page-lede">
+  Cloud is <b style="color:var(--color-cloud)">teal</b> (remote, metered). Local is your own machine — a different axis.
+  Each column shows <b>Cloud + Local stacked in one sidebar</b>, because both can be present at once.
+  Escalation twin of cloud's “orphan” is <b>lingering</b>: a port still held after the pane that spawned it is gone.
+</div>
+
+<div class="cols">
+
+  <!-- ============ AMBER ============ -->
+  <div class="col">
+    <h2><span class="swatch" style="background:#E8A04C"></span>Amber &nbsp;<code>#E8A04C</code><span class="rec">Chosen</span></h2>
+    <p class="why"><b>Most intuitive:</b> warm = your desk, cool teal = far-away cloud.
+      Overlaps pane-tag-3 orange <code>#FF9E5E</code>, but pane tags are user-assigned worktree marks on headers, not sidebar status.</p>
+    <div class="sidebar">
+      <div class="seclabel">Idle · 1</div>
+      <div class="item"><span class="item__dot" style="background:var(--color-success)"></span>
+        <span class="item__title">product-tools</span><span class="item__meta">2m</span></div>
+      <div class="gap"></div>
+      <div class="seclabel">Cloud</div>
+      <button class="card cloud-hue">
+        <div class="card__head"><span class="card__dot"></span><span class="card__title">2 machines</span>
+          <span class="card__trail">$4.20/hr</span></div>
+        <div class="card__sub">1 GPU · $18 spent</div>
+      </button>
+      <div class="gap"></div>
+      <div class="seclabel">Local</div>
+      <button class="card amber">
+        <div class="card__head"><span class="card__dot"></span><span class="card__title">3 servers</span>
+          <span class="card__trail">:5173</span></div>
+        <div class="card__sub">Vite · Next · Flask</div>
+        <div class="card__alert"><span class="card__alert-dot"></span>
+          <span class="card__alert-text">1 lingering</span><span class="card__alert-meta">20m</span></div>
+      </button>
+    </div>
+  </div>
+
+  <!-- ============ MAGENTA ============ -->
+  <div class="col">
+    <h2><span class="swatch" style="background:#CE7AD4"></span>Magenta &nbsp;<code>#CE7AD4</code></h2>
+    <p class="why"><b>Farthest from every claimed hue</b> and unmistakable next to teal. Its only neighbors
+      (purple pane-tags, salmon error) don't appear as sidebar status dots, so no in-context clash.</p>
+    <div class="sidebar">
+      <div class="seclabel">Idle · 1</div>
+      <div class="item"><span class="item__dot" style="background:var(--color-success)"></span>
+        <span class="item__title">product-tools</span><span class="item__meta">2m</span></div>
+      <div class="gap"></div>
+      <div class="seclabel">Cloud</div>
+      <button class="card cloud-hue">
+        <div class="card__head"><span class="card__dot"></span><span class="card__title">2 machines</span>
+          <span class="card__trail">$4.20/hr</span></div>
+        <div class="card__sub">1 GPU · $18 spent</div>
+      </button>
+      <div class="gap"></div>
+      <div class="seclabel">Local</div>
+      <button class="card magenta">
+        <div class="card__head"><span class="card__dot"></span><span class="card__title">3 servers</span>
+          <span class="card__trail">:5173</span></div>
+        <div class="card__sub">Vite · Next · Flask</div>
+        <div class="card__alert"><span class="card__alert-dot"></span>
+          <span class="card__alert-text">1 lingering</span><span class="card__alert-meta">20m</span></div>
+      </button>
+    </div>
+  </div>
+
+  <!-- ============ PERIWINKLE ============ -->
+  <div class="col">
+    <h2><span class="swatch" style="background:#8B84E8"></span>Periwinkle &nbsp;<code>#8B84E8</code></h2>
+    <p class="why"><b>Calmest</b>, sits in the blue→violet gap. <b>But</b> it's blue-adjacent, and
+      working-state blue dots sit on session rows right above — the exact collision cloud avoided by not reusing accent.</p>
+    <div class="sidebar">
+      <div class="seclabel">Idle · 1</div>
+      <div class="item"><span class="item__dot" style="background:var(--color-success)"></span>
+        <span class="item__title">product-tools</span><span class="item__meta">2m</span></div>
+      <div class="gap"></div>
+      <div class="seclabel">Cloud</div>
+      <button class="card cloud-hue">
+        <div class="card__head"><span class="card__dot"></span><span class="card__title">2 machines</span>
+          <span class="card__trail">$4.20/hr</span></div>
+        <div class="card__sub">1 GPU · $18 spent</div>
+      </button>
+      <div class="gap"></div>
+      <div class="seclabel">Local</div>
+      <button class="card peri">
+        <div class="card__head"><span class="card__dot"></span><span class="card__title">3 servers</span>
+          <span class="card__trail">:5173</span></div>
+        <div class="card__sub">Vite · Next · Flask</div>
+        <div class="card__alert"><span class="card__alert-dot"></span>
+          <span class="card__alert-text">1 lingering</span><span class="card__alert-meta">20m</span></div>
+      </button>
+    </div>
+  </div>
+
+</div>
+
+<!-- ================= EXPANDED PANEL (recommended hue) ================= -->
+<div class="panel-wrap">
+  <p class="panel-cap">The panel that opens on click <span>— amber (chosen) · lingering box first, live list below · each row opens or kills</span></p>
+
+  <div class="local">
+    <div class="local__head">
+      <span class="local__title">Local</span>
+      <span class="local__sub">3 listening · 1 lingering</span>
+      <span class="local__spacer"></span>
+      <button class="local__icon" aria-label="Rescan">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round">
+          <path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"/><path d="M13.6 2.2v2.8h-2.8"/></svg>
+      </button>
+    </div>
+
+    <div class="local__body">
+
+      <!-- ---- LINGERING: contained, tinted, sorted first ---- -->
+      <div class="area area--linger">
+        <div class="area__head">
+          <span class="area__dot"></span>
+          <span class="area__title">Still listening, no pane</span>
+          <span class="area__meta">1 server · held <b>20m</b> after close</span>
+          <span class="area__spacer"></span>
+          <button class="btn">Kill all</button>
+        </div>
+
+        <div class="srv srv--linger">
+          <div class="srv__top">
+            <span class="tag">Flask</span>
+            <span class="srv__port">:8000</span>
+            <span class="srv__cmd">python -m http.server 8000</span>
+            <span class="srv__spec">pid 4123 · 20m</span>
+            <button class="srv__act srv__open" aria-label="Open localhost:8000">
+              <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 2.5H2.5v7h7v-2"/><path d="M7 2.5h2.5V5"/><path d="M9.3 2.7 5.5 6.5"/></svg>
+            </button>
+            <button class="srv__act srv__kill" aria-label="Kill pid 4123">
+              <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7"/></svg>
+            </button>
+          </div>
+          <div class="srv__why">
+            <span class="srv__wdot srv__wdot--linger"></span>
+            <span class="srv__where">pane closed 20m ago</span>
+            <span class="srv__task">“python -m http.server 8000” — parent process gone</span>
+          </div>
+        </div>
+      </div><!-- /linger -->
+
+      <!-- ---- LIVE: bare list, tied to open panes ---- -->
+      <div class="area area--live">
+        <div class="area__head">
+          <span class="area__title">Serving for a pane</span>
+          <span class="area__meta">2 servers · newest <b>4m</b> ago</span>
+        </div>
+
+        <div class="srv">
+          <div class="srv__top">
+            <span class="tag">Vite</span>
+            <span class="srv__port">:5173</span>
+            <span class="srv__cmd">npm run dev</span>
+            <span class="srv__spec">pid 8821 · 4m</span>
+            <button class="srv__act srv__open" aria-label="Open localhost:5173">
+              <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 2.5H2.5v7h7v-2"/><path d="M7 2.5h2.5V5"/><path d="M9.3 2.7 5.5 6.5"/></svg>
+            </button>
+            <button class="srv__act srv__kill" aria-label="Kill pid 8821">
+              <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7"/></svg>
+            </button>
+          </div>
+          <div class="srv__why">
+            <span class="srv__wdot"></span>
+            <span class="srv__where">pane 3</span>
+            <span class="srv__state">· working</span>
+            <span class="srv__task">“run the web dev server”</span>
+          </div>
+        </div>
+
+        <div class="srv">
+          <div class="srv__top">
+            <span class="tag">Next</span>
+            <span class="srv__port">:3000</span>
+            <span class="srv__cmd">next dev</span>
+            <span class="srv__spec">pid 9001 · 48m</span>
+            <button class="srv__act srv__open" aria-label="Open localhost:3000">
+              <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 2.5H2.5v7h7v-2"/><path d="M7 2.5h2.5V5"/><path d="M9.3 2.7 5.5 6.5"/></svg>
+            </button>
+            <button class="srv__act srv__kill" aria-label="Kill pid 9001">
+              <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7"/></svg>
+            </button>
+          </div>
+          <div class="srv__why">
+            <span class="srv__wdot srv__wdot--idle"></span>
+            <span class="srv__where">pane 5</span>
+            <span class="srv__state">· idle</span>
+            <span class="srv__task">“next dev” — Perch dashboard</span>
+          </div>
+        </div>
+      </div><!-- /live -->
+
+    </div>
+
+    <div class="local__foot">
+      <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3">
+        <circle cx="8" cy="8" r="6.4"/><path d="M8 7.2v4" stroke-linecap="round"/><circle cx="8" cy="4.9" r=".7" fill="currentColor" stroke="none"/></svg>
+      <span>Loopback listeners (127.0.0.1 / ::1). Kill sends to the exact PID, never by name.</span>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
