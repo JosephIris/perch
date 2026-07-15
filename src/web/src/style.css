@@ -4478,13 +4478,57 @@ body.show-dashboard .dashboard { display: flex; }
   white-space: nowrap;
 }
 
+/* Skill invocation — a coloured action row. Same grid as .work, but violet and
+ * glyph-marked so a packaged capability stands out from the tool-call texture. */
+.skill {
+  display: grid;
+  grid-template-columns: 40px 12px 1fr auto;
+  align-items: baseline;
+  gap: var(--sp-8);
+  padding: 2px var(--sp-12);
+  margin: 0 var(--sp-8);
+  border-radius: var(--r-input);
+}
+.skill:hover { background: var(--color-subtle-secondary); }
+.skill__time {
+  font-family: var(--font-small);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: transparent;
+}
+.skill:hover .skill__time { color: var(--color-text-disabled); }
+.skill__glyph { text-align: center; font-size: 9px; color: var(--color-skill); }
+.skill__what {
+  min-width: 0;
+  display: flex;
+  gap: var(--sp-4);
+  align-items: baseline;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.skill__verb {
+  flex: none;
+  font-family: var(--font-small);
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--color-skill);
+}
+.skill__target {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-skill);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Filter the stream by kind. Pure show/hide driven by the filter bar — no
  * re-render. Hiding actions IS the old prose-only view. Interrupts ride with
- * "user" (they're your action). */
+ * "user" (they're your action); skills filter on their own. */
 .inspector__stream--hide-user .turn-prompt,
 .inspector__stream--hide-user .turn-interrupt,
 .inspector__stream--hide-claude .beat,
-.inspector__stream--hide-actions .work { display: none; }
+.inspector__stream--hide-actions .work,
+.inspector__stream--hide-skill .skill { display: none; }
 /* Every kind toggled off — the stream is empty by choice, so say so rather than
  * leave a blank rail that reads as a bug. */
 .inspector__stream--empty-filter::after {
@@ -4601,11 +4645,13 @@ body.show-dashboard .dashboard { display: flex; }
   flex: none;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--sp-4);
   padding: var(--sp-8);
   border-top: 1px solid var(--color-sidebar-stroke);
 }
-.inspector__filters-spacer { flex: 1; }
+/* The "All" reset gets a little air before the category chips. */
+.inspector__filter--all { margin-right: var(--sp-4); }
 .inspector__filter {
   display: inline-flex;
   align-items: center;
@@ -4638,6 +4684,12 @@ body.show-dashboard .dashboard { display: flex; }
 .inspector__filter--all[aria-pressed="true"] {
   background: var(--color-subtle-tertiary);
   color: var(--color-text-secondary);
+}
+/* Skills chip wears the violet, matching its rows (after the generic rule so it
+ * wins at equal specificity). */
+.inspector__filter--skill[aria-pressed="true"] {
+  background: var(--color-skill-faint);
+  color: var(--color-skill);
 }
 
 .inspector__vitals {
