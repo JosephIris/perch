@@ -610,6 +610,10 @@ export interface CloudResourceView {
   isOrphan: boolean;
   /** Live panes only: "working" | "done" | "waiting" | … */
   agentState?: string | null;
+  /** False → surfaced by the GPU radar (a running accelerator Perch didn't
+   * create), not one of our agent's machines. Radar rows are view-only: shown
+   * and costed so a stray GPU can't hide, but never killed from here. */
+  startedByPerch: boolean;
 }
 
 export interface CloudDataMessage {

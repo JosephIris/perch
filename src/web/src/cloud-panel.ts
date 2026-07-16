@@ -110,7 +110,10 @@ const KILL_SVG =
   'stroke-width="1.4" stroke-linecap="round"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7"/></svg>';
 
 function renderInstance(r: CloudResourceView): HTMLElement {
-  const card = el("div", "inst" + (r.isOrphan ? " inst--orphan" : ""));
+  // Radar rows are running accelerators Perch didn't create — shown so a stray
+  // GPU can't hide, but view-only (no kill, no orphan alarm).
+  const radar = r.startedByPerch === false;
+  const card = el("div", "inst" + (radar ? " inst--radar" : r.isOrphan ? " inst--orphan" : ""));
   if (deleting.has(r.id)) card.classList.add("inst--deleting");
 
   // ---- line 1: the machine ----
@@ -142,26 +145,37 @@ function renderInstance(r: CloudResourceView): HTMLElement {
     if (costNode) costNode.textContent = money(costSoFar(r));
   });
 
-  const kill = el("button", "inst__kill") as HTMLButtonElement;
-  kill.innerHTML = KILL_SVG;
-  kill.setAttribute("aria-label", `Delete ${r.name}`);
-  kill.disabled = deleting.has(r.id);
-  kill.addEventListener("click", () => void confirmDelete(r));
-  top.appendChild(kill);
+  // A radar row is not ours to kill — the button is omitted entirely, not just
+  // disabled, so there's nothing to click. (The host refuses it too.)
+  if (!radar) {
+    const kill = el("button", "inst__kill") as HTMLButtonElement;
+    kill.innerHTML = KILL_SVG;
+    kill.setAttribute("aria-label", `Delete ${r.name}`);
+    kill.disabled = deleting.has(r.id);
+    kill.addEventListener("click", () => void confirmDelete(r));
+    top.appendChild(kill);
+  }
   card.appendChild(top);
 
-  // ---- line 2: the agent that explains it ----
+  // ---- line 2: what explains it ----
   const why = el("div", "inst__why");
   const dot = el("span", "inst__dot");
-  dot.dataset.state = r.isOrphan ? "orphan" : (r.agentState ?? "idle");
+  dot.dataset.state = radar ? "radar" : r.isOrphan ? "orphan" : (r.agentState ?? "idle");
   why.appendChild(dot);
-  why.appendChild(el("span", "inst__agent", r.agentName || "unknown agent"));
-  const where = whyLine(r);
-  if (where) why.appendChild(el("span", "inst__where", where));
-  if (r.task) {
-    const task = el("span", "inst__task", `“${r.task}”`);
-    task.title = r.task;   // the ledger keeps the full prompt; the row truncates
-    why.appendChild(task);
+  if (radar) {
+    // No agent, no ledger — say plainly what it is and where, so the number in
+    // line 1 has a name.
+    why.appendChild(el("span", "inst__agent", "not started by Perch"));
+    if (r.zone) why.appendChild(el("span", "inst__where", r.zone));
+  } else {
+    why.appendChild(el("span", "inst__agent", r.agentName || "unknown agent"));
+    const where = whyLine(r);
+    if (where) why.appendChild(el("span", "inst__where", where));
+    if (r.task) {
+      const task = el("span", "inst__task", `“${r.task}”`);
+      task.title = r.task;   // the ledger keeps the full prompt; the row truncates
+      why.appendChild(task);
+    }
   }
   card.appendChild(why);
   return card;
@@ -207,14 +221,18 @@ function renderBody(): HTMLElement {
     empty.appendChild(el(
       "div",
       "cloud__empty-note",
-      "Machines your agents create with gcloud show up here. Perch only tracks what it created itself.",
+      "Machines your agents create with gcloud show up here — plus any GPU running in the project, even one Perch didn't start, so a stray accelerator can't hide.",
     ));
     body.appendChild(empty);
     return body;
   }
 
-  const orphans = latest.filter((r) => r.isOrphan);
-  const live = latest.filter((r) => !r.isOrphan);
+  // Radar rows (accelerators Perch didn't create) are their own bucket — never
+  // mixed into orphans/live, which are strictly OUR machines.
+  const radar = latest.filter((r) => r.startedByPerch === false);
+  const owned = latest.filter((r) => r.startedByPerch !== false);
+  const orphans = owned.filter((r) => r.isOrphan);
+  const live = owned.filter((r) => !r.isOrphan);
 
   if (orphans.length) {
     const area = el("div", "area area--orphans");
@@ -241,6 +259,22 @@ function renderBody(): HTMLElement {
     area.appendChild(head);
     registerSpent(head, live);
     live.forEach((r) => area.appendChild(renderInstance(r)));
+    body.appendChild(area);
+  }
+
+  // GPU radar — running accelerators nobody here started. Last, and visually its
+  // own thing: expensive to ignore, but not an orphan you clean up.
+  if (radar.length) {
+    const area = el("div", "area area--radar");
+    const head = areaHead(
+      "Not started by Perch",
+      radar.length,
+      radar.reduce((n, r) => n + costSoFar(r), 0),
+      false,
+    );
+    area.appendChild(head);
+    registerSpent(head, radar);
+    radar.forEach((r) => area.appendChild(renderInstance(r)));
     body.appendChild(area);
   }
 
@@ -361,7 +395,7 @@ export function showCloudPanel(): void {
   note.title =
     "List price for the machine type × time running. Excludes disks, network egress, " +
     "and any sustained-use or committed-use discounts — your real bill will differ. " +
-    "Perch only shows machines it created; anything made outside Perch is invisible here.";
+    "Perch shows machines its agents created, plus any running GPU it finds — even ones started elsewhere — so a stray accelerator can't hide. Non-Perch rows are view-only.";
   foot.appendChild(note);
   card.appendChild(foot);
 
@@ -406,7 +440,8 @@ function updateSidebar(): void {
   }
   area.hidden = false;
 
-  const orphans = latest.filter((r) => r.isOrphan);
+  const orphans = latest.filter((r) => r.isOrphan && r.startedByPerch !== false);
+  const radar = latest.filter((r) => r.startedByPerch === false);
   const burn = latest.reduce((n, r) => n + r.usdPerHour, 0);
   const spent = latest.reduce((n, r) => n + costSoFar(r), 0);
 
@@ -429,20 +464,31 @@ function updateSidebar(): void {
     sub.textContent = bits.join(" · ");
   }
 
-  card.classList.toggle("cloud-card--orphan", orphans.length > 0);
+  // Two things escalate the card to caution and grow the alert row: OUR orphans
+  // (yours to clean up) and radar GPUs (someone else's, but burning money).
+  // Orphans win the row when both are present — they're what you can act on here.
+  const alarm = orphans.length > 0 || radar.length > 0;
+  card.classList.toggle("cloud-card--orphan", alarm);
 
   const alert = document.getElementById("cloud-card-alert");
   const alertText = document.getElementById("cloud-card-alert-text");
   const alertCost = document.getElementById("cloud-card-alert-cost");
-  if (alert) alert.hidden = orphans.length === 0;
-  if (orphans.length && alertText && alertCost) {
-    alertText.textContent = `${orphans.length} with no agent`;
-    alertCost.textContent = money(orphans.reduce((n, r) => n + costSoFar(r), 0));
+  if (alert) alert.hidden = !alarm;
+  if (alertText && alertCost) {
+    if (orphans.length) {
+      alertText.textContent = `${orphans.length} with no agent`;
+      alertCost.textContent = money(orphans.reduce((n, r) => n + costSoFar(r), 0));
+    } else if (radar.length) {
+      alertText.textContent = `${radar.length} not started here`;
+      alertCost.textContent = money(radar.reduce((n, r) => n + costSoFar(r), 0));
+    }
   }
 
   card.title = orphans.length
     ? `${orphans.length} machine${orphans.length === 1 ? "" : "s"} running with no agent attached`
-    : `${latest.length} machine${latest.length === 1 ? "" : "s"} running`;
+    : radar.length
+      ? `${radar.length} GPU${radar.length === 1 ? "" : "s"} running that Perch didn't start`
+      : `${latest.length} machine${latest.length === 1 ? "" : "s"} running`;
 }
 
 export function initCloud(): void {

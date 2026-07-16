@@ -192,4 +192,54 @@ public class CloudPollerTests
         // would have made every machine look like an orphan, forever, silently.
         Assert.Equal("5dc1e171-7f05-4528-9849-51b59786927c", r.Session);
     }
+
+    // A GPU the project is running that Perch never created — no agent labels,
+    // just Terraform's. Exactly the case the radar exists for.
+    private const string RadarGpuJson = """
+    [{ "name":"tf-runner","zone":"z/us-central1-c",
+       "machineType":"m/a2-ultragpu-4g","status":"RUNNING",
+       "creationTimestamp":"2026-07-15T20:10:00-07:00",
+       "labels":{"goog-terraform-provisioned":"true","env":"ds"} }]
+    """;
+
+    [Fact]
+    public void Radar_rows_are_flagged_and_never_orphaned()
+    {
+        // Parsed as radar, a box with no live pane is NOT an orphan — orphan is a
+        // status only OUR machines can have. It's its own bucket instead.
+        var radar = Poller().Parse(RadarGpuJson, startedByPerch: false);
+        var ds = Assert.Single(radar);
+        Assert.False(ds.StartedByPerch);
+        Assert.False(ds.IsOrphan);
+        Assert.True(ds.IsGpu);
+        Assert.Equal(20.2752, ds.UsdPerHour, precision: 4);   // priced → cost shows
+        Assert.Null(ds.AgentName);                             // no ledger join attempted
+    }
+
+    [Fact]
+    public void Merge_keeps_the_attributed_copy_of_a_gpu_seen_in_both()
+    {
+        // A GPU WE created surfaces in both the label query and the GPU query. The
+        // attributed copy must win — it carries the agent + task the radar row lacks.
+        var attributed = Poller().Parse(Json, startedByPerch: true);
+        var radar = Poller().Parse(Json, startedByPerch: false);
+        var merged = CloudPoller.Merge(attributed, radar);
+
+        Assert.Equal(attributed.Count, merged.Count);          // no duplicates
+        var gpu = merged.Single(r => r.Name == "build-runner-h1");
+        Assert.True(gpu.StartedByPerch);
+        Assert.Equal("build-sweep", gpu.AgentName);            // ledger join survived
+    }
+
+    [Fact]
+    public void Merge_adds_a_radar_gpu_we_did_not_create()
+    {
+        var attributed = Poller().Parse(Json, startedByPerch: true);
+        var radar = Poller().Parse(RadarGpuJson, startedByPerch: false);
+        var merged = CloudPoller.Merge(attributed, radar);
+
+        Assert.Equal(attributed.Count + 1, merged.Count);
+        var ds = merged.Single(r => r.Name == "tf-runner");
+        Assert.False(ds.StartedByPerch);
+    }
 }
