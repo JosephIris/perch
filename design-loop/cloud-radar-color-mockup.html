@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Perch · Cloud radar — teal weights, not yellow</title>
+
+<style>
+@font-face { font-family:"Inter Variable"; src:url("./InterVariable.woff2") format("woff2-variations"); font-weight:100 900; font-style:normal; font-display:block; }
+@font-face { font-family:"Geist Mono Variable"; src:url("./GeistMonoVariable.woff2") format("woff2-variations"); font-weight:100 900; font-style:normal; font-display:block; }
+
+:root {
+  --sp-4:4px; --sp-8:8px; --sp-12:12px; --sp-16:16px; --sp-24:24px; --sp-32:32px; --sp-48:48px;
+  --r-input:4px; --r-pill:6px; --r-card:8px;
+  --font-text:"Inter Variable","Segoe UI Variable Text","Segoe UI",sans-serif;
+  --font-small:"Inter Variable","Segoe UI Variable Small","Segoe UI",sans-serif;
+  --font-mono:"Geist Mono Variable","Cascadia Code",Consolas,monospace;
+  --color-sidebar-surface:#181818;
+  --color-layer:rgba(255,255,255,0.04); --color-stroke:rgba(255,255,255,0.08);
+  --color-text-primary:rgba(255,255,255,0.92); --color-text-secondary:rgba(255,255,255,0.72);
+  --color-text-tertiary:rgba(255,255,255,0.5); --color-text-disabled:rgba(255,255,255,0.34);
+  --color-caution:#FCE100;
+
+  /* ONE teal — the app's --color-cloud. Everything below is a WEIGHT of it. */
+  --color-cloud:#5BC8AF;
+  --cloud-09:rgba(91,200,175,0.09);   /* today's resting fill */
+  --cloud-14:rgba(91,200,175,0.14);   /* today's hover */
+  --cloud-18:rgba(91,200,175,0.18);
+  --cloud-26:rgba(91,200,175,0.26);
+  --cloud-line:rgba(91,200,175,0.55);
+  --cloud-dim:#3E8C7B;                /* same hue, desaturated/darker */
+  --ease-entry:cubic-bezier(0,0,0,1); --dur-fast:150ms;
+}
+* { box-sizing:border-box; }
+html,body { margin:0; }
+body { background:#0e0e10; color:var(--color-text-primary); font-family:var(--font-text);
+  font-size:14px; line-height:1.4; -webkit-font-smoothing:antialiased; padding:var(--sp-32) var(--sp-24) var(--sp-48); }
+button { font:inherit; color:inherit; background:none; border:0; padding:0; margin:0; cursor:pointer; }
+
+.wrap { max-width:1120px; margin:0 auto; }
+.page-title { font-size:20px; font-weight:600; margin:0 0 var(--sp-4); letter-spacing:-0.01em; }
+.page-lede { font-size:13px; color:var(--color-text-secondary); margin:0 0 var(--sp-32); max-width:70ch; }
+.page-lede b { color:var(--color-cloud); font-weight:600; }
+.page-lede .y { color:var(--color-caution); font-weight:600; }
+h2.sec { font-size:12px; font-weight:600; letter-spacing:.04em; text-transform:uppercase;
+  color:var(--color-text-tertiary); margin:0 0 var(--sp-12); }
+.divider { height:1px; background:var(--color-stroke); margin:var(--sp-32) 0; }
+
+/* ---- the real sidebar cloud card ---- */
+.sidebar { background:var(--color-sidebar-surface); border-radius:var(--r-card);
+  padding:var(--sp-12) var(--sp-8); width:264px; }
+.arealabel { font-family:var(--font-small); font-size:11px; font-weight:600; letter-spacing:.04em;
+  text-transform:uppercase; color:var(--color-text-tertiary); padding:0 var(--sp-8) var(--sp-4); }
+.card { display:block; width:100%; text-align:left; border:1px solid transparent; cursor:pointer;
+  padding:var(--sp-8) var(--sp-12); border-radius:var(--r-card);
+  background:var(--cloud-09); transition:background var(--dur-fast) var(--ease-entry); }
+.card__head { display:flex; align-items:center; gap:var(--sp-8); }
+.card__dot { width:6px; height:6px; border-radius:50%; background:var(--color-cloud); flex:0 0 auto; }
+.card__title { font-size:13px; font-weight:600; color:var(--color-text-primary); }
+.card__rate { font-family:var(--font-small); font-size:12px; font-weight:600; color:var(--color-cloud);
+  margin-left:auto; font-variant-numeric:tabular-nums; }
+.card__sub { display:block; padding-left:calc(6px + var(--sp-8)); margin-top:2px;
+  font-family:var(--font-small); font-size:11px; color:var(--color-text-tertiary); }
+.card__alert { display:flex; align-items:center; gap:var(--sp-8); margin-top:var(--sp-8);
+  padding-top:var(--sp-8); border-top:1px solid rgba(255,255,255,0.07); }
+.card__alert-dot { width:6px; height:6px; border-radius:50%; background:var(--color-caution); flex:0 0 auto; }
+.card__alert-text { font-family:var(--font-small); font-size:11px; font-weight:600; color:var(--color-text-primary); }
+.card__alert-cost { font-family:var(--font-small); font-size:11px; font-weight:600; color:var(--color-caution);
+  margin-left:auto; font-variant-numeric:tabular-nums; }
+
+/* ===== reference: the two states that already exist ===== */
+/* orphan — YOUR machine, no agent. Stays caution yellow. Don't touch. */
+.card--orphan { background:rgba(252,225,0,0.06); }
+.card--orphan .card__dot { background:var(--color-caution); }
+.card--orphan .card__rate { color:var(--color-caution); }
+
+/* ===== the options for RADAR (not started here) — all teal ===== */
+
+/* A · deeper teal fill */
+.card--a { background:var(--cloud-18); }
+.card--a .card__alert-dot { background:var(--color-cloud); }
+.card--a .card__alert-cost { color:var(--color-cloud); }
+
+/* B · teal outline, no fill — borrows the Local card's grammar:
+      outline = not yours, fill = yours running */
+.card--b { background:transparent; border-color:var(--cloud-line); }
+.card--b .card__alert-dot { background:var(--color-cloud); }
+.card--b .card__alert-cost { color:var(--color-cloud); }
+
+/* C · unchanged card; only the alert row carries it, in full teal */
+.card--c .card__alert-dot { background:var(--color-cloud); }
+.card--c .card__alert-cost { color:var(--color-cloud); }
+
+/* D · dimmed teal — same hue, desaturated: "present, but not yours" */
+.card--d { background:rgba(62,140,123,0.20); }
+.card--d .card__dot { background:var(--cloud-dim); }
+.card--d .card__rate { color:var(--cloud-dim); }
+.card--d .card__alert-dot { background:var(--cloud-dim); }
+.card--d .card__alert-cost { color:var(--cloud-dim); }
+
+.row { display:flex; gap:var(--sp-24); flex-wrap:wrap; align-items:flex-start; }
+.opt { display:flex; flex-direction:column; gap:var(--sp-8); }
+.cap { font-family:var(--font-small); font-size:11px; color:var(--color-text-tertiary); width:264px; }
+.cap b { color:var(--color-text-secondary); font-weight:600; }
+.badge { display:inline-block; font-family:var(--font-small); font-size:9px; font-weight:700;
+  letter-spacing:.05em; text-transform:uppercase; color:var(--color-cloud);
+  border:1px solid var(--color-cloud); border-radius:3px; padding:0 4px; margin-left:6px; }
+
+/* ---- panel radar section weights ---- */
+.panel { width:520px; background:#1c1c1c; border:1px solid var(--color-stroke); border-radius:12px; overflow:hidden; }
+.panel__head { display:flex; align-items:center; gap:var(--sp-8); padding:var(--sp-8) var(--sp-12);
+  border-bottom:1px solid var(--color-stroke); }
+.panel__title { font-size:14px; font-weight:600; }
+.panel__sub { font-family:var(--font-small); font-size:11px; color:var(--color-text-tertiary); }
+.panel__body { padding:var(--sp-8); }
+.area { border-radius:var(--r-card); padding:var(--sp-8); margin-bottom:var(--sp-12); }
+.area--radar-09 { background:var(--cloud-09); border:1px solid var(--cloud-09); }
+.area--radar-line { background:transparent; border:1px solid var(--cloud-line); }
+.area__head { display:flex; align-items:center; gap:var(--sp-8); padding:2px var(--sp-4) var(--sp-8); }
+.area__dot { width:6px; height:6px; border-radius:50%; background:var(--color-cloud); flex:0 0 auto; }
+.area__title { font-size:12px; font-weight:600; color:var(--color-text-secondary); }
+.area__meta { font-family:var(--font-small); font-size:11px; color:var(--color-text-tertiary); }
+.area__meta b { color:var(--color-text-primary); font-weight:600; }
+.inst { background:rgba(255,255,255,0.04); border-radius:var(--r-pill); padding:var(--sp-8) var(--sp-12); }
+.inst__top { display:flex; align-items:center; gap:var(--sp-8); }
+.tag { font-family:var(--font-small); font-size:9px; font-weight:600; letter-spacing:.04em; text-transform:uppercase;
+  padding:1px 5px; border-radius:3px; background:rgba(91,200,175,0.14); color:var(--color-cloud); }
+.inst__name { font-family:var(--font-mono); font-size:12px; font-weight:600; }
+.inst__spec { font-family:var(--font-small); font-size:10px; color:var(--color-text-tertiary); }
+.inst__cost { font-size:13px; font-weight:600; margin-left:auto; font-variant-numeric:tabular-nums; }
+.inst__cost i { font-style:normal; font-size:10px; color:var(--color-text-tertiary); font-weight:400; }
+.inst__why { display:flex; align-items:center; gap:var(--sp-8); margin-top:2px; }
+.inst__wdot { width:5px; height:5px; border-radius:50%; background:var(--color-cloud); flex:0 0 auto; }
+.inst__agent { font-family:var(--font-small); font-size:11px; font-weight:600; color:var(--color-text-secondary); }
+.inst__where { font-family:var(--font-small); font-size:11px; color:var(--color-text-tertiary); }
+
+.note { margin-top:var(--sp-32); padding:var(--sp-16); background:var(--color-layer);
+  border:1px solid var(--color-stroke); border-radius:var(--r-card); }
+.note h3 { font-size:12px; font-weight:600; letter-spacing:.04em; text-transform:uppercase;
+  color:var(--color-text-tertiary); margin:0 0 var(--sp-8); }
+.note p { font-size:13px; color:var(--color-text-secondary); margin:var(--sp-4) 0; }
+.note b { color:var(--color-text-primary); font-weight:600; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="page-title">Cloud radar — teal weights, not yellow</div>
+  <p class="page-lede">
+    My bug: the sidebar card reused the <span class="y">orphan/caution</span> class, so a radar GPU turned the card
+    yellow. <span class="y">Yellow</span> should keep meaning <b style="color:var(--color-caution)">your machine, no agent — go clean it up</b>.
+    A radar GPU isn't yours to clean up, so it should stay in the <b>cloud teal</b>, distinguished by <b>weight</b>.
+    All four options below are the same scenario as your real one: 1 DWS A100 box, nothing of ours running.
+  </p>
+
+  <h2 class="sec">Reference — the two states that already exist (don't change)</h2>
+  <div class="row">
+    <div class="opt">
+      <div class="sidebar">
+        <div class="arealabel">Cloud</div>
+        <button class="card" type="button">
+          <span class="card__head"><span class="card__dot"></span><span class="card__title">2 machines</span><span class="card__rate">$3.80/hr</span></span>
+          <span class="card__sub">1 cluster · $14.20 spent</span>
+        </button>
+      </div>
+      <div class="cap"><b>Resting</b> — your machines, all attributed. Teal at 9%.</div>
+    </div>
+    <div class="opt">
+      <div class="sidebar">
+        <div class="arealabel">Cloud</div>
+        <button class="card card--orphan" type="button">
+          <span class="card__head"><span class="card__dot"></span><span class="card__title">2 machines</span><span class="card__rate">$3.80/hr</span></span>
+          <span class="card__sub">1 GPU · $88.10 spent</span>
+          <span class="card__alert"><span class="card__alert-dot"></span><span class="card__alert-text">1 with no agent</span><span class="card__alert-cost">$71.40</span></span>
+        </button>
+      </div>
+      <div class="cap"><b>Orphan</b> — yours, agent gone. Caution yellow. <b>Stays as-is.</b></div>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <h2 class="sec">Options for “not started here” — all teal</h2>
+  <div class="row">
+
+    <div class="opt">
+      <div class="sidebar">
+        <div class="arealabel">Cloud</div>
+        <button class="card card--a" type="button">
+          <span class="card__head"><span class="card__dot"></span><span class="card__title">1 machine</span><span class="card__rate">$20.28/hr</span></span>
+          <span class="card__sub">1 GPU · $52.66 spent</span>
+          <span class="card__alert"><span class="card__alert-dot"></span><span class="card__alert-text">1 not started here</span><span class="card__alert-cost">$52.66</span></span>
+        </button>
+      </div>
+      <div class="cap"><b>A · deeper teal fill</b> (18% vs 9%). Same hue, more presence — “more going on”, no alarm.</div>
+    </div>
+
+    <div class="opt">
+      <div class="sidebar">
+        <div class="arealabel">Cloud</div>
+        <button class="card card--b" type="button">
+          <span class="card__head"><span class="card__dot"></span><span class="card__title">1 machine</span><span class="card__rate">$20.28/hr</span></span>
+          <span class="card__sub">1 GPU · $52.66 spent</span>
+          <span class="card__alert"><span class="card__alert-dot"></span><span class="card__alert-text">1 not started here</span><span class="card__alert-cost">$52.66</span></span>
+        </button>
+      </div>
+      <div class="cap"><b>B · teal outline, no fill</b><span class="badge">matches Local</span> Borrows the grammar we just settled: outline = not yours, fill = yours running.</div>
+    </div>
+
+    <div class="opt">
+      <div class="sidebar">
+        <div class="arealabel">Cloud</div>
+        <button class="card card--c" type="button">
+          <span class="card__head"><span class="card__dot"></span><span class="card__title">1 machine</span><span class="card__rate">$20.28/hr</span></span>
+          <span class="card__sub">1 GPU · $52.66 spent</span>
+          <span class="card__alert"><span class="card__alert-dot"></span><span class="card__alert-text">1 not started here</span><span class="card__alert-cost">$52.66</span></span>
+        </button>
+      </div>
+      <div class="cap"><b>C · card unchanged</b> — the split happens in the panel; the card only grows the teal alert row. Quietest.</div>
+    </div>
+
+    <div class="opt">
+      <div class="sidebar">
+        <div class="arealabel">Cloud</div>
+        <button class="card card--d" type="button">
+          <span class="card__head"><span class="card__dot"></span><span class="card__title">1 machine</span><span class="card__rate">$20.28/hr</span></span>
+          <span class="card__sub">1 GPU · $52.66 spent</span>
+          <span class="card__alert"><span class="card__alert-dot"></span><span class="card__alert-text">1 not started here</span><span class="card__alert-cost">$52.66</span></span>
+        </button>
+      </div>
+      <div class="cap"><b>D · dimmed teal</b> — same hue, desaturated. Reads “present, but not yours / not your problem”.</div>
+    </div>
+
+  </div>
+
+  <div class="divider"></div>
+
+  <h2 class="sec">The panel section — same question, two weights</h2>
+  <div class="row">
+    <div class="opt">
+      <div class="panel">
+        <div class="panel__head"><span class="panel__title">Cloud</span><span class="panel__sub">1 running · $20.28/hr</span></div>
+        <div class="panel__body">
+          <div class="area area--radar-09">
+            <div class="area__head"><span class="area__dot"></span><span class="area__title">Not started by Perch</span>
+              <span class="area__meta">1 machine · <b>$52.66</b> spent</span></div>
+            <div class="inst">
+              <div class="inst__top"><span class="tag">GPU</span><span class="inst__name">tf-runner-us-central1-c-l0jl</span>
+                <span class="inst__spec">a2-ultragpu-4g · us-central1-c · 2h 36m</span>
+                <span class="inst__cost">$52.66<i> /$20.28</i></span></div>
+              <div class="inst__why"><span class="inst__wdot"></span><span class="inst__agent">not started by Perch</span>
+                <span class="inst__where">us-central1-c</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="cap"><b>Filled teal box</b> (9%) — what's shipped now.</div>
+    </div>
+
+    <div class="opt">
+      <div class="panel">
+        <div class="panel__head"><span class="panel__title">Cloud</span><span class="panel__sub">1 running · $20.28/hr</span></div>
+        <div class="panel__body">
+          <div class="area area--radar-line">
+            <div class="area__head"><span class="area__dot"></span><span class="area__title">Not started by Perch</span>
+              <span class="area__meta">1 machine · <b>$52.66</b> spent</span></div>
+            <div class="inst">
+              <div class="inst__top"><span class="tag">GPU</span><span class="inst__name">tf-runner-us-central1-c-l0jl</span>
+                <span class="inst__spec">a2-ultragpu-4g · us-central1-c · 2h 36m</span>
+                <span class="inst__cost">$52.66<i> /$20.28</i></span></div>
+              <div class="inst__why"><span class="inst__wdot"></span><span class="inst__agent">not started by Perch</span>
+                <span class="inst__where">us-central1-c</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="cap"><b>Teal outline box</b> — pairs with card option B.</div>
+    </div>
+  </div>
+
+  <div class="note">
+    <h3>Pick one</h3>
+    <p>Yellow stays reserved for <b>your orphan</b>. Radar goes teal in whichever weight you like — <b>A</b> (deeper fill), <b>B</b> (outline, matches the Local card), <b>C</b> (card unchanged, alert row only), or <b>D</b> (dimmed teal).</p>
+    <p>One wrinkle worth knowing: if you have <b>both</b> an orphan and a radar GPU, the card can only be one colour. I'd let <b>yellow win</b> — the orphan is the thing you can actually act on here — and keep the radar teal in its alert row + panel section.</p>
+  </div>
+
+</div>
+</body>
+</html>

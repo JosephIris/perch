@@ -160,6 +160,11 @@
   --color-cloud:            #5BC8AF;
   --color-cloud-faint:      rgba(91, 200, 175, 0.09);
   --color-cloud-hover:      rgba(91, 200, 175, 0.14);
+  /* Radar outline — a machine Perch didn't start. Same "not yours" grammar the
+   * Local card uses: a teal frame with NO fill, against the filled teal of the
+   * machines we did create. Caution yellow stays reserved for OUR orphans —
+   * the only thing on this card you can actually act on. */
+  --color-cloud-line:       rgba(91, 200, 175, 0.55);
 
   /* Local dev servers — a listener on YOUR machine, a DIFFERENT axis from cloud.
    * Cloud teal = remote + metered; local amber = warm, on your desk, not billing.
