@@ -31,7 +31,8 @@ internal sealed record CloudResource(
     string? AgentName,
     string? Task,
     bool IsOrphan,
-    string? AgentState);     // live panes only: working / done / waiting …
+    string? AgentState,      // live panes only: working / done / waiting …
+    bool StartedByPerch);    // false → surfaced by the GPU radar, not created here
 
 /// Asks GCP what is actually running, filtered server-side to resources this
 /// user's agents stamped. That filter is the whole trick: the project has 200+
@@ -67,6 +68,13 @@ internal sealed class CloudPoller
         return _available.Value;
     }
 
+    // A RUNNING accelerator box, whoever made it. Regex the machineType for the
+    // GPU families (a2/a3/g2 carry the GPU in the shape) and also catch n1/custom
+    // VMs with a card attached. No inner double quotes — the whole filter is
+    // already wrapped in escaped quotes for cmd.exe, and nesting would break it.
+    private const string GpuFilter =
+        "status=RUNNING AND (guestAccelerators:* OR machineType~a2- OR machineType~a3- OR machineType~g2-)";
+
     public async Task<IReadOnlyList<CloudResource>> PollAsync(CancellationToken ct = default)
     {
         if (!await IsAvailableAsync(ct)) return Array.Empty<CloudResource>();
@@ -74,31 +82,60 @@ internal sealed class CloudPoller
         var owner = PerchCli.GcloudLabels.SanitizeValue(Environment.UserName);
         if (owner.Length == 0) return Array.Empty<CloudResource>();
 
-        // Server-side filter on OUR label. Two things this buys us:
+        // 1) What THIS user's agents created. Server-side filter on OUR label buys:
         //   1. the 200-instance production fleet never crosses the wire, and
         //   2. a teammate running Perch against the same project sees their
         //      machines, not ours — so nobody deletes somebody else's cluster.
         // TERMINATED instances are excluded: they've stopped billing compute,
         // and showing them would make the panel a graveyard instead of a bill.
-        var filter = $"labels.agent-owner={owner} AND status!=TERMINATED";
+        var attributed = await ListAsync(
+            $"labels.agent-owner={owner} AND status!=TERMINATED", startedByPerch: true, ct);
+
+        // 2) GPU radar. A forgotten a2-ultragpu is ~$20/hr — worth surfacing even
+        //    without our label, and accelerators are rare enough that this stays
+        //    quiet (unlike listing the whole fleet). These carry no agent labels,
+        //    so they land as "not started here": visible + costed, but not ours to
+        //    kill from here.
+        var gpus = await ListAsync(GpuFilter, startedByPerch: false, ct);
+
+        return Merge(attributed, gpus);
+    }
+
+    /// One `instances list` + parse, tagging every row with who created it.
+    private async Task<IReadOnlyList<CloudResource>> ListAsync(
+        string filter, bool startedByPerch, CancellationToken ct)
+    {
         var (code, stdout, stderr) = await RunAsync(
             $"compute instances list --filter=\"{filter}\" --format=json", 30000, ct);
-
         if (code != 0)
         {
             Log.Info($"CloudPoller: gcloud list failed ({code}): {stderr.Trim()}");
             return Array.Empty<CloudResource>();
         }
-
-        try { return Parse(stdout); }
+        try { return Parse(stdout, startedByPerch); }
         catch (Exception ex) { Log.Error("CloudPoller.Parse", ex); return Array.Empty<CloudResource>(); }
+    }
+
+    /// Fold the radar set into the attributed one. A GPU WE created appears in
+    /// both queries — the attributed copy wins (it carries the agent + task), so
+    /// radar contributes only the strangers. Most-expensive-first, so the costliest
+    /// thing you forgot never needs a scroll.
+    internal static IReadOnlyList<CloudResource> Merge(
+        IReadOnlyList<CloudResource> attributed, IReadOnlyList<CloudResource> gpus)
+    {
+        var seen = new HashSet<string>(attributed.Select(r => r.Id), StringComparer.Ordinal);
+        var merged = new List<CloudResource>(attributed);
+        foreach (var g in gpus) if (seen.Add(g.Id)) merged.Add(g);
+        return merged
+            .OrderByDescending(r => r.UsdPerHour * Hours(r.CreatedUnixMs))
+            .ToList();
     }
 
     /// Turns the raw instance list into resources, collapsing Dataproc VMs into
     /// their cluster. Dataproc tags every VM it creates with
     /// goog-dataproc-cluster-name, so one `compute instances list` covers both
     /// resource kinds and we never need a second call per region.
-    internal IReadOnlyList<CloudResource> Parse(string json)
+    internal IReadOnlyList<CloudResource> Parse(string json, bool startedByPerch = true)
     {
         using var doc = JsonDocument.Parse(json);
         var vms = new List<Vm>();
@@ -144,7 +181,8 @@ internal sealed class CloudPoller
                 rate: rate,
                 priceKnown: known,
                 session: first.Session,
-                paneId: first.PaneId));
+                paneId: first.PaneId,
+                startedByPerch: startedByPerch));
         }
 
         // --- Plain VMs ---
@@ -161,7 +199,8 @@ internal sealed class CloudPoller
                 rate: CloudPricing.PerHour(vm.MachineType),
                 priceKnown: CloudPricing.IsKnown(vm.MachineType),
                 session: vm.Session,
-                paneId: vm.PaneId));
+                paneId: vm.PaneId,
+                startedByPerch: startedByPerch));
         }
 
         // Orphans first, then most expensive: the costliest mistake is the thing
@@ -174,10 +213,12 @@ internal sealed class CloudPoller
 
     private CloudResource Build(string id, string name, string kind, string machineType, string zone,
                                 int vmCount, long createdUnixMs, double rate, bool priceKnown,
-                                string? session, string? paneId)
+                                string? session, string? paneId, bool startedByPerch)
     {
-        var state = LookupPaneState?.Invoke(session);
-        var led = LookupLedger?.Invoke(session);
+        // A radar row has no agent labels, so there's no session to resolve and no
+        // ledger to join — skip the lookups and let it stand on its own.
+        var state = startedByPerch ? LookupPaneState?.Invoke(session) : null;
+        var led = startedByPerch ? LookupLedger?.Invoke(session) : null;
         return new CloudResource(
             Id: id,
             Name: name,
@@ -194,9 +235,12 @@ internal sealed class CloudPoller
             PaneId: paneId,
             AgentName: led?.AgentName,
             Task: led?.Task,
-            // No live pane owns this session → nothing is using the machine.
-            IsOrphan: state == null,
-            AgentState: state);
+            // For our own machines: no live pane owns this session → it's an orphan.
+            // Radar rows aren't ours, so "orphan" doesn't apply — they're their own
+            // bucket, flagged by StartedByPerch instead.
+            IsOrphan: startedByPerch && state == null,
+            AgentState: state,
+            StartedByPerch: startedByPerch);
     }
 
     private sealed record Vm(string Name, string Zone, string MachineType, long CreatedUnixMs,

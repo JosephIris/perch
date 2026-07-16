@@ -125,6 +125,10 @@ internal sealed class CloudController : IDisposable
     {
         var r = _last.FirstOrDefault(x => x.Id == id);
         if (r == null) return;
+        // Radar rows are view-only. We surface them so a stray GPU can't hide, but
+        // Perch didn't create it and won't delete it — that's the owner's call,
+        // where they made it. Belt-and-braces: the UI also omits the kill button.
+        if (!r.StartedByPerch) { Log.Info($"CloudController: refusing to delete radar row {r.Name}"); return; }
 
         var args = r.Kind == "cluster"
             ? $"dataproc clusters delete {r.Name} --region={r.Region} --quiet"
@@ -143,7 +147,9 @@ internal sealed class CloudController : IDisposable
     /// through and leave the user unsure what actually died.
     public async Task DeleteOrphansAsync()
     {
-        foreach (var r in _last.Where(x => x.IsOrphan).ToList())
+        // Only OUR orphans. A radar row (a GPU we didn't create) is never swept —
+        // deleting someone else's Terraform-managed box would be a real incident.
+        foreach (var r in _last.Where(x => x.IsOrphan && x.StartedByPerch).ToList())
             await DeleteAsync(r.Id);
     }
 
@@ -170,6 +176,7 @@ internal sealed class CloudController : IDisposable
                 paneId = r.PaneId,
                 isOrphan = r.IsOrphan,
                 agentState = r.AgentState,
+                startedByPerch = r.StartedByPerch,
             }).ToArray(),
             nowMs = now,
         });

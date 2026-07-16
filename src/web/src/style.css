@@ -3818,6 +3818,20 @@ body.show-dashboard .dashboard { display: flex; }
   padding: var(--sp-8);
   margin-bottom: var(--sp-16);
 }
+/* GPU radar — a contained box like orphans, but teal (metered, not yours) rather
+ * than caution yellow: these are running and costing, but they aren't a mistake
+ * of ours to clean up. Distinct in SHAPE from the bare "live" list too. */
+.area--radar {
+  background: var(--color-cloud-faint);
+  border: 1px solid var(--color-cloud-faint);
+  border-radius: var(--r-card);
+  padding: var(--sp-8);
+  margin-bottom: var(--sp-16);
+}
+.area--radar .area__title { color: var(--color-text-secondary); }
+/* View-only rows: no hover-reveal kill button, so a hover lift would promise an
+ * action that isn't there. Keep them calm. */
+.inst--radar:hover { background: transparent; }
 .area__head {
   display: flex;
   align-items: center;
@@ -3934,6 +3948,7 @@ body.show-dashboard .dashboard { display: flex; }
 .inst__dot[data-state="waiting"] { background: var(--color-state-waiting); }
 .inst__dot[data-state="permission"] { background: var(--color-state-permission); }
 .inst__dot[data-state="orphan"] { background: var(--color-caution); }
+.inst__dot[data-state="radar"] { background: var(--color-cloud); }
 .inst__agent {
   font-family: var(--font-small);
   font-size: 11px;

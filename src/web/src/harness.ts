@@ -444,6 +444,7 @@ if (view === "dashboard") {
     priceKnown: true,
     paneId: "3a91",
     task: "Sweep learning rates for the v3 global model",
+    startedByPerch: true,
   };
   const orphan = {
     ...base,
@@ -493,6 +494,7 @@ if (view === "dashboard") {
     resources: [
       {
         id: "us-central1-a/gpu-train-h1",
+        startedByPerch: true,
         name: "gpu-train-h1",
         kind: "instance",
         machineType: "a2-highgpu-1g",
@@ -510,6 +512,7 @@ if (view === "dashboard") {
       },
       {
         id: "cluster/dp-audience-8f2c",
+        startedByPerch: true,
         name: "dp-audience-8f2c",
         kind: "cluster",
         machineType: "e2-standard-8",
@@ -527,6 +530,7 @@ if (view === "dashboard") {
       },
       {
         id: "cluster/dp-lookalike-3a91",
+        startedByPerch: true,
         name: "dp-lookalike-3a91",
         kind: "cluster",
         machineType: "n2-standard-8",
@@ -544,6 +548,7 @@ if (view === "dashboard") {
       },
       {
         id: "us-central1-a/gpu-eval-01",
+        startedByPerch: true,
         name: "gpu-eval-01",
         kind: "instance",
         machineType: "a2-highgpu-1g",
@@ -561,6 +566,7 @@ if (view === "dashboard") {
       },
       {
         id: "us-east5-b/exotic-1",
+        startedByPerch: true,
         name: "exotic-1",
         kind: "instance",
         machineType: "c4-hypernova-99",
@@ -575,6 +581,26 @@ if (view === "dashboard") {
         paneId: "5b7d",
         isOrphan: false,
         agentState: "done",
+      },
+      {
+        // GPU radar: a Terraform-provisioned A100 box nobody here started. View-
+        // only — no agent, no kill, but costed so it can't hide.
+        id: "us-central1-c/ds-ml-dws",
+        startedByPerch: false,
+        name: "ds-ml-dws-us-central1-c-l0jl",
+        kind: "instance",
+        machineType: "a2-ultragpu-4g",
+        zone: "us-central1-c",
+        vmCount: 1,
+        isGpu: true,
+        createdMs: now - 2.1 * HOUR,
+        usdPerHour: 20.2752,
+        priceKnown: true,
+        agentName: null,
+        task: null,
+        paneId: null,
+        isOrphan: false,
+        agentState: null,
       },
     ],
   });
