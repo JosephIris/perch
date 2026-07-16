@@ -3818,12 +3818,13 @@ body.show-dashboard .dashboard { display: flex; }
   padding: var(--sp-8);
   margin-bottom: var(--sp-16);
 }
-/* GPU radar — a contained box like orphans, but teal (metered, not yours) rather
- * than caution yellow: these are running and costing, but they aren't a mistake
- * of ours to clean up. Distinct in SHAPE from the bare "live" list too. */
+/* GPU radar — a contained box like orphans, but a teal OUTLINE rather than a
+ * caution fill: running and costing, yet not a mistake of ours to clean up.
+ * Outline = not yours, matching the sidebar card and the Local panel. Still
+ * distinct in SHAPE from the bare "live" list. */
 .area--radar {
-  background: var(--color-cloud-faint);
-  border: 1px solid var(--color-cloud-faint);
+  background: transparent;
+  border: 1px solid var(--color-cloud-line);
   border-radius: var(--r-card);
   padding: var(--sp-8);
   margin-bottom: var(--sp-16);
@@ -4038,12 +4039,15 @@ body.show-dashboard .dashboard { display: flex; }
   display: block;
   width: 100%;
   text-align: left;
-  border: 0;
+  /* The 1px border slot is carried through every state (transparent unless the
+   * radar owns the card) so switching states never shifts the card's size. */
+  border: 1px solid transparent;
   cursor: pointer;
   padding: var(--sp-8) var(--sp-12);
   border-radius: var(--r-card);
   background: var(--color-cloud-faint);
-  transition: background var(--dur-fast) var(--ease-entry);
+  transition: background var(--dur-fast) var(--ease-entry),
+    border-color var(--dur-fast) var(--ease-entry);
 }
 .cloud-card:hover { background: var(--color-cloud-hover); }
 
@@ -4110,11 +4114,20 @@ body.show-dashboard .dashboard { display: flex; }
   font-variant-numeric: tabular-nums;
 }
 
-/* Orphan present: the card leaves the cloud class entirely. */
-.cloud-card--orphan { background: rgba(252, 225, 0, 0.06); }
+/* Orphan present: the card leaves the cloud class entirely. Caution is reserved
+ * for THIS — your machine with no agent, the one thing here you can act on. */
+.cloud-card--orphan { background: rgba(252, 225, 0, 0.06); border-color: transparent; }
 .cloud-card--orphan:hover { background: rgba(252, 225, 0, 0.1); }
 .cloud-card--orphan .cloud-card__dot { background: var(--color-caution); }
 .cloud-card--orphan .cloud-card__rate { color: var(--color-caution); }
+
+/* Radar owns the card: only accelerators nobody here started are running. Teal
+ * OUTLINE, no fill — the Local card's "not yours" grammar, one panel over. It's
+ * emphatically NOT caution: you can't clean this up, you just need to see it. */
+.cloud-card--radar { background: transparent; border-color: var(--color-cloud-line); }
+.cloud-card--radar:hover { background: var(--color-cloud-faint); }
+.cloud-card--radar .cloud-card__alert-dot { background: var(--color-cloud); }
+.cloud-card--radar .cloud-card__alert-cost { color: var(--color-cloud); }
 
 /* ══ Local dev servers ══════════════════════════════════════════════════════
  * Sibling of the cloud panel, one axis over: cloud is remote + metered (teal),

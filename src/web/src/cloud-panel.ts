@@ -464,11 +464,15 @@ function updateSidebar(): void {
     sub.textContent = bits.join(" · ");
   }
 
-  // Two things escalate the card to caution and grow the alert row: OUR orphans
-  // (yours to clean up) and radar GPUs (someone else's, but burning money).
-  // Orphans win the row when both are present — they're what you can act on here.
+  // Two things grow the alert row: OUR orphans (yours to clean up) and radar GPUs
+  // (someone else's, but burning money). They are NOT the same signal, so they
+  // don't share a colour: caution yellow means "you can fix this", while radar
+  // wears a teal outline — the same "not yours" grammar as the Local card. When
+  // both are present the orphan wins the card, because it's the actionable one;
+  // the radar still holds its own section in the panel.
   const alarm = orphans.length > 0 || radar.length > 0;
-  card.classList.toggle("cloud-card--orphan", alarm);
+  card.classList.toggle("cloud-card--orphan", orphans.length > 0);
+  card.classList.toggle("cloud-card--radar", orphans.length === 0 && radar.length > 0);
 
   const alert = document.getElementById("cloud-card-alert");
   const alertText = document.getElementById("cloud-card-alert-text");
