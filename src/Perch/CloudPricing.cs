@@ -66,6 +66,10 @@ internal static class CloudPricing
     /// Dataproc's own surcharge, per vCPU per hour, on top of the VM cost.
     private const double DataprocPerVcpuHour = 0.010;
 
+    /// The same surcharge, for callers that priced the VM elsewhere (the live
+    /// catalog) and still owe Dataproc its cut.
+    public static double DataprocPremium(int vcpus) => vcpus * DataprocPerVcpuHour;
+
     private static Dictionary<string, double>? _overrides;
 
     public static string OverridePath() => Path.Combine(

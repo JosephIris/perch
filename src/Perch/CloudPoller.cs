@@ -53,6 +53,21 @@ internal sealed class CloudPoller
     /// Session id → ledger entry (agent name + the prompt behind the machine).
     public Func<string?, CloudLedger.Entry?>? LookupLedger { get; set; }
 
+    /// Live list prices from Google's catalog. Null (or a miss) → the static table
+    /// in CloudPricing answers instead, which is exactly what the tests exercise.
+    public CloudPriceCatalog? Catalog { get; set; }
+
+    /// "zone/machineType" → the shape a price needs. `instances list` reports the
+    /// machine TYPE but not its vCPU/RAM, so these come from `machine-types list`,
+    /// fetched before Parse runs (Parse is synchronous) and kept for the session —
+    /// a machine type's shape never changes.
+    private readonly Dictionary<string, (int Cpus, double MemGiB)> _shapes = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _shapeZones = new(StringComparer.OrdinalIgnoreCase);
+
+    /// Test seam: hand Parse a shape without going near gcloud.
+    internal void SeedShape(string zone, string machineType, int cpus, double memGiB)
+        => _shapes[$"{zone}/{machineType}"] = (cpus, memGiB);
+
     private static readonly char[] Slash = { '/' };
     private bool? _available;
 
@@ -88,32 +103,92 @@ internal sealed class CloudPoller
         //      machines, not ours — so nobody deletes somebody else's cluster.
         // TERMINATED instances are excluded: they've stopped billing compute,
         // and showing them would make the panel a graveyard instead of a bill.
-        var attributed = await ListAsync(
-            $"labels.agent-owner={owner} AND status!=TERMINATED", startedByPerch: true, ct);
+        var attributedJson = await ListRawAsync(
+            $"labels.agent-owner={owner} AND status!=TERMINATED", ct);
 
         // 2) GPU radar. A forgotten a2-ultragpu is ~$20/hr — worth surfacing even
         //    without our label, and accelerators are rare enough that this stays
         //    quiet (unlike listing the whole fleet). These carry no agent labels,
         //    so they land as "not started here": visible + costed, but not ours to
         //    kill from here.
-        var gpus = await ListAsync(GpuFilter, startedByPerch: false, ct);
+        var gpuJson = await ListRawAsync(GpuFilter, ct);
 
+        // Pricing inputs must be in hand BEFORE Parse, which is synchronous. Both
+        // are best-effort: without them Parse just falls back to the static table.
+        await LoadPricingAsync(new[] { attributedJson, gpuJson }, ct);
+
+        var attributed = ParseSafe(attributedJson, startedByPerch: true);
+        var gpus = ParseSafe(gpuJson, startedByPerch: false);
         return Merge(attributed, gpus);
     }
 
-    /// One `instances list` + parse, tagging every row with who created it.
-    private async Task<IReadOnlyList<CloudResource>> ListAsync(
-        string filter, bool startedByPerch, CancellationToken ct)
+    /// One `instances list`. Returns the raw JSON so the caller can learn which
+    /// shapes it needs to price before parsing.
+    private async Task<string?> ListRawAsync(string filter, CancellationToken ct)
     {
         var (code, stdout, stderr) = await RunAsync(
             $"compute instances list --filter=\"{filter}\" --format=json", 30000, ct);
+        if (code == 0) return stdout;
+        Log.Info($"CloudPoller: gcloud list failed ({code}): {stderr.Trim()}");
+        return null;
+    }
+
+    private IReadOnlyList<CloudResource> ParseSafe(string? json, bool startedByPerch)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return Array.Empty<CloudResource>();
+        try { return Parse(json!, startedByPerch); }
+        catch (Exception ex) { Log.Error("CloudPoller.Parse", ex); return Array.Empty<CloudResource>(); }
+    }
+
+    /// Load the price catalog + the machine shapes these instances need. Entirely
+    /// best-effort: every failure here just leaves the static table in charge.
+    private async Task LoadPricingAsync(IEnumerable<string?> instanceJsons, CancellationToken ct)
+    {
+        try
+        {
+            Catalog ??= new CloudPriceCatalog();
+            if (!await Catalog.EnsureLoadedAsync(ct).ConfigureAwait(false)) { Catalog = null; return; }
+
+            var zones = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var json in instanceJsons)
+            {
+                if (string.IsNullOrWhiteSpace(json)) continue;
+                using var doc = JsonDocument.Parse(json!);
+                if (doc.RootElement.ValueKind != JsonValueKind.Array) continue;
+                foreach (var el in doc.RootElement.EnumerateArray())
+                {
+                    var z = LastSegment(Str(el, "zone"));
+                    if (!string.IsNullOrEmpty(z) && !_shapeZones.Contains(z!)) zones.Add(z!);
+                }
+            }
+            if (zones.Count > 0) await LoadShapesAsync(zones, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) { Log.Error("CloudPoller.LoadPricing", ex); }
+    }
+
+    /// vCPU + RAM for every machine type in these zones. One call per zone-set,
+    /// once per session — shapes are immutable, so there's nothing to invalidate.
+    private async Task LoadShapesAsync(HashSet<string> zones, CancellationToken ct)
+    {
+        var (code, stdout, stderr) = await RunAsync(
+            $"compute machine-types list --zones={string.Join(",", zones)} --format=json", 30000, ct);
         if (code != 0)
         {
-            Log.Info($"CloudPoller: gcloud list failed ({code}): {stderr.Trim()}");
-            return Array.Empty<CloudResource>();
+            Log.Info($"CloudPoller: machine-types list failed ({code}): {stderr.Trim()}");
+            return;
         }
-        try { return Parse(stdout, startedByPerch); }
-        catch (Exception ex) { Log.Error("CloudPoller.Parse", ex); return Array.Empty<CloudResource>(); }
+        using var doc = JsonDocument.Parse(stdout);
+        if (doc.RootElement.ValueKind != JsonValueKind.Array) return;
+        foreach (var el in doc.RootElement.EnumerateArray())
+        {
+            var name = Str(el, "name");
+            var zone = LastSegment(Str(el, "zone"));
+            var cpus = el.TryGetProperty("guestCpus", out var c) && c.ValueKind == JsonValueKind.Number ? c.GetInt32() : 0;
+            var mem  = el.TryGetProperty("memoryMb", out var m) && m.ValueKind == JsonValueKind.Number ? m.GetDouble() : 0;
+            if (name != null && !string.IsNullOrEmpty(zone) && cpus > 0)
+                _shapes[$"{zone}/{name}"] = (cpus, mem / 1024.0);
+        }
+        foreach (var z in zones) _shapeZones.Add(z);
     }
 
     /// Fold the radar set into the attributed one. A GPU WE created appears in
@@ -148,6 +223,26 @@ internal sealed class CloudPoller
 
             var zone = LastSegment(Str(el, "zone"));
             var mt = LastSegment(Str(el, "machineType"));
+
+            // How it was provisioned decides WHICH price it pays — the same A100
+            // is $3.93/hr on-demand and $1.85/hr under DWS Flex-Start.
+            string? provisioning = null;
+            if (el.TryGetProperty("scheduling", out var sched) && sched.ValueKind == JsonValueKind.Object)
+                provisioning = Str(sched, "provisioningModel");
+
+            // Attached cards live on the INSTANCE (n1 + a card), while a2/a3/g2
+            // carry them in the shape — but gcloud reports both here, so this is
+            // the one place that covers each case.
+            var accel = new List<(string Type, int Count)>();
+            if (el.TryGetProperty("guestAccelerators", out var ga) && ga.ValueKind == JsonValueKind.Array)
+                foreach (var a in ga.EnumerateArray())
+                {
+                    var t = LastSegment(Str(a, "acceleratorType"));
+                    var c = a.TryGetProperty("acceleratorCount", out var cc) && cc.ValueKind == JsonValueKind.Number
+                        ? cc.GetInt32() : 0;
+                    if (!string.IsNullOrEmpty(t) && c > 0) accel.Add((t!, c));
+                }
+
             vms.Add(new Vm(
                 Name: Str(el, "name") ?? "",
                 Zone: zone ?? "",
@@ -155,7 +250,9 @@ internal sealed class CloudPoller
                 CreatedUnixMs: ParseTime(Str(el, "creationTimestamp")),
                 Cluster: labels.GetValueOrDefault("goog-dataproc-cluster-name"),
                 Session: labels.GetValueOrDefault("agent-session"),
-                PaneId: labels.GetValueOrDefault("agent-pane")));
+                PaneId: labels.GetValueOrDefault("agent-pane"),
+                ProvisioningModel: provisioning,
+                Accelerators: accel));
         }
 
         var result = new List<CloudResource>();
@@ -166,8 +263,9 @@ internal sealed class CloudPoller
             var members = grp.ToList();
             var first = members.OrderBy(m => m.CreatedUnixMs).First();
             // Bill every member VM, each with Dataproc's per-vCPU premium on top.
-            var rate = members.Sum(m => CloudPricing.PerHour(m.MachineType, dataproc: true));
-            var known = members.All(m => CloudPricing.IsKnown(m.MachineType));
+            var priced = members.Select(m => PriceOf(m, dataproc: true)).ToList();
+            var rate = priced.Sum(p => p.Rate);
+            var known = priced.All(p => p.Known);
             result.Add(Build(
                 id: $"cluster/{grp.Key}",
                 name: grp.Key,
@@ -188,6 +286,7 @@ internal sealed class CloudPoller
         // --- Plain VMs ---
         foreach (var vm in vms.Where(v => string.IsNullOrEmpty(v.Cluster)))
         {
+            var p = PriceOf(vm, dataproc: false);
             result.Add(Build(
                 id: $"{vm.Zone}/{vm.Name}",
                 name: vm.Name,
@@ -196,8 +295,8 @@ internal sealed class CloudPoller
                 zone: vm.Zone,
                 vmCount: 1,
                 createdUnixMs: vm.CreatedUnixMs,
-                rate: CloudPricing.PerHour(vm.MachineType),
-                priceKnown: CloudPricing.IsKnown(vm.MachineType),
+                rate: p.Rate,
+                priceKnown: p.Known,
                 session: vm.Session,
                 paneId: vm.PaneId,
                 startedByPerch: startedByPerch));
@@ -209,6 +308,27 @@ internal sealed class CloudPoller
             .OrderByDescending(r => r.IsOrphan)
             .ThenByDescending(r => r.UsdPerHour * Hours(r.CreatedUnixMs))
             .ToList();
+    }
+
+    /// What one VM costs per hour, and whether we actually know.
+    ///
+    /// The catalog gets first refusal because it's the only source that knows the
+    /// machine was provisioned as Spot or DWS — the static table has exactly one
+    /// number per shape and is simply wrong for those (a DWS A100 box by ~72%).
+    /// Anything the catalog can't resolve falls straight through to the table, so
+    /// a catalog that's unreachable, stale, or missing a SKU costs us nothing.
+    private (double Rate, bool Known) PriceOf(Vm vm, bool dataproc)
+    {
+        if (Catalog != null && _shapes.TryGetValue($"{vm.Zone}/{vm.MachineType}", out var shape))
+        {
+            var spec = new MachineSpec(shape.Cpus, shape.MemGiB,
+                vm.Accelerators ?? Array.Empty<(string, int)>());
+            var dyn = Catalog.PerHour(vm.MachineType, RegionOf(vm.Zone),
+                CloudPriceCatalog.VariantOf(vm.ProvisioningModel), spec);
+            if (dyn is double d && d > 0)
+                return (dataproc ? d + CloudPricing.DataprocPremium(shape.Cpus) : d, true);
+        }
+        return (CloudPricing.PerHour(vm.MachineType, dataproc), CloudPricing.IsKnown(vm.MachineType));
     }
 
     private CloudResource Build(string id, string name, string kind, string machineType, string zone,
@@ -244,7 +364,9 @@ internal sealed class CloudPoller
     }
 
     private sealed record Vm(string Name, string Zone, string MachineType, long CreatedUnixMs,
-                             string? Cluster, string? Session, string? PaneId);
+                             string? Cluster, string? Session, string? PaneId,
+                             string? ProvisioningModel = null,
+                             IReadOnlyList<(string Type, int Count)>? Accelerators = null);
 
     /// The GPU families. Used only to tag the row — the $/hr figure already tells
     /// the real story, so this is a label, not an alarm.
