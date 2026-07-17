@@ -19,6 +19,7 @@ export class Toast {
     // Default parent (window-centered). We re-home the element here when a
     // toast targets no specific pane.
     this.home = el.parentElement;
+    singleton = this;
   }
 
   /** Show a toast. When `target` is a pane element the toast is re-parented
@@ -50,4 +51,17 @@ export class Toast {
       this.timer = null;
     }, HOLD_MS);
   }
+}
+
+/** The one Toast main.ts builds. Self-wiring modules (initInspector) own their
+ *  DOM and never see main.ts's locals, so they reach the toast through here
+ *  rather than main.ts threading an instance down into each of them. */
+let singleton: Toast | null = null;
+
+/** Fire a toast from anywhere. A no-op before main.ts constructs the Toast —
+ *  nothing can toast that early, and a missing confirmation beats a throw. */
+export function showToast(
+  text: string, level: NotificationLevel, target?: HTMLElement | null,
+): void {
+  singleton?.show(text, level, target);
 }

@@ -3287,6 +3287,26 @@ ul { list-style: none; padding: 0; margin: 0; }
   to   { opacity: 1; transform: translateY(0); }
 }
 
+/* Double-click-to-copy acknowledgement. The toast says a copy happened; this
+ * says WHICH row it took — on a rail this dense, "Copied message" alone leaves
+ * you guessing whether you hit the beat or the tool call beneath it. A brief
+ * wash of the success tint, no border and no movement: the row must not shift
+ * under a cursor that's about to click again.
+ *
+ * Held at full tint for the first half so it registers, then eased out — a
+ * linear fade from the peak reads as a slow bleed rather than a flash. Kept
+ * inside the 250ms ceiling; the toast is the confirmation that lingers, this
+ * only has to catch the eye. 14% rather than something punchier because it
+ * lands on rows that already carry a tint of their own (work--repeat's caution
+ * yellow, turn-interrupt's red), and a strong green over those reads as a
+ * state change rather than an acknowledgement. */
+.row-copied { animation: inspector-row-copied var(--dur-normal) var(--ease-exit); }
+@keyframes inspector-row-copied {
+  0%   { background: color-mix(in srgb, var(--color-success) 14%, transparent); }
+  50%  { background: color-mix(in srgb, var(--color-success) 14%, transparent); }
+  100% { background: transparent; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .restore-spinner { animation: none; }
   .restore-check { animation: none; }
@@ -3296,6 +3316,9 @@ ul { list-style: none; padding: 0; margin: 0; }
   .skill.row-enter,
   .turn-prompt.row-enter,
   .turn-interrupt.row-enter { animation: none; }
+  /* The copy flash still fires — it's the feedback, not decoration — but it
+   * holds and cuts rather than easing away. */
+  .row-copied { animation: inspector-row-copied var(--dur-normal) steps(1, end); }
 }
 
 .restore-card__foot {
@@ -4746,10 +4769,12 @@ body.show-dashboard .dashboard { display: flex; }
   -webkit-line-clamp: unset;
   overflow: visible;
 }
-.turn-prompt--clamped,
-.turn-prompt--open { cursor: pointer; }
+/* Only a prompt that actually overflows is clickable, so only that one gets the
+ * pointer. --open used to earn it too, which handed a short clicked prompt a
+ * cursor promising an expand that wasn't there. */
+.turn-prompt--expandable { cursor: pointer; }
 /* Chevron at the end, bottom-aligned so it reads as "there's more below". Hidden
- * until we know the text overflows (turn-prompt--clamped, set after layout). */
+ * until we know the text overflows (turn-prompt--expandable, set after layout). */
 .turn-prompt__chev {
   flex: none;
   align-self: flex-end;
@@ -4759,9 +4784,8 @@ body.show-dashboard .dashboard { display: flex; }
   color: var(--color-text-tertiary);
 }
 .turn-prompt__chev::before { content: "\2304"; }          /* ⌄ */
-.turn-prompt--open .turn-prompt__chev::before { content: "\2303"; }   /* ⌃ */
-.turn-prompt--clamped .turn-prompt__chev,
-.turn-prompt--open .turn-prompt__chev { display: block; }
+.turn-prompt--expandable.turn-prompt--open .turn-prompt__chev::before { content: "\2303"; }   /* ⌃ */
+.turn-prompt--expandable .turn-prompt__chev { display: block; }
 
 /* Interrupt — a turn you stopped (Esc / Ctrl-C). The one alarm in the stream:
  * error-tinted fill and a filled "!" badge so a halted turn is unmissable while
@@ -4831,8 +4855,12 @@ body.show-dashboard .dashboard { display: flex; }
   overflow: visible;
 }
 /* The affordance is the hover pill plus the clipped 4th line — no "…more" link.
- * A permanent control on every beat would out-shout the prose it's attached to. */
-.beat--clamped .beat__time::after {
+ * A permanent control on every beat would out-shout the prose it's attached to.
+ *
+ * Every chevron rule is gated on --expandable, including the open one. Keying
+ * the collapse chevron off --open alone meant any beat you clicked grew one,
+ * short ones included — a control pointing at nothing. */
+.beat--expandable .beat__time::after {
   content: "⌄";
   display: block;
   font-size: 9px;
@@ -4840,8 +4868,8 @@ body.show-dashboard .dashboard { display: flex; }
   opacity: 0;
   transition: opacity var(--dur-fast) var(--ease-entry);
 }
-.beat--clamped:hover .beat__time::after { opacity: 1; }
-.beat--open .beat__time::after { content: "⌃"; opacity: 1; }
+.beat--expandable:hover .beat__time::after { opacity: 1; }
+.beat--expandable.beat--open .beat__time::after { content: "⌃"; opacity: 1; }
 
 /* The two bits of inline markdown agents actually write in prose. Left raw,
  * "**Pushed to global_dnn** (`4d15a9d`)" reads as literal asterisks and

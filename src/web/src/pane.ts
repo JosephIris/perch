@@ -10,7 +10,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 
 import { b64ToBytes, bytesToB64, send } from "./bridge.js";
 import type { PaneTreeView } from "./bridge.js";
-import { cachedClipboardText, setCachedClipboardText } from "./clipboard.js";
+import { cachedClipboardText, copyText } from "./clipboard.js";
 import { showLinkMenu } from "./link-menu.js";
 import { buildPaneHeader, applyChips, applyAgentBadge, applyModelChip } from "./pane-header.js";
 import { buildPaneFooter, applyPaneFooter, type PaneFooter } from "./pane-footer.js";
@@ -583,36 +583,6 @@ export class Pane {
 function clampFontSize(n: number): number {
   if (!Number.isFinite(n)) return DEFAULT_FONT_SIZE;
   return Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, Math.round(n)));
-}
-
-/** Write text to the clipboard, preferring the async Clipboard API (granted
- *  without a prompt for the perch.local virtual host) and falling back to a
- *  hidden-textarea execCommand("copy") if it's rejected — belt and braces so
- *  copy works even when the async API is unavailable in a given WebView2
- *  build. */
-async function copyText(text: string): Promise<void> {
-  // Keep the paste cache correct for self-copies immediately, before the OS
-  // clipboard-change round-trip lands — otherwise right-clicking to paste what
-  // you just selected-copied could read the previous cache value.
-  setCachedClipboardText(text);
-  try {
-    await navigator.clipboard.writeText(text);
-    return;
-  } catch { /* fall through to the legacy path */ }
-  try {
-    const ta = document.createElement("textarea");
-    ta.value = text;
-    ta.style.position = "fixed";
-    ta.style.top = "-9999px";
-    ta.style.opacity = "0";
-    document.body.appendChild(ta);
-    ta.focus();
-    ta.select();
-    document.execCommand("copy");
-    ta.remove();
-  } catch (err) {
-    console.error("[pane] copy failed:", err);
-  }
 }
 
 // ---- OSC 7 parser ----------------------------------------------------------
