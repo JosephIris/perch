@@ -172,6 +172,12 @@ startSpinnerTicker();
 // one ellipsized meta line: ⏱ time-since-finish, per-tab loc, branch, panes).
 // Mirrors the shared-tree scenario the attribution work fixed: two done tabs in
 // one repo, each wearing ITS OWN +A −D instead of both wearing the union.
+//
+// The p-ptp tabs all sit on `main` in ONE repo, so they MUST all carry the same
+// ahead — `@{upstream}..HEAD` is a fact about the branch, and no two of them can
+// disagree about it. (The fixture used to give one tab ↑2 and its same-branch
+// siblings ↑0, which git can't produce.) Held honest here because it's also the
+// case that inflated the group header: summing ↑6 per-tab read ↑18.
 const projectsList = [
   { id: "p-ptp", name: "product-tools-prod", path: "C:\\dev\\product-tools-prod" },
   { id: "p-gm", name: "global-models", path: "C:\\dev\\global-models" },
@@ -207,6 +213,7 @@ const projectSessions: SessionView[] = [
     // sidebar row deliberately renders no color mark — see renderItem.
     rootPane: leaf({ name: "coldstart auds", agentState: "done", branch: "main", colorIndex: 5 }),
     doneAtMs: Date.now() - 47_000, linesAdded: 143, linesDeleted: 131, filesChanged: 6,
+    ahead: 6,
   }),
   // The reported mixed-tab scenario: aggregate state is "done" (host ranks
   // Done above Working) but ONE of the two panes is still working — the row
@@ -216,13 +223,13 @@ const projectSessions: SessionView[] = [
     id: "s-tab2", title: "generate tt/b4rec",
     rootPane: leaf({ name: "generate tt/b4rec", agentState: "done", branch: "main", colorIndex: 1 }),
     doneAtMs: Date.now() - 31_000, linesAdded: 89, linesDeleted: 12, filesChanged: 3,
-    paneCount: 2, ahead: 2, workingCount: 1, turnStartMs: TWO_MIN_AGO,
+    paneCount: 2, ahead: 6, workingCount: 1, turnStartMs: TWO_MIN_AGO,
   }),
   projectTab({
     id: "s-tab3", title: "fix perms audit",
     rootPane: leaf({ name: "fix perms audit", agentState: "working", activityDetail: "editing hook.ts", branch: "main" }),
     agentState: "working", activityDetail: "editing hook.ts",
-    workingCount: 1, turnStartMs: TWO_MIN_AGO, doneAtMs: 0,
+    workingCount: 1, turnStartMs: TWO_MIN_AGO, doneAtMs: 0, ahead: 6,
   }),
   // Long tagged title: proves the pre-title tag line survives the ellipsis
   // (the old trailing dot was swallowed with the clipped text).
