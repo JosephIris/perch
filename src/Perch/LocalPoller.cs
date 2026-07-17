@@ -11,10 +11,14 @@ using System.Threading.Tasks;
 namespace Perch;
 
 /// A live pane's root shell process, snapshotted on the UI thread and handed to
-/// the poller so attribution never has to read window state off-thread. Pid is
-/// the ConPty child; a dev server started in that pane is one of its descendants,
-/// so a server is "owned" by the pane whose Pid appears in the server's ancestry.
-internal sealed record PaneProc(int Pid, string PaneId, string Name, string? State);
+/// the poller so attribution never has to read window state off-thread.
+///
+/// Two ways to own a server, tried in that order. Job is the pane's job object
+/// and the authoritative one: the kernel tracks membership, so it holds even
+/// after the process that spawned the server has exited. Pid is the ConPty
+/// child, used by the legacy ancestry walk as a fallback for panes we never got
+/// a job for.
+internal sealed record PaneProc(int Pid, string PaneId, string Name, string? State, PaneJob? Job = null);
 
 /// One loopback listener the scan found, already attributed to a live pane (or
 /// not). The controller layers the ledger on top to decide lingering-vs-other;
@@ -124,7 +128,7 @@ internal sealed class LocalPoller
                 procs.TryGetValue(pid, out var proc);
                 var name = BaseName(proc?.Name ?? "");
 
-                var owner = FindOwner(pid, procs, paneByPid);
+                var owner = FindOwner(pid, procs, paneByPid, panes);
                 // System loopback noise (svchost, etc.) that no pane owns and no
                 // dev runtime explains is dropped — the panel is about dev
                 // servers, not every socket on the box.
@@ -147,9 +151,36 @@ internal sealed class LocalPoller
         return result;
     }
 
-    /// Walk a listener's process ancestry until it hits a live pane's root pid.
-    /// Bounded and cycle-guarded — a corrupt ppid chain must not spin.
-    private static PaneProc? FindOwner(int pid, Dictionary<int, ProcRow> procs, Dictionary<int, PaneProc> paneByPid)
+    /// Which live pane, if any, does this listener belong to?
+    private static PaneProc? FindOwner(
+        int pid, Dictionary<int, ProcRow> procs, Dictionary<int, PaneProc> paneByPid,
+        IReadOnlyList<PaneProc> panes)
+        => FindOwnerByJob(pid, panes) ?? FindOwnerByAncestry(pid, procs, paneByPid);
+
+    /// Ask the kernel. Job membership is inherited by every descendant and
+    /// outlives the processes in between, so this still resolves a dev server
+    /// the agent backgrounded and whose parent shell exited seconds later —
+    /// precisely the case the ancestry walk below loses. One process handle,
+    /// tested against each pane's job.
+    private static PaneProc? FindOwnerByJob(int pid, IReadOnlyList<PaneProc> panes)
+    {
+        var h = PaneJob.OpenForQuery(pid);
+        if (h == IntPtr.Zero) return null;
+        try
+        {
+            foreach (var p in panes)
+                if (p.Job != null && p.Job.Contains(h)) return p;
+            return null;
+        }
+        finally { PaneJob.CloseQuery(h); }
+    }
+
+    /// Fallback: walk the listener's process ancestry until it hits a live
+    /// pane's root pid. Only reachable for a pane whose job we never got, since
+    /// a job answers first. Bounded and cycle-guarded — a corrupt ppid chain
+    /// must not spin — and it gives up the moment an ancestor is missing,
+    /// because a dead pid ends the chain.
+    private static PaneProc? FindOwnerByAncestry(int pid, Dictionary<int, ProcRow> procs, Dictionary<int, PaneProc> paneByPid)
     {
         var visited = new HashSet<int>();
         var cur = pid;

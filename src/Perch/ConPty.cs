@@ -32,6 +32,12 @@ internal sealed class ConPty : IDisposable
 
     public int ProcessId { get; private set; }
 
+    /// The job object holding this pane's shell and every descendant it ever
+    /// spawns. The local-server scan asks it "is this listener mine?" — the one
+    /// question a parent-pid walk can't answer once an ancestor has exited.
+    /// Null if the OS refused us a job; attribution falls back to the pid walk.
+    public PaneJob? Job { get; private set; }
+
     // ---- Flow control (backpressure) -------------------------------------
     // The reader can read 8 KB and fire OutputReceived far faster than the
     // WebView2 page can parse+render it into xterm. With nothing throttling
@@ -163,17 +169,36 @@ internal sealed class ConPty : IDisposable
             var pi = new PROCESS_INFORMATION();
             // CreateProcess wants a mutable command line.
             var cmdLine = new StringBuilder(command);
+            // CREATE_SUSPENDED so the shell is in its job before it runs a
+            // single instruction. Assigning after it was already loose would
+            // leave a window — however slim — in which it could spawn a child
+            // that never joins the job and so can never be attributed back.
             if (!CreateProcess(
                     null, cmdLine,
                     IntPtr.Zero, IntPtr.Zero,
                     false,
-                    EXTENDED_STARTUPINFO_PRESENT,
+                    EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED,
                     IntPtr.Zero,
                     cwd,
                     ref si,
                     out pi))
             {
                 throw new InvalidOperationException($"CreateProcess('{command}') failed: " + Marshal.GetLastWin32Error());
+            }
+
+            // Bind first, resume no matter what: a pane that runs unattributed
+            // is a small bug, a pane left suspended forever is a dead terminal.
+            PaneJob? job = null;
+            try
+            {
+                job = PaneJob.Create();
+                job?.Assign(pi.hProcess);
+            }
+            catch (Exception ex) { Log.Error("ConPty.PaneJob", ex); }
+            finally
+            {
+                if (ResumeThread(pi.hThread) == unchecked((uint)-1))
+                    Log.Info($"ConPty: ResumeThread failed for pid {pi.dwProcessId} ({Marshal.GetLastWin32Error()})");
             }
 
             var inst = new ConPty
@@ -183,6 +208,7 @@ internal sealed class ConPty : IDisposable
                 _ptyOutRead = new SafeFileHandle(hPtyOutRead, ownsHandle: true),
                 _proc = pi,
                 ProcessId = (int)pi.dwProcessId,
+                Job = job,
                 _lastCols = cols,   // clamped ≥1 above; seeds the no-op guard
                 _lastRows = rows,
             };
@@ -364,6 +390,11 @@ internal sealed class ConPty : IDisposable
         try { _readGate.Dispose(); } catch { }
         try { if (_proc.hThread  != IntPtr.Zero) CloseHandle(_proc.hThread);  } catch { }
         try { if (_proc.hProcess != IntPtr.Zero) CloseHandle(_proc.hProcess); } catch { }
+        // Drops our handle to the job WITHOUT killing its members — a dev
+        // server that outlives this pane must keep serving so the panel can
+        // report it as lingering.
+        try { Job?.Dispose(); } catch { }
+        Job = null;
     }
 
     // -------------------- Native ----------------------------------------------
@@ -396,6 +427,7 @@ internal sealed class ConPty : IDisposable
     }
 
     private const uint EXTENDED_STARTUPINFO_PRESENT = 0x00080000;
+    private const uint CREATE_SUSPENDED = 0x00000004;
     private static readonly IntPtr PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE = (IntPtr)0x00020016;
 
     [StructLayout(LayoutKind.Sequential)]
@@ -448,4 +480,7 @@ internal sealed class ConPty : IDisposable
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool GetExitCodeProcess(IntPtr hProcess, out uint lpExitCode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint ResumeThread(IntPtr hThread);
 }
