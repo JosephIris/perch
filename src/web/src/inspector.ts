@@ -17,6 +17,8 @@
 
 import { send, onMessage, type InspectorDataMessage, type InspectorEventView,
          type PaneTreeView, type StateMessage } from "./bridge.js";
+import { copyText } from "./clipboard.js";
+import { showToast } from "./toast.js";
 
 // ---- Data layer ------------------------------------------------------------
 // Same request/reply + cache shape as commits.ts. The cache exists so switching
@@ -138,6 +140,91 @@ function appendInline(host: HTMLElement, text: string): void {
   if (last < text.length) host.append(text.slice(last));
 }
 
+// ---- Copy ------------------------------------------------------------------
+// Double-click any row to copy it. The rail is where you read what the agent
+// did, so it's also where you reach for a line to paste into a commit message,
+// an issue, or the next prompt — and until now the only way to get one out was
+// hand-dragging a selection across a 4-line clamp, which is precisely the
+// fiddliness the clamp introduced.
+//
+// What lands on the clipboard is the row's SOURCE, not its rendering: a beat
+// copies its raw **markdown** (that's what you'd paste back into a prompt) and
+// copies in FULL even when clamped to the four lines you can see. Held in a
+// WeakMap keyed by row element rather than a data- attribute — a prompt can be
+// an entire pasted spec, and that has no business being stringified into the
+// DOM — and it drops out with the row on the next poll re-render.
+//
+// Beats and prompts already expand on single click, so copy shares its rows
+// with a toggle. The second click of a double must not slam a beat shut again,
+// so those handlers bail on `detail > 1`: double-clicking a clamped beat copies
+// it AND leaves it open, which is the honest outcome — you can see the whole
+// thing you just took. We guard by `detail` rather than parking every toggle
+// behind a ~250ms dblclick timer, because taxing the common gesture (expand) to
+// serve the rarer one (copy) is the wrong way round, and a toggle that fires
+// and then reverses reads as a flicker.
+
+const copySource = new WeakMap<HTMLElement, string>();
+
+/** Clipboard text for one journal row, mirroring what the row shows. */
+function eventText(e: InspectorEventView): string {
+  switch (e.kind) {
+    case "prompt":
+    case "beat":
+      return e.text;
+    // The brackets on "[Request interrupted …]" are dropped in the render (the
+    // "!" badge carries that meaning now), so they don't ride along either.
+    case "interrupt":
+      return e.text.replace(/^\[|\]$/g, "");
+    default:
+      // "Skill deep-research", "Edit GitProc.cs", "Bash dotnet test". Note is
+      // the qualifier the row shows beside the target when it has one; the ×N
+      // repeat marker is a rendering of collapsed rows, not part of the action.
+      return [e.kind === "skill" ? "Skill" : e.verb, e.target, e.note]
+        .filter(Boolean).join(" ");
+  }
+}
+
+/** Rows whose double-click copies. Everything the rail renders as a discrete
+ *  thing-that-happened, plus the file rows in the Changes strip. */
+const COPYABLE = ".beat, .turn-prompt, .turn-interrupt, .skill, .work, .file-row";
+
+async function copyRow(row: HTMLElement): Promise<void> {
+  const text = copySource.get(row);
+  if (!text) return;
+
+  // A double-click natively selects the word under the cursor. We just copied
+  // the whole row, so leaving one word highlighted contradicts what happened.
+  window.getSelection()?.removeAllRanges();
+
+  if (await copyText(text)) {
+    // Flash the row itself as well as toasting: the toast says a copy happened,
+    // the flash says WHICH row — and with rows this dense that's the half you'd
+    // otherwise have to guess at.
+    row.classList.remove("row-copied");
+    void row.offsetWidth;                       // restart the animation mid-flight
+    row.classList.add("row-copied");
+    showToast(copyLabel(row, text), "success", null);
+  } else {
+    showToast("Couldn't copy to the clipboard", "error", null);
+  }
+}
+
+/** "Copied message" / "Copied action" / … — naming what you copied, since a
+ *  bare "Copied" on a rail of five row kinds tells you nothing about whether
+ *  you hit the beat or the tool call under it. */
+function copyLabel(row: HTMLElement, text: string): string {
+  const what =
+    row.classList.contains("beat") ? "message" :
+    row.classList.contains("turn-prompt") ? "prompt" :
+    row.classList.contains("turn-interrupt") ? "interrupt" :
+    row.classList.contains("skill") ? "skill" :
+    row.classList.contains("file-row") ? "path" : "action";
+  // Line count earns its place on a clamped beat: it's the confirmation that
+  // you got all 40 lines and not the 4 the rail was showing.
+  const lines = text.split("\n").length;
+  return lines > 1 ? `Copied ${what} · ${lines} lines` : `Copied ${what}`;
+}
+
 // ---- Rendering -------------------------------------------------------------
 
 function renderChanges(host: HTMLElement, data: InspectorDataMessage, open: boolean): void {
@@ -169,6 +256,9 @@ function renderChanges(host: HTMLElement, data: InspectorDataMessage, open: bool
     appendDiff(rl, f.added, f.deleted);
     row.appendChild(rl);
     row.title = f.path;
+    // The full path, not the filename the row leads with — a bare "GitProc.cs"
+    // is not something you can paste anywhere useful.
+    copySource.set(row, f.path);
     body.appendChild(row);
   }
   host.appendChild(body);
@@ -204,7 +294,9 @@ function renderEvent(e: InspectorEventView, i: number): HTMLElement {
     p.appendChild(elText("span", "turn-prompt__caret", ">"));
     p.appendChild(elText("span", "turn-prompt__text", e.text));
     p.appendChild(el("span", "turn-prompt__chev"));
-    p.addEventListener("click", () => {
+    p.addEventListener("click", (ev) => {
+      if (ev.detail > 1) return;                 // second click of a copy — see "Copy"
+      if (!p.classList.contains("turn-prompt--expandable")) return;   // nothing to open
       const open = p.classList.toggle("turn-prompt--open");
       if (open) expanded.add(i); else expanded.delete(i);
     });
@@ -223,7 +315,9 @@ function renderEvent(e: InspectorEventView, i: number): HTMLElement {
     const text = el("span", "beat__text");
     appendInline(text, e.text);
     b.appendChild(text);
-    b.addEventListener("click", () => {
+    b.addEventListener("click", (ev) => {
+      if (ev.detail > 1) return;                 // second click of a copy — see "Copy"
+      if (!b.classList.contains("beat--expandable")) return;          // nothing to open
       const open = b.classList.toggle("beat--open");
       if (open) expanded.add(i); else expanded.delete(i);
     });
@@ -280,27 +374,38 @@ function renderStream(host: HTMLElement, data: InspectorDataMessage): void {
   const fresh = prevEventCount;
   data.events.forEach((ev, i) => {
     const row = renderEvent(ev, i);
+    copySource.set(row, eventText(ev));
     if (fresh > 0 && i >= fresh) row.classList.add("row-enter");
     frag.appendChild(row);
   });
   host.appendChild(frag);
   prevEventCount = data.events.length;
 
-  // Only a beat/prompt that ACTUALLY overflows gets the expand affordance. We
-  // can't know that before layout, so mark them after insertion — a short one
-  // that showed a "there's more" chevron and then did nothing would be a small
-  // lie.
-  for (const b of host.querySelectorAll<HTMLElement>(".beat")) {
-    const t = b.querySelector<HTMLElement>(".beat__text");
+  markExpandable(host, "beat");
+  markExpandable(host, "turn-prompt");
+}
+
+/** Flag the beats/prompts that ACTUALLY overflow their clamp, so only those
+ *  advertise a chevron and only those answer a click — a short row that showed
+ *  a "there's more" chevron and then did nothing would be a small lie. Whether
+ *  a row overflows isn't knowable before layout, hence the pass after insertion.
+ *
+ *  The flag STAYS SET while the row is open, and that's the whole subtlety: an
+ *  open row has its clamp off, so it measures as not-overflowing, and a naive
+ *  `overflows && !open` drops the flag the instant you expand — which left an
+ *  open row showing a collapse chevron the CSS keyed off `--open` alone, and a
+ *  clicked-but-never-clamped row showing one too. A row can only be open
+ *  because it was expandable, and journal text is append-only, so carrying the
+ *  flag across is sound. */
+function markExpandable(host: HTMLElement, base: string): void {
+  for (const row of host.querySelectorAll<HTMLElement>(`.${base}`)) {
+    const t = row.querySelector<HTMLElement>(`.${base}__text`);
     if (!t) continue;
-    b.classList.toggle("beat--clamped",
-      !b.classList.contains("beat--open") && t.scrollHeight > t.clientHeight + 2);
-  }
-  for (const p of host.querySelectorAll<HTMLElement>(".turn-prompt")) {
-    const t = p.querySelector<HTMLElement>(".turn-prompt__text");
-    if (!t) continue;
-    p.classList.toggle("turn-prompt--clamped",
-      !p.classList.contains("turn-prompt--open") && t.scrollHeight > t.clientHeight + 2);
+    if (row.classList.contains(`${base}--open`)) {
+      row.classList.add(`${base}--expandable`);
+      continue;                                 // unmeasurable while open; see above
+    }
+    row.classList.toggle(`${base}--expandable`, t.scrollHeight > t.clientHeight + 2);
   }
 }
 
@@ -573,6 +678,14 @@ export function initInspector(): void {
   jumpEl = $<HTMLButtonElement>("inspector-jump");
 
   $("inspector-close").addEventListener("click", () => toggleInspector());
+
+  // Delegated on the rail, so it covers the stream AND the Changes strip and
+  // survives every poll re-render without rebinding per row. Bound once here
+  // rather than in renderEvent for the same reason.
+  railEl.addEventListener("dblclick", (ev) => {
+    const row = (ev.target as Element | null)?.closest<HTMLElement>(COPYABLE);
+    if (row) void copyRow(row);
+  });
 
   // Journal filter chips. Each toggles its kind; "All" flips everything on, or
   // clears it when everything's already on. Toggling scrolls back to latest so
