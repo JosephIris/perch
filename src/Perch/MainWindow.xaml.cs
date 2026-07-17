@@ -1368,11 +1368,12 @@ public partial class MainWindow : FluentWindow
         return null;
     }
 
-    /// Live panes' root shell pids, snapshotted on the UI thread for the local
-    /// server scan. A dev server started in a pane is a descendant of that pane's
-    /// shell, so its pid is how the scan attributes the server back to the pane —
-    /// and its ABSENCE from this list is how a server is found to have outlived
-    /// the pane that spawned it (lingering).
+    /// Live panes' job objects + root shell pids, snapshotted on the UI thread
+    /// for the local server scan. A dev server started in a pane is a member of
+    /// that pane's job (and a descendant of its shell), so the job is how the
+    /// scan attributes the server back to the pane — and the pane's ABSENCE from
+    /// this list is how a server is found to have outlived the pane that spawned
+    /// it (lingering).
     private IReadOnlyList<PaneProc> SnapshotLivePanes()
     {
         var list = new List<PaneProc>();
@@ -1385,7 +1386,8 @@ public partial class MainWindow : FluentWindow
                         pty.ProcessId,
                         pane.Id.ToString("N"),
                         pane.Name ?? "",
-                        pane.AgentState.ToString().ToLowerInvariant()));
+                        pane.AgentState.ToString().ToLowerInvariant(),
+                        pty.Job));
         }
         return list;
     }
