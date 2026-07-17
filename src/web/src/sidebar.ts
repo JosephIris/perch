@@ -38,6 +38,41 @@ function aheadPaneId(s: SessionView): string | null {
   return (ls.find((l) => l.ahead === s.ahead && s.ahead > 0) ?? ls[0])?.paneId ?? null;
 }
 
+/** A project group's unpushed-commit count, deduped by branch.
+ *
+ *  `ahead` is `@{upstream}..HEAD` — a property of the BRANCH, not the tab. N
+ *  tabs open on one branch each honestly report the same count, so summing
+ *  per-tab multiplies one branch's work by its tab count: five tabs on
+ *  storefront-web's main, all correctly reading ↑6, rendered a ↑30 header.
+ *  Git won't check out one branch in two worktrees, so within a project the
+ *  branch names a worktree uniquely — count each branch once.
+ *
+ *  A tab whose branch is unknown ("") can't be PROVEN a duplicate, so it keeps
+ *  its own key instead of collapsing into the other unknowns. Over-counting an
+ *  unresolved tab beats silently swallowing a real branch's commits.
+ *
+ *  `top` is the biggest single contributor — the pane whose recap the chip
+ *  opens, since the recap is per-pane and can't show a union.
+ */
+export function projectAhead(tabs: SessionView[]): { sum: number; top: SessionView | null } {
+  const byBranch = new Map<string, SessionView>();
+  for (const t of tabs) {
+    if (t.ahead <= 0) continue;
+    // Git forbids spaces (and control chars) in ref names, so a
+    // space-prefixed id is a sentinel no real branch can collide with.
+    const key = t.branch || ` ${t.id}`;
+    const prev = byBranch.get(key);
+    if (!prev || t.ahead > prev.ahead) byBranch.set(key, t);
+  }
+  let sum = 0;
+  let top: SessionView | null = null;
+  for (const t of byBranch.values()) {
+    sum += t.ahead;
+    if (!top || t.ahead > top.ahead) top = t;
+  }
+  return { sum, top };
+}
+
 /** Accent "↑N ready to push" chip — hover shows the commit recap, click opens
  *  the full lightbox. One builder for BOTH surfaces that wear it (a tab row's
  *  meta line and the project group header) so the behavior can't drift.
@@ -608,16 +643,16 @@ export class Sidebar {
     });
     row.appendChild(toggle);
 
-    // Unpushed-commit sum across the project's tabs, at the trailing edge.
-    // The per-tab ↑N hides when a tab is inactive (metrics fold behind the
-    // hover-ⓘ) or the group is collapsed — this keeps "there's work ready to
-    // push in here" readable from the header line alone. The recap it opens
-    // is driven by the pane of the tab contributing the most unpushed
-    // commits (the recap is per-pane; the biggest contributor is the most
-    // useful single answer to "what's in there?"). Hidden when the sum is 0.
-    const aheadSum = tabs.reduce((n, t) => n + (t.ahead > 0 ? t.ahead : 0), 0);
-    if (aheadSum > 0) {
-      const top = tabs.reduce((a, b) => (b.ahead > a.ahead ? b : a));
+    // Unpushed commits across the project's tabs, at the trailing edge — one
+    // count per branch, NOT per tab (see projectAhead). The per-tab ↑N hides
+    // when a tab is inactive (metrics fold behind the hover-ⓘ) or the group is
+    // collapsed — this keeps "there's work ready to push in here" readable from
+    // the header line alone. The recap it opens is driven by the pane of the
+    // tab contributing the most unpushed commits (the recap is per-pane; the
+    // biggest contributor is the most useful single answer to "what's in
+    // there?"). Hidden when the sum is 0.
+    const { sum: aheadSum, top } = projectAhead(tabs);
+    if (aheadSum > 0 && top) {
       row.appendChild(aheadChip(aheadSum, aheadPaneId(top), "project-header__ahead"));
     }
 

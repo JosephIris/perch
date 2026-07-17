@@ -11,7 +11,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { groupByProject, aggregateState } from "../src/sidebar.js";
+import { groupByProject, aggregateState, projectAhead } from "../src/sidebar.js";
 import type { SessionView, ProjectView, AgentStateName } from "../src/bridge.js";
 
 function sess(id: string, projectId = "", agentState: AgentStateName = "idle"): SessionView {
@@ -138,4 +138,50 @@ test("collapsed header state: all-idle (and empty) stays idle, so no dot shows",
 // blocked agent and total invisibility is this dot.
 test("collapsed header state: a single blocked tab still raises the dot", () => {
   assert.equal(aggregateState([sess("only", "p", "permission")]), "permission");
+});
+
+// Project-header ↑N. `ahead` is @{upstream}..HEAD — a fact about the BRANCH.
+// The header used to sum it per-tab, so N tabs open on one branch multiplied
+// that branch's work by N. Five sessions on storefront-web's main, each
+// correctly reading ↑6, rendered a ↑30 header while `git rev-list --count
+// @{upstream}..HEAD` said 6. These pin the dedupe.
+
+/** A tab on `branch` with `ahead` unpushed commits. */
+function tab(id: string, branch: string, ahead: number): SessionView {
+  return { ...sess(id, "p"), branch, ahead };
+}
+
+test("project ahead: tabs sharing a branch count once, not once each", () => {
+  const tabs = ["tt", "signup", "coverage", "fable", "thresholds"].map((id) =>
+    tab(id, "main", 6)
+  );
+  assert.equal(projectAhead(tabs).sum, 6);
+});
+
+test("project ahead: distinct worktree branches still sum", () => {
+  const tabs = [tab("a", "main", 6), tab("b", "feat/radar", 2), tab("c", "feat/loc", 1)];
+  assert.equal(projectAhead(tabs).sum, 9);
+});
+
+test("project ahead: a branch's count is taken once even if a tab lags", () => {
+  // Same branch, one tab not yet reconciled — the branch contributes one
+  // count (the live max), never the sum of its tabs' views of itself.
+  assert.equal(projectAhead([tab("fresh", "main", 6), tab("stale", "main", 30)]).sum, 30);
+});
+
+test("project ahead: unknown branches aren't collapsed into each other", () => {
+  // "" can't be proven a duplicate of another "" — over-count rather than
+  // swallow a real branch's commits.
+  assert.equal(projectAhead([tab("a", "", 3), tab("b", "", 4)]).sum, 7);
+});
+
+test("project ahead: nothing to push reads 0 with no pane to recap", () => {
+  const { sum, top } = projectAhead([tab("a", "main", 0), tab("b", "feat", 0)]);
+  assert.equal(sum, 0);
+  assert.equal(top, null);
+});
+
+test("project ahead: recap follows the biggest contributor", () => {
+  const { top } = projectAhead([tab("a", "main", 2), tab("b", "feat/radar", 9)]);
+  assert.equal(top?.id, "b");
 });
