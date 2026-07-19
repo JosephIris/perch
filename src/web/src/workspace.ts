@@ -210,25 +210,33 @@ export class Workspace {
     this.reconcile(stage, active, activePaneId, switching || isNew);
     this.activeSessionId = active.id;
 
+    // Switched back to an existing stage → re-show its hidden URL panes. (isNew
+    // panes are created visible; a same-session state push must not toggle them.)
+    if (switching) this.showStage(stage);
+
     // 6. Gentle fade-in when this stage just became visible.
     if (switching || isNew) this.fadeInStage(stage);
   }
 
-  /** Hide a stage that's being switched away from: dispose its URL panes so
-   *  their native WebView2 windows close (and drop them from the map so they
-   *  rebuild on return). Terminals stay alive. */
+  /** Hide a stage that's being switched away from: HIDE its URL panes' native
+   *  WebView2 windows (IsVisible=false) rather than closing them. A hidden
+   *  native window won't float over the new session, and — unlike the old
+   *  dispose-and-rebuild — the page stays loaded, so returning is instant with
+   *  no reload. The panes stay in the map with their DOM intact. Terminals,
+   *  as before, are left untouched. Mirror: showStage on return. */
   private hideStage(stage: Stage) {
-    let removedUrlPane = false;
-    for (const [id, pane] of [...stage.panes]) {
-      if (pane instanceof UrlPane) {
-        pane.dispose();
-        stage.panes.delete(id);
-        removedUrlPane = true;
-      }
+    for (const pane of stage.panes.values()) {
+      if (pane instanceof UrlPane) pane.setVisible(false);
     }
-    // Force a rebuild on next show so the disposed URL pane's DOM is recreated
-    // (renderTree will spawn a fresh WebView2 for it).
-    if (removedUrlPane) stage.signature = null;
+  }
+
+  /** Re-show a stage's URL panes when switching back to it. Their WebView2s
+   *  were only hidden, so this makes them visible again and refits to the
+   *  now-laid-out rect — no navigation, no reload. */
+  private showStage(stage: Stage) {
+    for (const pane of stage.panes.values()) {
+      if (pane instanceof UrlPane) pane.setVisible(true);
+    }
   }
 
   private fadeInStage(stage: Stage) {

@@ -28,9 +28,21 @@ internal sealed class UrlPaneController
         public required UrlPaneHost Host;
         public required string Url;
         public double X, Y, W, H;   // client-space DIPs (last reported)
+
+        /// The page's intent for this pane: visible when its session's stage is
+        /// the active one, hidden when switched away from. Independent of the
+        /// modal-suppress override below — a pane is only actually shown when
+        /// BOTH say so (see Apply).
+        public bool DesiredVisible = true;
     }
 
     private readonly Dictionary<Guid, Entry> _panes = new();
+
+    /// Set while a full-viewport DOM modal is up. A native web-pane HWND paints
+    /// above the host's HTML, so a modal can't cover it — we hide every pane
+    /// instead (airspace fix). Composes with per-pane DesiredVisible so closing
+    /// the modal restores each pane to its STAGE state, not blindly to visible.
+    private bool _suppressed;
     private readonly Window _owner;
     private readonly FrameworkElement _webHost;
     private readonly Microsoft.Web.WebView2.Wpf.WebView2 _mainWebView;
@@ -49,8 +61,27 @@ internal sealed class UrlPaneController
         _mainWebView = mainWebView;
     }
 
-    public void HideAll() { foreach (var e in _panes.Values) e.Host.SetVisible(false); }
-    public void ShowAll() { foreach (var e in _panes.Values) e.Host.SetVisible(true); }
+    /// Modal opened (true) / closed (false). Re-applies every pane's effective
+    /// visibility; off-stage panes stay hidden because their DesiredVisible is
+    /// already false.
+    public void SetSuppressed(bool on)
+    {
+        _suppressed = on;
+        foreach (var e in _panes.Values) Apply(e);
+    }
+
+    /// Page intent for one pane, driven by stage switches: visible=false when
+    /// its session is switched away from (the WebView2 is HIDDEN, not closed, so
+    /// returning is instant and doesn't reload), visible=true on return.
+    public void SetVisible(Guid paneId, bool visible)
+    {
+        if (!_panes.TryGetValue(paneId, out var e)) return;
+        e.DesiredVisible = visible;
+        Apply(e);
+    }
+
+    private void Apply(Entry e) => e.Host.SetVisible(e.DesiredVisible && !_suppressed);
+
     public bool HasPanes => _panes.Count > 0;
 
     /// Handle the page's urlpane.layout message. Creates a new UrlPaneWindow
@@ -83,6 +114,7 @@ internal sealed class UrlPaneController
                 _owner.Dispatcher.BeginInvoke(() => AutoTitleRequested?.Invoke(paneId, title));
             entry = new Entry { Host = host, Url = url!, X = x, Y = y, W = w, H = h };
             _panes[id] = entry;
+            Apply(entry);   // respect an open modal at create time
         }
         else
         {
@@ -104,7 +136,9 @@ internal sealed class UrlPaneController
             var paneId = id;
             host.DocumentTitleChanged += (title) =>
                 _owner.Dispatcher.BeginInvoke(() => AutoTitleRequested?.Invoke(paneId, title));
-            _panes[id] = new Entry { Host = host, Url = url };
+            var deferredEntry = new Entry { Host = host, Url = url };
+            _panes[id] = deferredEntry;
+            Apply(deferredEntry);   // respect an open modal at create time
             return;
         }
     }

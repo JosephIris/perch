@@ -102,6 +102,16 @@ export class UrlPane {
     this.element.classList.toggle("pane--active", active);
   }
 
+  /** Stage switch show/hide. Hides the native WebView2 instead of disposing it,
+   *  so switching back is instant with no reload. On show we forceRefit: the
+   *  stage was display:none while hidden, so the cached rect is stale and must
+   *  be re-measured once the container is visible again. */
+  setVisible(visible: boolean) {
+    if (this.tornDown) return;
+    send({ type: "urlpane.visible", paneId: this.paneId, visible });
+    if (visible) this.forceRefit();
+  }
+
   feed(_b64: string) { /* no-op for URL panes */ }
   notifyExit(_code: number) { /* no-op for URL panes */ }
   /** Called when this leaf's parent split changes or the host triggers

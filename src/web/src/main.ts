@@ -22,6 +22,7 @@ import { initCloud } from "./cloud-panel.js";
 import { initLocal } from "./local-panel.js";
 import { initInspector, toggleInspector } from "./inspector.js";
 import { setModelLimits } from "./model-menu.js";
+import { initWebPaneSuppression } from "./webpane-suppress.js";
 import type { PaneTreeView } from "./bridge.js";
 
 // One shared 1Hz ticker keeps every "working · 2m" label live without
@@ -420,6 +421,9 @@ window.addEventListener("keydown", (ev) => {
 
 setStatus("connecting...");
 send({ type: "ready" });
+
+// Hide native web panes while any full-viewport modal is up (airspace fix).
+initWebPaneSuppression();
 
 // ---- Font / cell diagnostic --------------------------------------------
 // Replaces the status sub-label with concrete, measurable values that

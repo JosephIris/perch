@@ -100,6 +100,14 @@ export type OutMessage =
    * WebView2; subsequent layouts reposition/resize. */
   | { type: "urlpane.layout"; paneId: string; url: string; x: number; y: number; w: number; h: number }
   | { type: "urlpane.dispose"; paneId: string }
+  /* Per-pane show/hide on stage switch. Hides the native WebView2 (not close),
+   * so returning to the tab is instant and doesn't reload the page. */
+  | { type: "urlpane.visible"; paneId: string; visible: boolean }
+  /* Airspace fix: each URL pane is a native WebView2 child HWND that composites
+   * ABOVE the host's HTML, so a DOM modal can't paint over it. While a full-
+   * viewport modal is up the page asks the host to hide every web pane (and to
+   * restore them when it closes). See webpane-suppress.ts. */
+  | { type: "ui.webpanes.suppress"; suppress: boolean }
   /* User preferences (terminal font size, Inspector rail open/closed, wide
    * layout mode) — host persists to Settings.cs so they survive restart. Each
    * field is optional so the page can update one without asserting the others. */
