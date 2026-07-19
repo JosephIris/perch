@@ -66,11 +66,13 @@ const EXPECTED_TYPES = [
   "settings.save",
   "sidebar.reorder",
   "ui.mode",
+  "ui.webpanes.suppress",
   "update.apply",
   "update.check",
   "url.open",
   "urlpane.dispose",
   "urlpane.layout",
+  "urlpane.visible",
 ];
 
 function outMessageTypesFromSource(): string[] {

@@ -136,6 +136,21 @@ public class ProtocolTests
     }
 
     [Fact]
+    public void UrlPaneVisible()
+    {
+        var m = Round<UrlPaneVisibleMsg>($"{{\"type\":\"urlpane.visible\",\"paneId\":\"{G1}\",\"visible\":false}}");
+        Assert.Equal(Guid.Parse(G1), m.PaneId);
+        Assert.False(m.Visible);
+    }
+
+    [Fact]
+    public void WebPanesSuppress()
+    {
+        Assert.True(Round<WebPanesSuppressMsg>("{\"type\":\"ui.webpanes.suppress\",\"suppress\":true}").Suppress);
+        Assert.False(Round<WebPanesSuppressMsg>("{\"type\":\"ui.webpanes.suppress\",\"suppress\":false}").Suppress);
+    }
+
+    [Fact]
     public void SessionMessages()
     {
         Assert.Null(Round<SessionNewMsg>("{\"type\":\"session.new\"}").Shell);

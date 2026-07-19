@@ -152,6 +152,24 @@ internal sealed record UrlPaneLayoutMsg
     public required double H { get; init; }
 }
 
+/// Airspace fix: URL panes are native WebView2 child HWNDs that paint above the
+/// host's HTML, so a DOM modal can't cover them. While a full-viewport modal is
+/// up the page sends suppress=true (host hides every web pane); false on close.
+internal sealed record WebPanesSuppressMsg
+{
+    public bool Suppress { get; init; }
+}
+
+/// Per-pane visibility, driven by stage switches. visible=false hides the pane's
+/// native WebView2 (IsVisible=false) when its session is switched away from —
+/// crucially it does NOT close it, so returning is instant with no reload;
+/// visible=true re-shows it on return.
+internal sealed record UrlPaneVisibleMsg
+{
+    public required Guid PaneId { get; init; }
+    public required bool Visible { get; init; }
+}
+
 internal sealed record SessionNewMsg
 {
     public string? Shell { get; init; }

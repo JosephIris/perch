@@ -534,6 +534,8 @@ public partial class MainWindow : FluentWindow
         .Add<PaneProbeMsg>("pane.probe", OnPaneProbe)
         .Add<UrlPaneLayoutMsg>("urlpane.layout", m => _urlPaneCtrl?.OnLayout(m))
         .Add<PaneRef>("urlpane.dispose", m => _urlPaneCtrl?.OnDispose(m))
+        .Add<UrlPaneVisibleMsg>("urlpane.visible", m => _urlPaneCtrl?.SetVisible(m.PaneId, m.Visible))
+        .Add<WebPanesSuppressMsg>("ui.webpanes.suppress", m => _urlPaneCtrl?.SetSuppressed(m.Suppress))
         .Add<SessionNewMsg>("session.new", OnSessionNew)
         .Add<SessionRef>("session.select", OnSessionSelect)
         .Add<SessionRenameMsg>("session.rename", OnSessionRename)
