@@ -5,7 +5,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { findLinksInLine, htmlFileToUrl, HTML_FILE_RE } from "../src/link-detect.js";
+import { findLinksInLine, htmlFileToUrl, HTML_FILE_RE, setHomeDir } from "../src/link-detect.js";
 
 // ---- web URLs still detected ----------------------------------------------
 
@@ -31,6 +31,26 @@ test("forward-slash drive, UNC, unix-absolute, and file:// forms all match", () 
   assert.equal(findLinksInLine("at \\\\nas\\share\\a.html now")[0]?.text, "\\\\nas\\share\\a.html");
   assert.equal(findLinksInLine("see /home/me/x.htm here")[0]?.text, "/home/me/x.htm");
   assert.equal(findLinksInLine("file:///C:/t/p.html")[0]?.text, "file:///C:/t/p.html");
+});
+
+test("a home-abbreviated ~\\ path (as Claude Code prints file recaps) is detected", () => {
+  const line = "wrote ~\\AppData\\Local\\Temp\\report.html (40KB)";
+  const links = findLinksInLine(line);
+  assert.equal(links.length, 1);
+  assert.equal(links[0].kind, "file");
+  assert.equal(links[0].text, "~\\AppData\\Local\\Temp\\report.html");
+});
+
+test("htmlFileToUrl expands ~ against the pushed home dir", () => {
+  setHomeDir("C:\\Users\\josep");
+  assert.equal(
+    htmlFileToUrl("~\\AppData\\Local\\Temp\\report.html"),
+    "file:///C:/Users/josep/AppData/Local/Temp/report.html"
+  );
+  // No home dir known yet → left unresolved rather than mangled.
+  setHomeDir("");
+  assert.equal(htmlFileToUrl("~\\x\\a.html"), "file://~/x/a.html");
+  setHomeDir("C:\\Users\\josep"); // restore for any later tests
 });
 
 test("a bare filename with no path separator is NOT detected (avoids prose noise)", () => {

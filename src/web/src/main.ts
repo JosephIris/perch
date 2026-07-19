@@ -5,6 +5,7 @@
 import "./style.css";
 
 import { onMessage, send, type StateMessage, type SidebarMode } from "./bridge.js";
+import { setHomeDir } from "./link-detect.js";
 import { Sidebar } from "./sidebar.js";
 import { Workspace } from "./workspace.js";
 import { Dashboard } from "./dashboard.js";
@@ -181,6 +182,8 @@ onMessage((msg) => {
   switch (msg.type) {
     case "state": {
       lastState = msg;
+      // Home dir for "~\…" path expansion in the terminal HTML-file link menu.
+      setHomeDir(msg.homeDir ?? "");
       // Drop any cached commit recap whose pane's ahead-count moved (a push or
       // a new commit) so the next hover/open refetches fresh.
       const walk = (n: PaneTreeView) => {

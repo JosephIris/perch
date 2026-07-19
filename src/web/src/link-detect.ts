@@ -23,12 +23,20 @@ export const URL_RE =
 export const HTML_FILE_RE = new RegExp(
   "(?:" +
     "file://[^\\s\"'`<>|]+\\.html?" + //     file:///C:/x.html
+    "|~[\\\\/][^\\s\"'`<>|]*\\.html?" + //   ~\AppData\…\x.html (home-abbreviated)
     "|[A-Za-z]:[\\\\/][^\\s\"'`<>|]*\\.html?" + // C:\x\y.html or C:/x/y.html
     "|\\\\\\\\[^\\s\"'`<>|]*\\.html?" + //   \\host\share\x.html (UNC)
     "|/[^\\s\"'`<>|]*\\.html?" + //          /home/me/x.html (unix-absolute)
   ")(?![A-Za-z0-9])",
   "i"
 );
+
+// The user's home dir (%USERPROFILE%), pushed with every state message so a
+// "~\…" token can be expanded into a real path. Empty until the first state.
+let homeDir = "";
+export function setHomeDir(dir: string): void {
+  homeDir = dir ?? "";
+}
 
 export type LinkKind = "url" | "file";
 export interface DetectedLink {
@@ -65,11 +73,17 @@ export function findLinksInLine(text: string): DetectedLink[] {
 }
 
 /** Convert a detected local-file token to a navigable file:// URL. A token that
- *  is already a file:// (or http) URL passes through. */
+ *  is already a file:// (or http) URL passes through. A leading "~" is expanded
+ *  to the home dir from the last state push (left as-is if none is known yet —
+ *  the link still shows, it just can't resolve). */
 export function htmlFileToUrl(token: string): string {
-  const s = token.trim();
+  let s = token.trim();
   if (/^(file|https?):\/\//i.test(s)) return s;
+  if (s[0] === "~" && homeDir) {
+    // "~\AppData\x.html" → "<home>\AppData\x.html"; normalize the join slash.
+    s = homeDir.replace(/[\\/]+$/, "") + "\\" + s.slice(1).replace(/^[\\/]+/, "");
+  }
   if (/^[A-Za-z]:[\\/]/.test(s)) return "file:///" + s.replace(/\\/g, "/"); // drive
   if (s.startsWith("\\\\")) return "file:" + s.replace(/\\/g, "/"); //          UNC
-  return "file://" + s; //                                               unix-absolute
+  return "file://" + s.replace(/\\/g, "/"); //          unix-absolute / unresolved ~
 }
