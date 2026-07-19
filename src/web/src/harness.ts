@@ -17,6 +17,7 @@ import { confirmDialog } from "./confirm.js";
 import { showPaneChooser } from "./pane-chooser.js";
 import { buildPaneFooter, applyPaneFooter } from "./pane-footer.js";
 import { buildPaneHeader, applyModelChip, applyAgentBadge } from "./pane-header.js";
+import { showBrowserPrompt } from "./browser-prompt.js";
 import { showModelMenu, dismissModelMenu, setModelLimits } from "./model-menu.js";
 import { showNewTabDialog } from "./new-tab-dialog.js";
 import { RestoreProgress } from "./restore-progress.js";
@@ -327,6 +328,45 @@ if (view === "modelmenu") {
   }, 80);
 }
 
+// #paneactions — the new pane-header action buttons (split right / split down /
+// open browser pane), sitting left of the ✕. The active pane reveals them (CSS
+// gates on .pane--active / :hover); the browser button's URL-entry popover is
+// opened so the whole feature is in one capture.
+if (view === "paneactions") {
+  const stage = document.getElementById("workspace")!;
+  stage.style.cssText = "display:flex;flex-direction:column;gap:16px;padding:24px;";
+  const mk = (label: string, name: string, active: boolean, agent: string | undefined) => {
+    const wrap = document.createElement("div");
+    wrap.style.cssText = "font:11px var(--font-small,sans-serif);color:rgba(255,255,255,0.4)";
+    const cap = document.createElement("div");
+    cap.textContent = label;
+    cap.style.cssText = "margin-bottom:4px";
+    const pane = document.createElement("div");
+    pane.className = "pane" + (active ? " pane--active" : "");
+    pane.style.cssText = "height:104px;width:380px";
+    const header = buildPaneHeader("demo-" + name);
+    header.nameEl.textContent = name;
+    if (agent) applyAgentBadge(header.agentBadgeEl, agent);
+    header.branchEl.style.display = "none";
+    header.commitsEl.style.display = "none";
+    const term = document.createElement("div");
+    term.className = "pane__term";
+    term.style.cssText = "display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,0.25)";
+    term.textContent = "terminal";
+    pane.append(header.root, term);
+    wrap.append(cap, pane);
+    stage.appendChild(wrap);
+    return header;
+  };
+  const active = mk("active pane — actions revealed", "nadec-api", true, "claude");
+  mk("inactive pane — actions hidden until hover", "cohort costs", false, "claude");
+  // Open the browser-URL popover under the active pane's browser button.
+  setTimeout(() => {
+    const browserBtn = active.root.querySelector<HTMLElement>('.pane__action[data-action="browser"]');
+    if (browserBtn) showBrowserPrompt(browserBtn, () => {});
+  }, 80);
+}
+
 // #panefooter — mock .pane shells (no xterm) exercising every footer state, so
 // the per-pane status bar can be screenshotted offline. Active panes show the
 // focus-gated git stats; inactive ones don't.
@@ -374,13 +414,21 @@ if (view === "panefooter") {
 // and Fable at its weekly limit so the disabled segment + its "resets HH:MM"
 // hint line show in a capture. Limits must be set BEFORE the dialog opens —
 // the field reads them at build time, same as the flyout reads them at open.
-if (view === "newtab") {
+if (view === "newtab" || view === "newtab-browser") {
   setModelLimits([{ alias: "fable", resetsAtMs: Date.now() + 9 * 3600_000 }]);
   showNewTabDialog({
     id: "p-ptp",
     name: "product-tools-prod",
     path: "C:\\dev\\product-tools-prod",
   });
+  // #newtab-browser — pick the Browser segment so the Address field shows and
+  // the worktree/model rows hide (a real pointer can't click in a capture).
+  if (view === "newtab-browser") {
+    setTimeout(() => {
+      const btns = Array.from(document.querySelectorAll<HTMLElement>(".newtab-seg__btn"));
+      btns.find((b) => b.textContent === "Browser")?.click();
+    }, 60);
+  }
 }
 
 if (view === "panechooser") {

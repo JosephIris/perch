@@ -2423,6 +2423,26 @@ public partial class MainWindow : FluentWindow
     private static readonly string[] CcColorNames =
         { "blue", "green", "yellow", "orange", "pink", "purple" };
 
+    // A readable tab title for a browser tab created without a typed name:
+    // the host (minus "www."), or the file name for a file:// URL. Falls back
+    // to "browser" if the URL won't parse.
+    private static string BrowserTabTitle(string url)
+    {
+        try
+        {
+            var u = new Uri(url.Contains("://") ? url : "https://" + url);
+            var host = u.Host;
+            if (string.IsNullOrEmpty(host))
+            {
+                var fn = System.IO.Path.GetFileName(u.LocalPath);
+                return string.IsNullOrEmpty(fn) ? "browser" : fn;
+            }
+            return host.StartsWith("www.", StringComparison.OrdinalIgnoreCase)
+                ? host.Substring(4) : host;
+        }
+        catch { return "browser"; }
+    }
+
     // Create a tab under a project. This is the feature: a named, colored agent
     // session in its own git worktree.
     private async void OnProjectTabNew(ProjectTabNewMsg msg)
@@ -2431,6 +2451,35 @@ public partial class MainWindow : FluentWindow
         {
             var proj = _projects.ById(msg.ProjectId);
             if (proj == null) return;
+
+            // Browser tab: the root leaf is a webview, not a terminal. No name is
+            // required (the webview auto-titles from <title>), no worktree, no
+            // PTY, no agent. File it under the project so it groups there; the
+            // color comes from the project's unused hues like any other tab.
+            if ((msg.Agent ?? "") == "browser")
+            {
+                var url = (msg.Url ?? "").Trim();
+                if (url.Length == 0) return;
+                var typed = (msg.Name ?? "").Trim();
+                var bTitle = typed.Length > 0 ? typed : BrowserTabTitle(url);
+                var bs = _store.AddNew();
+                bs.Title = bTitle;
+                bs.IsAutoTitle = typed.Length == 0;   // untyped title may improve later
+                bs.ProjectId = proj.Id;
+                bs.Root.Url = url;
+                bs.Root.ColorIndex = _store.PickUnusedColorForProject(proj.Id);
+                bs.Root.Name = bTitle;
+                // A typed name is the user's; keep it. An auto host-title stays
+                // auto so the webview's <title> can replace it once it loads.
+                bs.Root.IsUserNamed = typed.Length > 0;
+                bs.Root.IsAutoName = typed.Length == 0;
+                _store.ActiveSessionId = bs.Id;
+                _activePaneId = bs.Root.Id;
+                _store.Save();
+                PushState();
+                return;
+            }
+
             var name = (msg.Name ?? "").Trim();
             if (name.Length == 0) name = proj.Name;
 
@@ -2790,14 +2839,26 @@ public partial class MainWindow : FluentWindow
     // Open a URL in the OS default browser. Shell-execute via Process.Start
     // is the canonical Win32 way — the OS uses the user's configured
     // protocol handler (Edge / Chrome / Firefox). Validate scheme so we
-    // can't be tricked into launching arbitrary `file://` or `cmd://`
-    // schemes from terminal output.
+    // can't be tricked into launching arbitrary schemes (`cmd://`, an .exe
+    // via file://, …) from terminal output.
+    //
+    // http/https always allowed. file:// is allowed ONLY for a local .html/.htm
+    // file: this backs the "open in default browser" action on a detected HTML
+    // file in agent output. It's user-initiated (they clicked a link and chose
+    // the action), and a local HTML page opens in the sandboxed default browser.
+    // Any other file:// (an .exe, .ps1, .lnk, a scheme handler) is still
+    // refused, so crafted output can't shell-launch something dangerous.
     private void OnUrlOpen(UrlOpenMsg msg)
     {
         var url = msg.Url;
         if (string.IsNullOrEmpty(url)) return;
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return;
-        if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
+
+        var isWeb = uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps;
+        var isHtmlFile = uri.Scheme == Uri.UriSchemeFile
+            && (uri.LocalPath.EndsWith(".html", StringComparison.OrdinalIgnoreCase)
+                || uri.LocalPath.EndsWith(".htm", StringComparison.OrdinalIgnoreCase));
+        if (!isWeb && !isHtmlFile)
         {
             Log.Info("url.open.rejected", $"scheme={uri.Scheme}");
             return;
@@ -2806,7 +2867,9 @@ public partial class MainWindow : FluentWindow
         {
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
             {
-                FileName = url,
+                // For a file:// URL hand ShellExecute the local path so it opens
+                // with the default .html handler (the browser); for web, the URL.
+                FileName = isHtmlFile ? uri.LocalPath : url,
                 UseShellExecute = true,
             });
         }

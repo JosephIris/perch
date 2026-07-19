@@ -15,6 +15,7 @@
 import { send } from "./bridge.js";
 import type { PaneTreeView } from "./bridge.js";
 import { showModelMenu } from "./model-menu.js";
+import { buildPaneActions } from "./pane-actions.js";
 
 export interface PaneHeader {
   root: HTMLElement;
@@ -185,6 +186,10 @@ export function buildPaneHeader(paneId: string): PaneHeader {
   const stateLabelEl = document.createElement("span");
   stateLabelEl.className = "pane__state-label";
   root.appendChild(stateLabelEl);
+
+  // Action buttons (split right / down, open browser pane) — quiet, revealed
+  // on hover/active. Sit just left of the close button at the header's right.
+  root.appendChild(buildPaneActions(paneId));
 
   const close = document.createElement("button");
   close.type = "button";

@@ -227,7 +227,7 @@ internal sealed record ProjectTabNewMsg
     /// User-typed tab name. Also becomes the branch (slugified) and the cc
     /// session's display name. Empty falls back to the project's name.
     public string? Name { get; init; }
-    /// "claude" (default) | "codex" | "shell".
+    /// "claude" (default) | "codex" | "shell" | "browser".
     public string? Agent { get; init; }
     /// Cut a git worktree for this tab. Null/false → open in the repo itself.
     public bool? Worktree { get; init; }
@@ -235,6 +235,10 @@ internal sealed record ProjectTabNewMsg
     /// Null/absent/"" → account default. Only meaningful when Agent is
     /// "claude"; the host clamps unknown values to default.
     public string? Model { get; init; }
+    /// Normalized URL for a browser tab. Only set when Agent is "browser": the
+    /// tab's root leaf renders a webview pointed here instead of a terminal, and
+    /// no PTY/worktree is created. Name is optional in that case.
+    public string? Url { get; init; }
 }
 
 internal sealed record SessionRenameMsg
