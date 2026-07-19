@@ -223,6 +223,9 @@ onMessage((msg) => {
       workspace.notifyExit(msg.paneId, msg.code);
       setStatus(`pane exited (${msg.code})`);
       break;
+    case "pane.setup":
+      workspace.setupOverlay(msg.paneId, msg.show, msg.colorIndex);
+      break;
     case "toast":
       toast.show(
         msg.text,
