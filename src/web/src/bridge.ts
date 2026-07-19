@@ -535,6 +535,9 @@ export type InMessage =
   | StateMessage
   | { type: "pane.out"; paneId: string; b64: string }
   | { type: "pane.exit"; paneId: string; code: number }
+  /* Boot cover for a Claude Code pane: show the "Setting up…" overlay (tinted
+   * to colorIndex) while cc starts, then hide once it's up. */
+  | { type: "pane.setup"; paneId: string; show: boolean; colorIndex: number }
   | ToastMessage
   | SettingsDataMessage
   | CommitsDataMessage

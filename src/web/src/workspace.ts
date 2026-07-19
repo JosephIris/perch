@@ -355,6 +355,13 @@ export class Workspace {
     this.findPane(paneId)?.notifyExit(code);
   }
 
+  /** Show/hide a Claude Code pane's boot cover (host-driven, pane.setup).
+   *  Only terminal panes have one — URL panes are ignored. */
+  setupOverlay(paneId: string, show: boolean, colorIndex: number) {
+    const pane = this.findPane(paneId);
+    if (pane instanceof Pane) pane.showSetup(show, colorIndex);
+  }
+
   /** Find a pane by id across ALL stages — background sessions' panes are
    *  alive and still receive output, so feed/exit must reach them too. */
   private findPane(paneId: string): LeafPane | null {

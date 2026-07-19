@@ -5288,3 +5288,76 @@ body.show-dashboard .dashboard { display: flex; }
   background: var(--color-text-tertiary);
   transition: width var(--dur-normal) var(--ease-entry);
 }
+
+/* ---- Per-pane "Setting up…" overlay (built in setup-overlay.ts) --------
+ * Frosted cover shown while a Claude Code pane boots, then hidden. Sits above
+ * the terminal (z:9) but below in-pane menus (z >= 10). The mascot lays a twig
+ * on a woven-cup nest; only the bird moves. Frost tints to the pane color via
+ * --setup-hint (set from the pane's color-tag index). */
+.setup-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 9;
+  display: grid;
+  place-items: center;
+  color: var(--color-text-primary);
+  --setup-hint: var(--color-pane-tag-0);
+  background:
+    radial-gradient(150px 150px at 50% 44%,
+      color-mix(in srgb, var(--setup-hint) 20%, transparent) 0%, transparent 70%),
+    rgba(20, 22, 26, 0.42);
+  backdrop-filter: blur(9px) saturate(115%);
+  -webkit-backdrop-filter: blur(9px) saturate(115%);
+  animation: setup-in 0.16s var(--ease-entry) both;
+}
+.setup-overlay[hidden] { display: none; }
+@keyframes setup-in { from { opacity: 0; } to { opacity: 1; } }
+
+.setup-overlay__stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+.setup-loader {
+  width: 132px;
+  height: 114px;
+  overflow: visible;
+  color: inherit;
+}
+.setup-overlay__caption {
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.1px;
+  color: var(--color-text-primary);
+}
+/* fixed-width slot so "Setting up" stays put and only the dots fill in */
+.setup-overlay__dots { display: inline-block; width: 1.4em; text-align: left; }
+.setup-overlay__dots::after { content: ""; animation: setup-dots 1.4s steps(4, end) infinite; }
+@keyframes setup-dots {
+  0%   { content: ""; }
+  25%  { content: "."; }
+  50%  { content: ".."; }
+  75%  { content: "..."; }
+  100% { content: ""; }
+}
+
+/* only the bird moves; the nest is fixed */
+.setup-loader .setup-bird {
+  transform-box: view-box;
+  transform-origin: 52px 60px;
+  animation: setup-place 2.4s infinite;
+}
+@keyframes setup-place {
+  0%   { transform: rotate(-2deg);  animation-timing-function: cubic-bezier(.5, 0, .7, .4); }
+  13%  { transform: rotate(-5deg);  animation-timing-function: cubic-bezier(.28, 0, .22, 1); }
+  50%  { transform: rotate(5.2deg); animation-timing-function: cubic-bezier(.33, .9, .5, 1); }
+  58%  { transform: rotate(5.9deg); animation-timing-function: ease-in-out; }
+  65%  { transform: rotate(5.3deg); animation-timing-function: linear; }
+  80%  { transform: rotate(5.3deg); animation-timing-function: cubic-bezier(.4, 0, .25, 1); }
+  100% { transform: rotate(-2deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .setup-loader .setup-bird { animation: none; transform: rotate(4deg); }
+  .setup-overlay__dots::after { animation: none; content: "…"; }
+}

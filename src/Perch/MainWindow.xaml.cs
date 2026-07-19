@@ -94,17 +94,10 @@ public partial class MainWindow : FluentWindow
     /// _armedResumePanes / _pendingChoosers.
     private readonly Dictionary<Guid, string> _pendingInitialCommand = new();
 
-    /// Prompt-bar color to set inside a Claude session once it's up, keyed by
-    /// pane. cc has no flag for this (only the /color slash command), so it has
-    /// to be typed into the TUI — and only once cc is actually listening, which
-    /// its session-start hook tells us.
-    private readonly Dictionary<Guid, string> _pendingCcColor = new();
-
-    // Per-pane debounce for typing the pending /color into cc. Armed by the
-    // session-start hook (ApplyPendingCcColor); each PTY output chunk resets it
-    // (PostPaneOut); it fires when cc's first paint QUIETS — reader attached and
-    // idle — which is faster than a fixed wait and won't type mid-boot.
-    private readonly Dictionary<Guid, System.Windows.Threading.DispatcherTimer> _ccColorTimers = new();
+    // Per-pane failsafe that force-hides the "Setting up…" boot cover if the cc
+    // session-start hook never arrives (bad launch, missed hook). Armed when the
+    // cover is shown (ShowSetupOverlay); disarmed when it's hidden.
+    private readonly Dictionary<Guid, System.Windows.Threading.DispatcherTimer> _setupFailsafe = new();
     // Panes shown in the restore-progress lightbox → whether the pane has
     // reported "alive again" (its resumed session-start hook fired). Empty when
     // no restore is in flight. _restoreTimeout force-completes a batch whose
@@ -976,6 +969,12 @@ public partial class MainWindow : FluentWindow
             // into our IPC layer (stage 4 reactivates that pipe).
             var startCmd = Shell.BuildStartupCommandLine(baseShell, cwd, pane.Id, initialCommand);
             _panes.Spawn(sess, pane, startCmd, cwd, cols, rows, baseShell);
+            // Cover the pane while Claude Code boots (a fresh `claude --session-id`
+            // or a `claude --resume`), so nothing the user types lands in cc mid-
+            // boot. Dropped on the session-start hook (OnAgentSession) or failsafe.
+            if (initialCommand != null &&
+                initialCommand.StartsWith("claude", StringComparison.Ordinal))
+                ShowSetupOverlay(pane.Id, pane.ColorIndex);
             // Seed the pane's cwd from the dir we just spawned into instead of
             // waiting for the shell to report it via OSC 7. A pane that autostarts
             // an agent (`claude --resume <id>`) runs that as the LAST statement of
@@ -1335,7 +1334,8 @@ public partial class MainWindow : FluentWindow
             _store.Save();
         }
         MarkRestorePaneReady(paneId);
-        ApplyPendingCcColor(paneId);
+        // cc is up — drop the "Setting up…" boot cover for this pane.
+        HideSetupOverlay(paneId);
     }
 
     /// The PreToolUse hook just stamped agent labels onto a `gcloud ... create`
@@ -1415,58 +1415,36 @@ public partial class MainWindow : FluentWindow
         catch (Exception ex) { Log.Error("PostToPage", ex); }
     }
 
-    // Set the tab's color INSIDE its Claude session, so the prompt bar matches
-    // the sidebar dot. cc exposes no flag for this — only the `/color` slash
-    // command — so it has to be typed into the TUI, which means waiting until cc
-    // is actually listening AND has finished its first paint (type into the raw
-    // PTY mid-boot and it can land before cc's reader is attached, and be lost).
-    //
-    // The session-start hook proves the session is up; from there we wait for
-    // cc's first paint to QUIET instead of a fixed delay. Each PTY output chunk
-    // resets a short debounce (PostPaneOut → StartCcColorTimer); when output
-    // stops, the timer types the color. That tracks the machine — quick on a fast
-    // paint, patient on a slow one — where the old fixed 700ms was both too slow
-    // on a fast box and occasionally too early on a loaded one. One-shot:
-    // _pendingCcColor is drained on the write (FlushCcColor), so a later /clear
-    // (which re-fires session-start) doesn't re-type it.
-    private void ApplyPendingCcColor(Guid paneId)
+    // Boot cover: while a Claude Code pane starts up we show a frosted
+    // "Setting up…" overlay over the pane (see setup-overlay.ts). It replaces the
+    // old trick of typing `/color` into cc's raw PTY — which raced cc's input
+    // reader and could concatenate onto whatever the user had already typed.
+    // Covering the pane during boot means nothing lands in cc, and the frost
+    // tints to the pane's color. Shown from SpawnPty on a `claude` launch, hidden
+    // by the session-start hook (OnAgentSession) or the failsafe.
+    private void ShowSetupOverlay(Guid paneId, int colorIndex) => Dispatcher.InvokeAsync(() =>
     {
-        // Marshal to the UI thread: this fires from the IPC pipe thread, and the
-        // DispatcherTimer + its dictionaries live on the UI thread with PostPaneOut.
-        Dispatcher.InvokeAsync(() =>
-        {
-            if (_pendingCcColor.ContainsKey(paneId)) StartCcColorTimer(paneId);
-        });
-    }
-
-    // (Re)start the quiet-debounce that types the pending /color. Created lazily
-    // per pane; the initial Start() means it still fires when cc emits no further
-    // output after session-start. UI thread only.
-    private void StartCcColorTimer(Guid paneId)
-    {
-        if (!_ccColorTimers.TryGetValue(paneId, out var timer))
+        PostToPage(new { type = "pane.setup", paneId = paneId.ToString("D"), show = true, colorIndex });
+        if (!_setupFailsafe.TryGetValue(paneId, out var timer))
         {
             timer = new System.Windows.Threading.DispatcherTimer
             {
-                Interval = TimeSpan.FromMilliseconds(150),
+                Interval = TimeSpan.FromMilliseconds(1800),
             };
-            timer.Tick += (_, _) => FlushCcColor(paneId);
-            _ccColorTimers[paneId] = timer;
+            timer.Tick += (_, _) => HideSetupOverlay(paneId);
+            _setupFailsafe[paneId] = timer;
         }
         timer.Stop();
         timer.Start();
-    }
+    });
 
-    // Type `/color <name>\r` into the pane once cc's paint has settled. Runs on
-    // the UI thread (timer tick / PostPaneOut), so no dispatch. Guarded: the pane
-    // may have closed between the last output chunk and this tick.
-    private void FlushCcColor(Guid paneId)
+    // Hide the boot cover and disarm its failsafe. Safe from any thread; a no-op
+    // on the page if the pane is already gone.
+    private void HideSetupOverlay(Guid paneId) => Dispatcher.InvokeAsync(() =>
     {
-        if (_ccColorTimers.Remove(paneId, out var timer)) timer.Stop();
-        if (!_pendingCcColor.Remove(paneId, out var color)) return;
-        try { _panes.Write(paneId, System.Text.Encoding.UTF8.GetBytes($"/color {color}\r")); }
-        catch (Exception ex) { Log.Info("CcColor", $"skipped: {ex.Message}"); }
-    }
+        if (_setupFailsafe.Remove(paneId, out var timer)) timer.Stop();
+        PostToPage(new { type = "pane.setup", paneId = paneId.ToString("D"), show = false, colorIndex = 0 });
+    });
 
     // New Claude session in a terminal pane (fresh launch after ctrl+c twice,
     // or `/clear`) re-arms auto-naming so the next first prompt re-titles the
@@ -2417,14 +2395,6 @@ public partial class MainWindow : FluentWindow
         catch (Exception ex) { Log.Error("AdoptSessionsIntoProject", ex); }
     }
 
-    /// Our 6-hue pane palette mapped onto the color names Claude Code's `/color`
-    /// accepts (red|blue|green|yellow|purple|orange|pink|cyan). Ours is a strict
-    /// SUBSET of cc's, which is the happy accident that lets a single pick drive
-    /// both surfaces: the sidebar dot and the prompt bar inside the session end up
-    /// the same color, so a tab looks the same from the outside and the inside.
-    private static readonly string[] CcColorNames =
-        { "blue", "green", "yellow", "orange", "pink", "purple" };
-
     // A readable tab title for a browser tab created without a typed name:
     // the host (minus "www."), or the file name for a file:// URL. Falls back
     // to "browser" if the URL won't parse.
@@ -2541,7 +2511,6 @@ public partial class MainWindow : FluentWindow
                 var ccName = GitProc.Slugify(name);
                 if (ccName.Length == 0) ccName = "tab";
                 _pendingInitialCommand[s.Root.Id] = $"claude --session-id {sid} --name {ccName}";
-                _pendingCcColor[s.Root.Id] = CcColorNames[colorIndex % CcColorNames.Length];
                 // Creation-time model pick. Set on the PaneNode NOW — the PTY
                 // spawns lazily AFTER the PushState below (page renders → first
                 // pane.resize → SpawnPty), and SpawnPty writes the wrap-claude
@@ -3288,9 +3257,6 @@ public partial class MainWindow : FluentWindow
                 Web.CoreWebView2?.PostWebMessageAsJson(payload);
             }
             catch (Exception ex) { Log.Error("PostPaneOut", ex); }
-
-            // cc is still painting → hold the pending /color until output quiets.
-            if (_ccColorTimers.ContainsKey(paneId)) StartCcColorTimer(paneId);
         });
     }
 

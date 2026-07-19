@@ -15,6 +15,7 @@ import { showLinkMenu } from "./link-menu.js";
 import { URL_RE, findLinksInLine, htmlFileToUrl } from "./link-detect.js";
 import { buildPaneHeader, applyChips, applyAgentBadge, applyModelChip } from "./pane-header.js";
 import { buildPaneFooter, applyPaneFooter, type PaneFooter } from "./pane-footer.js";
+import { createSetupOverlay, type SetupOverlay } from "./setup-overlay.js";
 import { attachTooltip } from "./tooltip.js";
 import { permissionDialogVisible, blockedDialogVisible } from "./perm-probe.js";
 
@@ -48,6 +49,9 @@ export class Pane {
   private readonly agentBadgeEl: HTMLElement;
   private readonly modelEl: HTMLButtonElement;
   private readonly footer: PaneFooter;
+  // Boot cover shown while a Claude Code pane starts up (driven by pane.setup).
+  private readonly setup: SetupOverlay;
+  private setupActive = false;
   private readonly termHost: HTMLElement;
   private readonly term: Terminal;
   private readonly fit: FitAddon;
@@ -105,6 +109,11 @@ export class Pane {
     // pane reads header · terminal · footer top-to-bottom.
     this.footer = buildPaneFooter();
     this.element.appendChild(this.footer.root);
+
+    // Boot cover: appended last so it sits above the terminal within the pane's
+    // stacking context. Hidden until the host sends pane.setup {show:true}.
+    this.setup = createSetupOverlay();
+    this.element.appendChild(this.setup.el);
 
     // Terminal theme. Background is --color-terminal-bg (#1f1f1f), one
     // step LIGHTER than --color-sidebar-surface (#181818) so the pane
@@ -359,7 +368,26 @@ export class Pane {
   }
 
   focus() {
+    // While the boot cover is up, park focus on it so keystrokes can't reach cc.
+    if (this.setupActive) { this.setup.el.focus(); return; }
     this.term.focus();
+  }
+
+  /** Host-driven boot cover (pane.setup). While shown, the terminal is blurred
+   *  and focus parks on the overlay so nothing the user types reaches cc during
+   *  boot; hiding restores terminal focus if this is the active pane. */
+  showSetup(show: boolean, colorIndex: number) {
+    if (show) {
+      this.setup.setColor(colorIndex);
+      this.setup.el.hidden = false;
+      this.setupActive = true;
+      this.term.blur();
+      this.setup.el.focus();
+    } else {
+      this.setup.el.hidden = true;
+      this.setupActive = false;
+      if (this.isActive) this.term.focus();
+    }
   }
 
   setActive(active: boolean) {
@@ -370,8 +398,9 @@ export class Pane {
     // "focused" from xterm's perspective and renders its own blinking
     // cursor — with cursorInactiveStyle="none" this blur() is what makes
     // inactive panes go cursor-free instead of double-blinking.
-    if (active) this.term.focus();
-    else        this.term.blur();
+    if (active && this.setupActive) this.setup.el.focus();
+    else if (active) this.term.focus();
+    else             this.term.blur();
     // Only the focused pane runs a cursor-blink loop (see the constructor
     // note) — keeps the multi-pane cursor calm during heavy output.
     this.term.options.cursorBlink = active;
