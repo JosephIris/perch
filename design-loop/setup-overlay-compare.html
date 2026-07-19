@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Perch — setup overlay: framing compare</title>
+<style>
+  :root{
+    --pane-surface:#1f1f1f; --ink:#e9eef4; --ink-dim:#aab3bd;
+    --accent:#76B9ED; --eye:#15233b;
+    --tag-0:#76B9ED; --tag-1:#6CCB5F; --tag-2:#FCE100;
+    --tag-3:#FF9E5E; --tag-4:#FF99A4; --tag-5:#C792EA;
+    --hint:var(--tag-1); --loop:2.4s;
+    font-family:"Inter var","Inter","Segoe UI Variable Text","Segoe UI",sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;display:flex;flex-direction:column;align-items:center;
+    gap:22px;padding:34px 20px;background:#141414;color:var(--ink);
+    background-image:radial-gradient(1200px 600px at 30% -10%,#1c2330 0%,#141414 60%)}
+  .row{display:flex;gap:26px;flex-wrap:wrap;justify-content:center}
+  .col{display:flex;flex-direction:column;align-items:center;gap:10px}
+  .tag{font-size:12px;color:var(--ink-dim)}
+
+  .pane{position:relative;width:440px;max-width:92vw;height:300px;border-radius:8px;
+    overflow:hidden;background:var(--pane-surface);border:1px solid rgba(255,255,255,.06);
+    box-shadow:0 12px 40px rgba(0,0,0,.45)}
+  .pane-header{height:32px;display:flex;align-items:center;gap:8px;padding:0 12px;
+    font-size:12px;color:var(--ink-dim);border-bottom:1px solid rgba(255,255,255,.05)}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--hint)}
+  .pane-body{padding:12px 14px;font:12px/1.5 "Cascadia Mono",ui-monospace,monospace;color:#c7c7c7;white-space:pre-wrap}
+  .pane-body .muted{color:#6a6a6a}
+
+  .overlay{position:absolute;inset:0;display:grid;place-items:center;
+    background:radial-gradient(150px 150px at 50% 44%,
+        color-mix(in srgb,var(--hint) 20%, transparent) 0%, transparent 70%),
+      rgba(20,22,26,.42);
+    backdrop-filter:blur(9px) saturate(115%);-webkit-backdrop-filter:blur(9px) saturate(115%)}
+  .stack{display:flex;flex-direction:column;align-items:center;gap:14px}
+  .caption{font-size:13px;font-weight:500;color:var(--ink)}
+  /* fixed-width slot so "Setting up" stays put and only the dots fill in */
+  .caption .dots{display:inline-block;width:1.4em;text-align:left}
+  .caption .dots::after{content:"";animation:dots 1.4s steps(4,end) infinite}
+  @keyframes dots{0%{content:""}25%{content:"."}50%{content:".."}75%{content:"..."}100%{content:""}}
+
+  .loader{color:var(--ink)}
+  .loader--full{width:168px;height:146px;overflow:visible}
+  /* face crop: wider proportions + feathered edges so it melts into the frost */
+  .loader--face{width:214px;height:150px;overflow:hidden;
+    -webkit-mask-image:radial-gradient(80% 84% at 52% 50%,#000 56%,transparent 100%);
+            mask-image:radial-gradient(80% 84% at 52% 50%,#000 56%,transparent 100%)}
+
+  /* the nest is fixed; only the bird moves */
+  .bird-rig{transform-box:view-box;animation:place var(--loop) infinite}
+  .loader--full .bird-rig{transform-origin:52px 60px}
+  .loader--face .bird-rig{transform-origin:74px 92px}
+  @keyframes place{
+    0%  {transform:rotate(-2deg);   animation-timing-function:cubic-bezier(.5,0,.7,.4)}
+    13% {transform:rotate(-5deg);   animation-timing-function:cubic-bezier(.28,0,.22,1)}
+    50% {transform:rotate(5.2deg);  animation-timing-function:cubic-bezier(.33,.9,.5,1)}
+    58% {transform:rotate(5.9deg);  animation-timing-function:ease-in-out}
+    65% {transform:rotate(5.3deg);  animation-timing-function:linear}
+    80% {transform:rotate(5.3deg);  animation-timing-function:cubic-bezier(.4,0,.25,1)}
+    100%{transform:rotate(-2deg)}
+  }
+  @media (prefers-reduced-motion:reduce){.scene,.bird-rig,.caption .dots::after{animation:none}.bird-rig{transform:rotate(4deg)}}
+  .freeze .bird-rig{animation-delay:-1.2s;animation-play-state:paused}
+
+  .controls{display:flex;flex-wrap:wrap;align-items:center;gap:14px;font-size:12px;color:var(--ink-dim)}
+  .swatches{display:flex;gap:7px}
+  .sw{width:20px;height:20px;border-radius:6px;border:1px solid rgba(255,255,255,.15);cursor:pointer}
+  .sw.active{outline:2px solid #fff;outline-offset:1px}
+  button{font:inherit;color:var(--ink);background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.14);border-radius:6px;padding:5px 12px;cursor:pointer}
+  button:hover{background:rgba(255,255,255,.1)}
+  input[type=range]{accent-color:var(--accent)}
+
+  /* ---- reusable defs: a nest woven from individual twigs ---- */
+</style>
+</head>
+<body>
+  <div class="row">
+
+    <!-- ============ A: full scene ============ -->
+    <div class="col">
+      <div class="tag">A — full scene</div>
+      <div class="pane">
+        <div class="pane-header"><span class="dot"></span>&nbsp;cmux-win</div>
+        <div class="pane-body"><span class="muted">PS&gt;</span> claude --resume
+<span class="muted">Restoring conversation…</span></div>
+        <div class="overlay">
+          <div class="stack">
+            <svg class="loader loader--full" viewBox="0 0 150 130" aria-label="Setting up">
+              <g class="scene">
+                <!-- NEST (woven cup, drawn before the bird so the twig rests on the rim):
+                     elliptical opening frames a dark hollow, front wall wraps down,
+                     stray ends jut up/back. -->
+                <g fill="none" stroke="currentColor" stroke-linecap="round">
+                  <path d="M58 100 Q98 90 138 100" stroke-width="2.2" opacity=".4"/>
+                  <path d="M66 97 Q98 91 130 97" stroke-width="1.5" opacity=".28"/>
+                  <path d="M84 92 L80 82"  stroke-width="1.9" opacity=".45"/>
+                  <path d="M100 90 L106 80" stroke-width="1.9" opacity=".45"/>
+                  <path d="M116 92 L124 84" stroke-width="1.8" opacity=".38"/>
+                  <path d="M70 95 L63 87"  stroke-width="1.7" opacity=".33"/>
+                  <path d="M58 100 Q98 111 138 100" stroke-width="2.4" opacity=".72"/>
+                  <path d="M61 104 Q98 114 135 104" stroke-width="1.9" opacity=".58"/>
+                  <path d="M62 108 Q98 117 134 108" stroke-width="1.8" opacity=".48"/>
+                  <path d="M67 111 Q98 118 129 111" stroke-width="1.6" opacity=".4"/>
+                  <path d="M74 101 L88 106"  stroke-width="1.6" opacity=".55"/>
+                  <path d="M92 106 L106 100" stroke-width="1.6" opacity=".55"/>
+                  <path d="M110 101 L124 106" stroke-width="1.5" opacity=".5"/>
+                  <path d="M138 104 l7 2" stroke-width="1.7" opacity=".38"/>
+                  <path d="M58 104 l-7 2" stroke-width="1.7" opacity=".38"/>
+                </g>
+                <!-- BIRD RIG: full bird + beak + diagonally-laid twig -->
+                <g class="bird-rig">
+                  <g fill="none" stroke="currentColor" stroke-linecap="round">
+                    <path d="M97 57 Q111 72 121 94" stroke-width="2.7"/>
+                    <path d="M112 85 q4.5 -1 7.5 -0.5" stroke-width="2"/>
+                  </g>
+                  <circle cx="121" cy="94" r="1.8" fill="currentColor"/>
+                  <g transform="translate(3 20) scale(4.25)">
+                    <g transform="translate(-0.6 -3.4) rotate(15 12.3 15.6)">
+                      <path fill="none" stroke="currentColor" stroke-width="1.0" stroke-linecap="round" d="M11.3 14.1 V 15.7 M13.4 14.1 V 15.7"/>
+                      <path fill="currentColor" d="M19.9 10.0 C 19.5 7.9, 17.6 6.3, 15.4 6.5 C 13.9 6.5, 12.5 6.8, 11.4 7.4 C 9.4 7.6, 7.4 6.2, 5.7 6.7 C 5.1 6.9, 5.2 7.6, 5.9 8.1 C 7.0 8.9, 7.7 10.1, 8.5 11.1 C 9.6 12.7, 10.9 14.4, 12.6 14.4 C 14.0 14.4, 15.2 13.9, 16.1 13.0 C 17.1 12.4, 18.0 11.9, 18.6 11.2 C 19.1 10.9, 19.6 10.6, 19.9 10.0 Z"/>
+                      <!-- beak seated INSIDE the head (no seam); twig emerges from its tip -->
+                      <path fill="currentColor" d="M17.4 9.4 L 21.9 10.3 L 18.2 11.35 Z"/>
+                      <path fill="none" stroke="currentColor" stroke-width="0.5" stroke-linecap="round" d="M20.2 10.8 L 21.6 10.5"/>
+                      <path fill="none" stroke="#15233b" stroke-width="0.75" stroke-linecap="round" d="M15.9 7.3 C 16.55 7.25, 17.3 7.5, 17.9 8.0"/>
+                      <circle cx="17" cy="9" r="0.95" fill="#15233b"/>
+                      <circle cx="17" cy="9" r="1.95" fill="none" stroke="#76B9ED" stroke-width="0.6"/>
+                      <path fill="none" stroke="#76B9ED" stroke-width="0.5" stroke-linecap="round" d="M17.6 10.8 C 17.8 11.7, 17.5 12.5, 16.9 13.1"/>
+                    </g>
+                  </g>
+                </g>
+                <!-- nestle twigs over the placed tip (~121,94) -->
+                <g fill="none" stroke="currentColor" stroke-linecap="round">
+                  <path d="M113 98 L129 92" stroke-width="1.6" opacity=".55"/>
+                  <path d="M116 100 L131 95" stroke-width="1.4" opacity=".48"/>
+                </g>
+              </g>
+            </svg>
+            <div class="caption">Setting up<span class="dots"></span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ B: face + nest edge, feathered ============ -->
+    <div class="col">
+      <div class="tag">B — face + nest edge (feathered)</div>
+      <div class="pane">
+        <div class="pane-header"><span class="dot"></span>&nbsp;cmux-win</div>
+        <div class="pane-body"><span class="muted">PS&gt;</span> claude --resume
+<span class="muted">Restoring conversation…</span></div>
+        <div class="overlay">
+          <div class="stack">
+            <svg class="loader loader--face" viewBox="0 0 200 130" aria-label="Setting up">
+              <g class="scene">
+                <!-- NEST — drawn BEFORE the bird so the placed twig rests ON its rim.
+                     Elliptical woven cup: far + near rim frame the dark hollow, the
+                     front wall wraps down, a few stray ends jut up/back. -->
+                <g fill="none" stroke="currentColor" stroke-linecap="round">
+                  <!-- far (back) rim -->
+                  <path d="M89 96 Q137 84 185 96" stroke-width="2.4" opacity=".4"/>
+                  <path d="M98 93 Q137 87 176 93" stroke-width="1.6" opacity=".28"/>
+                  <!-- stray ends, up and back only (varied, not radial) -->
+                  <path d="M116 88 L112 76"  stroke-width="2.1" opacity=".45"/>
+                  <path d="M138 86 L146 74"  stroke-width="2.1" opacity=".45"/>
+                  <path d="M159 88 L169 78"  stroke-width="2"   opacity=".38"/>
+                  <path d="M101 91 L93 82"   stroke-width="1.9" opacity=".33"/>
+                  <!-- near (front) rim -->
+                  <path d="M89 96 Q137 108 185 96" stroke-width="2.6" opacity=".72"/>
+                  <!-- front wall wrapping down the bowl -->
+                  <path d="M92 100 Q137 111 182 100" stroke-width="2.1" opacity=".58"/>
+                  <path d="M93 104 Q137 115 181 104" stroke-width="2"   opacity=".48"/>
+                  <path d="M99 108 Q137 117 175 108" stroke-width="1.8" opacity=".4"/>
+                  <!-- rim weave -->
+                  <path d="M106 97 L122 102" stroke-width="1.7" opacity=".55"/>
+                  <path d="M128 102 L144 96" stroke-width="1.7" opacity=".55"/>
+                  <path d="M148 97 L164 102" stroke-width="1.7" opacity=".5"/>
+                  <path d="M166 102 L180 97" stroke-width="1.6" opacity=".45"/>
+                  <!-- front-bottom strays -->
+                  <path d="M182 104 l9 3" stroke-width="1.9" opacity=".38"/>
+                  <path d="M90 104 l-9 2" stroke-width="1.9" opacity=".38"/>
+                </g>
+                <!-- BIG face + beak + twig.
+                     Order: twig first, then head/beak ON TOP so the bill visibly
+                     grips the twig's base; twig tip rests ON the near rim (y≈106),
+                     opaque + a touch thicker so it reads over the woven twigs. -->
+                <g class="bird-rig">
+                  <g fill="none" stroke="currentColor" stroke-linecap="round">
+                    <!-- twig: starts at the bill tip, bends slightly away from the
+                         beak axis (so the grip reads as a joint, not one long needle),
+                         tip rests on top of the near rim -->
+                    <!-- twig laid diagonally (not vertical): starts deep inside the
+                         bill, rests its tip along the near rim -->
+                    <path d="M110 70 Q134 80 156 94" stroke-width="2.9"/>
+                    <path d="M144 87 q5 -1.2 8 -0.6" stroke-width="2.1"/>
+                  </g>
+                  <circle cx="156" cy="94" r="2" fill="currentColor"/>
+                  <g transform="translate(-82 -10) scale(8.5)">
+                    <g transform="translate(-0.6 -3.4) rotate(15 12.3 15.6)">
+                      <path fill="currentColor" d="M19.9 10.0 C 19.5 7.9, 17.6 6.3, 15.4 6.5 C 13.9 6.5, 12.5 6.8, 11.4 7.4 C 9.4 7.6, 7.4 6.2, 5.7 6.7 C 5.1 6.9, 5.2 7.6, 5.9 8.1 C 7.0 8.9, 7.7 10.1, 8.5 11.1 C 9.6 12.7, 10.9 14.4, 12.6 14.4 C 14.0 14.4, 15.2 13.9, 16.1 13.0 C 17.1 12.4, 18.0 11.9, 18.6 11.2 C 19.1 10.9, 19.6 10.6, 19.9 10.0 Z"/>
+                      <!-- bill: base seated INSIDE the head (overlaps the body fill so
+                           there's no seam), short point protruding; twig from its tip -->
+                      <path fill="currentColor" d="M17.4 9.4 L 21.9 10.3 L 18.2 11.35 Z"/>
+                      <path fill="none" stroke="currentColor" stroke-width="0.5" stroke-linecap="round" d="M20.2 10.8 L 21.6 10.5"/>
+                      <path fill="none" stroke="#15233b" stroke-width="0.6" stroke-linecap="round" d="M15.9 7.35 C 16.55 7.3, 17.3 7.55, 17.9 8.05"/>
+                      <circle cx="17" cy="9" r="0.95" fill="#15233b"/>
+                      <circle cx="17" cy="9" r="1.95" fill="none" stroke="#76B9ED" stroke-width="0.6"/>
+                      <path fill="none" stroke="#76B9ED" stroke-width="0.5" stroke-linecap="round" d="M17.6 10.8 C 17.8 11.7, 17.5 12.5, 16.9 13.1"/>
+                    </g>
+                  </g>
+                </g>
+                <!-- NESTLE: 2 twigs lacing over the placed twig's tip (~119,113) so it
+                     reads as tucked onto the near rim, not laid flat on top. -->
+                <g class="nest-front" fill="none" stroke="currentColor" stroke-linecap="round">
+                  <path d="M147 100 L167 94" stroke-width="1.8" opacity=".55"/>
+                  <path d="M151 101 L169 96" stroke-width="1.6" opacity=".48"/>
+                </g>
+              </g>
+            </svg>
+            <div class="caption">Setting up<span class="dots"></span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="controls">
+    <span>pane color:</span>
+    <div class="swatches" id="swatches"></div>
+    <label>speed <input id="speed" type="range" min="1.6" max="3.6" step="0.1" value="2.4"></label>
+    <button id="freezeBtn">Freeze placed</button>
+  </div>
+
+<script>
+  const root=document.documentElement;
+  if(location.search.includes('freeze')) document.body.classList.add('freeze');
+  const tags=['--tag-0','--tag-1','--tag-2','--tag-3','--tag-4','--tag-5'];
+  const sw=document.getElementById('swatches');
+  tags.forEach((t,i)=>{
+    const b=document.createElement('div'); b.className='sw'+(i===1?' active':'');
+    b.style.background=`var(${t})`;
+    b.onclick=()=>{root.style.setProperty('--hint',`var(${t})`);
+      [...sw.children].forEach(c=>c.classList.remove('active')); b.classList.add('active');};
+    sw.appendChild(b);
+  });
+  document.getElementById('speed').oninput=e=>root.style.setProperty('--loop',e.target.value+'s');
+  document.getElementById('freezeBtn').onclick=()=>document.body.classList.toggle('freeze');
+</script>
+</body>
+</html>

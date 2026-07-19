@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Perch — "Setting up" pane overlay</title>
+<style>
+  :root{
+    --pane-surface:#1f1f1f;
+    --ink:#e9eef4; --ink-dim:#aab3bd;
+    --accent:#76B9ED; --eye:#15233b;
+    --tag-0:#76B9ED; --tag-1:#6CCB5F; --tag-2:#FCE100;
+    --tag-3:#FF9E5E; --tag-4:#FF99A4; --tag-5:#C792EA;
+    --hint:var(--tag-1);
+    --loop:2.4s;
+    font-family:"Inter var","Inter","Segoe UI Variable Text","Segoe UI",sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; min-height:100vh; display:grid; place-items:center; gap:28px;
+    padding:40px 20px; background:#141414; color:var(--ink);
+    background-image:radial-gradient(1200px 600px at 30% -10%,#1c2330 0%,#141414 60%);
+  }
+  .pane{
+    position:relative; width:560px; max-width:92vw; height:360px;
+    border-radius:8px; overflow:hidden; background:var(--pane-surface);
+    border:1px solid rgba(255,255,255,.06); box-shadow:0 12px 40px rgba(0,0,0,.45);
+  }
+  .pane-header{height:34px;display:flex;align-items:center;gap:8px;padding:0 12px;
+    font-size:12px;color:var(--ink-dim);border-bottom:1px solid rgba(255,255,255,.05)}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--hint)}
+  .pane-body{padding:12px 14px;font:13px/1.55 "Cascadia Mono",ui-monospace,monospace;color:#c7c7c7;white-space:pre-wrap}
+  .pane-body .muted{color:#6a6a6a}
+  .pane-body .cyan{color:var(--accent)}
+
+  .overlay{
+    position:absolute; inset:0; display:grid; place-items:center;
+    background:
+      radial-gradient(150px 150px at 50% 42%,
+        color-mix(in srgb,var(--hint) 20%, transparent) 0%, transparent 70%),
+      rgba(20,22,26,.42);
+    backdrop-filter:blur(9px) saturate(115%);
+    -webkit-backdrop-filter:blur(9px) saturate(115%);
+    animation:overlay-in .16s cubic-bezier(0,0,0,1) both;
+  }
+  .overlay.hidden{display:none}
+  @keyframes overlay-in{from{opacity:0}to{opacity:1}}
+  .stack{display:flex;flex-direction:column;align-items:center;gap:16px}
+  .loader{width:176px;height:150px;overflow:visible;color:var(--ink)}
+  .caption{font-size:13px;font-weight:500;letter-spacing:.1px;color:var(--ink)}
+  .caption .dots::after{content:"";animation:dots 1.4s steps(4,end) infinite}
+  @keyframes dots{0%{content:""}25%{content:"."}50%{content:".."}75%{content:"..."}100%{content:""}}
+
+  /* the whole scene breathes, slightly out of phase with the place so it never
+     looks mechanically synced */
+  .scene{animation:bob calc(var(--loop) * 1.13) ease-in-out infinite}
+  @keyframes bob{0%,100%{transform:translateY(.6px)}50%{transform:translateY(-1.4px)}}
+
+  /* bird + the twig held at its beak swing together to the nest edge.
+     Per-keyframe easing gives it anticipation → careful decel → soft settle → lift. */
+  .bird-rig{
+    transform-box:fill-box; transform-origin:32px 58px;
+    animation:place var(--loop) infinite;
+  }
+  @keyframes place{
+    0%  {transform:rotate(-2deg);   animation-timing-function:cubic-bezier(.5,0,.7,.4)}   /* wind up */
+    13% {transform:rotate(-5deg);   animation-timing-function:cubic-bezier(.28,0,.22,1)}  /* lift / anticipation */
+    50% {transform:rotate(5.2deg);  animation-timing-function:cubic-bezier(.33,.9,.5,1)}  /* careful descent onto rim */
+    58% {transform:rotate(5.9deg);  animation-timing-function:ease-in-out}                /* gentle settle */
+    65% {transform:rotate(5.3deg);  animation-timing-function:linear}                     /* rests a beat */
+    80% {transform:rotate(5.3deg);  animation-timing-function:cubic-bezier(.4,0,.25,1)}   /* then lifts away */
+    100%{transform:rotate(-2deg)}
+  }
+
+  @media (prefers-reduced-motion:reduce){
+    .scene,.bird-rig,.caption .dots::after{animation:none}
+    .bird-rig{transform:rotate(4deg)}
+  }
+  .freeze .scene{animation-play-state:paused}
+  .freeze .bird-rig{animation-delay:-1.2s;animation-play-state:paused}
+
+  .controls{display:flex;flex-wrap:wrap;align-items:center;gap:14px;font-size:12px;color:var(--ink-dim)}
+  .swatches{display:flex;gap:7px}
+  .sw{width:20px;height:20px;border-radius:6px;border:1px solid rgba(255,255,255,.15);cursor:pointer}
+  .sw.active{outline:2px solid #fff;outline-offset:1px}
+  button{font:inherit;color:var(--ink);background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.14);border-radius:6px;padding:5px 12px;cursor:pointer}
+  button:hover{background:rgba(255,255,255,.1)}
+  input[type=range]{accent-color:var(--accent)}
+</style>
+</head>
+<body>
+  <div class="pane" id="pane">
+    <div class="pane-header"><span class="dot"></span>&nbsp;cmux-win — resume projects mode</div>
+    <div class="pane-body"><span class="muted">PS C:\Users\josep\dev-projects\cmux-win&gt;</span> claude --resume
+<span class="muted">Restoring conversation…</span>
+<span class="cyan">●</span> Claude Code</div>
+
+    <div class="overlay" id="overlay">
+      <div class="stack">
+        <svg class="loader" viewBox="0 0 150 130" aria-label="Setting up">
+          <g class="scene">
+
+            <!-- NEST: open woven bowl, lower-right where the beak reaches -->
+            <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M64 96 Q98 87 132 96" stroke-width="2.4" opacity=".45"/>    <!-- far rim -->
+              <path d="M132 96 q6 -2 9 -5" stroke-width="2" opacity=".4"/>          <!-- stray twig -->
+              <path d="M66 106 C 70 121, 126 121, 130 106" stroke-width="3"/>       <!-- cup -->
+              <path d="M64 96 Q98 104 132 96" stroke-width="3"/>                    <!-- near rim -->
+              <path d="M71 100 Q98 107 125 100" stroke-width="1.9" opacity=".6"/>   <!-- weave -->
+              <path d="M78 98 Q98 102 116 99"  stroke-width="1.6" opacity=".45"/>
+            </g>
+
+            <!-- BIRD RIG: mascot (big) + beak + the twig it carries, one group -->
+            <g class="bird-rig">
+              <!-- twig: a gently bowed branch with a small offshoot, tip on the rim -->
+              <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M92 59 Q109 70 126 92" stroke-width="2.9"/>
+                <path d="M117 80 q6 -1.5 11 -1" stroke-width="2.1"/>   <!-- offshoot -->
+              </g>
+              <circle cx="126" cy="92" r="1.6" fill="currentColor"/>
+
+              <g transform="translate(3 20) scale(4.25)">
+                <g transform="translate(-0.6 -3.4) rotate(15 12.3 15.6)">
+                  <!-- feet -->
+                  <path fill="none" stroke="currentColor" stroke-width="1.0" stroke-linecap="round" d="M11.3 14.1 V 15.7 M13.4 14.1 V 15.7"/>
+                  <!-- body (tail tip softened/rounded vs the icon) -->
+                  <path fill="currentColor" d="M19.9 10.0 C 19.5 7.9, 17.6 6.3, 15.4 6.5 C 13.9 6.5, 12.5 6.8, 11.4 7.4 C 9.4 7.6, 7.4 6.2, 5.7 6.7 C 5.1 6.9, 5.2 7.6, 5.9 8.1 C 7.0 8.9, 7.7 10.1, 8.5 11.1 C 9.6 12.7, 10.9 14.4, 12.6 14.4 C 14.0 14.4, 15.2 13.9, 16.1 13.0 C 17.1 12.4, 18.0 11.9, 18.6 11.2 C 19.1 10.9, 19.6 10.6, 19.9 10.0 Z"/>
+                  <!-- beak wedge gripping the twig -->
+                  <path fill="currentColor" d="M19.7 9.5 L 22.3 10.4 L 19.9 11.2 Z"/>
+                  <!-- brow -->
+                  <path fill="none" stroke="#15233b" stroke-width="0.85" stroke-linecap="round" d="M15.9 7.25 C 16.6 7.2, 17.4 7.5, 18.05 8.05"/>
+                  <!-- eye + monocle + string -->
+                  <circle cx="17" cy="9" r="0.95" fill="#15233b"/>
+                  <circle cx="17" cy="9" r="1.95" fill="none" stroke="#76B9ED" stroke-width="0.6"/>
+                  <path fill="none" stroke="#76B9ED" stroke-width="0.5" stroke-linecap="round" d="M17.6 10.8 C 17.8 11.7, 17.5 12.5, 16.9 13.1"/>
+                </g>
+              </g>
+            </g>
+
+          </g>
+        </svg>
+        <div class="caption">Setting up<span class="dots"></span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <span>pane color:</span>
+    <div class="swatches" id="swatches"></div>
+    <label>speed <input id="speed" type="range" min="1.6" max="3.6" step="0.1" value="2.4"></label>
+    <button id="replay">Replay overlay</button>
+    <button id="toggle">Show/hide</button>
+    <button id="freezeBtn">Freeze placed</button>
+  </div>
+
+<script>
+  const root=document.documentElement, ov=document.getElementById('overlay');
+  if(location.search.includes('freeze')) document.body.classList.add('freeze');
+  const tags=['--tag-0','--tag-1','--tag-2','--tag-3','--tag-4','--tag-5'];
+  const sw=document.getElementById('swatches');
+  tags.forEach((t,i)=>{
+    const b=document.createElement('div'); b.className='sw'+(i===1?' active':'');
+    b.style.background=`var(${t})`;
+    b.onclick=()=>{root.style.setProperty('--hint',`var(${t})`);
+      [...sw.children].forEach(c=>c.classList.remove('active')); b.classList.add('active');};
+    sw.appendChild(b);
+  });
+  document.getElementById('speed').oninput=e=>root.style.setProperty('--loop',e.target.value+'s');
+  document.getElementById('replay').onclick=()=>{ov.classList.remove('hidden');
+    ov.style.animation='none'; void ov.offsetWidth; ov.style.animation='';};
+  document.getElementById('toggle').onclick=()=>ov.classList.toggle('hidden');
+  document.getElementById('freezeBtn').onclick=()=>document.body.classList.toggle('freeze');
+</script>
+</body>
+</html>
