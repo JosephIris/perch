@@ -352,6 +352,10 @@ export type StateMessage = {
   type: "state";
   activeSessionId: string;
   activePaneId: string;
+  /* The user's home directory (%USERPROFILE%). Lets the page expand a "~\…"
+   * path — Claude Code abbreviates the home dir in its file recaps — into a
+   * real file:// URL for the HTML-file link menu. */
+  homeDir: string;
   sessions: SessionView[];
   /* Registered projects, ferried with every push like prefs — the list is tiny
    * and the page then never has to ask for it. */

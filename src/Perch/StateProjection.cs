@@ -87,6 +87,10 @@ internal static class StateProjection
             type = "state",
             activeSessionId = store.ActiveSessionId?.ToString("D") ?? "",
             activePaneId    = activePaneId?.ToString("D") ?? "",
+            // User profile dir, so the page can expand a "~\…" path (Claude
+            // Code abbreviates the home dir in its file recaps) into a real
+            // file:// URL for the HTML-file link menu.
+            homeDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             prefs = new { fontSize, onboardingSeen, sidebarMode, inspectorOpen, wideLayout, localPerchOnly },
             // Account-wide model rate limits (usually empty — the endpoint 429s).
             // Only the AT-LIMIT models ship: the picker disables exactly these
