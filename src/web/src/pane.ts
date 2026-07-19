@@ -12,6 +12,7 @@ import { b64ToBytes, bytesToB64, send } from "./bridge.js";
 import type { PaneTreeView } from "./bridge.js";
 import { cachedClipboardText, copyText } from "./clipboard.js";
 import { showLinkMenu } from "./link-menu.js";
+import { URL_RE, findLinksInLine, htmlFileToUrl } from "./link-detect.js";
 import { buildPaneHeader, applyChips, applyAgentBadge, applyModelChip } from "./pane-header.js";
 import { buildPaneFooter, applyPaneFooter, type PaneFooter } from "./pane-footer.js";
 import { attachTooltip } from "./tooltip.js";
@@ -24,19 +25,10 @@ import { permissionDialogVisible, blockedDialogVisible } from "./perm-probe.js";
 // MainWindow.OnWebViewProcessFailed.
 const WEBGL_DISABLED = new URLSearchParams(location.search).has("nowebgl");
 
-// URL regex — same as @xterm/addon-web-links's strictUrlRegex, copied so
-// our custom provider doesn't depend on the addon at all. Matches
-// http(s)://… up to the first whitespace / quote / disallowed-final.
-//
-// IMPORTANT: control bytes (\x00-\x1F including ESC) are excluded from
-// BOTH char classes. Without this, the regex happily absorbs an ANSI
-// escape sequence that immediately follows a URL ("http://x.com\x1b[0m"),
-// causing injectUrlUnderlines to stick its \x1b[24m INSIDE that
-// sequence, splitting "[0m" off as literal text and leaving the
-// underline ON for the rest of the line — which is exactly the bug
-// users saw where the underline extended past the URL.
-const URL_RE =
-  /(https?|HTTPS?):[/]{2}[^\s\x00-\x1f"'!*(){}|\\\^<>`]*[^\s\x00-\x1f"':,.!?{}|\\\^~\[\]`()<>]/;
+// URL_RE / findLinksInLine / htmlFileToUrl live in link-detect.ts (shared with
+// the always-underline byte injection below and unit-tested there). URL_RE is
+// re-used by injectUrlUnderlines; the xterm link provider uses findLinksInLine
+// so it also surfaces local HTML files, not just web URLs.
 
 const utf8 = new TextEncoder();
 
@@ -674,17 +666,18 @@ function makeUrlLinkProvider(term: Terminal, paneId: string): ILinkProvider {
       const line = buffer.getLine(y - 1);
       if (!line) return callback(undefined);
       const text = line.translateToString(true);
-      const rex = new RegExp(URL_RE.source, "g");
       const out: ILink[] = [];
-      let match: RegExpExecArray | null;
-      while ((match = rex.exec(text))) {
-        const start = match.index + 1;       // 1-based column
-        const end = start + match[0].length; // exclusive
+      for (const lk of findLinksInLine(text)) {
+        const start = lk.start + 1;          // 1-based column
+        const end = start + lk.text.length;  // exclusive
+        // Web URLs open as-is; a local HTML file token becomes a file:// URL
+        // the host / webview can navigate to. Both flow through the same menu.
+        const menuUrl = lk.kind === "file" ? htmlFileToUrl(lk.text) : lk.text;
         out.push({
           range: { start: { x: start, y }, end: { x: end - 1, y } },
-          text: match[0],
+          text: lk.text,
           decorations: { underline: true, pointerCursor: true },
-          activate: (ev: MouseEvent, uri: string) => {
+          activate: (ev: MouseEvent) => {
             const x = ev.clientX || window.innerWidth / 2;
             const y2 = ev.clientY || window.innerHeight / 2;
             // Wipe any selection xterm started on the underlying
@@ -697,7 +690,7 @@ function makeUrlLinkProvider(term: Terminal, paneId: string): ILinkProvider {
             // inside showLinkMenu; we just nudge xterm out of focus
             // proactively.
             try { (term.textarea as HTMLTextAreaElement | undefined)?.blur(); } catch {}
-            showLinkMenu(uri, x, y2, paneId);
+            showLinkMenu(menuUrl, x, y2, paneId);
             ev.preventDefault();
             ev.stopPropagation();
           },

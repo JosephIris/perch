@@ -163,11 +163,15 @@ export type OutMessage =
       type: "project.tab.new";
       projectId: string;
       name: string;
-      agent: "claude" | "codex" | "shell";
+      agent: "claude" | "codex" | "shell" | "browser";
       worktree: boolean;
       /* Claude model alias for the new tab ("fable"/"opus"/"sonnet"/"haiku");
        * omitted / "" = account default. Only sent when agent is "claude". */
       model?: string;
+      /* Normalized URL for a browser tab — the tab's root leaf is a webview
+       * pointed here instead of a terminal. Only sent when agent is "browser";
+       * name is optional in that case (webview auto-titles from <title>). */
+      url?: string;
     }
   /* User clicked the footer update pill. Host downloads the pending Velopack
    * update and relaunches into it (the process is replaced on success). */

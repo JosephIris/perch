@@ -984,6 +984,91 @@ ul { list-style: none; padding: 0; margin: 0; }
   background: var(--color-subtle-tertiary);
   color: var(--color-text-primary);
 }
+
+/* Pane header action buttons — split this pane into a new terminal to the
+ * right / below, or open an embedded browser pane beside it. Quiet: the group
+ * is invisible (and click-through-disabled) until the pane is hovered, active,
+ * or a button inside it is focused, so idle panes stay calm. Layout space is
+ * reserved either way, so revealing them causes no header reflow. */
+.pane__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-fast) var(--ease-entry);
+}
+.pane:hover .pane__actions,
+.pane--active .pane__actions,
+.pane__header:focus-within .pane__actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+.pane__action {
+  width: 20px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-input);
+  color: var(--color-text-tertiary);
+  transition:
+    background var(--dur-fast) var(--ease-entry),
+    color var(--dur-fast) var(--ease-entry);
+}
+.pane__action:hover,
+.pane__action:focus-visible {
+  background: var(--color-subtle-tertiary);
+  color: var(--color-text-primary);
+  outline: none;
+}
+.pane__action-icon { display: block; }
+
+/* URL entry popover for "open browser pane" / "browser tab" — anchored under
+ * the browser action button. Same acrylic family as .color-picker / .link-menu.
+ * UrlPane has no address bar, so the URL is supplied here at creation. */
+.browser-prompt {
+  position: fixed;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px;
+  border-radius: var(--r-card);
+  background: rgba(28, 28, 28, 0.96);
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  border: 1px solid var(--color-stroke);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+.browser-prompt__input {
+  width: 240px;
+  background: var(--color-subtle-secondary);
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--r-input);
+  color: var(--color-text-primary);
+  font: 400 13px var(--font-small);
+  padding: 5px 8px;
+  outline: none;
+}
+.browser-prompt__input:focus { border-color: var(--color-accent); }
+.browser-prompt__input::placeholder { color: var(--color-text-tertiary); }
+.browser-prompt--invalid .browser-prompt__input {
+  border-color: var(--color-state-permission);
+  animation: browser-prompt-shake 0.2s ease;
+}
+@keyframes browser-prompt-shake {
+  0%, 100% { transform: translateX(0); }
+  25%      { transform: translateX(-3px); }
+  75%      { transform: translateX(3px); }
+}
+.browser-prompt__hint {
+  font: 400 11px var(--font-small);
+  color: var(--color-text-tertiary);
+  flex: 0 0 auto;
+  padding-right: 2px;
+}
 .pane__term {
   flex: 1 1 auto;
   min-height: 0;

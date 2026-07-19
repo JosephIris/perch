@@ -7,6 +7,7 @@
 
 import { send, type ProjectView } from "./bridge.js";
 import { MODEL_OPTIONS, modelLimitHint } from "./model-menu.js";
+import { normalizeUrl } from "./browser-prompt.js";
 
 let overlay: HTMLElement | null = null;
 
@@ -60,12 +61,14 @@ export function showNewTabDialog(project: ProjectView) {
   agentText.textContent = "Start with";
   agentField.appendChild(agentText);
 
-  const agents: { id: "claude" | "codex" | "shell"; label: string }[] = [
+  type Agent = "claude" | "codex" | "shell" | "browser";
+  const agents: { id: Agent; label: string }[] = [
     { id: "claude", label: "Claude" },
     { id: "codex", label: "Codex" },
     { id: "shell", label: "Shell" },
+    { id: "browser", label: "Browser" },
   ];
-  let agent: "claude" | "codex" | "shell" = "claude";
+  let agent: Agent = "claude";
 
   const seg = document.createElement("div");
   seg.className = "newtab-seg";
@@ -81,12 +84,33 @@ export function showNewTabDialog(project: ProjectView) {
       b.setAttribute("aria-pressed", "true");
       syncWorktreeHint();
       syncModelField();
+      syncBrowserFields();
     });
     seg.appendChild(b);
     return b;
   });
   agentField.appendChild(seg);
   card.appendChild(agentField);
+
+  // ── url (Browser only) ────────────────────────────────────────────────────
+  // A browser tab's root is a webview, not a terminal — it needs an address
+  // (our webview pane has no URL bar), and it doesn't take a model, worktree,
+  // or a required name (the page auto-titles from the site <title>).
+  const urlField = document.createElement("label");
+  urlField.className = "newtab-field";
+  const urlText = document.createElement("span");
+  urlText.className = "newtab-field__label";
+  urlText.textContent = "Address";
+  urlField.appendChild(urlText);
+
+  const urlInput = document.createElement("input");
+  urlInput.type = "text";
+  urlInput.className = "settings-control settings-control--text newtab-input";
+  urlInput.placeholder = "example.com or localhost:3000";
+  urlInput.spellcheck = false;
+  urlInput.autocomplete = "off";
+  urlField.appendChild(urlInput);
+  card.appendChild(urlField);
 
   // ── model (Claude only) ─────────────────────────────────────────────────
   // Same segmented idiom as the agent picker; five short labels fit the card.
@@ -188,6 +212,16 @@ export function showNewTabDialog(project: ProjectView) {
   wtCheck.addEventListener("change", syncWorktreeHint);
   syncWorktreeHint();
 
+  // Browser tab: swap the terminal-oriented fields (worktree) for the address,
+  // and make the name optional. Model is already claude-only via syncModelField.
+  const syncBrowserFields = () => {
+    const isBrowser = agent === "browser";
+    urlField.style.display = isBrowser ? "" : "none";
+    wtField.style.display = isBrowser ? "none" : "";
+    nameText.textContent = isBrowser ? "Name (optional)" : "Name";
+  };
+  syncBrowserFields();
+
   // ── actions ─────────────────────────────────────────────────────────────
   const actions = document.createElement("div");
   actions.className = "projects-card__actions";
@@ -209,6 +243,24 @@ export function showNewTabDialog(project: ProjectView) {
   create.textContent = "Create tab";
 
   const submit = () => {
+    // Browser tab: the address is required, the name isn't; no worktree/model.
+    if (agent === "browser") {
+      const url = normalizeUrl(urlInput.value);
+      if (!url) {
+        urlInput.focus();
+        return;
+      }
+      send({
+        type: "project.tab.new",
+        projectId: project.id,
+        name: nameInput.value.trim(),
+        agent,
+        worktree: false,
+        url,
+      });
+      closeNewTabDialog();
+      return;
+    }
     const name = nameInput.value.trim();
     if (!name) {
       nameInput.focus();
@@ -232,6 +284,10 @@ export function showNewTabDialog(project: ProjectView) {
 
   nameInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter") submit();
+  });
+  urlInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") submit();
+    e.stopPropagation();
   });
 
   overlay.appendChild(card);
