@@ -43,6 +43,29 @@ public partial class MainWindow : FluentWindow
     private static readonly long RedrawWindowTicks = System.Diagnostics.Stopwatch.Frequency; // ~1s
     private readonly Dictionary<Guid, long> _lastResizeTicks = new();
 
+    // Ambient-output filter for the watchdog. An IDLE Claude pane is not
+    // actually silent: a configured statusline repaints every few seconds, and
+    // other TUI chrome ticks too. Each repaint is a single short burst — but a
+    // WORKING agent is continuously chatty (it redraws its spinner ~1/sec). So
+    // one burst must never read as "the agent resumed": output only counts as
+    // ACTIVITY once the pane's byte counter has advanced across two
+    // consecutive 1Hz watchdog ticks. Byte-counter deltas, not output
+    // timestamps — a "was output recent?" window wider than the tick reads a
+    // single burst as two ticks' worth, and one narrower drops legitimate
+    // 1/sec spinner frames to timer jitter.
+    // Without this, a pane whose turn ended hook-lessly (Esc interrupt — cc
+    // fires no Stop) oscillated working↔done forever on statusline repaints,
+    // its sidebar spinner restarting on every flip.
+    // _activityStreak counts consecutive byte-advancing ticks per pane;
+    // _lastSustainedTicks is when a streak last reached two — the level signal
+    // BOTH watchdog edges are driven by (which also makes the demote immune to
+    // ambient ticks resetting the silence clock). Working entries in
+    // OnAgentStatus / OnPaneProbe restart that clock directly: the hook IS the
+    // activity signal, and the agent's first byte can lag it by seconds.
+    private readonly Dictionary<Guid, long> _lastByteCounts = new();
+    private readonly Dictionary<Guid, int> _activityStreak = new();
+    private readonly Dictionary<Guid, long> _lastSustainedTicks = new();
+
     private System.Windows.Threading.DispatcherTimer? _idleWatchdog;
 
     private ControlIpcServer? _control;
@@ -1154,7 +1177,15 @@ public partial class MainWindow : FluentWindow
         if (newState == AgentState.Working)
         {
             if (prev != AgentState.Working)
+            {
                 pane.TurnStartUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                // Restart the watchdog's silence clock too: the hook asserting
+                // "working" IS the activity signal, and without this a pane
+                // whose last sustained output predates the turn (it usually
+                // does — the user just typed one line) demotes on the very
+                // next tick, before the agent's first byte lands.
+                _lastSustainedTicks[pane.Id] = System.Diagnostics.Stopwatch.GetTimestamp();
+            }
         }
         else
         {
@@ -1213,10 +1244,31 @@ public partial class MainWindow : FluentWindow
         {
             foreach (var pane in AllLeaves(sess.Root))
             {
-                // No output seen yet (just spawned) → treat as not-silent so we
-                // don't demote a pane that hasn't had a chance to draw.
-                var silent = _panes.TryGetLastOutputTicks(pane.Id, out var last)
-                             && (now - last) >= IdleDemoteTicks;
+                var hasOutput = _panes.TryGetLastOutputTicks(pane.Id, out var last);
+                // "Bytes arrived since the previous tick" — and they aren't a
+                // resize's own redraw (see RedrawWindowTicks above).
+                var bytes = _panes.BytesReceived(pane.Id);
+                var advanced = _lastByteCounts.TryGetValue(pane.Id, out var prevBytes)
+                               && bytes > prevBytes;
+                _lastByteCounts[pane.Id] = bytes;
+                var fresh = advanced
+                            && (!_lastResizeTicks.TryGetValue(pane.Id, out var rz)
+                                || !hasOutput || last - rz > RedrawWindowTicks);
+                var streak = fresh ? _activityStreak.GetValueOrDefault(pane.Id) + 1 : 0;
+                _activityStreak[pane.Id] = streak;
+                var sustained = streak >= 2;
+
+                // The silence clock runs from the last SUSTAINED activity, so an
+                // ambient one-burst repaint (statusline tick) neither resets it
+                // nor counts as the agent resuming. First sight seeds the clock
+                // (from the last output if there was one, else "now") so a
+                // just-spawned pane isn't demoted before it had a chance to draw.
+                if (!_lastSustainedTicks.TryGetValue(pane.Id, out var sustainedAt))
+                    sustainedAt = _lastSustainedTicks[pane.Id] = hasOutput ? last : now;
+                if (sustained)
+                    sustainedAt = _lastSustainedTicks[pane.Id] = now;
+
+                var silent = (now - sustainedAt) >= IdleDemoteTicks;
 
                 if (pane.AgentState == AgentState.Working && silent)
                 {
@@ -1227,11 +1279,10 @@ public partial class MainWindow : FluentWindow
                     changed = true;
                     Log.Info("IdleWatchdog", $"pane={pane.Id:N} working->done (output-silent)");
                 }
-                else if (pane.AgentState == AgentState.Done && pane.StateInferred && !silent
-                         && (!_lastResizeTicks.TryGetValue(pane.Id, out var rz)
-                             || last - rz > RedrawWindowTicks))
+                else if (pane.AgentState == AgentState.Done && pane.StateInferred && sustained)
                 {
-                    // Not a resize's redraw — real output resumed. Walk it back.
+                    // Real output resumed (two consecutive ticks of it, not a
+                    // lone repaint). Walk it back.
                     pane.AgentState = AgentState.Working;
                     // Stays inferred — it's still a watchdog guess until a hook
                     // says otherwise. Restart the turn clock for the new spell.
@@ -1278,6 +1329,10 @@ public partial class MainWindow : FluentWindow
             pane.AgentState = AgentState.Working;
             pane.StateInferred = true;
             pane.TurnStartUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            // Same silence-clock restart as OnAgentStatus's Working entry: give
+            // the (possibly) resumed agent its grace window before the watchdog
+            // may settle an Esc'd turn to Done.
+            _lastSustainedTicks[pane.Id] = System.Diagnostics.Stopwatch.GetTimestamp();
             // The ask died with the dialog — a stale "Claude needs your
             // permission" note must not outlive it in the sidebar/dashboard.
             pane.NotificationText = "";
