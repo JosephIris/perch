@@ -5,15 +5,23 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 
 namespace Perch;
 
-/// One row in the Inspector's stream. Four kinds, one ordered list:
+/// One row in the Inspector's stream. Six kinds, one ordered list:
 ///   "prompt"    — what YOU asked (a real user turn, slash-command noise stripped)
 ///   "beat"      — what the agent SAID (an assistant `text` block)
 ///   "work"      — what the agent DID (an assistant `tool_use` block)
 ///   "interrupt" — a turn YOU stopped (Esc / Ctrl-C); the rail paints it red
 ///   "skill"     — the agent invoked a Skill; its own kind, coloured violet
+///   "image"     — an image in the conversation. Verb says whose: "pasted"
+///                 (you put it in a prompt) or "shared" (a tool handed it to
+///                 the agent — a screenshot it took, an image file it read).
+///                 Target is the image id the page uses to fetch the bytes
+///                 on demand (inspector.image) — the event itself carries NO
+///                 pixel data, so the journal payload stays small.
 /// The page renders beats as the spine and work as dimmed connective tissue,
 /// so one list drives both the narrative and the activity views.
 ///
@@ -50,6 +58,14 @@ internal sealed record InspectorData(
     IReadOnlyList<InspectorEvent> Events,
     InspectorVitals? Vitals);
 
+/// Where one image's bytes live: which transcript file, the byte range of the
+/// JSONL line holding it, and which image (in document order) within that line.
+/// Captured on the UI thread by LocateImage, then handed to ExtractImage on a
+/// worker — the extract re-reads the line from disk rather than keeping the
+/// base64 in memory, because a screenshot-heavy session would otherwise pin
+/// tens of MB for images the user may never click.
+internal sealed record ImageLocator(string Path, long Offset, int Length, int Ordinal);
+
 /// Reads Claude Code's JSONL transcript for a pane and projects it into the
 /// Inspector's stream + vitals.
 ///
@@ -72,11 +88,16 @@ internal sealed class TranscriptReader
         public string Path = "";
         public long Offset;
         public readonly List<InspectorEvent> Events = new();
+        /// Image id → where its bytes live in the file. Metadata only — the
+        /// base64 stays on disk until the page asks for that image.
+        public readonly Dictionary<string, ImageRef> Images = new();
         public string Model = "";
         public long Input, Output, CacheRead, CacheWrite;
         public long LastContext;
         public double Cost;
     }
+
+    private readonly record struct ImageRef(long Offset, int Length, int Ordinal);
 
     private readonly Dictionary<Guid, Tail> _tails = new();
 
@@ -120,6 +141,7 @@ internal sealed class TranscriptReader
         {
             tail.Offset = 0;
             tail.Events.Clear();
+            tail.Images.Clear();
             tail.Input = tail.Output = tail.CacheRead = tail.CacheWrite = 0;
             tail.Cost = 0;
             tail.Model = "";
@@ -132,13 +154,14 @@ internal sealed class TranscriptReader
 
         var lastNl = Array.LastIndexOf(buf, (byte)'\n');
         if (lastNl < 0) return;                       // no complete line yet
+        var baseOffset = tail.Offset;                 // where this batch began
         tail.Offset += lastNl + 1;
 
         foreach (var range in SplitLines(buf.AsSpan(0, lastNl + 1)))
         {
             var line = Encoding.UTF8.GetString(buf, range.Start, range.Length);
             if (line.Length == 0) continue;
-            try { Row(tail, line); }
+            try { Row(tail, line, baseOffset + range.Start, range.Length); }
             catch (JsonException) { /* one bad row must not kill the rest */ }
         }
     }
@@ -158,7 +181,7 @@ internal sealed class TranscriptReader
         return lines;
     }
 
-    private static void Row(Tail tail, string line)
+    private static void Row(Tail tail, string line, long lineOffset, int lineLength)
     {
         using var doc = JsonDocument.Parse(line);
         var root = doc.RootElement;
@@ -186,15 +209,31 @@ internal sealed class TranscriptReader
             // their prose. Absent metadata (older transcripts) reads as human, so
             // their prompts still show; UserPrompt's text filters stay as the
             // backstop for tool_results and slash-command scaffolding.
-            if (IsInjected(root)) return;
-            var prompt = UserPrompt(msg);
-            if (prompt == null) return;
-            // An interrupt (Esc / Ctrl-C) is recorded as a "[Request interrupted
-            // …]" user turn — bare, or "…for tool use". It reads as an alarm, not
-            // a prompt, so it gets its own kind and the rail paints it red.
-            var kind = prompt.StartsWith("[Request interrupted", StringComparison.Ordinal)
-                ? "interrupt" : "prompt";
-            tail.Events.Add(new InspectorEvent(kind, ts, prompt, "", "", "", 1));
+            if (!IsInjected(root) && UserPrompt(msg) is { } prompt)
+            {
+                // An interrupt (Esc / Ctrl-C) is recorded as a "[Request interrupted
+                // …]" user turn — bare, or "…for tool use". It reads as an alarm, not
+                // a prompt, so it gets its own kind and the rail paints it red.
+                var kind = prompt.StartsWith("[Request interrupted", StringComparison.Ordinal)
+                    ? "interrupt" : "prompt";
+                tail.Events.Add(new InspectorEvent(kind, ts, prompt, "", "", "", 1));
+            }
+
+            // Images ride on user rows even when the row itself isn't a prompt:
+            // a paste sits inside the typed turn, a screenshot/read image comes
+            // back inside a tool_result. Scan every user row for them — AFTER the
+            // prompt so a paste renders under the words it accompanied.
+            var ord = 0;
+            foreach (var (origin, _) in ImageBlocks(msg))
+            {
+                // Stable across re-reads of the same file (offset + position),
+                // and collision-proof enough across rotations that a page-side
+                // cache keyed on it can't show the wrong image.
+                var id = FormattableString.Invariant($"{lineOffset}-{ord}-{lineLength}");
+                tail.Images[id] = new ImageRef(lineOffset, lineLength, ord);
+                tail.Events.Add(new InspectorEvent("image", ts, "", origin, id, "", 1));
+                ord++;
+            }
             return;
         }
         if (type != "assistant") return;
@@ -232,6 +271,125 @@ internal sealed class TranscriptReader
                     break;
             }
         }
+    }
+
+    /// Every image in a user row's content, in document order, tagged with how
+    /// it got there: "pasted" (a block directly in the message — the user put it
+    /// in the prompt) or "shared" (nested in a tool_result — a screenshot the
+    /// agent took, an image file it read). ONE walk order, used by both Ingest
+    /// (assigning ordinals) and ExtractImage (resolving them) — the ordinal
+    /// contract breaks the moment the two disagree, so they share this method.
+    private static IEnumerable<(string Origin, JsonElement Block)> ImageBlocks(JsonElement msg)
+    {
+        if (!msg.TryGetProperty("content", out var content) ||
+            content.ValueKind != JsonValueKind.Array) yield break;
+
+        foreach (var block in content.EnumerateArray())
+        {
+            var kind = Str(block, "type");
+            if (kind == "image")
+            {
+                if (ValidImage(block)) yield return ("pasted", block);
+            }
+            else if (kind == "tool_result" &&
+                     block.TryGetProperty("content", out var inner) &&
+                     inner.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var ib in inner.EnumerateArray())
+                    if (Str(ib, "type") == "image" && ValidImage(ib))
+                        yield return ("shared", ib);
+            }
+        }
+    }
+
+    /// Only the base64 source shape is servable. (`toolUseResult` duplicates
+    /// tool_result images in a `file.base64` shape — we never read that field,
+    /// so nothing double-counts.)
+    private static bool ValidImage(JsonElement block) =>
+        block.TryGetProperty("source", out var src) &&
+        src.ValueKind == JsonValueKind.Object &&
+        Str(src, "type") == "base64" &&
+        src.TryGetProperty("data", out var d) &&
+        d.ValueKind == JsonValueKind.String;
+
+    /// Resolve an image id to its on-disk location. UI-thread only (touches
+    /// _tails); the returned locator is immutable and safe to carry to a worker.
+    public ImageLocator? LocateImage(Guid paneId, string imageId) =>
+        _tails.TryGetValue(paneId, out var tail) &&
+        tail.Images.TryGetValue(imageId, out var r)
+            ? new ImageLocator(tail.Path, r.Offset, r.Length, r.Ordinal)
+            : null;
+
+    /// Re-read one image's bytes from the transcript. Pure file IO + decode —
+    /// call it off-thread. `thumb` returns a JPEG downscaled to ≤320px on the
+    /// long edge (a rail thumbnail has no use for a 4K screenshot's bytes);
+    /// full returns the original base64 untouched. Null when the file rotated
+    /// out from under the locator or the row no longer parses — the page shows
+    /// "unavailable" rather than a broken img.
+    public static (string MediaType, string Data)? ExtractImage(ImageLocator loc, bool thumb)
+    {
+        try
+        {
+            using var fs = new FileStream(
+                loc.Path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            if (fs.Length < loc.Offset + loc.Length) return null;   // truncated since ingest
+            fs.Seek(loc.Offset, SeekOrigin.Begin);
+            var buf = new byte[loc.Length];
+            fs.ReadExactly(buf, 0, buf.Length);
+
+            using var doc = JsonDocument.Parse(buf);
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("message", out var msg) ||
+                msg.ValueKind != JsonValueKind.Object) return null;
+
+            var ord = 0;
+            foreach (var (_, block) in ImageBlocks(msg))
+            {
+                if (ord++ != loc.Ordinal) continue;
+                var src = block.GetProperty("source");
+                var media = Str(src, "media_type") is { Length: > 0 } m ? m : "image/png";
+                var data = Str(src, "data");
+                if (!thumb) return (media, data);
+                return ThumbBase64(data) is { } t ? ("image/jpeg", t) : (media, data);
+            }
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Log.Error("TranscriptReader.ExtractImage", ex);
+            return null;
+        }
+    }
+
+    /// Downscale to ≤320px long edge and re-encode as JPEG (q80). 320 covers
+    /// the rail's ~250px content width at 125% DPI; JPEG because thumbnails of
+    /// screenshots compress ~10x better than PNG and the quality loss is
+    /// invisible at that size. Null on any decode failure → caller falls back
+    /// to shipping the original bytes rather than no image.
+    private static string? ThumbBase64(string base64)
+    {
+        try
+        {
+            var bytes = Convert.FromBase64String(base64);
+            using var ms = new MemoryStream(bytes);
+            var frame = BitmapFrame.Create(ms, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
+            BitmapSource src = frame;
+
+            var scale = 320.0 / Math.Max(frame.PixelWidth, frame.PixelHeight);
+            if (scale < 1.0)
+            {
+                var tb = new TransformedBitmap(frame, new ScaleTransform(scale, scale));
+                tb.Freeze();
+                src = tb;
+            }
+
+            var enc = new JpegBitmapEncoder { QualityLevel = 80 };
+            enc.Frames.Add(BitmapFrame.Create(src));
+            using var outMs = new MemoryStream();
+            enc.Save(outMs);
+            return Convert.ToBase64String(outMs.ToArray());
+        }
+        catch { return null; }
     }
 
     /// A `type:"user"` row the user did NOT type: an isMeta row (an image-paste

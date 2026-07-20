@@ -81,6 +81,58 @@ onMessage((msg) => {
   p.resolve(msg);
 });
 
+// ---- Images ----------------------------------------------------------------
+// Journal image rows carry only an ID — the pixels are fetched here, on demand.
+// Thumbs are cached for the app's lifetime (they're ≤320px JPEGs, a few KB
+// each), so the 2s poll re-render costs nothing: every recreated <img> resolves
+// from the cache synchronously. Full-size bytes are NOT cached — a lightbox
+// open is rare, the read is local, and a session of 4K screenshots would pin
+// tens of MB for nothing.
+
+const IMG_TIMEOUT_MS = 8000;
+
+/** paneId:imageId → data URI. */
+const thumbCache = new Map<string, string>();
+type ImgPending = { resolve: (src: string) => void; timer: number };
+/** paneId:imageId:variant → pending request (coalesced like inspector.data). */
+const imgInflight = new Map<string, ImgPending>();
+
+/** Resolves to a data URI, or "" when the host can't serve the image. */
+function requestImage(pane: string, imageId: string, variant: "thumb" | "full"): Promise<string> {
+  if (variant === "thumb") {
+    const hit = thumbCache.get(`${pane}:${imageId}`);
+    if (hit) return Promise.resolve(hit);
+  }
+  const key = `${pane}:${imageId}:${variant}`;
+  const existing = imgInflight.get(key);
+  if (existing) {
+    return new Promise((r) => {
+      const prev = existing.resolve;
+      existing.resolve = (s) => { prev(s); r(s); };
+    });
+  }
+  return new Promise((resolve) => {
+    const timer = window.setTimeout(() => {
+      imgInflight.delete(key);
+      resolve("");
+    }, IMG_TIMEOUT_MS);
+    imgInflight.set(key, { resolve, timer });
+    send({ type: "inspector.image", paneId: pane, imageId, variant });
+  });
+}
+
+onMessage((msg) => {
+  if (msg.type !== "inspector.image.data") return;
+  const src = msg.data ? `data:${msg.mediaType};base64,${msg.data}` : "";
+  if (src && msg.variant === "thumb") thumbCache.set(`${msg.paneId}:${msg.imageId}`, src);
+  const key = `${msg.paneId}:${msg.imageId}:${msg.variant}`;
+  const p = imgInflight.get(key);
+  if (!p) return;
+  clearTimeout(p.timer);
+  imgInflight.delete(key);
+  p.resolve(src);
+});
+
 // ---- Element helpers -------------------------------------------------------
 
 const el = (tag: string, cls?: string): HTMLElement => {
@@ -175,6 +227,10 @@ function eventText(e: InspectorEventView): string {
     // "!" badge carries that meaning now), so they don't ride along either.
     case "interrupt":
       return e.text.replace(/^\[|\]$/g, "");
+    // An image row's "source" is pixels, not text — nothing meaningful to put
+    // on a text clipboard, and its single click already opens the lightbox.
+    case "image":
+      return "";
     default:
       // "Skill deep-research", "Edit GitProc.cs", "Bash dotnet test". Note is
       // the qualifier the row shows beside the target when it has one; the ×N
@@ -223,6 +279,68 @@ function copyLabel(row: HTMLElement, text: string): string {
   // you got all 40 lines and not the 4 the rail was showing.
   const lines = text.split("\n").length;
   return lines > 1 ? `Copied ${what} · ${lines} lines` : `Copied ${what}`;
+}
+
+// ---- Image lightbox --------------------------------------------------------
+// Same overlay surface as the commits lightbox (.settings-overlay/.settings-card
+// — which also enrolls it in webpane-suppress's modal airspace fix for free).
+// Opens instantly on the cached thumbnail, then swaps in the full-size bytes
+// when they land: a blurry-for-100ms image beats a spinner.
+
+let imageLightboxOpen = false;
+
+function openImageLightbox(pane: string, e: InspectorEventView): void {
+  if (imageLightboxOpen) return;
+  imageLightboxOpen = true;
+
+  const overlay = el("div", "settings-overlay");
+  const card = el("div", "settings-card image-lightbox");
+  card.setAttribute("role", "dialog");
+  card.setAttribute("aria-modal", "true");
+
+  const img = document.createElement("img");
+  img.className = "image-lightbox__img";
+  img.alt = e.verb === "pasted" ? "Pasted image" : "Shared image";
+  const thumb = thumbCache.get(`${pane}:${e.target}`);
+  if (thumb) img.src = thumb;
+  card.appendChild(img);
+
+  const time = hhmm(e.ts);
+  const caption = elText("div", "image-lightbox__caption",
+    (e.verb === "pasted" ? "Pasted by you" : "Shared in the conversation") +
+    (time ? ` · ${time}` : ""));
+  card.appendChild(caption);
+
+  overlay.appendChild(card);
+  document.body.appendChild(overlay);
+
+  let settled = false;
+  const finish = () => {
+    if (settled) return;
+    settled = true;
+    imageLightboxOpen = false;
+    window.removeEventListener("keydown", onKey, true);
+    overlay.classList.add("settings-overlay--closing");
+    overlay.addEventListener("animationend", () => overlay.remove(), { once: true });
+    window.setTimeout(() => overlay.remove(), 260); // reduced-motion fallback
+  };
+  function onKey(ev: KeyboardEvent) {
+    if (ev.key === "Escape") {
+      ev.preventDefault();
+      ev.stopPropagation();
+      finish();
+    }
+  }
+  overlay.addEventListener("mousedown", (ev) => {
+    if (ev.target === overlay) finish();
+  });
+  window.addEventListener("keydown", onKey, true);
+
+  void requestImage(pane, e.target, "full").then((src) => {
+    if (settled) return;
+    if (src) img.src = src;
+    else if (!img.src) caption.textContent = "Couldn't load this image";
+  });
 }
 
 // ---- Rendering -------------------------------------------------------------
@@ -322,6 +440,41 @@ function renderEvent(e: InspectorEventView, i: number): HTMLElement {
       if (open) expanded.add(i); else expanded.delete(i);
     });
     return b;
+  }
+
+  if (e.kind === "image") {
+    // A thumbnail hung in the stream at its chronological spot — a paste lands
+    // right under the prompt it rode in on, a screenshot under the tool call
+    // that took it. Click opens the lightbox; the row itself is deliberately
+    // small (max 120px tall) so a screenshot-heavy session stays scannable.
+    const pasted = e.verb === "pasted";
+    const row = el("div", pasted ? "imgrow imgrow--pasted" : "imgrow imgrow--shared");
+    row.appendChild(elText("span", "imgrow__time", hhmm(e.ts)));
+
+    const btn = el("button", "imgrow__thumb") as HTMLButtonElement;
+    btn.type = "button";
+    btn.title = pasted ? "Image you pasted — click to enlarge"
+                       : "Image from the conversation — click to enlarge";
+    const img = document.createElement("img");
+    img.className = "imgrow__img";
+    img.alt = pasted ? "Pasted image" : "Shared image";
+    img.draggable = false;
+    btn.appendChild(img);
+    row.appendChild(btn);
+
+    const pane = paneId;
+    if (pane) {
+      void requestImage(pane, e.target, "thumb").then((src) => {
+        if (src) { img.src = src; return; }
+        // Truncated transcript, unreadable row — say so quietly instead of
+        // leaving a broken-image glyph that looks like OUR bug.
+        row.classList.add("imgrow--dead");
+        btn.disabled = true;
+        btn.replaceChildren(elText("span", "imgrow__dead", "Image unavailable"));
+      });
+      btn.addEventListener("click", () => openImageLightbox(pane, e));
+    }
+    return row;
   }
 
   if (e.kind === "skill") {
@@ -650,11 +803,14 @@ function applyFilters(): void {
 }
 
 /** Chip counts are TOTALS per kind (querySelectorAll matches hidden rows too),
- *  so they tell you what each filter would reveal, not what's showing now. */
+ *  so they tell you what each filter would reveal, not what's showing now.
+ *  Image rows count with their author: a paste is yours, a shared image rides
+ *  with Claude's side of the conversation — same split the hide classes use. */
 function updateFilterCounts(): void {
   filterCounts.user.textContent =
-    String(streamEl.querySelectorAll(".turn-prompt, .turn-interrupt").length);
-  filterCounts.claude.textContent = String(streamEl.querySelectorAll(".beat").length);
+    String(streamEl.querySelectorAll(".turn-prompt, .turn-interrupt, .imgrow--pasted").length);
+  filterCounts.claude.textContent =
+    String(streamEl.querySelectorAll(".beat, .imgrow--shared").length);
   filterCounts.actions.textContent = String(streamEl.querySelectorAll(".work").length);
   filterCounts.skill.textContent = String(streamEl.querySelectorAll(".skill").length);
 }

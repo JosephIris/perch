@@ -125,6 +125,11 @@ export type OutMessage =
    * under load), and a few hundred journal rows per pane would make that hot
    * path quadratic for data only ONE pane's rail ever displays. */
   | { type: "inspector.request"; paneId: string }
+  /* Inspector rail: fetch one conversation image's bytes. Journal image rows
+   * carry only an id (see InspectorEventView) — pixels are pulled on demand,
+   * "thumb" for the rail (host downscales to ≤320px JPEG), "full" when the
+   * lightbox opens. Host replies with inspector.image.data. */
+  | { type: "inspector.image"; paneId: string; imageId: string; variant: "thumb" | "full" }
   /* Settings dialog: page asks the host for current settings + the list
    * of detected shells, host replies with a settings.data message. */
   | { type: "settings.request" }
@@ -438,12 +443,16 @@ export type CommitsDataMessage = {
   commits: CommitView[];
 };
 
-/* One row of the Inspector's stream. Four kinds, one ordered list:
+/* One row of the Inspector's stream. Six kinds, one ordered list:
  *   "prompt"    — what you asked (a real user turn; slash-command noise stripped)
  *   "beat"      — what the agent SAID (an assistant text block)
  *   "work"      — what the agent DID (a tool call)
  *   "interrupt" — a turn you STOPPED (Esc / Ctrl-C); painted red as an alarm
  *   "skill"     — the agent invoked a Skill; its own kind, coloured violet
+ *   "image"     — an image in the conversation; verb is "pasted" (you put it
+ *                 in a prompt) or "shared" (a tool handed it to the agent),
+ *                 target is the id for inspector.image fetches. No pixels in
+ *                 the event itself — the journal payload stays small.
  * The rail renders beats as the spine and work as dimmed connective tissue, so
  * one list drives both the narrative and the activity views.
  *
@@ -451,7 +460,7 @@ export type CommitsDataMessage = {
  * row ("Read perch.log ×6"). That's the thrash signal — the cheapest way to
  * see an agent spinning without reading a word. */
 export type InspectorEventView = {
-  kind: "prompt" | "beat" | "work" | "interrupt" | "skill";
+  kind: "prompt" | "beat" | "work" | "interrupt" | "skill" | "image";
   ts: string;
   text: string;
   verb: string;
@@ -476,6 +485,18 @@ export type InspectorVitalsView = {
 };
 
 export type InspectorFileView = { path: string; added: number; deleted: number };
+
+/* Reply to inspector.image — one image's bytes, base64. Empty `data` means the
+ * image couldn't be served (transcript rotated/truncated since it was indexed);
+ * the page renders an "unavailable" placeholder rather than a broken img. */
+export type InspectorImageDataMessage = {
+  type: "inspector.image.data";
+  paneId: string;
+  imageId: string;
+  variant: string;
+  mediaType: string;
+  data: string;
+};
 
 /* Reply to inspector.request. hasAgent=false means the pane has no Claude
  * session (a plain shell, or an agent that hasn't started one yet) — the rail
@@ -542,6 +563,7 @@ export type InMessage =
   | SettingsDataMessage
   | CommitsDataMessage
   | InspectorDataMessage
+  | InspectorImageDataMessage
   | ProjectsCandidatesMessage
   | { type: "host.error"; message: string }
   /* One-time launch prompt: N saved Claude sessions can be reopened. The page
