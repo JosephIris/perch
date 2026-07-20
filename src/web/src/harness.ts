@@ -241,6 +241,53 @@ const projectSessions: SessionView[] = [
   }),
 ];
 
+// #warmth — the age ramp on "your turn" rows. A `done` tab means the agent
+// handed the turn back, so all of these are actionable; what separates them is
+// AGE, and the ramp spans an hour. Staggering doneAtMs across the four buckets
+// is the only way to see the whole thing at once (waiting it out would take an
+// hour of wall clock, and the buckets themselves are unit-tested in
+// warmth.test.ts — what needs EYES is whether the ramp reads).
+//
+// s-w-hot is the ACTIVE row on purpose: the active row's close ✕ permanently
+// owns the chip cell, so its age has to route to the meta line instead. That
+// path shipped broken in the first cut and is invisible in any fixture that
+// only looks at inactive rows.
+const MIN_MS = 60_000;
+const warmthSessions: SessionView[] = [
+  projectTab({
+    id: "s-w-hot", title: "cleanup ds2 gcs",
+    doneAtMs: Date.now() - 12_000, linesAdded: 143, linesDeleted: 131, filesChanged: 6, ahead: 6,
+  }),
+  projectTab({
+    id: "s-w-hot2", title: "fc-double-check",
+    doneAtMs: Date.now() - 40_000, linesAdded: 12, linesDeleted: 4, filesChanged: 2, ahead: 6,
+  }),
+  projectTab({
+    id: "s-w-warm", title: "ds-coverage pinstall",
+    doneAtMs: Date.now() - 4 * MIN_MS, linesAdded: 89, linesDeleted: 12, filesChanged: 3, ahead: 6,
+  }),
+  // A working tab in the middle, so the ramp is seen next to the state it must
+  // NOT disturb: the braille spinner and its own elapsed are untouched by this.
+  projectTab({
+    id: "s-w-working", title: "ccs metrics",
+    rootPane: leaf({ name: "ccs metrics", agentState: "working", activityDetail: "running bq", branch: "main" }),
+    agentState: "working", activityDetail: "running bq",
+    workingCount: 1, turnStartMs: TWO_MIN_AGO, doneAtMs: 0, ahead: 6,
+  }),
+  projectTab({
+    id: "s-w-cool", title: "faux-targets-check",
+    doneAtMs: Date.now() - 22 * MIN_MS, linesAdded: 30, linesDeleted: 9, filesChanged: 2, ahead: 6,
+  }),
+  projectTab({
+    id: "s-w-cold", title: "coldstart - custom M",
+    doneAtMs: Date.now() - 2 * 3_600_000, linesAdded: 4, linesDeleted: 1, filesChanged: 1, ahead: 6,
+  }),
+  projectTab({
+    id: "s-w-cold2", title: "embeddings sync", projectId: "p-gm",
+    doneAtMs: Date.now() - 5 * 3_600_000, linesAdded: 2, linesDeleted: 0, filesChanged: 1,
+  }),
+];
+
 const list = document.getElementById("sidebar-scroll")!;
 const newBtn = document.getElementById("new-session-button")!;
 // "Recently closed" container — present in the real index.html; create a
@@ -253,7 +300,11 @@ if (!closedEl) {
   list.parentElement?.insertBefore(closedEl, list.nextSibling);
 }
 const NOW = Date.now();
-if (view === "projects" || view === "projects-tip") {
+if (view === "warmth") {
+  const sb = new Sidebar(list, newBtn, closedEl);
+  sb.rerender = () => sb.render(warmthSessions, "s-w-hot", [], projectsList, "projects");
+  sb.rerender();
+} else if (view === "projects" || view === "projects-tip") {
   const sb = new Sidebar(list, newBtn, closedEl);
   sb.rerender = () => sb.render(projectSessions, "s-tab1", [], projectsList, "projects");
   sb.rerender();

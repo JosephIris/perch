@@ -13,7 +13,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { warmthFor } from "../src/elapsed.js";
+import { warmthFor, fmtAge } from "../src/elapsed.js";
 
 const SEC = 1000;
 const MIN = 60 * SEC;
@@ -47,6 +47,26 @@ test("a clock skew that runs the delta negative reads hot, not cold", () => {
   // parked-for-an-hour.
   assert.equal(warmthFor(-1), "hot");
   assert.equal(warmthFor(-5 * MIN), "hot");
+});
+
+test("age label is always ONE unit — the cold end has to be the quiet one", () => {
+  assert.equal(fmtAge(0), "0s");
+  assert.equal(fmtAge(12 * SEC), "12s");
+  assert.equal(fmtAge(4 * MIN), "4m");
+  assert.equal(fmtAge(59 * MIN), "59m");
+  // The regression this pins: fmtElapsed renders these "2h 6m" / "5h 6m",
+  // which put the noisiest string on the row exactly where the design wants
+  // the quietest. Nobody triages a two-hour-old row on the trailing minutes.
+  assert.equal(fmtAge(2 * HOUR + 6 * MIN), "2h");
+  assert.equal(fmtAge(5 * HOUR + 6 * MIN), "5h");
+  assert.equal(fmtAge(23 * HOUR), "23h");
+  assert.equal(fmtAge(50 * HOUR), "2d");
+});
+
+test("age label never widens past 3 glyphs, so it can't crowd the title", () => {
+  for (const ms of [0, 9 * SEC, 59 * SEC, MIN, 59 * MIN, HOUR, 23 * HOUR, 9 * 24 * HOUR]) {
+    assert.ok(fmtAge(ms).length <= 3, `"${fmtAge(ms)}" is wider than the column allows`);
+  }
 });
 
 test("buckets are ordered and total — every duration lands in exactly one", () => {

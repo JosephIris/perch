@@ -23,7 +23,7 @@ import type {
 import { send } from "./bridge.js";
 import { confirmDialog, confirmWithOption } from "./confirm.js";
 import { showNewTabDialog } from "./new-tab-dialog.js";
-import { elapsedSpan, agoSpan } from "./elapsed.js";
+import { elapsedSpan, agoSpan, ageSpan } from "./elapsed.js";
 import { spinnerSpan } from "./spinner.js";
 import { attachCommitsHover, openCommitsLightbox, placeNear } from "./commits-view.js";
 
@@ -871,9 +871,21 @@ export class Sidebar {
         const chip = document.createElement("span");
         chip.className = "session-item__chip session-item__age";
         chip.title = "Time since the agent handed the turn back";
-        chip.appendChild(elapsedSpan(s.doneAtMs, false, true));
+        chip.appendChild(ageSpan(s.doneAtMs));
         item.appendChild(chip);
       }
+    } else if (compact && active && s.agentState === "done" && s.doneAtMs > 0) {
+      // Same age on the ACTIVE done row, which can't use the chip cell — the
+      // close ✕ lives there permanently. It rides the END OF THE TITLE LINE
+      // instead (margin-left:auto inside .session-item__primary), NOT the meta
+      // line below: the ages form a right-edge column the eye scans down, and
+      // a label that drops a line and jumps left breaks that column on the one
+      // row you're most likely looking at.
+      const chip = document.createElement("span");
+      chip.className = "session-item__age session-item__age--inline";
+      chip.title = "Time since the agent handed the turn back";
+      chip.appendChild(ageSpan(s.doneAtMs));
+      primary.appendChild(chip);
     } else {
       const meta = this.buildMeta(s, compact);
       if (meta) item.appendChild(meta);

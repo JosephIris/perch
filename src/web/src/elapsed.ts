@@ -52,16 +52,11 @@ export function fmtAgoCoarse(ms: number): string {
 
 /** Create a span that auto-updates to the elapsed since `turnStartMs`.
  *  `coarse` drops the seconds counter (minute granularity) — see the footer. */
-export function elapsedSpan(
-  turnStartMs: number,
-  coarse = false,
-  warmth = false
-): HTMLElement {
+export function elapsedSpan(turnStartMs: number, coarse = false): HTMLElement {
   const e = document.createElement("span");
   e.dataset.turnStart = String(turnStartMs);
   if (coarse) e.dataset.coarse = "1";
   const d = Date.now() - turnStartMs;
-  if (warmth) e.dataset.warmth = warmthFor(d);
   e.textContent = coarse ? fmtElapsedCoarse(d) : fmtElapsed(d);
   return e;
 }
@@ -84,17 +79,43 @@ export function warmthFor(ms: number): Warmth {
   return "cold";
 }
 
+/** Age label for a "your turn" row: "12s" / "4m" / "2h" / "3d".
+ *
+ * Deliberately ONE unit. fmtElapsed's two-part "2h 6m" is right for a turn you
+ * are watching run, but this label's whole job at the cold end is to be quiet,
+ * and "2h 6m" is the noisiest string on the row precisely where it matters
+ * least — nobody triages on the 6. Coarsening past the hour also stops the
+ * label growing wide enough to crowd the title. */
+export function fmtAge(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h`;
+  return `${Math.floor(h / 24)}d`;
+}
+
+/** Create the live age label for a finished turn — single-unit text plus the
+ * warmth bucket, both kept current by the shared ticker. */
+export function ageSpan(doneAtMs: number): HTMLElement {
+  const e = document.createElement("span");
+  e.dataset.age = String(doneAtMs);
+  const d = Date.now() - doneAtMs;
+  e.dataset.warmth = warmthFor(d);
+  e.textContent = fmtAge(d);
+  return e;
+}
+
 /** Create a span that auto-updates to the relative-ago since `doneAtMs` (the
  * Unix-ms a turn finished). Same shared ticker as elapsedSpan, so a done row's
  * "finished · 2m ago" stays live without the host re-pushing state. `coarse`
- * drops the sub-minute seconds. `warmth` opts the span into the age-decay
- * treatment — the ticker then keeps data-warmth current alongside the text. */
-export function agoSpan(doneAtMs: number, coarse = false, warmth = false): HTMLElement {
+ * drops the sub-minute seconds. */
+export function agoSpan(doneAtMs: number, coarse = false): HTMLElement {
   const e = document.createElement("span");
   e.dataset.since = String(doneAtMs);
   if (coarse) e.dataset.coarse = "1";
   const d = Date.now() - doneAtMs;
-  if (warmth) e.dataset.warmth = warmthFor(d);
   e.textContent = coarse ? fmtAgoCoarse(d) : fmtAgo(d);
   return e;
 }
@@ -111,15 +132,19 @@ export function startElapsedTicker(): void {
     // on working rows (data-turn-start) and relative-ago on finished rows
     // (data-since). One DOM walk, branch per node.
     document
-      .querySelectorAll<HTMLElement>("[data-turn-start], [data-since]")
+      .querySelectorAll<HTMLElement>("[data-turn-start], [data-since], [data-age]")
       .forEach((el) => {
         const coarse = el.dataset.coarse === "1";
         let next: string | null = null;
         let delta = -1;
         const start = Number(el.dataset.turnStart) || 0;
+        const age = Number(el.dataset.age) || 0;
         if (start > 0) {
           delta = now - start;
           next = coarse ? fmtElapsedCoarse(delta) : fmtElapsed(delta);
+        } else if (age > 0) {
+          delta = now - age;
+          next = fmtAge(delta);
         } else {
           const since = Number(el.dataset.since) || 0;
           if (since > 0) {

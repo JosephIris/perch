@@ -2109,6 +2109,15 @@ ul { list-style: none; padding: 0; margin: 0; }
   font-size: 10px;
   letter-spacing: -0.02em;
 }
+/* The ACTIVE row's age: end of the title line, because column 3 is occupied
+ * by its permanent close ✕. margin-left:auto pins it right so it still lands
+ * in the same right-edge column the inactive rows' chips form. flex-shrink:0
+ * keeps the title (not the age) the thing that ellipsizes. */
+.session-item__age--inline {
+  margin-left: auto;
+  padding-left: var(--sp-8);
+  flex: 0 0 auto;
+}
 .session-item__age > [data-warmth="hot"] {
   color: var(--color-warmth-hot);
   background: var(--color-warmth-hot-fill);
