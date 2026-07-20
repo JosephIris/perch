@@ -5302,10 +5302,7 @@ body.show-dashboard .dashboard { display: flex; }
   place-items: center;
   color: var(--color-text-primary);
   --setup-hint: var(--color-pane-tag-0);
-  background:
-    radial-gradient(150px 150px at 50% 44%,
-      color-mix(in srgb, var(--setup-hint) 20%, transparent) 0%, transparent 70%),
-    rgba(20, 22, 26, 0.42);
+  background: rgba(20, 22, 26, 0.42);
   backdrop-filter: blur(9px) saturate(115%);
   -webkit-backdrop-filter: blur(9px) saturate(115%);
   animation: setup-in 0.16s var(--ease-entry) both;
@@ -5319,9 +5316,35 @@ body.show-dashboard .dashboard { display: flex; }
   align-items: center;
   gap: 16px;
 }
+/* The color-tag glow is anchored HERE, not on .setup-overlay: the overlay's
+ * center is the pane's center, but the art sits above it (stack = art +
+ * caption), so a pane-anchored gradient always read high and to the right of
+ * the bird. 40%/43% is the bird's centroid inside the viewBox — the nest and
+ * the carried twig extend right and down from it, so the glow is deliberately
+ * up-left of the art's geometric center. */
+.setup-overlay__art { position: relative; display: block; }
+/* A free-standing circle centered on the bird, NOT a background on the art box
+ * — a background would clip to that box and read as a lit rectangle. 40%/43%
+ * is the bird's centroid inside the viewBox; the nest and the carried twig
+ * extend right and down from it, so this sits up-left of the art's geometric
+ * center by design. */
+.setup-overlay__art::before {
+  content: "";
+  position: absolute;
+  left: 40%;
+  top: 43%;
+  width: 400px;
+  height: 400px;
+  margin: -200px 0 0 -200px;
+  pointer-events: none;
+  background: radial-gradient(closest-side,
+    color-mix(in srgb, var(--setup-hint) 20%, transparent) 0%, transparent 70%);
+}
 .setup-loader {
-  width: 132px;
-  height: 114px;
+  position: relative;   /* paint above the ::before glow */
+  display: block;
+  width: 198px;
+  height: 171px;
   overflow: visible;
   color: inherit;
 }

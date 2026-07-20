@@ -94,10 +94,46 @@ public partial class MainWindow : FluentWindow
     /// _armedResumePanes / _pendingChoosers.
     private readonly Dictionary<Guid, string> _pendingInitialCommand = new();
 
-    // Per-pane failsafe that force-hides the "Setting up…" boot cover if the cc
-    // session-start hook never arrives (bad launch, missed hook). Armed when the
-    // cover is shown (ShowSetupOverlay); disarmed when it's hidden.
-    private readonly Dictionary<Guid, System.Windows.Threading.DispatcherTimer> _setupFailsafe = new();
+    /// Per-pane state for the "Setting up…" boot cover. The cover is not just a
+    /// spinner — it's the airspace in which we type `/color <name>` into cc's
+    /// TUI. cc exposes no flag for the prompt-bar color, only the slash command,
+    /// so it has to be typed; the cover is what stops the user's keystrokes from
+    /// colliding with ours (the bug that killed the pre-overlay version).
+    ///
+    /// Lifecycle, per pane: ShowSetupOverlay (PTY spawned) → session-start hook
+    /// lands (SessionUp) → cc's first paint QUIETS → write `/color` → cc's
+    /// repaint QUIETS → hide. Each step is gated on output going quiet rather
+    /// than a fixed delay, so it tracks the machine. Cap force-finishes the
+    /// whole thing if any step never arrives.
+    private sealed class SetupState
+    {
+        /// `/color` name still to be typed; null once written (or never wanted).
+        public string? Color;
+        /// cc's session-start hook has landed — it's listening, safe to type.
+        public bool SessionUp;
+        /// Debounce reset by every PTY output chunk; fires when cc goes quiet.
+        public System.Windows.Threading.DispatcherTimer? Quiet;
+        /// Hard cap — finishes the cover even if cc never reports or never quiets.
+        public System.Windows.Threading.DispatcherTimer? Cap;
+    }
+    private readonly Dictionary<Guid, SetupState> _setup = new();
+
+    /// How long cc's output must stay quiet before we treat a boot step as done.
+    /// Only has to outlast the gap between two chunks of ONE paint, so it can be
+    /// short — it's paid twice per launch (once before /color, once after), and
+    /// 150ms is what the pre-overlay implementation used without trouble.
+    private const int SetupQuietMs = 150;
+    /// Ceiling on the FIRST phase — waiting for cc's session-start hook. A cold
+    /// `claude` behind a pwsh boot measured 7.3s on this machine, so this has to
+    /// be generous: cap phase 1 too tight and we uncover before cc is listening
+    /// AND type /color into a PTY with no reader attached, which is precisely
+    /// the race the cover exists to prevent. On expiry we uncover WITHOUT
+    /// typing — cc never came up, so there is nothing to color.
+    private const int SetupBootCapMs = 20000;
+    /// Ceiling on the SECOND phase — hook landed, waiting for cc's paint to
+    /// quiet. Short, because by here cc is provably listening: on expiry we DO
+    /// type the pending /color before uncovering.
+    private const int SetupPaintCapMs = 4000;
     // Panes shown in the restore-progress lightbox → whether the pane has
     // reported "alive again" (its resumed session-start hook fired). Empty when
     // no restore is in flight. _restoreTimeout force-completes a batch whose
@@ -1334,8 +1370,10 @@ public partial class MainWindow : FluentWindow
             _store.Save();
         }
         MarkRestorePaneReady(paneId);
-        // cc is up — drop the "Setting up…" boot cover for this pane.
-        HideSetupOverlay(paneId);
+        // cc is listening — but NOT yet painted. This only arms the boot cover's
+        // quiet-watch; the cover drops once cc's paint settles and the pane's
+        // /color has been applied (OnSetupQuiet), not here.
+        NoteSetupSessionUp(paneId);
     }
 
     /// The PreToolUse hook just stamped agent labels onto a `gcloud ... create`
@@ -1416,33 +1454,139 @@ public partial class MainWindow : FluentWindow
     }
 
     // Boot cover: while a Claude Code pane starts up we show a frosted
-    // "Setting up…" overlay over the pane (see setup-overlay.ts). It replaces the
-    // old trick of typing `/color` into cc's raw PTY — which raced cc's input
-    // reader and could concatenate onto whatever the user had already typed.
-    // Covering the pane during boot means nothing lands in cc, and the frost
-    // tints to the pane's color. Shown from SpawnPty on a `claude` launch, hidden
-    // by the session-start hook (OnAgentSession) or the failsafe.
+    // "Setting up…" overlay over the pane (see setup-overlay.ts) and, underneath
+    // it, type `/color <name>` into cc so the prompt bar matches the sidebar dot.
+    // Typing into the raw PTY is the only way to set that color, and doing it
+    // uncovered was the old bug: it raced cc's input reader and could concatenate
+    // onto whatever the user had already typed. The cover owns focus for the
+    // whole window, so our keystrokes are the only ones in flight.
+    //
+    // Shown from SpawnPty on a `claude` launch. It does NOT drop on the
+    // session-start hook — that hook fires the moment cc starts, long before its
+    // TUI has painted and the --name/--color have taken, so dropping there put
+    // you back in an unfinished pane. See NoteSetupSessionUp / OnSetupQuiet.
     private void ShowSetupOverlay(Guid paneId, int colorIndex) => Dispatcher.InvokeAsync(() =>
     {
         PostToPage(new { type = "pane.setup", paneId = paneId.ToString("D"), show = true, colorIndex });
-        if (!_setupFailsafe.TryGetValue(paneId, out var timer))
-        {
-            timer = new System.Windows.Threading.DispatcherTimer
-            {
-                Interval = TimeSpan.FromMilliseconds(1800),
-            };
-            timer.Tick += (_, _) => HideSetupOverlay(paneId);
-            _setupFailsafe[paneId] = timer;
-        }
-        timer.Stop();
-        timer.Start();
+
+        if (!_setup.TryGetValue(paneId, out var st)) _setup[paneId] = st = new SetupState();
+        st.SessionUp = false;
+        st.Color = CcColorNames[((colorIndex % CcColorNames.Length) + CcColorNames.Length) % CcColorNames.Length];
+
+        st.Quiet ??= NewSetupTimer(SetupQuietMs, () => OnSetupQuiet(paneId));
+        st.Cap ??= NewSetupTimer(SetupBootCapMs, () => FinishSetup(paneId, capped: true));
+        st.Quiet.Stop();          // idle until the session-start hook arms it
+        st.Cap.Stop();
+        st.Cap.Interval = TimeSpan.FromMilliseconds(SetupBootCapMs);
+        st.Cap.Start();
     });
 
-    // Hide the boot cover and disarm its failsafe. Safe from any thread; a no-op
-    // on the page if the pane is already gone.
-    private void HideSetupOverlay(Guid paneId) => Dispatcher.InvokeAsync(() =>
+    private System.Windows.Threading.DispatcherTimer NewSetupTimer(int ms, Action tick)
     {
-        if (_setupFailsafe.Remove(paneId, out var timer)) timer.Stop();
+        var t = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(ms) };
+        t.Tick += (_, _) => tick();
+        return t;
+    }
+
+    // cc's session-start hook landed: it's up and listening. Start watching for
+    // its first paint to go quiet. Starting the debounce here (rather than only
+    // on the next output chunk) means a cc that emits nothing further still
+    // completes. Fires from the IPC pipe thread → marshal to the UI thread,
+    // where the timers and _setup live.
+    private void NoteSetupSessionUp(Guid paneId) => Dispatcher.InvokeAsync(() =>
+    {
+        if (!_setup.TryGetValue(paneId, out var st)) return;
+        st.SessionUp = true;
+        // Phase 2: cc is provably listening, so the generous boot cap gives way
+        // to the short paint cap — and only from here is typing /color safe.
+        if (st.Cap != null)
+        {
+            st.Cap.Stop();
+            st.Cap.Interval = TimeSpan.FromMilliseconds(SetupPaintCapMs);
+            st.Cap.Start();
+        }
+        RestartSetupQuiet(st);
+    });
+
+    // Every PTY output chunk pushes the quiet deadline out — cc is still
+    // painting. UI thread only (called from PostPaneOut's dispatch).
+    private void NoteSetupOutput(Guid paneId)
+    {
+        if (_setup.TryGetValue(paneId, out var st) && st.SessionUp) RestartSetupQuiet(st);
+    }
+
+    private static void RestartSetupQuiet(SetupState st)
+    {
+        st.Quiet?.Stop();
+        st.Quiet?.Start();
+    }
+
+    // cc has been quiet for SetupQuietMs. Two quiet periods happen under the
+    // cover: the first ends cc's boot paint (→ type /color), the second ends the
+    // repaint that /color triggers (→ uncover). Draining st.Color is what
+    // distinguishes them, and it also makes the write one-shot, so a later
+    // `/clear` — which re-fires session-start — doesn't re-type it.
+    private void OnSetupQuiet(Guid paneId)
+    {
+        // DispatcherTimer repeats; every path below either restarts it or ends
+        // the cover, so stop it up front rather than leaving one ticking on a
+        // pane whose state has already been torn down.
+        if (!_setup.TryGetValue(paneId, out var st)) return;
+        st.Quiet?.Stop();
+        if (st.Color != null)
+        {
+            WriteCcColor(paneId, st.Color);
+            st.Color = null;
+            RestartSetupQuiet(st);   // wait for the repaint to settle, then uncover
+            return;
+        }
+        FinishSetup(paneId, capped: false);
+    }
+
+    // Type `/color <name>\r` into the pane. Guarded: the pane may have closed
+    // between the last output chunk and this tick.
+    private void WriteCcColor(Guid paneId, string color)
+    {
+        try
+        {
+            _panes.Write(paneId, System.Text.Encoding.UTF8.GetBytes($"/color {color}\r"));
+            Log.Info("CcColor", $"pane {paneId:N} → /color {color}");
+        }
+        catch (Exception ex) { Log.Info("CcColor", $"skipped: {ex.Message}"); }
+    }
+
+    // Tear down the boot cover. On the capped path cc never quieted (or never
+    // reported), so any pending /color is typed here as a last shot before we
+    // uncover — the user may see it echo, which beats losing the color.
+    private void FinishSetup(Guid paneId, bool capped) => Dispatcher.InvokeAsync(() =>
+    {
+        if (_setup.Remove(paneId, out var st))
+        {
+            st.Quiet?.Stop();
+            st.Cap?.Stop();
+            // Only type on the capped path if cc actually came up. Capping in
+            // phase 1 means the session-start hook never arrived — writing then
+            // would push /color into a PTY with no reader attached, which is the
+            // exact race the cover exists to prevent.
+            if (capped && st.Color != null && st.SessionUp)
+            {
+                Log.Info("Setup", $"pane {paneId:N} paint never quieted ({SetupPaintCapMs}ms); typing /color late");
+                WriteCcColor(paneId, st.Color);
+            }
+            else if (capped)
+                Log.Info("Setup", $"pane {paneId:N} gave up (sessionUp={st.SessionUp}); uncovering without /color");
+            else Log.Info("Setup", $"pane {paneId:N} settled; uncovering");
+        }
+        PostToPage(new { type = "pane.setup", paneId = paneId.ToString("D"), show = false, colorIndex = 0 });
+    });
+
+    // Drop the cover without ceremony (pane closed / PTY died). No /color, no
+    // waiting — there's nothing left to set up.
+    private void CancelSetupOverlay(Guid paneId) => Dispatcher.InvokeAsync(() =>
+    {
+        if (!_setup.Remove(paneId, out var st)) return;
+        st.Quiet?.Stop();
+        st.Cap?.Stop();
         PostToPage(new { type = "pane.setup", paneId = paneId.ToString("D"), show = false, colorIndex = 0 });
     });
 
@@ -2395,6 +2539,15 @@ public partial class MainWindow : FluentWindow
         catch (Exception ex) { Log.Error("AdoptSessionsIntoProject", ex); }
     }
 
+    /// Our 6-hue pane palette mapped onto the color names Claude Code's `/color`
+    /// accepts (red|blue|green|yellow|purple|orange|pink|cyan). Ours is a strict
+    /// SUBSET of cc's, which is the happy accident that lets a single pick drive
+    /// both surfaces: the sidebar dot and the prompt bar inside the session end up
+    /// the same color, so a tab looks the same from the outside and the inside.
+    /// Index order must stay aligned with --color-pane-tag-N in tokens.css.
+    private static readonly string[] CcColorNames =
+        { "blue", "green", "yellow", "orange", "pink", "purple" };
+
     // A readable tab title for a browser tab created without a typed name:
     // the host (minus "www."), or the file name for a file:// URL. Falls back
     // to "browser" if the URL won't parse.
@@ -2881,6 +3034,18 @@ public partial class MainWindow : FluentWindow
         if (pane == null) return;
         pane.ColorIndex = idx;
         _store.Save();
+
+        // Live recolor: push the new hue INTO the running session too, so the cc
+        // prompt bar keeps matching the sidebar dot after a mid-session change.
+        // Same mechanism (and same caveat) as the /model live switch below — cc
+        // has no flag for it, only the slash command. A pane still under the boot
+        // cover is skipped: its SetupState already carries a /color that
+        // OnSetupQuiet will type, and we refresh that instead of double-typing.
+        if (_setup.TryGetValue(pane.Id, out var st) && st.Color != null)
+            st.Color = CcColorNames[idx % CcColorNames.Length];
+        else if (pane.AgentType == "claude" && _panes.Has(pane.Id))
+            WriteCcColor(pane.Id, CcColorNames[idx % CcColorNames.Length]);
+
         PushState();
     }
 
@@ -3257,6 +3422,9 @@ public partial class MainWindow : FluentWindow
                 Web.CoreWebView2?.PostWebMessageAsJson(payload);
             }
             catch (Exception ex) { Log.Error("PostPaneOut", ex); }
+
+            // cc is still painting → push the boot cover's quiet deadline out.
+            NoteSetupOutput(paneId);
         });
     }
 
@@ -3275,6 +3443,10 @@ public partial class MainWindow : FluentWindow
                 Web.CoreWebView2?.PostWebMessageAsJson(payload);
             }
             catch (Exception ex) { Log.Error("PostPaneExit", ex); }
+
+            // The PTY died — there is nothing left to set up. Drop the cover now
+            // rather than letting it sit there until the cap.
+            CancelSetupOverlay(paneId);
         });
     }
 

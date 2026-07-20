@@ -71,8 +71,13 @@ export function createSetupOverlay(): SetupOverlay {
   el.className = "setup-overlay";
   el.tabIndex = -1;
   el.hidden = true;
+  // The tint glow lives on __art, not on the overlay root: the root's center is
+  // the PANE's center, but the art sits above it (the stack is svg + caption),
+  // so a root-anchored gradient always read high and off to one side of the
+  // bird. Anchored here it tracks the art no matter how the pane is sized.
   el.innerHTML =
-    `<div class="setup-overlay__stack">${LOADER_SVG}` +
+    `<div class="setup-overlay__stack">` +
+    `<div class="setup-overlay__art">${LOADER_SVG}</div>` +
     `<div class="setup-overlay__caption">Setting up` +
     `<span class="setup-overlay__dots"></span></div></div>`;
 
