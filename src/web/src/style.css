@@ -2092,6 +2092,32 @@ ul { list-style: none; padding: 0; margin: 0; }
   transition: opacity var(--dur-fast) var(--ease-entry);
 }
 .session-item:hover .session-item__chip { opacity: 0; }
+
+/* Age on a DONE (= your-turn) row. Mono numerals because this label is
+ * rewritten by the 1Hz ticker and tabular-nums is what keeps the row from
+ * twitching a pixel on every tick — proportional digits would. Mono is
+ * already this row's voice: the braille spinner one column left uses the same
+ * family.
+ *
+ * Warmth decays over four buckets (see warmthFor in elapsed.ts). Only the
+ * FRESH bucket earns color — a green pill for "<2m, you just left this" —
+ * because the sidebar already carries five state hues and a sixth green for
+ * age would dilute all of them. Everything older is a plain brightness ramp
+ * down to near-invisible: still there, no longer asking. */
+.session-item__age {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: -0.02em;
+}
+.session-item__age > [data-warmth="hot"] {
+  color: var(--color-warmth-hot);
+  background: var(--color-warmth-hot-fill);
+  padding: 1px 6px;
+  border-radius: var(--r-input);
+}
+.session-item__age > [data-warmth="warm"] { color: var(--color-warmth-warm); }
+.session-item__age > [data-warmth="cool"] { color: var(--color-warmth-cool); }
+.session-item__age > [data-warmth="cold"] { color: var(--color-warmth-cold); }
 .session-item--nested.session-item--active {
   border-color: transparent;
   background: var(--color-subtle-tertiary);
