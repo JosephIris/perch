@@ -5156,7 +5156,7 @@ body.show-dashboard .dashboard { display: flex; }
 /* Image row — a thumbnail hung in the stream at its chronological spot (a
  * paste sits under the prompt it rode in on, a screenshot under the tool call
  * that took it). Same 40px time gutter as beats/work so the spine stays
- * aligned. The thumb is a quiet bordered card, capped at 120px tall — tall
+ * aligned. The thumb is a quiet bordered card, a fixed 120px tall — tall
  * enough to recognize, small enough that a screenshot-heavy session doesn't
  * turn the journal into a photo reel. Click opens the lightbox. */
 .imgrow {
@@ -5181,21 +5181,27 @@ body.show-dashboard .dashboard { display: flex; }
   border-radius: var(--r-input);
   background: var(--color-layer);
   overflow: hidden;
-  line-height: 0;
   cursor: zoom-in;
   max-width: 100%;
-  /* Holds the row's shape while the thumb bytes are in flight, so the poll
-   * re-render doesn't jitter the stream. */
+  /* FIXED height, not max — the thumb bytes arrive after the stream has
+   * already pinned to the bottom, and a row that grows on image decode
+   * shifts everything below it: the viewport ends up parked just above
+   * the latest row and the jump pill turns on after every poll. With the
+   * box height constant, a loading image only ever changes row WIDTH,
+   * which no scroll position cares about. */
+  height: 120px;
   min-width: 48px;
-  min-height: 32px;
+  display: grid;
+  place-items: center;
   transition: border-color var(--dur-fast) var(--ease-entry);
 }
 .imgrow__thumb:hover { border-color: var(--color-stroke-strong); }
 .imgrow__thumb:disabled { cursor: default; }
 .imgrow__img {
   display: block;
+  height: 100%;
+  width: auto;
   max-width: 100%;
-  max-height: 120px;
   object-fit: contain;
 }
 /* Transcript rotated out from under us — say so quietly instead of showing a
@@ -5211,14 +5217,14 @@ body.show-dashboard .dashboard { display: flex; }
 
 /* Filter the stream by kind. Pure show/hide driven by the filter bar — no
  * re-render. Hiding actions IS the old prose-only view. Interrupts ride with
- * "user" (they're your action); skills filter on their own. */
+ * "user" (they're your action); skills filter on their own, and so do images
+ * (pasted and shared alike — "just the pictures" is one chip). */
 .inspector__stream--hide-user .turn-prompt,
 .inspector__stream--hide-user .turn-interrupt,
-.inspector__stream--hide-user .imgrow--pasted,
 .inspector__stream--hide-claude .beat,
-.inspector__stream--hide-claude .imgrow--shared,
 .inspector__stream--hide-actions .work,
-.inspector__stream--hide-skill .skill { display: none; }
+.inspector__stream--hide-skill .skill,
+.inspector__stream--hide-images .imgrow { display: none; }
 /* Every kind toggled off — the stream is empty by choice, so say so rather than
  * leave a blank rail that reads as a bug. */
 .inspector__stream--empty-filter::after {
