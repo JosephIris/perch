@@ -199,6 +199,18 @@
   --color-state-done:       var(--color-success);
   --color-state-error:      var(--color-error);
 
+  /* Age-warmth ramp for a DONE row's elapsed label. `done` means the agent
+   * handed the turn back, so all of them are actionable — these encode HOW
+   * LONG it's been waiting, which the state dot can't say. Only the freshest
+   * bucket takes color (a green pill); the rest are a plain brightness ramp,
+   * because a sixth hue in a sidebar that already runs five state colors
+   * would dilute every one of them. Buckets in `warmthFor` (elapsed.ts). */
+  --color-warmth-hot:       #8FE07F;                    /* <2m, lifted off --color-success */
+  --color-warmth-hot-fill:  rgba(108, 203, 95, 0.14);   /* --color-success @ 14% */
+  --color-warmth-warm:      rgba(108, 203, 95, 0.80);   /* 2–10m */
+  --color-warmth-cool:      var(--color-text-tertiary); /* 10m–1h */
+  --color-warmth-cold:      rgba(255, 255, 255, 0.32);  /* >1h, quieter than tertiary */
+
   /* Pane color-tag palette. 6 distinguishable hues that read well on the
    * #1f1f1f pane surface, used to mark "this pane is the simulator-fix
    * worktree, that pane is the kanban one" — pick from a small fixed set

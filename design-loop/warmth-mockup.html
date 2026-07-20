@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Sidebar warmth decay — mockup</title>
+<style>
+:root {
+  --sp-4: 4px; --sp-8: 8px; --sp-12: 12px; --sp-16: 16px; --sp-24: 24px;
+  --font-text: "Inter Variable", "Segoe UI Variable Text", "Segoe UI", sans-serif;
+  --font-small: "Inter Variable", "Segoe UI Variable Small", "Segoe UI", sans-serif;
+  --color-subtle-secondary: rgba(255,255,255,0.04);
+  --color-subtle-tertiary:  rgba(255,255,255,0.08);
+  --color-stroke:           rgba(255,255,255,0.08);
+  --color-stroke-strong:    rgba(255,255,255,0.14);
+  --color-text-primary:     rgba(255,255,255,0.92);
+  --color-text-secondary:   rgba(255,255,255,0.72);
+  --color-text-tertiary:    rgba(255,255,255,0.5);
+  --color-success:          #6CCB5F;
+  --color-caution:          #FCE100;
+  --color-error:            #FF99A4;
+  --color-state-working:    #4cc2ff;
+  --color-state-permission: #ff5c6c;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: var(--sp-24);
+  background: #1a1a1a; color: var(--color-text-primary);
+  font-family: var(--font-text); font-size: 14px; line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+}
+h1 { font-size: 20px; font-weight: 600; margin: 0 0 var(--sp-8); }
+.lede { color: var(--color-text-secondary); max-width: 62ch; margin: 0 0 var(--sp-24); }
+.cols { display: flex; gap: var(--sp-32, 32px); align-items: flex-start; flex-wrap: wrap; }
+.col { width: 306px; }
+.col > h2 {
+  font-family: var(--font-small); font-size: 12px; font-weight: 600;
+  color: var(--color-text-tertiary); text-transform: uppercase; letter-spacing: .04em;
+  margin: 0 0 var(--sp-12);
+}
+.sidebar {
+  background: #1f1f1f; border: 1px solid var(--color-stroke);
+  border-radius: 8px; padding: var(--sp-12) var(--sp-8) var(--sp-16);
+}
+
+/* ---- project header ---- */
+.project-header {
+  display: flex; align-items: center; gap: var(--sp-8);
+  padding: var(--sp-8) var(--sp-12) var(--sp-4);
+  font-weight: 600; font-size: 14px; color: var(--color-text-primary);
+}
+.project-header .chev { color: var(--color-text-tertiary); font-size: 10px; }
+.project-header .count { color: var(--color-text-tertiary); font-weight: 400; font-size: 12px; }
+.project-header .plus { margin-left: auto; color: var(--color-text-tertiary); font-size: 15px; }
+
+/* ---- row ---- */
+.row {
+  display: flex; align-items: center; gap: var(--sp-8);
+  padding: var(--sp-8) var(--sp-12);
+  border-radius: 8px; margin-bottom: var(--sp-4);
+  cursor: default;
+}
+.row:hover { background: var(--color-subtle-secondary); }
+.row.active { background: var(--color-subtle-tertiary); }
+.dot {
+  width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto;
+  background: var(--color-success);
+}
+.title {
+  font-size: 14px; font-weight: 500; color: var(--color-text-primary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.info { margin-left: var(--sp-4); color: var(--color-text-tertiary); font-size: 11px; }
+.age {
+  margin-left: auto; font-family: var(--font-small); font-size: 11px;
+  color: var(--color-text-tertiary); flex: 0 0 auto;
+}
+
+/* ---------- PROPOSED: warmth decay ----------
+ * `done` already means "agent handed the turn back" = your move.
+ * The only thing missing is AGE. Fresh = warm + full-strength title.
+ * Stale = desaturated, then hollow. Nothing else changes. */
+.p .dot { box-shadow: none; }
+.p .row[data-w="hot"]  .dot { background: var(--color-success); box-shadow: 0 0 0 3px rgba(108,203,95,.16); }
+.p .row[data-w="warm"] .dot { background: rgba(108,203,95,.72); }
+.p .row[data-w="cool"] .dot { background: rgba(108,203,95,.38); }
+.p .row[data-w="cold"] .dot { background: transparent; box-shadow: inset 0 0 0 1px rgba(108,203,95,.42); }
+.p .row[data-w="hot"]  .title { color: var(--color-text-primary); }
+.p .row[data-w="warm"] .title { color: var(--color-text-primary); }
+.p .row[data-w="cool"] .title { color: var(--color-text-secondary); }
+.p .row[data-w="cold"] .title { color: var(--color-text-tertiary); }
+.p .row[data-w="hot"]  .age { color: rgba(108,203,95,.85); }
+
+/* non-"your turn" states recede hard so the eye lands only on green */
+.p .row[data-s="working"] .dot,
+.b .row[data-s="working"] .dot { background: var(--color-state-working); }
+.p .row[data-s="working"] .title { color: var(--color-text-secondary); }
+.p .row[data-s="perm"] .dot,
+.b .row[data-s="perm"] .dot { background: var(--color-state-permission); }
+.p .row[data-s="perm"] .dot { box-shadow: 0 0 0 3px rgba(255,92,108,.18); }
+
+.spin {
+  width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%;
+  border: 1px solid rgba(76,194,255,.3); border-top-color: var(--color-state-working);
+  animation: spin 900ms linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.legend {
+  margin-top: var(--sp-24); font-family: var(--font-small); font-size: 12px;
+  color: var(--color-text-tertiary); max-width: 62ch;
+}
+.legend b { color: var(--color-text-secondary); font-weight: 600; }
+.legend .sw { display: inline-block; width: 8px; height: 8px; border-radius: 50%; vertical-align: middle; margin-right: 6px; }
+.legend li { margin-bottom: var(--sp-4); }
+.legend ul { padding-left: 0; list-style: none; }
+</style>
+</head>
+<body>
+
+<h1>Warmth decay on “your turn”</h1>
+<p class="lede">
+  The green dots aren’t noise — <code>done</code> already means the agent handed the turn
+  back to you. Every green row <em>is</em> actionable. The problem is that eleven of them
+  shout at the same volume with no sense of age. So: keep the state machine, add decay.
+</p>
+
+<div class="cols">
+
+  <!-- ============ BEFORE ============ -->
+  <div class="col b">
+    <h2>Today</h2>
+    <div class="sidebar">
+      <div class="project-header"><span class="chev">⌄</span> product-tools-prod <span class="count">6</span><span class="plus">+</span></div>
+      <div class="row"><span class="dot"></span><span class="title">cleanup ds2 gcs</span><span class="info">ⓘ</span></div>
+      <div class="row"><span class="dot"></span><span class="title">fc-double-check</span><span class="info">ⓘ</span></div>
+      <div class="row"><span class="dot"></span><span class="title">ds-coverage pinstall</span><span class="info">ⓘ</span></div>
+      <div class="row"><span class="dot"></span><span class="title">ccs metrics</span><span class="info">ⓘ</span></div>
+      <div class="row"><span class="dot"></span><span class="title">faux-targets-check</span><span class="info">ⓘ</span></div>
+      <div class="row"><span class="dot"></span><span class="title">coldstart - custom M</span><span class="info">ⓘ</span></div>
+
+      <div class="project-header"><span class="chev">⌄</span> services <span class="count">1</span><span class="plus">+</span></div>
+      <div class="row"><span class="dot"></span><span class="title">embeddings sync</span><span class="info">ⓘ</span></div>
+
+      <div class="project-header"><span class="chev">⌄</span> global_dnn <span class="count">1</span><span class="plus">+</span></div>
+      <div class="row"><span class="dot"></span><span class="title">cc commit</span><span class="info">ⓘ</span></div>
+
+      <div class="project-header"><span class="chev">⌄</span> cmux-win <span class="count">2</span><span class="plus">+</span></div>
+      <div class="row"><span class="dot"></span><span class="title">setting up overlay fixes</span><span class="info">ⓘ</span></div>
+      <div class="row active"><span class="dot" style="background:var(--color-state-working)"></span><span class="title">last message clearer indicator…</span><span class="age">0s</span></div>
+    </div>
+  </div>
+
+  <!-- ============ AFTER ============ -->
+  <div class="col p">
+    <h2>Proposed — warmth decay</h2>
+    <div class="sidebar">
+      <div class="project-header"><span class="chev">⌄</span> product-tools-prod <span class="count">6</span><span class="plus">+</span></div>
+      <div class="row" data-w="hot"><span class="dot"></span><span class="title">cleanup ds2 gcs</span><span class="age">12s</span></div>
+      <div class="row" data-w="hot"><span class="dot"></span><span class="title">fc-double-check</span><span class="age">40s</span></div>
+      <div class="row" data-w="warm"><span class="dot"></span><span class="title">ds-coverage pinstall</span><span class="age">4m</span></div>
+      <div class="row" data-s="working"><span class="spin"></span><span class="title">ccs metrics</span><span class="age">running</span></div>
+      <div class="row" data-w="cool"><span class="dot"></span><span class="title">faux-targets-check</span><span class="age">22m</span></div>
+      <div class="row" data-w="cold"><span class="dot"></span><span class="title">coldstart - custom M</span><span class="age">2h</span></div>
+
+      <div class="project-header"><span class="chev">⌄</span> services <span class="count">1</span><span class="plus">+</span></div>
+      <div class="row" data-w="cold"><span class="dot"></span><span class="title">embeddings sync</span><span class="age">5h</span></div>
+
+      <div class="project-header"><span class="chev">⌄</span> global_dnn <span class="count">1</span><span class="plus">+</span></div>
+      <div class="row" data-s="perm"><span class="dot"></span><span class="title">cc commit</span><span class="age">needs&nbsp;you</span></div>
+
+      <div class="project-header"><span class="chev">⌄</span> cmux-win <span class="count">2</span><span class="plus">+</span></div>
+      <div class="row" data-w="warm"><span class="dot"></span><span class="title">setting up overlay fixes</span><span class="age">6m</span></div>
+      <div class="row active" data-s="working"><span class="spin"></span><span class="title">last message clearer indicator…</span><span class="age">0s</span></div>
+    </div>
+  </div>
+
+</div>
+
+<div class="legend">
+  <ul>
+    <li><span class="sw" style="background:#6CCB5F;box-shadow:0 0 0 3px rgba(108,203,95,.16)"></span><b>Hot</b> — &lt; 2m since it handed back. Full green + faint halo, age in green.</li>
+    <li><span class="sw" style="background:rgba(108,203,95,.72)"></span><b>Warm</b> — 2–10m. Green fades, title stays primary.</li>
+    <li><span class="sw" style="background:rgba(108,203,95,.38)"></span><b>Cool</b> — 10m–1h. Dot dim, title drops to secondary.</li>
+    <li><span class="sw" style="background:transparent;box-shadow:inset 0 0 0 1px rgba(108,203,95,.42)"></span><b>Cold</b> — &gt; 1h. Hollow ring, title tertiary. Still there, no longer asking.</li>
+    <li><span class="sw" style="background:#4cc2ff"></span><b>Working</b> — spinner, title recedes to secondary. Not your turn, so it shouldn’t pull.</li>
+    <li><span class="sw" style="background:#ff5c6c;box-shadow:0 0 0 3px rgba(255,92,108,.18)"></span><b>Permission</b> — never decays. Blocked on you until answered.</li>
+  </ul>
+  <p>All driven by <code>doneAtMs</code>, which is already pushed. The 1Hz <code>elapsed.ts</code>
+  ticker that rewrites “0s” can stamp a <code>data-warmth</code> bucket on the same pass —
+  no new host state, no content parsing.</p>
+</div>
+
+</body>
+</html>

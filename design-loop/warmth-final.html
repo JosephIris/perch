@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Age chip — green pill + mono numerals</title>
+<style>
+:root{
+  --sp-4:4px;--sp-8:8px;--sp-12:12px;--sp-16:16px;--sp-24:24px;--sp-32:32px;
+  --font-text:"Inter Variable","Segoe UI Variable Text","Segoe UI",sans-serif;
+  --font-small:"Inter Variable","Segoe UI Variable Small","Segoe UI",sans-serif;
+  --font-mono:"Geist Mono Variable","Cascadia Code","Cascadia Mono",Consolas,monospace;
+  --color-subtle-secondary:rgba(255,255,255,0.04);
+  --color-subtle-tertiary:rgba(255,255,255,0.08);
+  --color-stroke:rgba(255,255,255,0.08);
+  --color-text-primary:rgba(255,255,255,0.92);
+  --color-text-secondary:rgba(255,255,255,0.72);
+  --color-text-tertiary:rgba(255,255,255,0.5);
+  --color-success:#6CCB5F;
+  --color-state-working:#4cc2ff;
+  --color-state-permission:#ff5c6c;
+}
+*{box-sizing:border-box}
+body{margin:0;padding:var(--sp-24);background:#1a1a1a;color:var(--color-text-primary);
+  font-family:var(--font-text);font-size:14px;line-height:1.4;-webkit-font-smoothing:antialiased}
+h1{font-size:20px;font-weight:600;margin:0 0 var(--sp-8)}
+.lede{color:var(--color-text-secondary);max-width:70ch;margin:0 0 var(--sp-24)}
+.cols{display:flex;gap:var(--sp-24);align-items:flex-start;flex-wrap:wrap}
+.col{width:274px}
+.col>h2{font-family:var(--font-small);font-size:12px;font-weight:600;margin:0 0 2px}
+.col>.sub{font-family:var(--font-small);font-size:11px;color:var(--color-text-tertiary);
+  margin:0 0 var(--sp-12);min-height:44px}
+.sidebar{background:#1f1f1f;border:1px solid var(--color-stroke);border-radius:8px;
+  padding:var(--sp-12) var(--sp-8) var(--sp-16)}
+.ph{display:flex;align-items:center;gap:var(--sp-8);padding:var(--sp-8) var(--sp-12) var(--sp-4);
+  font-weight:600;font-size:13px}
+.ph .chev{color:var(--color-text-tertiary);font-size:10px}
+.ph .count{color:var(--color-text-tertiary);font-weight:400;font-size:12px}
+.row{display:flex;align-items:center;gap:var(--sp-8);padding:var(--sp-8) var(--sp-12);
+  border-radius:8px;margin-bottom:var(--sp-4)}
+.row:hover{background:var(--color-subtle-secondary)}
+.row.active{background:var(--color-subtle-tertiary)}
+.dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto;background:var(--color-success)}
+.title{font-size:14px;font-weight:500;color:var(--color-text-primary);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.spin{flex:0 0 auto;width:10px;font-family:var(--font-mono);font-size:11px;line-height:1;
+  color:var(--color-state-working)}
+.row[data-s="perm"] .dot{background:var(--color-state-permission)}
+
+/* === the age chip: mono numerals, tabular so the 1Hz tick never jitters === */
+.age{
+  margin-left:auto;flex:0 0 auto;
+  font-family:var(--font-mono);
+  font-size:10px;
+  font-variant-numeric:tabular-nums;
+  letter-spacing:-.02em;
+  color:var(--color-text-tertiary);
+}
+/* hot: green pill */
+.row[data-w="hot"] .age{
+  color:#8FE07F;
+  background:rgba(108,203,95,.14);
+  padding:1px 6px;
+  border-radius:4px;
+}
+.row[data-w="warm"] .age{color:rgba(108,203,95,.8)}
+.row[data-w="cool"] .age{color:var(--color-text-tertiary)}
+.row[data-w="cold"] .age{color:rgba(255,255,255,.32)}
+
+/* --- V2: pill a touch softer, no letterspacing squeeze --- */
+.V2 .age{letter-spacing:0}
+.V2 .row[data-w="hot"] .age{color:#8FE07F;background:rgba(108,203,95,.10)}
+
+/* --- V3: pill outlined instead of filled --- */
+.V3 .row[data-w="hot"] .age{
+  background:transparent;
+  box-shadow:inset 0 0 0 1px rgba(108,203,95,.34);
+  color:#8FE07F;
+}
+
+/* --- V4: 11px mono, roomier pill --- */
+.V4 .age{font-size:11px}
+.V4 .row[data-w="hot"] .age{padding:1px 7px}
+
+.note{margin-top:var(--sp-32);font-family:var(--font-small);font-size:12px;
+  color:var(--color-text-tertiary);max-width:78ch}
+.note b{color:var(--color-text-secondary)}
+.note code{color:var(--color-text-secondary)}
+</style>
+</head>
+<body>
+
+<h1>Green pill + mono numerals</h1>
+<p class="lede">
+  C0’s pill, C4’s numerals. <code>font-variant-numeric: tabular-nums</code> matters here — the
+  label is rewritten every second by the existing ticker, and proportional digits would make the
+  row twitch. Mono in chrome has precedent: the braille spinner one column left already uses
+  <code>--font-mono</code>.
+</p>
+
+<div class="cols">
+  <div class="col V1"><h2>V1 · as specced</h2>
+    <p class="sub">10px mono, −0.02em, filled pill at 14% green.</p>
+    <div class="sidebar" data-rows></div></div>
+
+  <div class="col V2"><h2>V2 · softer fill</h2>
+    <p class="sub">Pill down to 10% green, no letterspacing squeeze. Calmer against the dot.</p>
+    <div class="sidebar" data-rows></div></div>
+
+  <div class="col V3"><h2>V3 · outlined pill</h2>
+    <p class="sub">Hairline instead of fill — matches the constitution’s “borders over fills” lean.</p>
+    <div class="sidebar" data-rows></div></div>
+
+  <div class="col V4"><h2>V4 · 11px</h2>
+    <p class="sub">One step up so the numerals stay legible at 125% scaling.</p>
+    <div class="sidebar" data-rows></div></div>
+</div>
+
+<p class="note">
+  All four keep: uniform green dot for “your turn”, existing braille spinner for working, red for
+  permission. Only the age label changes. Driven entirely by <code>doneAtMs</code>, bucketed in the
+  1Hz <code>elapsed.ts</code> pass — no host change, no content parsing.
+</p>
+
+<script>
+const ROWS=[
+ ['h','product-tools-prod',6],
+ ['r','cleanup ds2 gcs','hot','12s'],
+ ['r','fc-double-check','hot','40s'],
+ ['r','ds-coverage pinstall','warm','4m'],
+ ['w','ccs metrics'],
+ ['r','faux-targets-check','cool','22m'],
+ ['r','coldstart - custom M','cold','2h'],
+ ['h','services',1],
+ ['r','embeddings sync','cold','5h'],
+ ['h','global_dnn',1],
+ ['p','cc commit'],
+ ['h','cmux-win',2],
+ ['r','setting up overlay fixes','warm','6m'],
+ ['a','last message clearer indicator…'],
+];
+const esc=s=>s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const html=ROWS.map(x=>{
+ if(x[0]==='h')return `<div class="ph"><span class="chev">⌄</span> ${esc(x[1])} <span class="count">${x[2]}</span></div>`;
+ if(x[0]==='w')return `<div class="row" data-s="working"><span class="spin"></span><span class="title">${esc(x[1])}</span><span class="age">running</span></div>`;
+ if(x[0]==='a')return `<div class="row active" data-s="working"><span class="spin"></span><span class="title">${esc(x[1])}</span><span class="age">0s</span></div>`;
+ if(x[0]==='p')return `<div class="row" data-s="perm"><span class="dot"></span><span class="title">${esc(x[1])}</span><span class="age">needs you</span></div>`;
+ return `<div class="row" data-w="${x[2]}"><span class="dot"></span><span class="title">${esc(x[1])}</span><span class="age">${x[3]}</span></div>`;
+}).join('');
+document.querySelectorAll('[data-rows]').forEach(el=>el.innerHTML=html);
+const F=['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];let i=0;
+setInterval(()=>{i=(i+1)%F.length;document.querySelectorAll('.spin').forEach(s=>s.textContent=F[i])},80);
+</script>
+</body>
+</html>

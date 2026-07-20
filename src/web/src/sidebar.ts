@@ -859,6 +859,21 @@ export class Sidebar {
         attachMetricsHover(info, () => this.buildMeta(s, true)!);
         primary.appendChild(info);
       }
+      // A DONE row is a row waiting on YOU — the turn came back and nothing
+      // has been typed since. Every green dot in a tall list is equally
+      // actionable, which is exactly why the list stops being scannable past
+      // a handful: nothing says which one you dropped a moment ago and which
+      // has been parked since morning. So the age comes out from behind the
+      // ⓘ hover and rides the right edge, in the same grid cell (and the same
+      // fade-on-hover) as the close ✕. CSS decays it via data-warmth; the dot
+      // stays uniform so warmth never competes with the state palette.
+      if (s.agentState === "done" && s.doneAtMs > 0) {
+        const chip = document.createElement("span");
+        chip.className = "session-item__chip session-item__age";
+        chip.title = "Time since the agent handed the turn back";
+        chip.appendChild(elapsedSpan(s.doneAtMs, false, true));
+        item.appendChild(chip);
+      }
     } else {
       const meta = this.buildMeta(s, compact);
       if (meta) item.appendChild(meta);

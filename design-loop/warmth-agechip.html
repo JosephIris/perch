@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Age chip — how quiet can it go</title>
+<style>
+:root{
+  --sp-4:4px;--sp-8:8px;--sp-12:12px;--sp-16:16px;--sp-24:24px;--sp-32:32px;
+  --font-text:"Inter Variable","Segoe UI Variable Text","Segoe UI",sans-serif;
+  --font-small:"Inter Variable","Segoe UI Variable Small","Segoe UI",sans-serif;
+  --font-mono:"Geist Mono Variable","Cascadia Code","Cascadia Mono",Consolas,monospace;
+  --color-subtle-secondary:rgba(255,255,255,0.04);
+  --color-subtle-tertiary:rgba(255,255,255,0.08);
+  --color-stroke:rgba(255,255,255,0.08);
+  --color-text-primary:rgba(255,255,255,0.92);
+  --color-text-secondary:rgba(255,255,255,0.72);
+  --color-text-tertiary:rgba(255,255,255,0.5);
+  --color-success:#6CCB5F;
+  --color-state-working:#4cc2ff;
+  --color-state-permission:#ff5c6c;
+}
+*{box-sizing:border-box}
+body{margin:0;padding:var(--sp-24);background:#1a1a1a;color:var(--color-text-primary);
+  font-family:var(--font-text);font-size:14px;line-height:1.4;-webkit-font-smoothing:antialiased}
+h1{font-size:20px;font-weight:600;margin:0 0 var(--sp-8)}
+.lede{color:var(--color-text-secondary);max-width:70ch;margin:0 0 var(--sp-24)}
+.cols{display:flex;gap:var(--sp-24);align-items:flex-start;flex-wrap:wrap}
+.col{width:274px}
+.col>h2{font-family:var(--font-small);font-size:12px;font-weight:600;margin:0 0 2px}
+.col>.sub{font-family:var(--font-small);font-size:11px;color:var(--color-text-tertiary);
+  margin:0 0 var(--sp-12);min-height:44px}
+.sidebar{background:#1f1f1f;border:1px solid var(--color-stroke);border-radius:8px;
+  padding:var(--sp-12) var(--sp-8) var(--sp-16)}
+.ph{display:flex;align-items:center;gap:var(--sp-8);padding:var(--sp-8) var(--sp-12) var(--sp-4);
+  font-weight:600;font-size:13px}
+.ph .chev{color:var(--color-text-tertiary);font-size:10px}
+.ph .count{color:var(--color-text-tertiary);font-weight:400;font-size:12px}
+.row{display:flex;align-items:center;gap:var(--sp-8);padding:var(--sp-8) var(--sp-12);
+  border-radius:8px;margin-bottom:var(--sp-4)}
+.row:hover{background:var(--color-subtle-secondary)}
+.row.active{background:var(--color-subtle-tertiary)}
+.dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto;background:var(--color-success)}
+.title{font-size:14px;font-weight:500;color:var(--color-text-primary);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.age{margin-left:auto;font-family:var(--font-small);font-size:11px;
+  font-variant-numeric:tabular-nums;color:var(--color-text-tertiary);flex:0 0 auto}
+.spin{flex:0 0 auto;width:10px;font-family:var(--font-mono);font-size:11px;line-height:1;
+  color:var(--color-state-working)}
+.row[data-s="perm"] .dot{background:var(--color-state-permission)}
+
+/* ---- C0 · as shown before: green pill ---- */
+.C0 .row[data-w="hot"]  .age{color:#8FE07F;background:rgba(108,203,95,.14);padding:1px 6px;border-radius:4px;font-weight:500}
+.C0 .row[data-w="warm"] .age{color:rgba(108,203,95,.8)}
+.C0 .row[data-w="cool"] .age{color:var(--color-text-tertiary)}
+.C0 .row[data-w="cold"] .age{color:rgba(255,255,255,.32)}
+
+/* ---- C1 · no color at all. Brightness ramp only. ---- */
+.C1 .row[data-w="hot"]  .age{color:rgba(255,255,255,.92);font-weight:500}
+.C1 .row[data-w="warm"] .age{color:rgba(255,255,255,.72)}
+.C1 .row[data-w="cool"] .age{color:rgba(255,255,255,.5)}
+.C1 .row[data-w="cold"] .age{color:rgba(255,255,255,.3)}
+
+/* ---- C2 · one green, one row. Only "hot" gets hue, no fill. ---- */
+.C2 .row[data-w="hot"]  .age{color:var(--color-success);font-weight:500}
+.C2 .row[data-w="warm"] .age{color:rgba(255,255,255,.72)}
+.C2 .row[data-w="cool"] .age{color:rgba(255,255,255,.5)}
+.C2 .row[data-w="cold"] .age{color:rgba(255,255,255,.3)}
+
+/* ---- C3 · no color, no weight. Stale rows just recede whole-row. ---- */
+.C3 .row[data-w="hot"]  .age{color:rgba(255,255,255,.85)}
+.C3 .row[data-w="warm"] .age{color:rgba(255,255,255,.6)}
+.C3 .row[data-w="cool"]{opacity:.72}
+.C3 .row[data-w="cold"]{opacity:.5}
+
+/* ---- C4 · mono numerals, brightness only. Reads as telemetry. ---- */
+.C4 .age{font-family:var(--font-mono);font-size:10px;letter-spacing:-.02em}
+.C4 .row[data-w="hot"]  .age{color:rgba(255,255,255,.9)}
+.C4 .row[data-w="warm"] .age{color:rgba(255,255,255,.66)}
+.C4 .row[data-w="cool"] .age{color:rgba(255,255,255,.44)}
+.C4 .row[data-w="cold"] .age{color:rgba(255,255,255,.26)}
+
+.note{margin-top:var(--sp-32);font-family:var(--font-small);font-size:12px;
+  color:var(--color-text-tertiary);max-width:78ch}
+.note b{color:var(--color-text-secondary)}
+.note code{color:var(--color-text-secondary)}
+</style>
+</head>
+<body>
+
+<h1>Age chip, dialled down</h1>
+<p class="lede">
+  The green pill was making the age label compete with the dot for the same job. Four quieter
+  cuts. Dot column is identical in all of them — uniform green for “your turn”, existing braille
+  spinner for working, red for permission.
+</p>
+
+<div class="cols">
+  <div class="col C0"><h2>C0 · green pill (before)</h2>
+    <p class="sub">Two signals shouting. The pill also invents a surface the sidebar doesn’t otherwise have.</p>
+    <div class="sidebar" data-rows></div></div>
+
+  <div class="col C1"><h2>C1 · brightness only</h2>
+    <p class="sub">Zero hue. Fresh age is near-white and semibold, stale fades to 30%. Nothing new in the palette.</p>
+    <div class="sidebar" data-rows></div></div>
+
+  <div class="col C2"><h2>C2 · one green line</h2>
+    <p class="sub">Only &lt;2m gets the green, as text — no fill. Everything older is plain gray.</p>
+    <div class="sidebar" data-rows></div></div>
+
+  <div class="col C3"><h2>C3 · whole row recedes</h2>
+    <p class="sub">Age stays gray; stale rows dim <em>entirely</em>, dot included. Fewest moving parts.</p>
+    <div class="sidebar" data-rows></div></div>
+
+  <div class="col C4"><h2>C4 · mono telemetry</h2>
+    <p class="sub">10px mono numerals, brightness ramp. Feels like an instrument readout, not a badge.</p>
+    <div class="sidebar" data-rows></div></div>
+</div>
+
+<p class="note">
+  <b>C1</b> is the pick — it adds no color to a sidebar that already carries five state hues, and
+  brightness alone is enough because the dot already says “your turn.” <b>C3</b> is the most
+  restrained but dims the dot too, which weakens the one signal you want kept.
+  <b>C2</b> is a decent middle if &lt;2m deserves a nudge. <b>C4</b> is handsome but mono here
+  competes with the terminal’s voice.
+</p>
+
+<script>
+const ROWS=[
+ ['h','product-tools-prod',6],
+ ['r','cleanup ds2 gcs','hot','12s'],
+ ['r','fc-double-check','hot','40s'],
+ ['r','ds-coverage pinstall','warm','4m'],
+ ['w','ccs metrics'],
+ ['r','faux-targets-check','cool','22m'],
+ ['r','coldstart - custom M','cold','2h'],
+ ['h','services',1],
+ ['r','embeddings sync','cold','5h'],
+ ['h','global_dnn',1],
+ ['p','cc commit'],
+ ['h','cmux-win',2],
+ ['r','setting up overlay fixes','warm','6m'],
+ ['a','last message clearer indicator…'],
+];
+const esc=s=>s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const html=ROWS.map(x=>{
+ if(x[0]==='h')return `<div class="ph"><span class="chev">⌄</span> ${esc(x[1])} <span class="count">${x[2]}</span></div>`;
+ if(x[0]==='w')return `<div class="row" data-s="working"><span class="spin"></span><span class="title">${esc(x[1])}</span><span class="age">running</span></div>`;
+ if(x[0]==='a')return `<div class="row active" data-s="working"><span class="spin"></span><span class="title">${esc(x[1])}</span><span class="age">0s</span></div>`;
+ if(x[0]==='p')return `<div class="row" data-s="perm"><span class="dot"></span><span class="title">${esc(x[1])}</span><span class="age">needs you</span></div>`;
+ return `<div class="row" data-w="${x[2]}"><span class="dot"></span><span class="title">${esc(x[1])}</span><span class="age">${x[3]}</span></div>`;
+}).join('');
+document.querySelectorAll('[data-rows]').forEach(el=>el.innerHTML=html);
+const F=['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];let i=0;
+setInterval(()=>{i=(i+1)%F.length;document.querySelectorAll('.spin').forEach(s=>s.textContent=F[i])},80);
+</script>
+</body>
+</html>

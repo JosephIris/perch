@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>“Your turn” warmth — 5 options</title>
+<style>
+:root {
+  --sp-4:4px; --sp-8:8px; --sp-12:12px; --sp-16:16px; --sp-24:24px; --sp-32:32px;
+  --font-text:"Inter Variable","Segoe UI Variable Text","Segoe UI",sans-serif;
+  --font-small:"Inter Variable","Segoe UI Variable Small","Segoe UI",sans-serif;
+  --font-mono:"Geist Mono Variable","Cascadia Code","Cascadia Mono",Consolas,monospace;
+  --color-subtle-secondary:rgba(255,255,255,0.04);
+  --color-subtle-tertiary:rgba(255,255,255,0.08);
+  --color-stroke:rgba(255,255,255,0.08);
+  --color-text-primary:rgba(255,255,255,0.92);
+  --color-text-secondary:rgba(255,255,255,0.72);
+  --color-text-tertiary:rgba(255,255,255,0.5);
+  --color-success:#6CCB5F;
+  --color-state-working:#4cc2ff;
+  --color-state-permission:#ff5c6c;
+}
+*{box-sizing:border-box}
+body{margin:0;padding:var(--sp-24);background:#1a1a1a;color:var(--color-text-primary);
+  font-family:var(--font-text);font-size:14px;line-height:1.4;-webkit-font-smoothing:antialiased}
+h1{font-size:20px;font-weight:600;margin:0 0 var(--sp-8)}
+.lede{color:var(--color-text-secondary);max-width:70ch;margin:0 0 var(--sp-24)}
+.cols{display:flex;gap:var(--sp-24);align-items:flex-start;flex-wrap:wrap}
+.col{width:274px}
+.col>h2{font-family:var(--font-small);font-size:12px;font-weight:600;color:var(--color-text-primary);
+  margin:0 0 2px}
+.col>.sub{font-family:var(--font-small);font-size:11px;color:var(--color-text-tertiary);
+  margin:0 0 var(--sp-12);min-height:30px}
+.sidebar{background:#1f1f1f;border:1px solid var(--color-stroke);border-radius:8px;
+  padding:var(--sp-12) var(--sp-8) var(--sp-16)}
+.ph{display:flex;align-items:center;gap:var(--sp-8);padding:var(--sp-8) var(--sp-12) var(--sp-4);
+  font-weight:600;font-size:13px}
+.ph .chev{color:var(--color-text-tertiary);font-size:10px}
+.ph .count{color:var(--color-text-tertiary);font-weight:400;font-size:12px}
+.row{display:flex;align-items:center;gap:var(--sp-8);padding:var(--sp-8) var(--sp-12);
+  border-radius:8px;margin-bottom:var(--sp-4);position:relative}
+.row:hover{background:var(--color-subtle-secondary)}
+.row.active{background:var(--color-subtle-tertiary)}
+.dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto;background:var(--color-success)}
+.title{font-size:14px;font-weight:500;color:var(--color-text-primary);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.age{margin-left:auto;font-family:var(--font-small);font-size:11px;
+  font-variant-numeric:tabular-nums;color:var(--color-text-tertiary);flex:0 0 auto}
+
+/* EXISTING working treatment — braille spinner in the dot slot, untouched. */
+.spin{flex:0 0 auto;width:10px;font-family:var(--font-mono);font-size:11px;line-height:1;
+  color:var(--color-state-working)}
+.row[data-s="perm"] .dot{background:var(--color-state-permission)}
+
+/* ---------- A: opacity decay ---------- */
+.A .row[data-w="hot"]  .dot{box-shadow:0 0 0 3px rgba(108,203,95,.16)}
+.A .row[data-w="warm"] .dot{background:rgba(108,203,95,.72)}
+.A .row[data-w="cool"] .dot{background:rgba(108,203,95,.38)}
+.A .row[data-w="cold"] .dot{background:transparent;box-shadow:inset 0 0 0 1px rgba(108,203,95,.42)}
+.A .row[data-w="cool"] .title{color:var(--color-text-secondary)}
+.A .row[data-w="cold"] .title{color:var(--color-text-tertiary)}
+.A .row[data-w="hot"]  .age{color:rgba(108,203,95,.85)}
+
+/* ---------- B: fill → ring, two steps only ---------- */
+.B .row[data-w="hot"]  .dot,
+.B .row[data-w="warm"] .dot{background:var(--color-success)}
+.B .row[data-w="cool"] .dot,
+.B .row[data-w="cold"] .dot{background:transparent;box-shadow:inset 0 0 0 1.5px rgba(108,203,95,.55)}
+.B .row[data-w="cold"] .title{color:var(--color-text-secondary)}
+
+/* ---------- C: dot uniform, age label carries heat ---------- */
+.C .row[data-w] .dot{background:var(--color-success)}
+.C .age{font-weight:500}
+.C .row[data-w="hot"]  .age{color:#8FE07F;background:rgba(108,203,95,.14);
+  padding:1px 6px;border-radius:4px}
+.C .row[data-w="warm"] .age{color:rgba(108,203,95,.8)}
+.C .row[data-w="cool"] .age{color:var(--color-text-tertiary)}
+.C .row[data-w="cold"] .age{color:rgba(255,255,255,.32)}
+
+/* ---------- D: left-edge warmth bar, dot untouched ---------- */
+.D .row[data-w]::before{content:"";position:absolute;left:2px;top:7px;bottom:7px;width:2px;
+  border-radius:1px}
+.D .row[data-w="hot"]::before {background:var(--color-success)}
+.D .row[data-w="warm"]::before{background:rgba(108,203,95,.55)}
+.D .row[data-w="cool"]::before{background:rgba(108,203,95,.22)}
+.D .row[data-w="cold"]::before{background:transparent}
+
+/* ---------- E: size decay ---------- */
+.E .row[data-w="hot"]  .dot{width:9px;height:9px;box-shadow:0 0 0 3px rgba(108,203,95,.18)}
+.E .row[data-w="warm"] .dot{width:7px;height:7px}
+.E .row[data-w="cool"] .dot{width:5px;height:5px;background:rgba(108,203,95,.7)}
+.E .row[data-w="cold"] .dot{width:3px;height:3px;background:rgba(108,203,95,.5)}
+.E .row[data-w="cold"] .title{color:var(--color-text-secondary)}
+
+.note{margin-top:var(--sp-32);font-family:var(--font-small);font-size:12px;
+  color:var(--color-text-tertiary);max-width:78ch}
+.note b{color:var(--color-text-secondary)}
+.note code{color:var(--color-text-secondary)}
+</style>
+</head>
+<body>
+
+<h1>“Your turn” warmth — five ways</h1>
+<p class="lede">
+  Same data in every column. <b>Working rows keep the existing braille spinner</b> — untouched.
+  Only the <code>done</code> (= agent handed the turn back) rows differ. Buckets:
+  hot &lt;2m · warm 2–10m · cool 10m–1h · cold &gt;1h, all off the <code>doneAtMs</code>
+  already being pushed.
+</p>
+
+<div class="cols">
+
+<div class="col A">
+  <h2>A · Opacity decay</h2>
+  <p class="sub">Dot fades green→hollow, title dims in step. Smoothest, most gradual.</p>
+  <div class="sidebar" data-rows></div>
+</div>
+
+<div class="col B">
+  <h2>B · Fill → ring</h2>
+  <p class="sub">Binary: solid = fresh, hollow = stale. One hard edge, no in-between guessing.</p>
+  <div class="sidebar" data-rows></div>
+</div>
+
+<div class="col C">
+  <h2>C · Age chip carries it</h2>
+  <p class="sub">Dots stay uniform. The timestamp is the signal — fresh gets a green pill.</p>
+  <div class="sidebar" data-rows></div>
+</div>
+
+<div class="col D">
+  <h2>D · Left-edge bar</h2>
+  <p class="sub">Warmth lives in a 2px rail, dot column untouched. Reads as a margin scan.</p>
+  <div class="sidebar" data-rows></div>
+</div>
+
+<div class="col E">
+  <h2>E · Size decay</h2>
+  <p class="sub">Dot shrinks with age, 9px→3px. Color constant, so it survives colorblindness.</p>
+  <div class="sidebar" data-rows></div>
+</div>
+
+</div>
+
+<p class="note">
+  <b>A</b> is the safest and most Fluent-native. <b>C</b> is the least invasive — zero change to
+  the dot column, so it can't fight the existing state palette. <b>E</b> is the only one that
+  doesn't lean on hue at all. <b>D</b> risks reading as the accent stripe the constitution
+  rules out for sidebar selection. <b>B</b> is crisp but loses the “how stale” gradient.
+</p>
+
+<script>
+const ROWS = [
+  ['h','product-tools-prod',6],
+  ['r','cleanup ds2 gcs','hot','12s'],
+  ['r','fc-double-check','hot','40s'],
+  ['r','ds-coverage pinstall','warm','4m'],
+  ['w','ccs metrics'],
+  ['r','faux-targets-check','cool','22m'],
+  ['r','coldstart - custom M','cold','2h'],
+  ['h','services',1],
+  ['r','embeddings sync','cold','5h'],
+  ['h','global_dnn',1],
+  ['p','cc commit'],
+  ['h','cmux-win',2],
+  ['r','setting up overlay fixes','warm','6m'],
+  ['a','last message clearer indicator…'],
+];
+const esc = s => s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const html = ROWS.map(x => {
+  if (x[0]==='h') return `<div class="ph"><span class="chev">⌄</span> ${esc(x[1])} <span class="count">${x[2]}</span></div>`;
+  if (x[0]==='w') return `<div class="row" data-s="working"><span class="spin"></span><span class="title">${esc(x[1])}</span><span class="age">running</span></div>`;
+  if (x[0]==='a') return `<div class="row active" data-s="working"><span class="spin"></span><span class="title">${esc(x[1])}</span><span class="age">0s</span></div>`;
+  if (x[0]==='p') return `<div class="row" data-s="perm"><span class="dot"></span><span class="title">${esc(x[1])}</span><span class="age">needs you</span></div>`;
+  return `<div class="row" data-w="${x[2]}"><span class="dot"></span><span class="title">${esc(x[1])}</span><span class="age">${x[3]}</span></div>`;
+}).join('');
+document.querySelectorAll('[data-rows]').forEach(el => el.innerHTML = html);
+
+// cc's braille spinner, same frames/cadence as the app
+const FRAMES = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
+let i = 0;
+setInterval(() => {
+  i = (i + 1) % FRAMES.length;
+  document.querySelectorAll('.spin').forEach(s => s.textContent = FRAMES[i]);
+}, 80);
+</script>
+
+</body>
+</html>

@@ -52,24 +52,49 @@ export function fmtAgoCoarse(ms: number): string {
 
 /** Create a span that auto-updates to the elapsed since `turnStartMs`.
  *  `coarse` drops the seconds counter (minute granularity) — see the footer. */
-export function elapsedSpan(turnStartMs: number, coarse = false): HTMLElement {
+export function elapsedSpan(
+  turnStartMs: number,
+  coarse = false,
+  warmth = false
+): HTMLElement {
   const e = document.createElement("span");
   e.dataset.turnStart = String(turnStartMs);
   if (coarse) e.dataset.coarse = "1";
   const d = Date.now() - turnStartMs;
+  if (warmth) e.dataset.warmth = warmthFor(d);
   e.textContent = coarse ? fmtElapsedCoarse(d) : fmtElapsed(d);
   return e;
+}
+
+/** Warmth bucket for a finished turn. A `done` row already means "the agent
+ * handed the turn back to you" — every one of them is actionable. What the
+ * sidebar was missing is AGE: eleven equally-bright rows say nothing about
+ * which one you dropped ten seconds ago and which has been sitting all
+ * afternoon. These four buckets drive the age label's treatment (CSS keys off
+ * data-warmth); the state dot is deliberately NOT bucketed, so warmth never
+ * competes with the state palette. */
+export type Warmth = "hot" | "warm" | "cool" | "cold";
+
+/** hot <2m · warm 2–10m · cool 10m–1h · cold >1h. */
+export function warmthFor(ms: number): Warmth {
+  const m = Math.max(0, ms) / 60000;
+  if (m < 2) return "hot";
+  if (m < 10) return "warm";
+  if (m < 60) return "cool";
+  return "cold";
 }
 
 /** Create a span that auto-updates to the relative-ago since `doneAtMs` (the
  * Unix-ms a turn finished). Same shared ticker as elapsedSpan, so a done row's
  * "finished · 2m ago" stays live without the host re-pushing state. `coarse`
- * drops the sub-minute seconds. */
-export function agoSpan(doneAtMs: number, coarse = false): HTMLElement {
+ * drops the sub-minute seconds. `warmth` opts the span into the age-decay
+ * treatment — the ticker then keeps data-warmth current alongside the text. */
+export function agoSpan(doneAtMs: number, coarse = false, warmth = false): HTMLElement {
   const e = document.createElement("span");
   e.dataset.since = String(doneAtMs);
   if (coarse) e.dataset.coarse = "1";
   const d = Date.now() - doneAtMs;
+  if (warmth) e.dataset.warmth = warmthFor(d);
   e.textContent = coarse ? fmtAgoCoarse(d) : fmtAgo(d);
   return e;
 }
@@ -90,16 +115,28 @@ export function startElapsedTicker(): void {
       .forEach((el) => {
         const coarse = el.dataset.coarse === "1";
         let next: string | null = null;
+        let delta = -1;
         const start = Number(el.dataset.turnStart) || 0;
         if (start > 0) {
-          next = coarse ? fmtElapsedCoarse(now - start) : fmtElapsed(now - start);
+          delta = now - start;
+          next = coarse ? fmtElapsedCoarse(delta) : fmtElapsed(delta);
         } else {
           const since = Number(el.dataset.since) || 0;
-          if (since > 0) next = coarse ? fmtAgoCoarse(now - since) : fmtAgo(now - since);
+          if (since > 0) {
+            delta = now - since;
+            next = coarse ? fmtAgoCoarse(delta) : fmtAgo(delta);
+          }
         }
         // Only touch the DOM when the rendered value actually changes — a
         // coarse (minute) label then writes ~once a minute, not every tick.
         if (next != null && el.textContent !== next) el.textContent = next;
+        // Warmth rides the same walk, for spans that opted in. Same
+        // write-only-on-change rule: this attribute changes 3 times an hour,
+        // not once a second.
+        if (delta >= 0 && el.dataset.warmth != null) {
+          const w = warmthFor(delta);
+          if (el.dataset.warmth !== w) el.dataset.warmth = w;
+        }
       });
   }, 1000);
 }
