@@ -577,6 +577,7 @@ public partial class MainWindow : FluentWindow
         .Add<PrefsSetMsg>("prefs.set", OnPrefsSet)
         .Add<PaneRef>("commits.request", OnCommitsRequest)
         .Add<PaneRef>("inspector.request", OnInspectorRequest)
+        .Add<InspectorImageMsg>("inspector.image", OnInspectorImage)
         .Add("settings.request", OnSettingsRequest)
         .Add<SettingsSaveMsg>("settings.save", OnSettingsSave)
         .Add("onboarding.seen", OnOnboardingSeen)
@@ -2357,6 +2358,39 @@ public partial class MainWindow : FluentWindow
             Web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(payload));
         }
         catch (Exception ex) { Log.Error("OnInspectorRequest", ex); }
+    }
+
+    // Page asked for one conversation image's bytes (rail thumbnail or lightbox
+    // full-size). The journal rows carry only image IDs; resolving one means
+    // re-reading its line from the transcript, decoding, and (for thumbs)
+    // downscaling — file IO + image decode, so it runs off-thread. Locator is
+    // resolved on the UI thread FIRST (it reads TranscriptReader's tail state,
+    // which is UI-thread-owned). The host always replies, even with empty data:
+    // a request that vanished would leave the page waiting on its timeout.
+    private async void OnInspectorImage(InspectorImageMsg msg)
+    {
+        var full = string.Equals(msg.Variant, "full", StringComparison.OrdinalIgnoreCase);
+        string mediaType = "", data = "";
+        try
+        {
+            if (_transcripts.LocateImage(msg.PaneId, msg.ImageId) is { } loc)
+            {
+                var img = await Task.Run(() => TranscriptReader.ExtractImage(loc, thumb: !full));
+                if (img is { } i) { mediaType = i.MediaType; data = i.Data; }
+            }
+        }
+        catch (Exception ex) { Log.Error("OnInspectorImage", ex); }
+
+        var payload = new
+        {
+            type = "inspector.image.data",
+            paneId = msg.PaneId.ToString("D"),
+            imageId = msg.ImageId,
+            variant = full ? "full" : "thumb",
+            mediaType,
+            data,
+        };
+        Web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(payload));
     }
 
     // ── Window placement ────────────────────────────────────────────────────

@@ -327,6 +327,17 @@ internal sealed record SessionCloseMsg
     public bool? RemoveWorktree { get; init; }
 }
 
+/// Inspector rail: fetch one conversation image's bytes on demand. The journal
+/// rows only carry image IDs (see TranscriptReader) — the page asks for pixels
+/// when a thumbnail scrolls in ("thumb") or the lightbox opens ("full").
+internal sealed record InspectorImageMsg
+{
+    public required Guid PaneId { get; init; }
+    public required string ImageId { get; init; }
+    /// "thumb" (default) or "full".
+    public string? Variant { get; init; }
+}
+
 /// Deserialization boundary for page + control-pipe messages. Web defaults
 /// (camelCase, case-insensitive) plus two leniencies the control pipe needs:
 /// numbers and bools may arrive as strings, because `perch test` ships every

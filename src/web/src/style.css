@@ -3400,6 +3400,7 @@ ul { list-style: none; padding: 0; margin: 0; }
 .beat.row-enter,
 .work.row-enter,
 .skill.row-enter,
+.imgrow.row-enter,
 .turn-prompt.row-enter,
 .turn-interrupt.row-enter { animation: inspector-row-in var(--dur-normal) var(--ease-entry); }
 @keyframes inspector-row-in {
@@ -3434,6 +3435,7 @@ ul { list-style: none; padding: 0; margin: 0; }
   .beat.row-enter,
   .work.row-enter,
   .skill.row-enter,
+  .imgrow.row-enter,
   .turn-prompt.row-enter,
   .turn-interrupt.row-enter { animation: none; }
   /* The copy flash still fires — it's the feedback, not decoration — but it
@@ -3779,6 +3781,34 @@ body.show-dashboard .dashboard { display: flex; }
   border-bottom: 1px solid var(--color-stroke);
 }
 .commits-lightbox .commit-row:last-child { padding-bottom: 0; border-bottom: none; }
+
+/* Image lightbox — full-size view of a conversation image (opened from the
+ * Inspector's thumbnail rows). Same .settings-card surface as the commits
+ * lightbox; the card shrink-wraps the image instead of taking a fixed width,
+ * capped so a 4K screenshot letterboxes into the viewport instead of scrolling. */
+.image-lightbox {
+  width: auto;
+  max-width: min(1200px, calc(100vw - var(--sp-48)));
+  align-items: center;
+  gap: var(--sp-12);
+}
+.image-lightbox__img {
+  display: block;
+  max-width: 100%;
+  /* Viewport minus the card's padding + caption — the image may never push the
+   * caption below the fold. */
+  max-height: calc(100vh - 160px);
+  min-width: 320px;
+  min-height: 200px;
+  object-fit: contain;
+  border-radius: var(--r-input);
+}
+.image-lightbox__caption {
+  font-family: var(--font-small);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+  text-align: center;
+}
 
 /* Waiting/permission-card body: peek at the agent's ask, then reply or open. */
 .card__wait { display: flex; flex-direction: column; gap: var(--sp-8); }
@@ -5123,12 +5153,70 @@ body.show-dashboard .dashboard { display: flex; }
   text-overflow: ellipsis;
 }
 
+/* Image row — a thumbnail hung in the stream at its chronological spot (a
+ * paste sits under the prompt it rode in on, a screenshot under the tool call
+ * that took it). Same 40px time gutter as beats/work so the spine stays
+ * aligned. The thumb is a quiet bordered card, capped at 120px tall — tall
+ * enough to recognize, small enough that a screenshot-heavy session doesn't
+ * turn the journal into a photo reel. Click opens the lightbox. */
+.imgrow {
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  gap: var(--sp-8);
+  padding: var(--sp-4) var(--sp-12);
+  margin: 0 var(--sp-8);
+  border-radius: var(--r-pill);
+}
+.imgrow__time {
+  font-family: var(--font-small);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-disabled);
+  padding-top: 2px;
+}
+.imgrow__thumb {
+  justify-self: start;
+  padding: 0;
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--r-input);
+  background: var(--color-layer);
+  overflow: hidden;
+  line-height: 0;
+  cursor: zoom-in;
+  max-width: 100%;
+  /* Holds the row's shape while the thumb bytes are in flight, so the poll
+   * re-render doesn't jitter the stream. */
+  min-width: 48px;
+  min-height: 32px;
+  transition: border-color var(--dur-fast) var(--ease-entry);
+}
+.imgrow__thumb:hover { border-color: var(--color-stroke-strong); }
+.imgrow__thumb:disabled { cursor: default; }
+.imgrow__img {
+  display: block;
+  max-width: 100%;
+  max-height: 120px;
+  object-fit: contain;
+}
+/* Transcript rotated out from under us — say so quietly instead of showing a
+ * broken-image glyph that reads as our bug. */
+.imgrow__dead {
+  display: block;
+  padding: var(--sp-8) var(--sp-12);
+  font-family: var(--font-small);
+  font-size: 11px;
+  line-height: var(--type-body-line);
+  color: var(--color-text-disabled);
+}
+
 /* Filter the stream by kind. Pure show/hide driven by the filter bar — no
  * re-render. Hiding actions IS the old prose-only view. Interrupts ride with
  * "user" (they're your action); skills filter on their own. */
 .inspector__stream--hide-user .turn-prompt,
 .inspector__stream--hide-user .turn-interrupt,
+.inspector__stream--hide-user .imgrow--pasted,
 .inspector__stream--hide-claude .beat,
+.inspector__stream--hide-claude .imgrow--shared,
 .inspector__stream--hide-actions .work,
 .inspector__stream--hide-skill .skill { display: none; }
 /* Every kind toggled off — the stream is empty by choice, so say so rather than

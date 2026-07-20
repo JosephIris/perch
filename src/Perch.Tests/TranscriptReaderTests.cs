@@ -263,6 +263,104 @@ public sealed class TranscriptReaderTests : IDisposable
         Assert.All(d.Events, e => Assert.Equal(1, e.Repeat));
     }
 
+    // ---- Images -------------------------------------------------------------
+
+    private static string ImageBlock(string b64, string media = "image/png") =>
+        "{\"type\":\"image\",\"source\":{\"type\":\"base64\",\"media_type\":\"" +
+        media + "\",\"data\":\"" + b64 + "\"}}";
+
+    [Fact]
+    public void PastedImages_RideTheStream_UnderTheirPrompt()
+    {
+        var b64 = Convert.ToBase64String(Encoding.ASCII.GetBytes("not-a-real-png"));
+        WriteTranscript(
+            "{\"type\":\"user\",\"origin\":{\"kind\":\"human\"},\"promptSource\":\"typed\"," +
+            "\"timestamp\":\"2026-07-03T17:47:00Z\",\"message\":{\"content\":[" +
+            "{\"type\":\"text\",\"text\":\"[Image #1] why does this dialog clip\"}," +
+            ImageBlock(b64) + "]}}",
+            Assistant(TextBlock));
+
+        var d = Read(new TranscriptReader());
+
+        // The paste renders directly under the words it rode in on.
+        Assert.Equal(new[] { "prompt", "image", "beat" }, d.Events.Select(e => e.Kind));
+        Assert.Equal("pasted", d.Events[1].Verb);
+        Assert.NotEmpty(d.Events[1].Target);           // the id the page fetches by
+        Assert.Equal("", d.Events[1].Text);            // no pixels in the journal payload
+    }
+
+    [Fact]
+    public void ToolResultImages_AreShared_AndStillNotPrompts()
+    {
+        // A screenshot the agent took (or an image file it read) comes back
+        // inside a tool_result user row. The row must NOT become a prompt —
+        // that filter is pinned above — but its image belongs in the stream:
+        // it's the picture the conversation is about.
+        var b64 = Convert.ToBase64String(Encoding.ASCII.GetBytes("screenshot-bytes"));
+        WriteTranscript(
+            "{\"type\":\"user\",\"timestamp\":\"2026-07-03T19:33:00Z\",\"message\":{\"content\":[" +
+            "{\"type\":\"tool_result\",\"tool_use_id\":\"x\",\"content\":[" +
+            "{\"type\":\"text\",\"text\":\"1 image\"}," + ImageBlock(b64, "image/jpeg") +
+            "]}]}}");
+
+        var d = Read(new TranscriptReader());
+
+        var e = Assert.Single(d.Events);
+        Assert.Equal("image", e.Kind);
+        Assert.Equal("shared", e.Verb);
+    }
+
+    [Fact]
+    public void ExtractImage_RoundTripsTheExactBytes_ByOrdinal()
+    {
+        var one = Convert.ToBase64String(Encoding.ASCII.GetBytes("image-one"));
+        var two = Convert.ToBase64String(Encoding.ASCII.GetBytes("image-two"));
+        WriteTranscript(
+            UserText("padding row so the image line's offset is non-zero"),
+            "{\"type\":\"user\",\"timestamp\":\"2026-07-03T17:47:00Z\",\"message\":{\"content\":[" +
+            ImageBlock(one) + "," + ImageBlock(two, "image/jpeg") + "]}}");
+
+        var reader = new TranscriptReader();
+        var pane = Guid.NewGuid();
+        var imgs = reader.Read(pane, Sid, Cwd)!.Events.Where(e => e.Kind == "image").ToList();
+        Assert.Equal(2, imgs.Count);
+
+        // Full variant returns the original bytes untouched — the lightbox
+        // contract. (The thumb variant runs the WPF decoder against real pixel
+        // data; these fake bytes exercise the pure path only, per this
+        // project's window-free test scope.)
+        var first = TranscriptReader.ExtractImage(reader.LocateImage(pane, imgs[0].Target)!, thumb: false);
+        var second = TranscriptReader.ExtractImage(reader.LocateImage(pane, imgs[1].Target)!, thumb: false);
+
+        Assert.Equal("image/png", first!.Value.MediaType);
+        Assert.Equal(one, first.Value.Data);
+        Assert.Equal("image/jpeg", second!.Value.MediaType);
+        Assert.Equal(two, second.Value.Data);
+    }
+
+    [Fact]
+    public void ExtractImage_OnATruncatedTranscript_ReturnsNull_NotGarbage()
+    {
+        var b64 = Convert.ToBase64String(Encoding.ASCII.GetBytes("gone"));
+        WriteTranscript(
+            UserText("first"),
+            "{\"type\":\"user\",\"timestamp\":\"2026-07-03T17:48:00Z\",\"message\":{\"content\":[" +
+            ImageBlock(b64) + "]}}");
+
+        var reader = new TranscriptReader();
+        var pane = Guid.NewGuid();
+        var id = reader.Read(pane, Sid, Cwd)!.Events.Single(e => e.Kind == "image").Target;
+        var loc = reader.LocateImage(pane, id)!;
+
+        // A /clear truncates the file: the locator's byte range no longer
+        // exists, and serving whatever now lives at that offset would show the
+        // wrong image. Null → the page's "Image unavailable" placeholder.
+        var dir = Path.Combine(_root, "projects", ClaudeTranscripts.SanitizeCwd(Cwd));
+        File.WriteAllText(Path.Combine(dir, Sid + ".jsonl"), "");
+
+        Assert.Null(TranscriptReader.ExtractImage(loc, thumb: false));
+    }
+
     // ---- Vitals -------------------------------------------------------------
 
     [Fact]

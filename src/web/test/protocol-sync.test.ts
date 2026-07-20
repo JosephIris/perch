@@ -24,6 +24,7 @@ const EXPECTED_TYPES = [
   "cloud.panel",
   "cloud.refresh",
   "commits.request",
+  "inspector.image",
   "inspector.request",
   "local.kill",
   "local.killLingering",
