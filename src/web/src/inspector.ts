@@ -629,9 +629,11 @@ const expanded = new Set<number>();
  *  Reset on pane change so switching in doesn't cascade the whole history. */
 let prevEventCount = 0;
 /** Which journal kinds are shown. Global (like the quiet toggle this replaces)
- *  and session-only. Interrupts ride with "user" — they're your action. Applied
- *  as CSS classes on the stream, so a toggle never re-renders or refetches. */
-const shown = { user: true, claude: true, actions: true, skill: true };
+ *  and session-only. Interrupts ride with "user" — they're your action; images
+ *  (pasted AND shared) filter as their own kind, so "just the pictures" is one
+ *  chip. Applied as CSS classes on the stream, so a toggle never re-renders or
+ *  refetches. */
+const shown = { user: true, claude: true, actions: true, skill: true, images: true };
 type FilterCat = keyof typeof shown;
 let pollTimer: number | null = null;
 let skeletonTimer: number | null = null;
@@ -795,6 +797,7 @@ function applyFilters(): void {
   streamEl.classList.toggle("inspector__stream--hide-claude", !shown.claude);
   streamEl.classList.toggle("inspector__stream--hide-actions", !shown.actions);
   streamEl.classList.toggle("inspector__stream--hide-skill", !shown.skill);
+  streamEl.classList.toggle("inspector__stream--hide-images", !shown.images);
   for (const btn of filterBtns)
     btn.setAttribute("aria-pressed", String(shown[btn.dataset.cat as FilterCat]));
   const vals = Object.values(shown);
@@ -803,16 +806,14 @@ function applyFilters(): void {
 }
 
 /** Chip counts are TOTALS per kind (querySelectorAll matches hidden rows too),
- *  so they tell you what each filter would reveal, not what's showing now.
- *  Image rows count with their author: a paste is yours, a shared image rides
- *  with Claude's side of the conversation — same split the hide classes use. */
+ *  so they tell you what each filter would reveal, not what's showing now. */
 function updateFilterCounts(): void {
   filterCounts.user.textContent =
-    String(streamEl.querySelectorAll(".turn-prompt, .turn-interrupt, .imgrow--pasted").length);
-  filterCounts.claude.textContent =
-    String(streamEl.querySelectorAll(".beat, .imgrow--shared").length);
+    String(streamEl.querySelectorAll(".turn-prompt, .turn-interrupt").length);
+  filterCounts.claude.textContent = String(streamEl.querySelectorAll(".beat").length);
   filterCounts.actions.textContent = String(streamEl.querySelectorAll(".work").length);
   filterCounts.skill.textContent = String(streamEl.querySelectorAll(".skill").length);
+  filterCounts.images.textContent = String(streamEl.querySelectorAll(".imgrow").length);
 }
 
 // ---- Init ------------------------------------------------------------------
@@ -847,7 +848,7 @@ export function initInspector(): void {
   // clears it when everything's already on. Toggling scrolls back to latest so
   // the newest visible row stays in view.
   allBtn = $<HTMLButtonElement>("filter-all");
-  (["user", "claude", "actions", "skill"] as FilterCat[]).forEach((cat) => {
+  (["user", "claude", "actions", "skill", "images"] as FilterCat[]).forEach((cat) => {
     const btn = $<HTMLButtonElement>(`filter-${cat}`);
     btn.addEventListener("click", () => {
       shown[cat] = !shown[cat];

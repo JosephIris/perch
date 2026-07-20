@@ -222,10 +222,11 @@
         </button>
       </div>
       <!-- Filter bar. Toggles which journal kinds show — You (your prompts +
-           interrupts), Claude (prose beats), Actions (tool calls) — live and
-           independently; "All" flips everything on or clears it. Turning Actions
-           off IS the old prose-only view (which is why the header ☰ is gone).
-           Filtering is pure CSS on the stream, so it never re-renders. -->
+           interrupts), Claude (prose beats), Actions (tool calls), Images
+           (pasted + shared thumbnails) — live and independently; "All" flips
+           everything on or clears it. Turning Actions off IS the old prose-only
+           view (which is why the header ☰ is gone). Filtering is pure CSS on
+           the stream, so it never re-renders. -->
       <div id="inspector-filters" class="inspector__filters" role="group"
            aria-label="Filter the journal">
         <button id="filter-all" class="inspector__filter inspector__filter--all"
@@ -249,6 +250,11 @@
                 data-cat="skill" aria-pressed="true" title="Skills the agent used">
           <span class="inspector__filter-glyph" aria-hidden="true">&#9670;</span>Skills<span
                 id="filter-count-skill" class="inspector__filter-count"></span>
+        </button>
+        <button id="filter-images" class="inspector__filter" type="button"
+                data-cat="images" aria-pressed="true" title="Images in the conversation">
+          <span class="inspector__filter-glyph" aria-hidden="true">&#9635;</span>Images<span
+                id="filter-count-images" class="inspector__filter-count"></span>
         </button>
       </div>
       <div id="inspector-vitals" class="inspector__vitals"></div>
