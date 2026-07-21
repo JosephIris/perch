@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Perch — bird on a wire "Setting up" mock</title>
+<style>
+  :root{
+    --pane-surface:#1f1f1f;
+    --ink:#e9eef4; --ink-dim:#aab3bd;
+    --accent:#76B9ED; --eye:#15233b;
+    --tag-0:#76B9ED; --tag-1:#6CCB5F; --tag-2:#FCE100;
+    --tag-3:#FF9E5E; --tag-4:#FF99A4; --tag-5:#C792EA;
+    --hint:var(--tag-1);
+    font-family:"Inter var","Inter","Segoe UI Variable Text","Segoe UI",sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; min-height:100vh; display:grid; place-items:center; gap:24px;
+    padding:32px 20px; background:#141414; color:var(--ink);
+    background-image:radial-gradient(1200px 600px at 30% -10%,#1c2330 0%,#141414 60%);
+  }
+  .pane{
+    position:relative; width:640px; max-width:94vw; height:400px;
+    border-radius:8px; overflow:hidden; background:var(--pane-surface);
+    border:1px solid rgba(255,255,255,.06); box-shadow:0 12px 40px rgba(0,0,0,.45);
+  }
+  .pane-header{height:34px;display:flex;align-items:center;gap:8px;padding:0 12px;
+    font-size:12px;color:var(--ink-dim);border-bottom:1px solid rgba(255,255,255,.05)}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--hint)}
+  .pane-body{padding:12px 14px;font:13px/1.55 "Cascadia Mono",ui-monospace,monospace;color:#c7c7c7;white-space:pre-wrap}
+  .pane-body .muted{color:#6a6a6a}
+
+  .overlay{
+    position:absolute; inset:0; display:grid; place-items:center;
+    background:
+      radial-gradient(170px 150px at 50% 46%,
+        color-mix(in srgb,var(--hint) 18%, transparent) 0%, transparent 70%),
+      rgba(20,22,26,.42);
+    backdrop-filter:blur(9px) saturate(115%);
+    -webkit-backdrop-filter:blur(9px) saturate(115%);
+  }
+  .stack{display:flex;flex-direction:column;align-items:center;gap:14px}
+  .scene-holder{width:400px;height:187px}
+  .scene-holder svg{width:100%;height:100%;overflow:visible;color:var(--ink)}
+  .caption{font-size:13px;font-weight:500;letter-spacing:.1px;color:var(--ink)}
+  .caption .dots{display:inline-block;width:1.4em;text-align:left}
+  .caption .dots::after{content:"";animation:dots 1.4s steps(4,end) infinite}
+  @keyframes dots{0%{content:""}25%{content:"."}50%{content:".."}75%{content:"..."}100%{content:""}}
+
+  /* -------- controls -------- */
+  .controls{
+    display:flex; align-items:center; gap:12px; width:640px; max-width:94vw;
+    font-size:12px; color:var(--ink-dim);
+  }
+  .controls button{
+    background:rgba(255,255,255,.07); color:var(--ink); border:1px solid rgba(255,255,255,.1);
+    border-radius:4px; padding:4px 12px; font:inherit; cursor:pointer;
+  }
+  .controls input[type=range]{flex:1}
+  .controls select{background:#222;color:var(--ink);border:1px solid rgba(255,255,255,.1);border-radius:4px;padding:3px}
+  .t-readout{font-variant-numeric:tabular-nums;min-width:64px}
+
+  /* -------- filmstrip mode -------- */
+  body.strip{display:block;padding:20px}
+  .strip-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;max-width:1360px;margin:0 auto}
+  .strip-cell{
+    position:relative;border-radius:6px;overflow:hidden;
+    background:rgba(20,22,26,.9);border:1px solid rgba(255,255,255,.08);
+  }
+  .strip-cell svg{width:100%;display:block;color:var(--ink)}
+  .strip-label{position:absolute;left:6px;top:4px;font-size:11px;color:var(--ink-dim);
+    font-variant-numeric:tabular-nums}
+</style>
+</head>
+<body>
+
+<script>
+"use strict";
+/* ================================================================
+   Timeline engine: the whole animation is pose(t) — a pure function
+   of milliseconds → rig parameters. No CSS animations on the rig,
+   so any t can be frozen, scrubbed, or filmstripped exactly.
+   ================================================================ */
+
+const W = 320, H = 150;            // scene viewBox
+const S = 1.6;                     // bird rig scale (art authored small, shown big)
+const PERCH_X = 175;               // where the bird settles (slightly right of center)
+const WALK_FROM = 46;              // enters from the left
+const INTRO_MS = 2050;             // walk + land
+const IDLE_MS  = 3600;             // inquisitive loop
+const TOTAL_PREVIEW = INTRO_MS + IDLE_MS;   // one full pass for scrub/strip
+
+/* ---------- easing ---------- */
+const clamp01 = u => Math.min(1, Math.max(0, u));
+const easeOutCubic  = u => 1 - Math.pow(1 - u, 3);
+const easeInOutCubic= u => u < .5 ? 4*u*u*u : 1 - Math.pow(-2*u + 2, 3)/2;
+const easeOutBack   = u => { const c = 1.4; return 1 + (c+1)*Math.pow(u-1,3) + c*Math.pow(u-1,2); };
+const EASES = { lin: u=>u, out: easeOutCubic, inout: easeInOutCubic, back: easeOutBack };
+
+/* keyframe track: kf(t, [[t0,v0],[t1,v1,'ease'],...]) — ease names the curve
+   INTO that key. Times in ms, clamped at both ends. */
+function kf(t, keys){
+  if (t <= keys[0][0]) return keys[0][1];
+  for (let i = 1; i < keys.length; i++){
+    const [t1, v1, e] = keys[i], [t0, v0] = keys[i-1];
+    if (t <= t1){
+      const u = (EASES[e || 'inout'])(clamp01((t - t0) / (t1 - t0)));
+      return v0 + (v1 - v0) * u;
+    }
+  }
+  return keys[keys.length - 1][1];
+}
+
+/* wire: gentle catenary-ish sag across the frame + a local dip under the bird */
+const wireBaseY = x => 92 + 40 * (x / W) * (1 - x / W);   // ~102 at center
+function wireY(x, birdX, weight){
+  const d = (x - birdX) / 38;
+  return wireBaseY(x) + weight * S * Math.exp(-d * d);
+}
+
+/* blink: v-shaped closure around a center time, ~140ms total */
+function blink(t, at){
+  const d = Math.abs(t - at);
+  return d > 70 ? 1 : Math.max(0.12, d / 70);
+}
+
+/* ---------- pose(t): every number the rig needs ---------- */
+function pose(t){
+  const p = {};
+  if (t < INTRO_MS){
+    /* -------- intro: walk in, brake, land into the perch -------- */
+    const walkEnd = 1550;
+    p.x = kf(t, [[0, WALK_FROM], [walkEnd, PERCH_X, 'out']]);
+    const stride = 2 * Math.PI * (t / 430);            // step frequency
+    const moving = t < walkEnd ? 1 - clamp01((t - 1250) / 300) : 0; // fades out while braking
+    p.bob      = -Math.abs(Math.sin(stride)) * 1.7 * moving;
+    p.legSwing = Math.sin(stride) * 16 * moving;
+    p.bodyRot  = 4 * moving + kf(t, [[1250, 0], [1550, -3, 'out'], [1900, 0]]);  // brake lean-back
+    p.headTilt = Math.sin(stride - 0.9) * 2.5 * moving;
+    p.crouch   = kf(t, [[1450, 0], [1650, 1, 'out'], [2050, 0.55]]); // lands, stays half-settled
+    p.tailAng  = kf(t, [[1500, 0], [1680, 16, 'back'], [2050, 4]]);  // tail flick on landing
+    p.weight   = 2.0 + p.crouch * 1.6;
+    /* wire takes the landing: damped bounce after touchdown */
+    if (t > 1600){
+      const tau = (t - 1600) / 1000;
+      p.weight += 1.4 * Math.exp(-3.2 * tau) * Math.cos(12 * tau);
+    }
+    p.blink   = blink(t, 950);                          // one blink mid-walk
+    p.breathe = 0;
+    p.headDX = 0; p.headDY = 0;
+    p.brow = kf(t, [[1450, 0], [1700, 1, 'back'], [2050, 0.25]]); // pops on landing
+  } else {
+    /* -------- idle: perched, inquisitive -------- */
+    const i = (t - INTRO_MS) % IDLE_MS;
+    p.x = PERCH_X;
+    p.bob = 0; p.legSwing = 0;
+    p.crouch  = 0.55;
+    p.weight  = 2.9;
+    p.breathe = Math.sin(2 * Math.PI * (2 * i / IDLE_MS)) * 0.012; // 2 cycles/loop → seamless
+    p.headTilt = kf(i, [
+      [0,    0        ],
+      [350, -19, 'back'],   // curious tilt away
+      [1100,-19, 'lin' ],
+      [1500, 11, 'inout'],  // then peers down toward the pane
+      [2500, 11, 'lin' ],
+      [3000,  0, 'inout'],
+      [3600,  0        ],
+    ]);
+    /* the tilt alone barely reads on a circular head — translate the head too:
+       a lift-back on the curious tilt, a forward-down crane on the peer */
+    p.headDX = kf(i, [[0,0],[350,-0.8,'back'],[1100,-0.8,'lin'],[1500,1.7,'inout'],[2500,1.7,'lin'],[3000,0,'inout']]);
+    p.headDY = kf(i, [[0,0],[350,-0.9,'back'],[1100,-0.9,'lin'],[1500,1.1,'inout'],[2500,1.1,'lin'],[3000,0,'inout']]);
+    p.bodyRot = kf(i, [[1100, 0], [1500, 3.5, 'inout'], [2500, 3.5], [3000, 0, 'inout']]);
+    p.tailAng = kf(i, [[2100, 4], [2260, 15, 'back'], [2600, 4, 'out']]);
+    p.blink   = Math.min(blink(i, 800), blink(i, 2050));
+    /* the personality channel: raised + smug on the chin-up tilt,
+       flattened + judgy on the peer-down */
+    p.brow = kf(i, [[0, 0.25], [350, 1, 'back'], [1100, 1, 'lin'],
+                    [1500, -0.35, 'inout'], [2500, -0.35, 'lin'], [3000, 0.25, 'inout']]);
+  }
+  return p;
+}
+
+/* ================================================================
+   Rig: geometric bird — circles/ellipses only, no bezier draftsmanship.
+   Local origin = point between the feet ON the wire. Faces right.
+   ================================================================ */
+/* Mascot geometry lifted verbatim from setup-overlay.ts ("Monocle Guy") —
+   one merged silhouette, so the rig is trunk-rotation + an animated face. */
+const K = 2.5;                 // mascot-units → rig-units
+const FEET = { x: 12.35, y: 15.7 };   // midpoint between the mascot's feet
+const BODY_D = "M19.9 10.0 C 19.5 7.9, 17.6 6.3, 15.4 6.5 C 13.9 6.5, 12.5 6.8, 11.4 7.4 C 9.4 7.6, 7.4 6.2, 5.7 6.7 C 5.1 6.9, 5.2 7.6, 5.9 8.1 C 7.0 8.9, 7.7 10.1, 8.5 11.1 C 9.6 12.7, 10.9 14.4, 12.6 14.4 C 14.0 14.4, 15.2 13.9, 16.1 13.0 C 17.1 12.4, 18.0 11.9, 18.6 11.2 C 19.1 10.9, 19.6 10.6, 19.9 10.0 Z";
+const BEAK_D = "M17.4 9.4 L 21.9 10.3 L 18.2 11.35 Z";
+
+/* brow: lerp between neutral / raised (r=1, smug) / flat (r<0, judgy) */
+const BROW_N = [15.9,7.3, 16.55,7.25, 17.3,7.5, 17.9,8.0];
+const BROW_R = [15.75,6.55, 16.6,6.15, 17.45,6.35, 18.0,7.15];
+function browD(r){
+  const p = BROW_N.map((v, i) => v + (BROW_R[i] - v) * r);
+  return `M${p[0].toFixed(2)} ${p[1].toFixed(2)} C ${p[2].toFixed(2)} ${p[3].toFixed(2)}, ${p[4].toFixed(2)} ${p[5].toFixed(2)}, ${p[6].toFixed(2)} ${p[7].toFixed(2)}`;
+}
+
+function buildScene(){
+  const NS = "http://www.w3.org/2000/svg";
+  const el = (n, at) => { const e = document.createElementNS(NS, n);
+    for (const k in at) e.setAttribute(k, at[k]); return e; };
+
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}` });
+
+  const wire = el("path", { fill:"none", stroke:"currentColor",
+    "stroke-width":"1.6", "stroke-linecap":"round", opacity:".65" });
+  svg.appendChild(wire);
+
+  const bird = el("g", {});                    // translate to (x, wireY)
+  /* everything below lives in mascot coordinates, feet mapped to (0,0) */
+  const mascot = el("g", { transform:
+    `scale(${K}) translate(${-FEET.x} ${-FEET.y})` });
+
+  const legL = el("path", { d:"M11.3 14.1 V 15.7", stroke:"currentColor",
+    "stroke-width":"1.0", "stroke-linecap":"round", fill:"none" });
+  const legR = el("path", { d:"M13.4 14.1 V 15.7", stroke:"currentColor",
+    "stroke-width":"1.0", "stroke-linecap":"round", fill:"none" });
+
+  const trunk = el("g", {});                   // pitch / tilt / crouch / bob
+  const breatheG = el("g", {});
+  const body = el("path", { d: BODY_D, fill:"currentColor" });
+  const beak = el("path", { d: BEAK_D, fill:"currentColor" });
+
+  const face = el("g", {});                    // peek translation rides here
+  const brow = el("path", { d: browD(0), fill:"none", stroke:"var(--eye)",
+    "stroke-width":".75", "stroke-linecap":"round" });
+  const eye  = el("ellipse", { cx:17, cy:9, rx:.95, ry:.95, fill:"var(--eye)" });
+  const ring = el("circle", { cx:17, cy:9, r:1.95, fill:"none",
+    stroke:"var(--accent)", "stroke-width":".6" });
+  const chain= el("path", { d:"M17.6 10.8 C 17.8 11.7, 17.5 12.5, 16.9 13.1",
+    fill:"none", stroke:"var(--accent)", "stroke-width":".5", "stroke-linecap":"round" });
+  face.append(brow, eye, ring, chain);
+
+  breatheG.append(body, beak, face);
+  trunk.appendChild(breatheG);
+  mascot.append(legL, legR, trunk);
+  bird.appendChild(mascot);
+  svg.appendChild(bird);
+
+  function apply(p){
+    /* wire re-sampled each frame so it dips under the bird */
+    let d = "";
+    for (let x = 0; x <= W; x += 8)
+      d += (x ? " L" : "M") + x.toFixed(1) + " " + wireY(x, p.x, p.weight).toFixed(2);
+    wire.setAttribute("d", d);
+
+    const gy = wireY(p.x, p.x, p.weight);
+    bird.setAttribute("transform",
+      `translate(${p.x.toFixed(2)} ${gy.toFixed(2)}) scale(${S})`);
+
+    /* rig values were authored in rig-units; /K converts into mascot space */
+    const dy = (p.bob + p.crouch * 2.2) / K;
+    const tilt = p.bodyRot + p.headTilt * 0.55 - p.tailAng * 0.12;
+    trunk.setAttribute("transform",
+      `translate(0 ${dy.toFixed(3)}) rotate(${tilt.toFixed(2)} 13 11.5)`);
+    breatheG.setAttribute("transform",
+      `translate(${FEET.x} ${FEET.y}) scale(1 ${(1 + p.breathe).toFixed(4)})` +
+      ` translate(${-FEET.x} ${-FEET.y})`);
+
+    legL.setAttribute("transform", `rotate(${(+p.legSwing).toFixed(1)} 11.3 14.1)`);
+    legR.setAttribute("transform", `rotate(${(-p.legSwing).toFixed(1)} 13.4 14.1)`);
+
+    face.setAttribute("transform",
+      `translate(${((p.headDX||0) * 0.35).toFixed(2)} ${((p.headDY||0) * 0.35).toFixed(2)})`);
+    brow.setAttribute("d", browD(p.brow || 0));
+    eye.setAttribute("ry", (0.95 * p.blink).toFixed(2));
+  }
+  return { svg, apply };
+}
+
+/* ================================================================
+   Modes: player (default) | ?t=ms freeze | ?strip=N contact sheet
+   ================================================================ */
+const params = new URLSearchParams(location.search || location.hash.slice(1));
+
+if (params.has("strip")){
+  document.body.classList.add("strip");
+  const n    = Math.max(2, +params.get("strip") || 12);
+  const zoom = params.has("zoom");           // crop tight around the perch spot
+  const from = +params.get("from") || (zoom ? INTRO_MS : 0);
+  const to   = +params.get("to")   || TOTAL_PREVIEW;
+  const grid = document.createElement("div");
+  grid.className = "strip-grid";
+  for (let i = 0; i < n; i++){
+    const t = from + (to - from) * i / (n - 1);
+    const cell = document.createElement("div");
+    cell.className = "strip-cell";
+    const s = buildScene();
+    if (zoom) s.svg.setAttribute("viewBox", "100 32 150 112");
+    s.apply(pose(t));
+    const label = document.createElement("div");
+    label.className = "strip-label";
+    label.textContent = (t/1000).toFixed(2) + "s";
+    cell.append(s.svg, label);
+    grid.appendChild(cell);
+  }
+  document.body.appendChild(grid);
+} else {
+  /* pane + overlay chrome mirroring the real setup overlay */
+  document.body.insertAdjacentHTML("beforeend", `
+    <div class="pane">
+      <div class="pane-header"><span class="dot"></span> claude — pane 2</div>
+      <div class="pane-body"><span class="muted">PS C:\\Users\\josep\\dev-projects\\cmux-win&gt;</span> claude
+</div>
+      <div class="overlay"><div class="stack">
+        <div class="scene-holder" id="holder"></div>
+        <div class="caption">Setting up<span class="dots"></span></div>
+      </div></div>
+    </div>
+    <div class="controls">
+      <button id="play">Pause</button>
+      <input id="scrub" type="range" min="0" max="${TOTAL_PREVIEW}" step="10" value="0">
+      <span class="t-readout" id="readout">0.00s</span>
+      <select id="speed">
+        <option value="0.25">0.25×</option><option value="0.5">0.5×</option>
+        <option value="1" selected>1×</option>
+      </select>
+    </div>`);
+
+  const scene = buildScene();
+  document.getElementById("holder").appendChild(scene.svg);
+
+  const scrub = document.getElementById("scrub");
+  const readout = document.getElementById("readout");
+  const playBtn = document.getElementById("play");
+  const speedSel = document.getElementById("speed");
+
+  let playing = !params.has("t");
+  let t = +params.get("t") || 0;
+  let last = performance.now();
+
+  function frame(now){
+    const dt = now - last; last = now;
+    if (playing){
+      t += dt * +speedSel.value;
+      if (t > TOTAL_PREVIEW) t = INTRO_MS + ((t - INTRO_MS) % IDLE_MS);
+    }
+    scene.apply(pose(t));
+    scrub.value = Math.min(t, TOTAL_PREVIEW);
+    readout.textContent = (t/1000).toFixed(2) + "s";
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  playBtn.onclick = () => { playing = !playing; playBtn.textContent = playing ? "Pause" : "Play"; };
+  scrub.oninput = () => { playing = false; playBtn.textContent = "Play"; t = +scrub.value; };
+  addEventListener("keydown", e => {
+    if (e.key === " "){ e.preventDefault(); playBtn.onclick(); }
+    if (e.key === "ArrowRight"){ playing = false; t += e.shiftKey ? 10 : 50; }
+    if (e.key === "ArrowLeft"){  playing = false; t -= e.shiftKey ? 10 : 50; }
+  });
+}
+</script>
+</body>
+</html>

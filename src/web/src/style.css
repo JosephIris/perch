@@ -296,7 +296,13 @@ ul { list-style: none; padding: 0; margin: 0; }
   width: 100%;
   min-width: 0;
   box-sizing: border-box;
-  gap: var(--sp-8);
+  /* column-gap only — NOT the `gap` shorthand. A row can have extra grid rows
+   * (the hover-reveal meta, the note line), each with its own margin; letting
+   * the shorthand also set an 8px ROW-gap stacked a phantom 8px under every
+   * title (worst on the dense project-tab rows). Vertical spacing is owned by
+   * the child margins so the rhythm stays tight and consistent. */
+  column-gap: var(--sp-8);
+  row-gap: 0;
   padding: 8px var(--sp-12);
   /* Per-item frame (perch tabs-as-cards). Constant 1px border = the frame;
    * hover/selected deepen the fill, active strengthens the border. No accent
@@ -5393,18 +5399,26 @@ body.show-dashboard .dashboard { display: flex; }
   flex: none;
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: var(--sp-4);
+  /* One row, always. If the chips don't fit (narrow rail), the strip scrolls
+   * horizontally rather than wrapping to a second row — the scrollbar is hidden
+   * so it reads as a single clean line. */
+  flex-wrap: nowrap;
+  gap: 3px;
   padding: var(--sp-8);
   border-top: 1px solid var(--color-sidebar-stroke);
+  overflow-x: auto;
+  scrollbar-width: none;           /* Firefox */
 }
+.inspector__filters::-webkit-scrollbar { display: none; }   /* Chromium/WebView2 */
 /* The "All" reset gets a little air before the category chips. */
-.inspector__filter--all { margin-right: var(--sp-4); }
+.inspector__filter--all { margin-right: 3px; }
 .inspector__filter {
+  flex: 0 0 auto;
+  user-select: none;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 3px var(--sp-8);
+  gap: 4px;
+  padding: 3px 7px;
   border-radius: var(--r-pill);
   font-family: var(--font-small);
   font-size: 11px;
@@ -5472,9 +5486,10 @@ body.show-dashboard .dashboard { display: flex; }
 
 /* ---- Per-pane "Setting up…" overlay (built in setup-overlay.ts) --------
  * Frosted cover shown while a Claude Code pane boots, then hidden. Sits above
- * the terminal (z:9) but below in-pane menus (z >= 10). The mascot lays a twig
- * on a woven-cup nest; only the bird moves. Frost tints to the pane color via
- * --setup-hint (set from the pane's color-tag index). */
+ * the terminal (z:9) but below in-pane menus (z >= 10). The mascot walks a
+ * sagging power line, lands, and perches; all motion is driven from JS
+ * (pose(t) in setup-overlay.ts), not CSS keyframes, so frames are exactly
+ * reproducible. Frost tints to the pane color via --setup-hint. */
 .setup-overlay {
   position: absolute;
   inset: 0;
@@ -5496,24 +5511,27 @@ body.show-dashboard .dashboard { display: flex; }
   flex-direction: column;
   align-items: center;
   gap: 16px;
+  width: 100%;
 }
 /* The color-tag glow is anchored HERE, not on .setup-overlay: the overlay's
  * center is the pane's center, but the art sits above it (stack = art +
- * caption), so a pane-anchored gradient always read high and to the right of
- * the bird. 40%/43% is the bird's centroid inside the viewBox — the nest and
- * the carried twig extend right and down from it, so the glow is deliberately
- * up-left of the art's geometric center. */
-.setup-overlay__art { position: relative; display: block; }
-/* A free-standing circle centered on the bird, NOT a background on the art box
- * — a background would clip to that box and read as a lit rectangle. 40%/43%
- * is the bird's centroid inside the viewBox; the nest and the carried twig
- * extend right and down from it, so this sits up-left of the art's geometric
- * center by design. */
+ * caption), so a root-anchored gradient always read high and off to one side
+ * of the bird. 55%/58% is the perched bird's centroid inside the viewBox
+ * (it settles right of center, low on the sagging wire). */
+.setup-overlay__art {
+  position: relative;
+  display: block;
+  width: min(400px, 100%);
+  aspect-ratio: 320 / 150;
+}
+/* A free-standing circle centered on the perched bird, NOT a background on
+ * the art box — a background would clip to that box and read as a lit
+ * rectangle. */
 .setup-overlay__art::before {
   content: "";
   position: absolute;
-  left: 40%;
-  top: 43%;
+  left: 55%;
+  top: 58%;
   width: 400px;
   height: 400px;
   margin: -200px 0 0 -200px;
@@ -5521,11 +5539,11 @@ body.show-dashboard .dashboard { display: flex; }
   background: radial-gradient(closest-side,
     color-mix(in srgb, var(--setup-hint) 20%, transparent) 0%, transparent 70%);
 }
-.setup-loader {
+.setup-scene-svg {
   position: relative;   /* paint above the ::before glow */
   display: block;
-  width: 198px;
-  height: 171px;
+  width: 100%;
+  height: 100%;
   overflow: visible;
   color: inherit;
 }
@@ -5546,22 +5564,8 @@ body.show-dashboard .dashboard { display: flex; }
   100% { content: ""; }
 }
 
-/* only the bird moves; the nest is fixed */
-.setup-loader .setup-bird {
-  transform-box: view-box;
-  transform-origin: 52px 60px;
-  animation: setup-place 2.4s infinite;
-}
-@keyframes setup-place {
-  0%   { transform: rotate(-2deg);  animation-timing-function: cubic-bezier(.5, 0, .7, .4); }
-  13%  { transform: rotate(-5deg);  animation-timing-function: cubic-bezier(.28, 0, .22, 1); }
-  50%  { transform: rotate(5.2deg); animation-timing-function: cubic-bezier(.33, .9, .5, 1); }
-  58%  { transform: rotate(5.9deg); animation-timing-function: ease-in-out; }
-  65%  { transform: rotate(5.3deg); animation-timing-function: linear; }
-  80%  { transform: rotate(5.3deg); animation-timing-function: cubic-bezier(.4, 0, .25, 1); }
-  100% { transform: rotate(-2deg); }
-}
+/* Bird motion is JS-driven (reduced-motion renders one static perched frame
+ * in setup-overlay.ts); only the caption dots animate from CSS. */
 @media (prefers-reduced-motion: reduce) {
-  .setup-loader .setup-bird { animation: none; transform: rotate(4deg); }
   .setup-overlay__dots::after { animation: none; content: "…"; }
 }
