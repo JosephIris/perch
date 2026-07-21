@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 150" width="720" height="150" role="img" aria-label="perch - Monocle Guy perched on a wire beside the wordmark">
+  <path d="M0 96.0 L10 96.4 L20 96.7 L30 97.0 L40 97.4 L50 97.7 L60 98.0 L70 98.3 L80 98.6 L90 98.8 L100 99.1 L110 99.4 L120 99.6 L130 99.8 L140 100.1 L150 100.3 L160 100.5 L170 100.7 L180 100.9 L190 101.1 L200 101.2 L210 101.4 L220 101.5 L230 101.7 L240 101.8 L250 101.9 L260 102.0 L270 102.1 L280 102.2 L290 102.3 L300 102.3 L310 102.4 L320 102.4 L330 102.5 L340 102.5 L350 102.5 L360 102.5 L370 102.5 L380 102.5 L390 102.5 L400 102.4 L410 102.4 L420 102.3 L430 102.3 L440 102.2 L450 102.1 L460 102.0 L470 101.9 L480 101.8 L490 101.7 L500 101.6 L510 101.5 L520 101.9 L530 102.9 L540 104.7 L550 106.7 L560 107.5 L570 106.3 L580 103.9 L590 101.7 L600 100.3 L610 99.5 L620 99.1 L630 98.8 L640 98.6 L650 98.3 L660 98.0 L670 97.7 L680 97.4 L690 97.0 L700 96.7 L710 96.4 L720 96.0" fill="none" stroke="#e9eef4" stroke-width="2" stroke-linecap="round" opacity=".55"/>
+  <text x="56" y="98" font-family="Segoe UI Variable Display, Segoe UI, -apple-system, system-ui, sans-serif" font-size="54" font-weight="600" fill="#e9eef4">perch</text>
+  <g transform="translate(560 107.5) scale(5) translate(-12.35 -15.7)">
+    <path d="M11.3 14.1 V 15.7 M13.4 14.1 V 15.7" stroke="#e9eef4" stroke-width="1" stroke-linecap="round" fill="none"/>
+    <path d="M19.9 10.0 C 19.5 7.9, 17.6 6.3, 15.4 6.5 C 13.9 6.5, 12.5 6.8, 11.4 7.4 C 9.4 7.6, 7.4 6.2, 5.7 6.7 C 5.1 6.9, 5.2 7.6, 5.9 8.1 C 7.0 8.9, 7.7 10.1, 8.5 11.1 C 9.6 12.7, 10.9 14.4, 12.6 14.4 C 14.0 14.4, 15.2 13.9, 16.1 13.0 C 17.1 12.4, 18.0 11.9, 18.6 11.2 C 19.1 10.9, 19.6 10.6, 19.9 10.0 Z" fill="#e9eef4"/>
+    <path d="M17.4 9.4 L 21.9 10.3 L 18.2 11.35 Z" fill="#e9eef4"/>
+    <path d="M15.8625 7.1125 C 16.5625 6.975, 17.3375 7.2125, 17.924999999999997 7.7875" fill="none" stroke="#15233b" stroke-width="0.75" stroke-linecap="round"/>
+    <circle cx="17" cy="9" r="0.95" fill="#15233b"/>
+    <circle cx="17" cy="9" r="1.95" fill="none" stroke="#76B9ED" stroke-width="0.6"/>
+    <path d="M17.6 10.8 C 17.8 11.7, 17.5 12.5, 16.9 13.1" fill="none" stroke="#76B9ED" stroke-width="0.5" stroke-linecap="round"/>
+  </g>
+</svg>
