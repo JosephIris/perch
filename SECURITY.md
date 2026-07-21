@@ -1,9 +1,10 @@
 # Security policy
 
-Perch is a Windows terminal app that spawns shell processes and ships an
-in-app auto-updater. That makes the integrity of a release important: an update
-installs and runs on a user's machine. We take reports seriously and appreciate
-responsible disclosure.
+Perch is a native Win11 workspace for running coding agents (Claude Code first)
+across your projects. It spawns shell and agent processes and ships an in-app
+auto-updater, so the integrity of a release matters: an update installs and runs
+on a user's machine. We take reports seriously and appreciate responsible
+disclosure.
 
 ## Supported versions
 
@@ -51,7 +52,7 @@ downloaded was built by this repository's CI, from this source, and was not
 tampered with:
 
 ```
-gh attestation verify Perch-<version>-win-Setup.exe --repo JosephIris/perch
+gh attestation verify Perch-win-Setup.exe --repo JosephIris/perch
 ```
 
 Authenticode code signing (so Windows SmartScreen and Defender recognize the

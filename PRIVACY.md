@@ -39,7 +39,7 @@ Notes:
 
 ## Tools you run inside Perch
 
-Perch is a terminal. When you run an agent CLI or shell command in a pane
+Perch runs other programs for you. When you run an agent CLI or shell command in a pane
 (for example Claude Code, Codex, `gcloud`, or any other program), **that tool
 does its own networking under your own accounts and credentials.** Perch
 launches it and displays its output; it does not intercept, reroute, or
