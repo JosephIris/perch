@@ -27,13 +27,14 @@
       background: radial-gradient(1100px 700px at 30% -10%,
         #1c2330 0%, #101014 55%, #0c0c0e 100%);
     }
+    /* Full-bleed window: the capture IS the app window, edge to edge. No
+       backdrop margin, radius, or shadow — consumers (README, site) frame
+       the image themselves, and a baked-in dark mat reads as an artifact. */
     #frame {
-      width: 1552px; height: 872px;
-      border-radius: 10px; overflow: hidden;
+      width: 100vw; height: 100vh;
+      overflow: hidden;
       display: flex; flex-direction: column;
       background: #1a1a1c; /* stand-in for Mica, which never screenshots */
-      border: 1px solid rgba(255, 255, 255, 0.09);
-      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
     }
     .fake-titlebar {
       height: 36px; flex: none;
