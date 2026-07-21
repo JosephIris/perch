@@ -11,6 +11,9 @@
     <UseRidGraph>true</UseRidGraph>
     <RuntimeIdentifier>win10-x64</RuntimeIdentifier>
     <ApplicationIcon>Assets\perch.ico</ApplicationIcon>
+    <!-- Per-monitor-v2 DPI awareness (crisp text at fractional / multi-monitor
+         scaling; see app.manifest). -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyTitle>Perch</AssemblyTitle>
     <Product>Perch</Product>
   </PropertyGroup>
