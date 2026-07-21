@@ -194,7 +194,7 @@ ul { list-style: none; padding: 0; margin: 0; }
   padding: 6px var(--sp-12);
   border-radius: var(--r-pill);
   color: var(--color-text-primary);
-  font-weight: 380;
+  font-weight: var(--weight-body);
   text-align: left;
   transition: background var(--dur-fast) var(--ease-entry);
 }
@@ -386,10 +386,10 @@ ul { list-style: none; padding: 0; margin: 0; }
   overflow: hidden;
 }
 .session-item__title {
-  /* Inter at the variable axis 380 (between Light and Regular). Renders
-   * closer to Söhne 400 weight, which is what Claude desktop uses. The
-   * variable-font axis goes 100–900 continuously per @font-face. */
-  font-weight: 380;
+  /* Chrome body weight (var(--weight-body)) — a touch above Regular so Inter's
+   * unhinted strokes stay crisp on low-DPI Windows. The variable-font axis goes
+   * 100–900 continuously per @font-face. */
+  font-weight: var(--weight-body);
   min-width: 0;     /* flex child must allow shrink for the ellipsis to engage */
   white-space: nowrap;
   overflow: hidden;
@@ -425,37 +425,29 @@ ul { list-style: none; padding: 0; margin: 0; }
   font-size: 10px;
 }
 .session-item__meta--compact .session-item__meta-item { display: inline; }
-/* ⓘ on an INACTIVE project tab — its metrics live in the hover tip, keeping
- * the row to one line. Always rendered (a hover-revealed affordance is
- * undiscoverable — same rule as .project-header__add), quiet by default,
- * solid while hovered. */
-.session-item__info {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  align-self: center;
-  color: var(--color-text-tertiary);
-  opacity: 0.7;
-  transition: opacity var(--dur-fast) var(--ease-entry),
-              color var(--dur-fast) var(--ease-entry);
-}
-.session-item__info:hover {
-  opacity: 1;
-  color: var(--color-text-secondary);
-}
-/* The tip itself: one metrics line on the shared commits-pop surface. Undo the
- * compact line's clamp — the panel sizes to the content, nothing to ellipsize. */
-.session-metrics-tip {
-  min-width: 0;
-  max-width: none;
-  padding: 6px var(--sp-12);
-}
-.session-metrics-tip .session-item__meta--compact {
-  overflow: visible;
-  text-overflow: clip;
+/* Hover-reveal metrics on an INACTIVE project tab. The row stays a single title
+ * line at rest (so a tall project list scans as titles, not numbers); hovering
+ * — or keyboard-focusing — the row slides the compact meta line in as a second
+ * line INSIDE the row. Replaces the old per-row ⓘ + floating tip: the metrics
+ * now live where the eye already is. Collapsed via max-height so the row grows
+ * smoothly and only the hovered row expands. Spans to the row's right edge
+ * (col 2→end) since the age chip sits a line up. */
+.session-item__meta--hover {
+  grid-column: 2 / 4;
+  max-height: 0;
   margin-top: 0;
-  font-size: 11px;
-  color: var(--color-text-secondary);
+  opacity: 0;
+  overflow: hidden;
+  transition: max-height var(--dur-fast) var(--ease-entry),
+              opacity var(--dur-fast) var(--ease-entry),
+              margin-top var(--dur-fast) var(--ease-entry);
+}
+.session-item:hover .session-item__meta--hover,
+.session-item:focus-visible .session-item__meta--hover,
+.session-item--peek .session-item__meta--hover {
+  max-height: 18px;
+  margin-top: 1px;
+  opacity: 1;
 }
 /* The clock + count-up pair stays glued (inline-flex is still inline-level,
  * so the line's single-ellipsis behavior is unaffected). Scoped under
@@ -1283,7 +1275,7 @@ button.pane__chip--ports:hover {
   padding: 6px var(--sp-8);
   border-radius: var(--r-input);
   color: var(--color-text-primary);
-  font-weight: 380;
+  font-weight: var(--weight-body);
   font-size: 13px;
   text-align: left;
   transition: background var(--dur-fast) var(--ease-entry);
@@ -1339,7 +1331,7 @@ button.pane__chip--ports:hover {
   padding: 6px var(--sp-8);
   border-radius: var(--r-input);
   color: var(--color-text-primary);
-  font-weight: 380;
+  font-weight: var(--weight-body);
   font-size: 13px;
   text-align: left;
   transition: background var(--dur-fast) var(--ease-entry);
@@ -1607,7 +1599,7 @@ button.pane__chip--ports:hover {
   flex: 1 1 auto;
 }
 .sidebar__identity-name {
-  font-weight: 380;
+  font-weight: var(--weight-body);
   font-size: 13px;
   color: var(--color-text-primary);
 }
@@ -3667,7 +3659,7 @@ body.show-dashboard .dashboard { display: flex; }
 .card__dot[data-state="idle"]       { background: transparent; box-shadow: inset 0 0 0 1px var(--color-text-tertiary); }
 .card__title {
   font-size: var(--type-subtitle-size);
-  font-weight: 380;
+  font-weight: var(--weight-body);
   flex: 1;
   white-space: nowrap;
   overflow: hidden;

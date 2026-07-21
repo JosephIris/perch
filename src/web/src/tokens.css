@@ -85,6 +85,12 @@
   --type-large-size:      28px;
   --type-body-line:       1.4;
   --type-title-line:      1.2;
+  /* Base weight for chrome body text. Inter is UNHINTED (variable fonts drop
+   * bytecode hints), so on a low-DPI Windows panel very light strokes wash out
+   * and read soft. 410 — a touch above Regular — firms the strokes so they
+   * rasterize crisply, without tipping the calm chrome toward BodyStrong (600).
+   * Was a hardcoded 380 (Söhne-400 look) in several places; tokenized here. */
+  --weight-body:          410;
 
   /* Color — Fluent v2 dark, mirrors WPF-UI ApplicationBackground / Text / Accent.
    * Values pulled from Microsoft's Fluent design tokens. Light theme is a

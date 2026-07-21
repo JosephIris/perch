@@ -25,7 +25,7 @@ import { confirmDialog, confirmWithOption } from "./confirm.js";
 import { showNewTabDialog } from "./new-tab-dialog.js";
 import { elapsedSpan, agoSpan, ageSpan } from "./elapsed.js";
 import { spinnerSpan } from "./spinner.js";
-import { attachCommitsHover, openCommitsLightbox, placeNear } from "./commits-view.js";
+import { attachCommitsHover, openCommitsLightbox } from "./commits-view.js";
 
 /** Flatten a pane tree to its leaves. */
 function leaves(node: PaneTreeView): Array<Extract<PaneTreeView, { kind: "leaf" }>> {
@@ -843,10 +843,6 @@ export class Sidebar {
     // edge, and the "what exactly is it doing" line lives on the spinner's
     // hover tip (and in the pane header you're about to click anyway).
     if (working) {
-      // The full meta (▸ action · elapsed) as a hover tip on the spinner —
-      // fresh build per reveal so its tickers start current.
-      if (this.buildMeta(s, true))
-        attachMetricsHover(statusEl, () => this.buildMeta(s, true)!);
       if (s.turnStartMs > 0) {
         if (active) {
           // The active row shows the close ✕ permanently in column 3, so its
@@ -865,15 +861,8 @@ export class Sidebar {
         }
       }
     } else if (compact && !active) {
-      if (this.buildMeta(s, true)) {
-        const info = document.createElement("span");
-        info.className = "session-item__info";
-        info.setAttribute("aria-label", `Metrics for ${s.title}`);
-        info.appendChild(infoIcon());
-        // Fresh build per reveal so the tip's live tickers start current.
-        attachMetricsHover(info, () => this.buildMeta(s, true)!);
-        primary.appendChild(info);
-      }
+      // Metrics are no longer behind a per-row ⓘ; they slide in on row hover
+      // (appended below the branches). Here we keep only the always-on age.
       // A DONE row is a row waiting on YOU — the turn came back and nothing
       // has been typed since. Every green dot in a tall list is equally
       // actionable, which is exactly why the list stops being scannable past
@@ -904,6 +893,18 @@ export class Sidebar {
     } else {
       const meta = this.buildMeta(s, compact);
       if (meta) item.appendChild(meta);
+    }
+
+    // Compact INACTIVE rows stay one title line at rest; hovering the row slides
+    // the metrics in as a second line INSIDE the row (replacing the old per-row
+    // ⓘ + floating tip). The time already rides the right edge, so this line
+    // omits it (withTime:false). CSS (.session-item__meta--hover) does the reveal.
+    if (compact && !active) {
+      const hoverMeta = this.buildMeta(s, true, { withTime: false });
+      if (hoverMeta) {
+        hoverMeta.classList.add("session-item__meta--hover");
+        item.appendChild(hoverMeta);
+      }
     }
 
     // Note line — only in the Needs-you section. Shows the agent's ask; falls
@@ -980,7 +981,10 @@ export class Sidebar {
    * the active tab, inside the hover-ⓘ tip for the rest — with a timer glyph
    * standing in for the word "finished".
    */
-  private buildMeta(s: SessionView, compact: boolean): HTMLElement | null {
+  private buildMeta(s: SessionView, compact: boolean, opts?: { withTime?: boolean }): HTMLElement | null {
+    // withTime:false drops the leading elapsed/age item — used by the inline
+    // hover-meta, where the time already rides the row's right edge.
+    const withTime = opts?.withTime ?? true;
     const metaItems: Array<{
       text: string;
       alert?: boolean;
@@ -996,14 +1000,14 @@ export class Sidebar {
     const aheadItem = s.ahead > 0 ? { text: "", ahead: s.ahead } : null;
 
     if (s.agentState === "working") {
-      metaItems.push({ text: `▸ ${s.activityDetail || "working"}`, turnStart: s.turnStartMs });
+      metaItems.push({ text: `▸ ${s.activityDetail || "working"}`, turnStart: withTime ? s.turnStartMs : undefined });
     } else if (s.agentState === "done") {
       // Lead with live "finished · 2m ago" so the freshness reads first — this
       // is the "your move" section, and how long it's been waiting on you is
       // the most useful signal. Falls back to nothing if the turn-end wasn't
       // stamped (older sessions). Compact rows spend a glyph instead of the
       // word: "⏱ 47s" counting up says the same in a third of the width.
-      if (s.doneAtMs > 0)
+      if (withTime && s.doneAtMs > 0)
         metaItems.push(
           compact ? { text: "", sinceTimer: s.doneAtMs } : { text: "finished", since: s.doneAtMs }
         );
@@ -1099,81 +1103,6 @@ export class Sidebar {
     }
     return meta;
   }
-}
-
-// ---- Metrics hover tip (inactive project tabs) ------------------------------
-// One shared fixed-position panel, shown while the pointer rests on a row's
-// ⓘ glyph. Same surface + fade as the commits hover (commits-pop classes),
-// same placement helper — so the two sidebar tooltips read as one system.
-// Content is rebuilt on every reveal (the sidebar rebuilds rows on each state
-// push, so cached content would go stale); the shared 1Hz ticker keeps the
-// times inside it live while it's open.
-
-let tipEl: HTMLElement | null = null;
-let tipTimer = 0;
-let tipAnchor: HTMLElement | null = null;
-
-function metricsTipPanel(): HTMLElement {
-  if (tipEl) return tipEl;
-  tipEl = document.createElement("div");
-  tipEl.className = "commits-pop commits-pop--hover session-metrics-tip";
-  tipEl.setAttribute("role", "tooltip");
-  document.body.appendChild(tipEl);
-  return tipEl;
-}
-
-function hideMetricsTip(): void {
-  if (tipTimer) {
-    clearTimeout(tipTimer);
-    tipTimer = 0;
-  }
-  tipAnchor = null;
-  tipEl?.classList.remove("commits-pop--visible");
-}
-
-function attachMetricsHover(anchor: HTMLElement, build: () => HTMLElement): void {
-  anchor.addEventListener("mouseenter", () => {
-    tipAnchor = anchor;
-    if (tipTimer) clearTimeout(tipTimer);
-    // Shorter than the commits hover's 450ms: the ⓘ is a deliberate,
-    // small target — by the time the pointer lands on it the intent is clear.
-    tipTimer = window.setTimeout(() => {
-      tipTimer = 0;
-      if (tipAnchor !== anchor) return;
-      const tip = metricsTipPanel();
-      tip.replaceChildren(build());
-      tip.classList.add("commits-pop--visible");
-      placeNear(tip, anchor);
-    }, 250);
-  });
-  anchor.addEventListener("mouseleave", hideMetricsTip);
-  anchor.addEventListener("mousedown", hideMetricsTip);
-}
-
-/** Single-stroke "i in a circle" info glyph (Fluent/Lucide family) — marks a
- *  row whose metrics are folded behind the hover tip. */
-function infoIcon(): SVGElement {
-  const ns = "http://www.w3.org/2000/svg";
-  const svg = document.createElementNS(ns, "svg");
-  svg.setAttribute("width", "11");
-  svg.setAttribute("height", "11");
-  svg.setAttribute("viewBox", "0 0 12 12");
-  svg.setAttribute("fill", "none");
-  svg.setAttribute("stroke", "currentColor");
-  svg.setAttribute("stroke-width", "1.1");
-  svg.setAttribute("stroke-linecap", "round");
-  svg.setAttribute("aria-hidden", "true");
-  const ring = document.createElementNS(ns, "circle");
-  ring.setAttribute("cx", "6");
-  ring.setAttribute("cy", "6");
-  ring.setAttribute("r", "4.6");
-  const stem = document.createElementNS(ns, "path");
-  stem.setAttribute("d", "M6 5.6 V8.2");
-  const dot = document.createElementNS(ns, "path");
-  dot.setAttribute("d", "M6 3.8 V3.9");
-  dot.setAttribute("stroke-width", "1.5");
-  svg.append(ring, stem, dot);
-  return svg;
 }
 
 /** Single-stroke clock glyph (Fluent/Lucide family) — the compact rows'
