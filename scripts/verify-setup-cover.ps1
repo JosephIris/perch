@@ -2,13 +2,21 @@
 #
 # Launches an ISOLATED Perch (PERCH_DATA_DIR → a scratch dir, so the user's real
 # session store is never touched), drives a project tab over the test control
-# pipe, and asserts the ordering that the whole feature exists to guarantee:
+# pipe, and asserts the ordering AND the timing the feature exists to guarantee:
 #
-#     session-start hook  →  /color typed  →  cover uncovered
+#     session-start hook  →  /color typed (only after cc SETTLES)  →  uncovered
 #
-# The bug this pins down: the cover used to drop ON the session-start hook, which
-# fires before cc has painted, and an earlier fix typed /color on a timeout that
-# could expire BEFORE the hook — i.e. into a PTY with no reader attached.
+# Two bugs this pins down:
+#  1. The cover used to drop ON the session-start hook, which fires before cc has
+#     painted; an earlier fix typed /color on a timeout that could expire BEFORE
+#     the hook — i.e. into a PTY with no reader attached. (ordering asserts)
+#  2. The 150ms quiet gate fired inside cc's FIRST inter-paint boot lull (~250ms
+#     in, 3 chunks), typing /color into a not-yet-ready cc and uncovering while
+#     it was still painting. Ordering alone did NOT catch this — the phase-1
+#     SETTLE gate must hold /color until cc genuinely goes quiet, so /color must
+#     land well after the hook, not a few hundred ms later. (timing assert below)
+#
+# PERCH_SETUP_DIAG=1 makes the host log each boot chunk + the settle gate firing.
 #
 # Usage:  pwsh -File scripts/verify-setup-cover.ps1
 # Exit 0 = pass. Leaves the app running only long enough to observe one launch.
@@ -29,6 +37,7 @@ New-Item -ItemType Directory -Force (Join-Path $sandbox "perch") | Out-Null
 Remove-Item env:NO_COLOR -ErrorAction SilentlyContinue
 $env:PERCH_DATA_DIR       = $sandbox
 $env:PERCH_ENABLE_TEST_IPC = "1"
+$env:PERCH_SETUP_DIAG      = "1"   # richer boot-timing log for the assertions below
 
 $proc = Start-Process -FilePath $exe -PassThru
 Write-Host "launched pid=$($proc.Id) data=$sandbox"
@@ -88,7 +97,30 @@ try {
     if ($iUncover -lt $iColor) { throw "FAIL: uncovered BEFORE /color was applied" }
     if ($seq | Select-String "capped|gave up") { throw "FAIL: hit a cap instead of settling naturally" }
 
-    Write-Host "`nPASS: hook -> /color -> uncover, no cap" -ForegroundColor Green
+    # TIMING assert (bug #2): /color must land only AFTER cc's boot settles, not
+    # inside the first ~250ms inter-paint lull. The settle gate structurally can't
+    # fire until cc has been quiet for SetupSettleMs, so the hook→/color delta is
+    # necessarily > ~1s on a healthy boot; the bug produced ~250ms. Parse the
+    # "[HH:mm:ss.fff]" stamps and require a clear separation.
+    function Stamp([string]$line) {
+        if ($line -match '^\[(\d\d:\d\d:\d\d\.\d\d\d)\]') {
+            return [datetime]::ParseExact($matches[1], 'HH:mm:ss.fff', $null)
+        }
+        return $null
+    }
+    $tSession = Stamp (($seq | Select-String "type=session" | Select-Object -First 1).Line)
+    $tColor   = Stamp (($seq | Select-String "CcColor:"     | Select-Object -First 1).Line)
+    if ($tSession -and $tColor) {
+        $deltaMs = ($tColor - $tSession).TotalMilliseconds
+        Write-Host ("hook -> /color delta: {0:N0}ms" -f $deltaMs)
+        if ($deltaMs -lt 1000) {
+            throw "FAIL: /color typed only ${deltaMs}ms after the hook — the settle gate did NOT hold; it fired inside a boot lull (the pre-fix bug)."
+        }
+    } else {
+        Write-Host "WARN: could not parse timestamps for the timing assert" -ForegroundColor Yellow
+    }
+
+    Write-Host "`nPASS: hook -> settle -> /color -> uncover, no cap" -ForegroundColor Green
     exit 0
 }
 finally {

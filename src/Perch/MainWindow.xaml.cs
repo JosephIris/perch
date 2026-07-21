@@ -138,25 +138,56 @@ public partial class MainWindow : FluentWindow
         public System.Windows.Threading.DispatcherTimer? Quiet;
         /// Hard cap — finishes the cover even if cc never reports or never quiets.
         public System.Windows.Threading.DispatcherTimer? Cap;
+        // Setup-timing trace (surfaced by PERCH_SETUP_DIAG=1). These pinned the
+        // ~1.4s inter-paint boot lulls behind the /color race; kept as the
+        // standing diagnostic for this choreography, which has no cheaper probe.
+        public DateTime SessionUpAt;
+        public DateTime LastOutputAt;
+        public int OutputChunks;
+        public int QuietFires;
+        public long OutputBytes;   // cumulative bytes since SessionUp
     }
     private readonly Dictionary<Guid, SetupState> _setup = new();
 
-    /// How long cc's output must stay quiet before we treat a boot step as done.
-    /// Only has to outlast the gap between two chunks of ONE paint, so it can be
-    /// short — it's paid twice per launch (once before /color, once after), and
-    /// 150ms is what the pre-overlay implementation used without trouble.
-    private const int SetupQuietMs = 150;
+    private static int EnvInt(string name, int fallback) =>
+        int.TryParse(Environment.GetEnvironmentVariable(name), out var v) && v > 0 ? v : fallback;
+    // PERCH_SETUP_DIAG=1 → log every output chunk's gap + cumulative bytes (the
+    // instrumentation that pinned the /color race). Off by default.
+    private static readonly bool SetupDiagVerbose =
+        Environment.GetEnvironmentVariable("PERCH_SETUP_DIAG") == "1";
+
+    /// PHASE 1 gate — how long cc's output must stay QUIET before we accept that
+    /// its boot has SETTLED (input box painted, ready for a slash command). This
+    /// is the fix for the /color race: cc's cold boot is not one continuous
+    /// paint but several bursts separated by ~1.3–1.4s lulls (config load, the
+    /// update check, MCP init — measured on this machine). The old 150ms gate
+    /// fired inside the FIRST such lull, ~250ms in, and typed /color into a cc
+    /// whose input reader wasn't attached yet — the color landed as buffered
+    /// text (or got eaten by a boot prompt) and the cover was pulled while cc was
+    /// still painting. The settle gate has to comfortably OUTLAST those lulls, so
+    /// only cc's final go-quiet (nothing more coming) trips it. Every output
+    /// chunk restarts it, so on a slow machine it simply tracks cc's real pace.
+    /// 2000ms leaves ~600ms of margin over the largest lull measured here (~1.4s);
+    /// a boot so slow it exceeds even this is caught by SetupPaintCapMs.
+    private static readonly int SetupSettleMs = EnvInt("PERCH_SETUP_SETTLE_MS", 2000);
+    /// PHASE 2 gate — after /color is typed, how long the echo must stay quiet
+    /// before uncovering. Short: cc is provably alive and echoing here, and the
+    /// /color repaint is a single quick burst, so this only has to outlast the
+    /// gap between two chunks of ONE paint.
+    private static readonly int SetupEchoMs = EnvInt("PERCH_SETUP_ECHO_MS", 150);
     /// Ceiling on the FIRST phase — waiting for cc's session-start hook. A cold
     /// `claude` behind a pwsh boot measured 7.3s on this machine, so this has to
     /// be generous: cap phase 1 too tight and we uncover before cc is listening
     /// AND type /color into a PTY with no reader attached, which is precisely
     /// the race the cover exists to prevent. On expiry we uncover WITHOUT
     /// typing — cc never came up, so there is nothing to color.
-    private const int SetupBootCapMs = 20000;
-    /// Ceiling on the SECOND phase — hook landed, waiting for cc's paint to
-    /// quiet. Short, because by here cc is provably listening: on expiry we DO
-    /// type the pending /color before uncovering.
-    private const int SetupPaintCapMs = 4000;
+    private static readonly int SetupBootCapMs = EnvInt("PERCH_SETUP_BOOTCAP_MS", 20000);
+    /// Ceiling on the SECOND phase — hook landed, waiting for cc to settle then
+    /// echo /color. Must exceed the real settle path (cc paints ~3s + SetupSettleMs
+    /// + the echo), so a healthy boot finishes on the settle gate, not this cap;
+    /// the cap only catches a cc that painted but never went quiet. On expiry we
+    /// DO type the pending /color before uncovering (cc is provably up).
+    private static readonly int SetupPaintCapMs = EnvInt("PERCH_SETUP_PAINTCAP_MS", 12000);
     // Panes shown in the restore-progress lightbox → whether the pane has
     // reported "alive again" (its resumed session-start hook fired). Empty when
     // no restore is in flight. _restoreTimeout force-completes a batch whose
@@ -1529,7 +1560,7 @@ public partial class MainWindow : FluentWindow
         st.SessionUp = false;
         st.Color = CcColorNames[((colorIndex % CcColorNames.Length) + CcColorNames.Length) % CcColorNames.Length];
 
-        st.Quiet ??= NewSetupTimer(SetupQuietMs, () => OnSetupQuiet(paneId));
+        st.Quiet ??= NewSetupTimer(SetupSettleMs, () => OnSetupQuiet(paneId));
         st.Cap ??= NewSetupTimer(SetupBootCapMs, () => FinishSetup(paneId, capped: true));
         st.Quiet.Stop();          // idle until the session-start hook arms it
         st.Cap.Stop();
@@ -1545,30 +1576,52 @@ public partial class MainWindow : FluentWindow
     }
 
     // cc's session-start hook landed: it's up and listening. Start watching for
-    // its first paint to go quiet. Starting the debounce here (rather than only
-    // on the next output chunk) means a cc that emits nothing further still
-    // completes. Fires from the IPC pipe thread → marshal to the UI thread,
+    // its boot to SETTLE (the phase-1 gate). Starting the debounce here (rather
+    // than only on the next output chunk) means a cc that emits nothing further
+    // still completes. Fires from the IPC pipe thread → marshal to the UI thread,
     // where the timers and _setup live.
     private void NoteSetupSessionUp(Guid paneId) => Dispatcher.InvokeAsync(() =>
     {
         if (!_setup.TryGetValue(paneId, out var st)) return;
         st.SessionUp = true;
-        // Phase 2: cc is provably listening, so the generous boot cap gives way
-        // to the short paint cap — and only from here is typing /color safe.
+        st.SessionUpAt = DateTime.Now;
+        if (SetupDiagVerbose)
+            Log.Info("SetupDiag", $"pane {paneId:N} session hook landed; arming {SetupSettleMs}ms settle watch");
+        // The generous boot cap (waiting for the hook) gives way to the paint
+        // cap now that cc is provably listening.
         if (st.Cap != null)
         {
             st.Cap.Stop();
             st.Cap.Interval = TimeSpan.FromMilliseconds(SetupPaintCapMs);
             st.Cap.Start();
         }
+        // Phase 1: watch for cc's boot to go quiet for SetupSettleMs (must outlast
+        // cc's inter-paint boot lulls — see the SetupSettleMs note).
+        if (st.Quiet != null) st.Quiet.Interval = TimeSpan.FromMilliseconds(SetupSettleMs);
         RestartSetupQuiet(st);
     });
 
     // Every PTY output chunk pushes the quiet deadline out — cc is still
     // painting. UI thread only (called from PostPaneOut's dispatch).
-    private void NoteSetupOutput(Guid paneId)
+    private void NoteSetupOutput(Guid paneId, int byteCount)
     {
-        if (_setup.TryGetValue(paneId, out var st) && st.SessionUp) RestartSetupQuiet(st);
+        if (_setup.TryGetValue(paneId, out var st) && st.SessionUp)
+        {
+            // Every chunk restarts the settle timer — the gate fires only once cc
+            // truly stops, so it tracks the machine's real pace instead of a fixed
+            // delay. PERCH_SETUP_DIAG=1 logs each chunk's gap + cumulative bytes
+            // (the trace that pinned the ~1.4s inter-paint boot lulls).
+            var now = DateTime.Now;
+            st.OutputChunks++;
+            st.OutputBytes += byteCount;
+            if (SetupDiagVerbose && st.LastOutputAt != default)
+            {
+                var gap = (now - st.LastOutputAt).TotalMilliseconds;
+                Log.Info("SetupDiag", $"pane {paneId:N} chunk #{st.OutputChunks} +{(now - st.SessionUpAt).TotalMilliseconds:F0}ms gap={gap:F0}ms bytes={byteCount} cum={st.OutputBytes} (color={(st.Color != null ? "PENDING" : "typed")})");
+            }
+            st.LastOutputAt = now;
+            RestartSetupQuiet(st);
+        }
     }
 
     private static void RestartSetupQuiet(SetupState st)
@@ -1577,11 +1630,12 @@ public partial class MainWindow : FluentWindow
         st.Quiet?.Start();
     }
 
-    // cc has been quiet for SetupQuietMs. Two quiet periods happen under the
-    // cover: the first ends cc's boot paint (→ type /color), the second ends the
-    // repaint that /color triggers (→ uncover). Draining st.Color is what
-    // distinguishes them, and it also makes the write one-shot, so a later
-    // `/clear` — which re-fires session-start — doesn't re-type it.
+    // cc's output has gone quiet. Two quiet periods happen under the cover, on
+    // DIFFERENT thresholds: phase 1 waits SetupSettleMs for cc's boot to settle
+    // (long — must clear its inter-paint lulls) → type /color; phase 2 waits the
+    // short SetupEchoMs for the /color repaint to settle → uncover. Draining
+    // st.Color is what distinguishes them, and it also makes the write one-shot,
+    // so a later `/clear` — which re-fires session-start — doesn't re-type it.
     private void OnSetupQuiet(Guid paneId)
     {
         // DispatcherTimer repeats; every path below either restarts it or ends
@@ -1589,11 +1643,17 @@ public partial class MainWindow : FluentWindow
         // pane whose state has already been torn down.
         if (!_setup.TryGetValue(paneId, out var st)) return;
         st.Quiet?.Stop();
+        st.QuietFires++;
+        if (SetupDiagVerbose)
+            Log.Info("SetupDiag", $"pane {paneId:N} QUIET #{st.QuietFires} at +{(DateTime.Now - st.SessionUpAt).TotalMilliseconds:F0}ms after {st.OutputChunks} chunks (color={(st.Color != null ? "about-to-type" : "already-typed")})");
         if (st.Color != null)
         {
+            // Phase 1 done: cc settled. Type /color, then switch to the short echo
+            // gate and wait for cc to redraw+quiet before uncovering.
             WriteCcColor(paneId, st.Color);
             st.Color = null;
-            RestartSetupQuiet(st);   // wait for the repaint to settle, then uncover
+            if (st.Quiet != null) st.Quiet.Interval = TimeSpan.FromMilliseconds(SetupEchoMs);
+            RestartSetupQuiet(st);
             return;
         }
         FinishSetup(paneId, capped: false);
@@ -3513,7 +3573,7 @@ public partial class MainWindow : FluentWindow
             catch (Exception ex) { Log.Error("PostPaneOut", ex); }
 
             // cc is still painting → push the boot cover's quiet deadline out.
-            NoteSetupOutput(paneId);
+            NoteSetupOutput(paneId, bytes.Length);
         });
     }
 
