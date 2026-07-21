@@ -137,13 +137,30 @@ const PERCHED = {
   tailAng: 4, blink: 1, breathe: 0, brow: 0.25,
 };
 
-/* ---------- pose(t): every number the rig needs ---------- */
+/* ---------- pose(t): every number the rig needs ----------
+   The app shuffles the idle-beat order per boot (see setup-overlay.ts);
+   here the order is pinned by ?order= (letters a/b/c = inquisitive/notes/
+   sleepy, default abc) so scrubbing stays deterministic per URL. */
+const ORDER = (() => {
+  const raw = (new URLSearchParams(location.search || location.hash.slice(1))
+    .get("order") || "abc").toLowerCase();
+  const idx = [...raw].map(ch => "abc".indexOf(ch)).filter(i => i >= 0);
+  return idx.length === 3 && new Set(idx).size === 3 ? idx : [0, 1, 2];
+})();
+const BEAT_TABLE = () => [
+  { ms: IDLE_A_MS, at: idleInquisitive, name: "inquisitive" },
+  { ms: IDLE_B_MS, at: idleNotes,       name: "taking notes" },
+  { ms: IDLE_C_MS, at: idleSleepy,      name: "sleepy" },
+];
 function pose(t){
   if (t < INTRO_MS) return intro(t);
-  const i = (t - INTRO_MS) % IDLE_MS;
-  if (i < IDLE_A_MS) return idleInquisitive(i);
-  if (i < IDLE_A_MS + IDLE_B_MS) return idleNotes(i - IDLE_A_MS);
-  return idleSleepy(i - IDLE_A_MS - IDLE_B_MS);
+  const beats = BEAT_TABLE();
+  let i = (t - INTRO_MS) % IDLE_MS;
+  for (const bi of ORDER) {
+    if (i < beats[bi].ms) return beats[bi].at(i);
+    i -= beats[bi].ms;
+  }
+  return idleInquisitive(0);
 }
 
 /* -------- intro: walk in, brake, land into the perch -------- */
@@ -504,10 +521,13 @@ if (params.has("strip")){
 
   function beatName(ms){
     if (ms < INTRO_MS) return "walk-in";
-    const i = (ms - INTRO_MS) % IDLE_MS;
-    if (i < IDLE_A_MS) return "inquisitive";
-    if (i < IDLE_A_MS + IDLE_B_MS) return "taking notes";
-    return "sleepy";
+    const beats = BEAT_TABLE();
+    let i = (ms - INTRO_MS) % IDLE_MS;
+    for (const bi of ORDER) {
+      if (i < beats[bi].ms) return beats[bi].name;
+      i -= beats[bi].ms;
+    }
+    return beats[ORDER[2]].name;
   }
 
   function frame(now){

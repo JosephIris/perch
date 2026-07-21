@@ -9,11 +9,13 @@
 // routine: an inquisitive look-around, a note-taking beat (a little pad hangs
 // on the wire; he scribbles at it beak-first and lines appear), and a sleepy
 // beat (lids sink, the monocle slips, z's drift up, he nods off and startles
-// awake — which loops him back to the inquisitive beat). The whole performance
-// is pose(t), a pure function of milliseconds → rig parameters, driven by one
-// rAF loop per visible overlay. Any frame is reproducible by number, which is
-// how it was reviewed: design-loop/perch-wire-mockup.html is the scrubbable
-// source of truth — keep the two in sync when iterating.
+// awake). The beat ORDER is shuffled per show() — boots are short, so a fixed
+// order meant nobody ever saw past the first beat. The whole performance is
+// pose(t, order), a pure function of its arguments → rig parameters, driven
+// by one rAF loop per visible overlay. Any frame is reproducible by number
+// and order, which is how it was reviewed: design-loop/perch-wire-mockup.html
+// is the scrubbable source of truth (?order=bca to pin a permutation) — keep
+// the two in sync when iterating.
 
 const W = 320;                     // scene viewBox
 const H = 150;
@@ -92,13 +94,38 @@ const PERCHED = {
   tailAng: 4, blink: 1, breathe: 0, brow: 0.25,
 };
 
-/* ---------- pose(t): every number the rig needs ---------- */
-function pose(t: number): Pose {
+/* ---------- pose(t): every number the rig needs ----------
+ * `order` permutes the idle beats. Boots are short — with a fixed order
+ * nobody would ever meet the note-taker or the sleeper — so each show()
+ * shuffles. Every beat starts AND ends at the neutral perched pose, so any
+ * permutation chains seamlessly. The order is an argument (not hidden
+ * state), keeping pose a pure function of (t, order): same inputs, same
+ * frame, so the mockup can still scrub and captures stay reproducible. */
+type BeatOrder = readonly [number, number, number];
+const CANONICAL_ORDER: BeatOrder = [0, 1, 2];
+
+function pose(t: number, order: BeatOrder = CANONICAL_ORDER): Pose {
   if (t < INTRO_MS) return intro(t);
-  const i = (t - INTRO_MS) % IDLE_MS;
-  if (i < IDLE_A_MS) return idleInquisitive(i);
-  if (i < IDLE_A_MS + IDLE_B_MS) return idleNotes(i - IDLE_A_MS);
-  return idleSleepy(i - IDLE_A_MS - IDLE_B_MS);
+  const BEATS = [
+    { ms: IDLE_A_MS, at: idleInquisitive },
+    { ms: IDLE_B_MS, at: idleNotes },
+    { ms: IDLE_C_MS, at: idleSleepy },
+  ];
+  let i = (t - INTRO_MS) % IDLE_MS;
+  for (const bi of order) {
+    if (i < BEATS[bi].ms) return BEATS[bi].at(i);
+    i -= BEATS[bi].ms;
+  }
+  return idleInquisitive(0);   // unreachable: the beat lengths sum to IDLE_MS
+}
+
+function shuffledOrder(): BeatOrder {
+  const p = [0, 1, 2];
+  for (let i = p.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [p[i], p[j]] = [p[j], p[i]];
+  }
+  return p as unknown as BeatOrder;
 }
 
 /* -------- intro: walk in, brake, land into the perch -------- */
@@ -430,8 +457,10 @@ export interface SetupOverlay {
 }
 
 /** Build a hidden setup overlay for a pane. Caller appends `el` to the pane
- *  root, calls show()/hide(), and manages focus. */
-export function createSetupOverlay(): SetupOverlay {
+ *  root, calls show()/hide(), and manages focus. `shuffleIdle` is on for the
+ *  app (each boot meets a different beat first) and off where a capture must
+ *  be reproducible (the harness hero shot). */
+export function createSetupOverlay(shuffleIdle = true): SetupOverlay {
   const el = document.createElement("div");
   el.className = "setup-overlay";
   el.tabIndex = -1;
@@ -455,9 +484,10 @@ export function createSetupOverlay(): SetupOverlay {
   let raf = 0;
   let t0 = 0;
   let hideTimer = 0;
+  let runOrder: BeatOrder = CANONICAL_ORDER;
 
   function tick(now: number): void {
-    scene.apply(pose(now - t0));
+    scene.apply(pose(now - t0, runOrder));
     raf = requestAnimationFrame(tick);
   }
 
@@ -473,8 +503,10 @@ export function createSetupOverlay(): SetupOverlay {
       if (hideTimer) { window.clearTimeout(hideTimer); hideTimer = 0; }
       el.classList.remove("setup-overlay--closing");
       el.hidden = false;
+      runOrder = shuffleIdle ? shuffledOrder() : CANONICAL_ORDER;
       if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
         // The STATE still reads (perched bird + caption); only motion drops.
+        // Canonical order on purpose: the static frame is the reviewed one.
         scene.apply(pose(REST_T));
         return;
       }
