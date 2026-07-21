@@ -8,9 +8,13 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# Allow the workflow to create releases when a tag is pushed.
+# Allow the workflow to create releases when a tag is pushed, plus the two
+# scopes the build-provenance attestation needs (OIDC token + attestation
+# store). Nothing here grants write to code or other repos.
 permissions:
-  contents: write
+  contents: write      # create the GitHub Release + upload its assets
+  id-token: write      # OIDC token used to sign the build-provenance attestation
+  attestations: write  # write that attestation to the repo's attestation store
 
 jobs:
   build:
@@ -31,7 +35,11 @@ jobs:
       SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
 
     steps:
-      - uses: actions/checkout@v7
+      # Actions are pinned to full commit SHAs (not moving tags like @v7) so a
+      # compromised/retagged action can't silently run in a workflow that holds
+      # `contents: write` + release credentials. Dependabot (.github/dependabot.yml)
+      # bumps the SHA and the trailing version comment together.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Determine version
         id: version
@@ -47,12 +55,12 @@ jobs:
           Write-Output "Building version $v"
 
       - name: Setup .NET 8
-        uses: actions/setup-dotnet@v5
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
           dotnet-version: '8.0.x'
 
       - name: Setup Node 20
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '20'
           # No package-lock cache key here -- esbuild + xterm.js pin
@@ -145,6 +153,23 @@ jobs:
             --icon src/Perch/Assets/perch.ico `
             --framework webview2
 
+      # Sign a SLSA build-provenance attestation over the release artifacts.
+      # This is SEPARATE from Authenticode code signing (SignPath, still being
+      # onboarded): provenance proves these exact bytes were built by THIS
+      # workflow from THIS repo/commit, verifiable offline with
+      #   gh attestation verify <file> --repo JosephIris/perch
+      # It runs BEFORE the release is published, so a failed attestation blocks
+      # the release (fail-closed) rather than shipping unattested bytes. If a
+      # Sigstore outage ever blocks a release you need out, add
+      # continue-on-error: true here. Tag builds only.
+      - name: Attest build provenance
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: |
+            Releases/*Setup.exe
+            Releases/*.nupkg
+
       # Convenience artifact for PR / manual-dispatch runs — grab the installer
       # straight off the Actions run page. Tag builds go to GitHub Releases
       # below; routine main pushes don't need a grab-able copy. continue-on-error
@@ -153,7 +178,7 @@ jobs:
       - name: Upload Setup artifact
         if: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
         continue-on-error: true
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: Perch-Setup-${{ env.APP_VERSION }}
           path: Releases/*Setup.exe
