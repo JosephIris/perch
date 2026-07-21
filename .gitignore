@@ -45,3 +45,4 @@ src/Perch/wwwroot/
 # Node side
 src/web/node_modules/
 src/web/.test-out/
+site/dist/
