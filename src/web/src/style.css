@@ -2120,18 +2120,24 @@ button.pane__chip--ports:hover {
 }
 .session-item--nested {
   position: relative;
-  /* Left gutter holds the tree connector, clear of the status dot/spinner. */
-  padding: 3px var(--sp-8) 3px 24px;
-  border-color: transparent;
+  /* Left gutter holds the tree connector, clear of the status dot/spinner.
+   * No border (unlike the flat session cards): a nested row never shows a
+   * frame, and the inherited 1px transparent border used to clip the trunk
+   * pseudo-element to the padding box — stopping it 1px shy of each edge, so
+   * two touching rows left a 2px dead gap and the tree read as dashes, not a
+   * line. The 1px is folded into the top/bottom padding so row height (and the
+   * tick's 50% anchor) is unchanged. */
+  padding: 4px var(--sp-8) 4px 24px;
+  border: 0;
   border-radius: var(--r-input);
 }
 /* Tree connector: a vertical trunk down the group + a short horizontal tick into
  * each tab, so a project → its tabs reads as a nested tree (file-explorer feel).
- * The trunk spans each row's full height; since the rows touch (gap:0) the
- * segments meet into one continuous line, and the LAST tab stops its trunk at
- * the tick — the └ elbow that closes the branch. It all sits in the 24px left
- * gutter, so a working tab's braille spinner (in the 10px status column to the
- * right) animates untouched. */
+ * The trunk spans each row's full BORDER box; since the rows touch (gap:0, no
+ * border) the segments meet into one continuous line, and the LAST tab stops its
+ * trunk at the tick — the └ elbow that closes the branch. It all sits in the
+ * 24px left gutter, so a working tab's braille spinner (in the 10px status
+ * column to the right) animates untouched. */
 .session-item--nested::before {          /* vertical trunk */
   content: "";
   position: absolute;
@@ -2147,7 +2153,9 @@ button.pane__chip--ports:hover {
   position: absolute;
   left: 13px;
   top: 50%;
-  width: 7px;
+  /* Reaches the node (13 → 25px = the status dot/spinner's left edge) so the
+   * branch terminates AT its tab's marker, not in the gap before it. */
+  width: 12px;
   height: 1px;
   background: var(--color-stroke);
 }
@@ -2158,12 +2166,19 @@ button.pane__chip--ports:hover {
 }
 .session-item--nested:hover { background: var(--color-subtle-secondary); }
 /* Working tab's braille spinner — cc's own glyphs, in the dot's 10px slot.
- * Mono font so every frame has identical advance (no title jitter). */
+ * Mono font so every frame has identical advance (no title jitter). Sized a
+ * step up from the resting dot (13px vs an 8px dot) so it reads as the branch's
+ * live node, and flex-centered in the slot so the glyph sits ON the tick line
+ * rather than floating above it — the tick (see ::after) now terminates here. */
 .session-item__spinner {
   flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 10px;
+  height: 10px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 13px;
   line-height: 1;
   color: var(--color-state-working);
 }
@@ -5528,7 +5543,10 @@ body.show-dashboard .dashboard { display: flex; }
  * the terminal (z:9) but below in-pane menus (z >= 10). The mascot walks a
  * sagging power line, lands, and perches; all motion is driven from JS
  * (pose(t) in setup-overlay.ts), not CSS keyframes, so frames are exactly
- * reproducible. Frost tints to the pane color via --setup-hint. */
+ * reproducible.
+ * No background fill and no color spotlight — the backdrop blur alone frosts
+ * the booting terminal. A dark wash read as a second surface, and the
+ * pane-color glow behind the bird read as a stage light; both were cut. */
 .setup-overlay {
   position: absolute;
   inset: 0;
@@ -5536,14 +5554,19 @@ body.show-dashboard .dashboard { display: flex; }
   display: grid;
   place-items: center;
   color: var(--color-text-primary);
-  --setup-hint: var(--color-pane-tag-0);
-  background: rgba(20, 22, 26, 0.42);
   backdrop-filter: blur(9px) saturate(115%);
   -webkit-backdrop-filter: blur(9px) saturate(115%);
   animation: setup-in 0.16s var(--ease-entry) both;
 }
+/* hide() fades the whole cover out fast (bird still animating under it),
+ * then flips [hidden]; timing mirrors FADE_OUT_MS in setup-overlay.ts. */
+.setup-overlay--closing {
+  animation: setup-out var(--dur-fast) var(--ease-exit) both;
+  pointer-events: none;
+}
 .setup-overlay[hidden] { display: none; }
 @keyframes setup-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes setup-out { from { opacity: 1; } to { opacity: 0; } }
 
 .setup-overlay__stack {
   display: flex;
@@ -5552,34 +5575,13 @@ body.show-dashboard .dashboard { display: flex; }
   gap: 16px;
   width: 100%;
 }
-/* The color-tag glow is anchored HERE, not on .setup-overlay: the overlay's
- * center is the pane's center, but the art sits above it (stack = art +
- * caption), so a root-anchored gradient always read high and off to one side
- * of the bird. 55%/58% is the perched bird's centroid inside the viewBox
- * (it settles right of center, low on the sagging wire). */
 .setup-overlay__art {
   position: relative;
   display: block;
   width: min(400px, 100%);
   aspect-ratio: 320 / 150;
 }
-/* A free-standing circle centered on the perched bird, NOT a background on
- * the art box — a background would clip to that box and read as a lit
- * rectangle. */
-.setup-overlay__art::before {
-  content: "";
-  position: absolute;
-  left: 55%;
-  top: 58%;
-  width: 400px;
-  height: 400px;
-  margin: -200px 0 0 -200px;
-  pointer-events: none;
-  background: radial-gradient(closest-side,
-    color-mix(in srgb, var(--setup-hint) 20%, transparent) 0%, transparent 70%);
-}
 .setup-scene-svg {
-  position: relative;   /* paint above the ::before glow */
   display: block;
   width: 100%;
   height: 100%;

@@ -2,24 +2,32 @@
 // pane boots, then hidden. It replaces the old trick of typing `/color` into
 // cc's raw PTY (fragile: it raced cc's input reader and could concatenate onto
 // whatever the user had already typed). Instead we cover the pane during the
-// boot window so nothing lands in cc, and the frost tints to the pane's color.
+// boot window so nothing lands in cc — a plain blur frost, no tint, no glow.
 //
 // The mascot ("Monocle Guy") walks in along a sagging power line, lands — the
-// wire takes a damped bounce — perches, and loops an inquisitive idle: a smug
-// raised-brow chin-up, then a flat-browed peer down toward the pane. The whole
-// performance is pose(t), a pure function of milliseconds → rig parameters,
-// driven by one rAF loop per visible overlay. Any frame is reproducible by
-// number, which is how it was reviewed: design-loop/perch-wire-mockup.html is
-// the scrubbable source of truth — keep the two in sync when iterating.
+// wire takes a damped bounce — perches, and then runs a three-beat idle
+// routine: an inquisitive look-around, a note-taking beat (a little pad hangs
+// on the wire; he scribbles at it beak-first and lines appear), and a sleepy
+// beat (lids sink, the monocle slips, z's drift up, he nods off and startles
+// awake — which loops him back to the inquisitive beat). The whole performance
+// is pose(t), a pure function of milliseconds → rig parameters, driven by one
+// rAF loop per visible overlay. Any frame is reproducible by number, which is
+// how it was reviewed: design-loop/perch-wire-mockup.html is the scrubbable
+// source of truth — keep the two in sync when iterating.
 
 const W = 320;                     // scene viewBox
 const H = 150;
 const S = 1.6;                     // bird rig scale (art authored small, shown big)
 const PERCH_X = 175;               // where the bird settles (slightly right of center)
 const WALK_FROM = 46;              // enters from the left
+const NOTE_X = 216;                // where the note pad hangs, just right of the perch
 const INTRO_MS = 2050;             // walk + land
-const IDLE_MS = 3600;              // inquisitive loop
+const IDLE_A_MS = 3600;            // beat 1: inquisitive look-around
+const IDLE_B_MS = 4600;            // beat 2: taking notes
+const IDLE_C_MS = 5600;            // beat 3: drowse, nod off, startle awake
+const IDLE_MS = IDLE_A_MS + IDLE_B_MS + IDLE_C_MS;  // full routine, then repeats
 const REST_T = 2450;               // perched pose used when motion is reduced
+const FADE_OUT_MS = 150;           // hide() fade — matches --dur-fast in tokens.css
 
 /* ---------- easing ---------- */
 const clamp01 = (u: number) => Math.min(1, Math.max(0, u));
@@ -65,46 +73,68 @@ interface Pose {
   x: number; bob: number; legSwing: number; bodyRot: number; headTilt: number;
   crouch: number; tailAng: number; weight: number; blink: number;
   breathe: number; headDX: number; headDY: number; brow: number;
+  /* prop / beat channels (zero outside their beat) */
+  noteVis: number;   // note pad visibility 0..1
+  scribble: number;  // how much of the pad's writing exists 0..1
+  jitter: number;    // enveloped scribble oscillation (head + pad wobble)
+  z1: number; z2: number;  // sleepy "z" glyph phases, live in (0,1)
+  slip: number;      // monocle slip 0..1
 }
+
+/* channels only some beats drive; zero everywhere else */
+const CALM = { noteVis: 0, scribble: 0, jitter: 0, z1: 0, z2: 0, slip: 0 };
+
+/* shared perched baseline the idle beats override from */
+const PERCHED = {
+  ...CALM,
+  x: PERCH_X, bob: 0, legSwing: 0, crouch: 0.55, weight: 2.9,
+  bodyRot: 0, headTilt: 0, headDX: 0, headDY: 0,
+  tailAng: 4, blink: 1, breathe: 0, brow: 0.25,
+};
 
 /* ---------- pose(t): every number the rig needs ---------- */
 function pose(t: number): Pose {
-  if (t < INTRO_MS) {
-    /* -------- intro: walk in, brake, land into the perch -------- */
-    const walkEnd = 1550;
-    const stride = 2 * Math.PI * (t / 430);
-    const moving = t < walkEnd ? 1 - clamp01((t - 1250) / 300) : 0;
-    const crouch = kf(t, [[1450, 0], [1650, 1, "out"], [2050, 0.55]]);
-    let weight = 2.0 + crouch * 1.6;
-    if (t > 1600) {
-      const tau = (t - 1600) / 1000;
-      weight += 1.4 * Math.exp(-3.2 * tau) * Math.cos(12 * tau);
-    }
-    return {
-      x: kf(t, [[0, WALK_FROM], [walkEnd, PERCH_X, "out"]]),
-      bob: -Math.abs(Math.sin(stride)) * 1.7 * moving,
-      legSwing: Math.sin(stride) * 16 * moving,
-      bodyRot: 4 * moving + kf(t, [[1250, 0], [1550, -3, "out"], [1900, 0]]),
-      headTilt: Math.sin(stride - 0.9) * 2.5 * moving,
-      crouch,
-      tailAng: kf(t, [[1500, 0], [1680, 16, "back"], [2050, 4]]),
-      weight,
-      blink: blink(t, 950),
-      breathe: 0,
-      headDX: 0,
-      headDY: 0,
-      brow: kf(t, [[1450, 0], [1700, 1, "back"], [2050, 0.25]]), // pops on landing
-    };
-  }
-  /* -------- idle: perched, inquisitive -------- */
+  if (t < INTRO_MS) return intro(t);
   const i = (t - INTRO_MS) % IDLE_MS;
+  if (i < IDLE_A_MS) return idleInquisitive(i);
+  if (i < IDLE_A_MS + IDLE_B_MS) return idleNotes(i - IDLE_A_MS);
+  return idleSleepy(i - IDLE_A_MS - IDLE_B_MS);
+}
+
+/* -------- intro: walk in, brake, land into the perch -------- */
+function intro(t: number): Pose {
+  const walkEnd = 1550;
+  const stride = 2 * Math.PI * (t / 430);
+  const moving = t < walkEnd ? 1 - clamp01((t - 1250) / 300) : 0;
+  const crouch = kf(t, [[1450, 0], [1650, 1, "out"], [2050, 0.55]]);
+  let weight = 2.0 + crouch * 1.6;
+  if (t > 1600) {
+    const tau = (t - 1600) / 1000;
+    weight += 1.4 * Math.exp(-3.2 * tau) * Math.cos(12 * tau);
+  }
   return {
-    x: PERCH_X,
-    bob: 0,
-    legSwing: 0,
-    crouch: 0.55,
-    weight: 2.9,
-    breathe: Math.sin(2 * Math.PI * (2 * i / IDLE_MS)) * 0.012, // 2 cycles/loop → seamless
+    ...CALM,
+    x: kf(t, [[0, WALK_FROM], [walkEnd, PERCH_X, "out"]]),
+    bob: -Math.abs(Math.sin(stride)) * 1.7 * moving,
+    legSwing: Math.sin(stride) * 16 * moving,
+    bodyRot: 4 * moving + kf(t, [[1250, 0], [1550, -3, "out"], [1900, 0]]),
+    headTilt: Math.sin(stride - 0.9) * 2.5 * moving,
+    crouch,
+    tailAng: kf(t, [[1500, 0], [1680, 16, "back"], [2050, 4]]),
+    weight,
+    blink: blink(t, 950),
+    breathe: 0,
+    headDX: 0,
+    headDY: 0,
+    brow: kf(t, [[1450, 0], [1700, 1, "back"], [2050, 0.25]]), // pops on landing
+  };
+}
+
+/* -------- beat 1: perched, inquisitive -------- */
+function idleInquisitive(i: number): Pose {
+  return {
+    ...PERCHED,
+    breathe: Math.sin(2 * Math.PI * (2 * i / IDLE_A_MS)) * 0.012, // 2 cycles/beat → seamless
     headTilt: kf(i, [
       [0, 0],
       [350, -19, "back"],   // curious chin-up tilt
@@ -125,6 +155,85 @@ function pose(t: number): Pose {
        flattened + judgy on the peer-down */
     brow: kf(i, [[0, 0.25], [350, 1, "back"], [1100, 1, "lin"],
                  [1500, -0.35, "inout"], [2500, -0.35, "lin"], [3000, 0.25, "inout"]]),
+  };
+}
+
+/* -------- beat 2: taking notes -------- */
+/* A little pad fades in hanging on the wire beside him; he leans over it and
+   scribbles beak-first in two bursts (lines appear as he writes), with a
+   raised-brow think-glance up between them, then a satisfied tail flick. */
+function idleNotes(n: number): Pose {
+  /* write bursts: a fast small oscillation under a trapezoid envelope — the
+     same value drives the head jiggle and the pad's clothesline swing */
+  const env =
+    clamp01((n - 600) / 120) * clamp01((1450 - n) / 120) +
+    clamp01((n - 2600) / 120) * clamp01((3400 - n) / 120);
+  const jitter = env * Math.sin(2 * Math.PI * n / 115);
+  return {
+    ...PERCHED,
+    breathe: Math.sin(2 * Math.PI * (2 * n / IDLE_B_MS)) * 0.012,
+    noteVis: kf(n, [[150, 0], [550, 1, "out"], [4050, 1, "lin"], [4500, 0, "inout"]]),
+    scribble: kf(n, [[600, 0], [1450, 0.5, "lin"], [2600, 0.5], [3400, 1, "lin"]]),
+    jitter,
+    headTilt: kf(n, [[0, 0], [500, 14, "inout"], [1450, 14, "lin"],
+                     [1800, -8, "back"], [2250, -8, "lin"],       // hmm… (thinks)
+                     [2600, 14, "inout"], [3400, 14, "lin"],
+                     [4100, 0, "inout"]]) + jitter * 1.6,
+    headDX: kf(n, [[0, 0], [500, 2.2, "inout"], [1450, 2.2, "lin"],
+                   [1800, -0.6, "back"], [2250, -0.6, "lin"],
+                   [2600, 2.2, "inout"], [3400, 2.2, "lin"], [4100, 0, "inout"]]),
+    headDY: kf(n, [[0, 0], [500, 1.6, "inout"], [1450, 1.6, "lin"],
+                   [1800, -1.0, "back"], [2250, -1.0, "lin"],
+                   [2600, 1.6, "inout"], [3400, 1.6, "lin"], [4100, 0, "inout"]]) + jitter * 0.35,
+    bodyRot: kf(n, [[0, 0], [500, 4, "inout"], [3400, 4, "lin"], [4100, 0, "inout"]]),
+    tailAng: kf(n, [[3400, 4], [3560, 15, "back"], [3900, 4, "out"]]), // done — flick
+    blink: Math.min(blink(n, 2050), blink(n, 3650)),
+    brow: kf(n, [[0, 0.25], [500, -0.2, "inout"], [1450, -0.2, "lin"], // concentrating
+                 [1800, 0.9, "back"], [2250, 0.9, "lin"],
+                 [2600, -0.2, "inout"], [3400, -0.2, "lin"],
+                 [3700, 0.6, "back"], [4600, 0.25, "inout"]]),         // satisfied
+  };
+}
+
+/* -------- beat 3: sleepy -------- */
+/* Lids sink, the head and body sag, the monocle slips, z's drift up. A slow
+   nod-off tips too far and he startles awake — wide-eyed, monocle snapped
+   back — which hands off cleanly to the inquisitive beat on loop. */
+function idleSleepy(s: number): Pose {
+  /* deep-drowse micro-sway on the lids so the doze doesn't freeze */
+  const sway = s > 1500 && s < 3700 ? Math.sin(2 * Math.PI * (s - 1500) / 1100) * 0.06 : 0;
+  const lids = kf(s, [[0, 1], [1500, 0.45, "inout"], [3100, 0.3, "lin"],
+                      [3700, 0.12, "out"], [4000, 0.12, "lin"],
+                      [4180, 1.05, "back"],                      // startle: eyes wide
+                      [4900, 1, "lin"]]);
+  return {
+    ...PERCHED,
+    /* slower, deeper breathing while dozing; 1.5 cycles/beat keeps sin() zero
+       at both edges so the neighbours join seamlessly */
+    breathe: Math.sin(2 * Math.PI * (1.5 * s / IDLE_C_MS)) *
+             kf(s, [[0, 0.012], [1500, 0.024, "inout"], [4000, 0.024, "lin"], [4400, 0.012, "out"]]),
+    headTilt: kf(s, [[0, 0], [1500, 9, "inout"], [3100, 12, "lin"],
+                     [3700, 18, "out"], [4000, 18, "lin"],       // the nod-off
+                     [4180, -5, "back"], [4900, -5, "lin"],      // SNAP awake
+                     [5600, 0, "inout"]]),
+    headDY: kf(s, [[0, 0], [1500, 1.6, "inout"], [3700, 2.4, "lin"], [4000, 2.4, "lin"],
+                   [4180, -0.8, "back"], [4900, -0.8, "lin"], [5600, 0, "inout"]]),
+    headDX: kf(s, [[0, 0], [1500, 0.6, "inout"], [3700, 1.0, "lin"], [4000, 1.0, "lin"],
+                   [4180, -0.4, "back"], [4900, -0.4, "lin"], [5600, 0, "inout"]]),
+    bodyRot: kf(s, [[0, 0], [1500, 2.5, "inout"], [3700, 4, "lin"], [4000, 4, "lin"],
+                    [4180, -1, "back"], [4900, -1, "lin"], [5600, 0, "inout"]]),
+    crouch: 0.55 + kf(s, [[0, 0], [1500, 0.25, "inout"], [4000, 0.25, "lin"],
+                          [4180, -0.1, "back"], [4900, -0.1, "lin"], [5600, 0, "inout"]]),
+    weight: 2.9 + kf(s, [[0, 0], [1500, 0.4, "inout"], [4000, 0.4, "lin"], [4400, 0, "out"]]),
+    tailAng: kf(s, [[0, 4], [1600, 1, "inout"], [4000, 1, "lin"],
+                    [4180, 14, "back"], [4600, 4, "out"]]),
+    blink: Math.min(lids + sway, blink(s, 5150)),                // one settling re-blink
+    slip: kf(s, [[0, 0], [1600, 0.6, "inout"], [3700, 1, "lin"], [4000, 1, "lin"],
+                 [4230, 0, "back"]]),
+    z1: (s - 2000) / 1300,
+    z2: (s - 2700) / 1200,
+    brow: kf(s, [[0, 0.25], [1500, -0.3, "inout"], [3700, -0.45, "lin"], [4000, -0.45, "lin"],
+                 [4180, 1, "back"], [4900, 1, "lin"], [5600, 0.25, "inout"]]),
   };
 }
 
@@ -166,6 +275,32 @@ function buildScene(): Scene {
     "stroke-width": "1.6", "stroke-linecap": "round", opacity: ".65",
   });
   svg.appendChild(wire);
+
+  /* note pad — clipped to the wire beside the perch, hidden outside beat 2.
+     Local origin is the attachment point on the wire so the scribble wobble
+     swings it clothesline-style. Ink matches the eye/brow ink; the paper is
+     currentColor like the silhouette (the art is light-on-dark by design). */
+  const pad = el<SVGGElement>("g", {});
+  const padInk = { fill: "none", stroke: "#15233b", "stroke-linecap": "round" };
+  pad.append(
+    el<SVGPathElement>("path", { d: "M0 0 V 2.2", stroke: "currentColor",
+      "stroke-width": "1.1", "stroke-linecap": "round", fill: "none" }),
+    el<SVGRectElement>("rect", { x: "-8.5", y: "2.2", width: "17", height: "13",
+      rx: "1.5", fill: "currentColor", opacity: "0.92" }),
+  );
+  const padLine1 = el<SVGPathElement>("path", {
+    ...padInk, "stroke-width": "0.9", pathLength: "1",
+    "stroke-dasharray": "1", "stroke-dashoffset": "1",
+    d: "M-5.3 6.8 C -3.9 5.9, -2.7 7.5, -1.3 6.7 C 0.1 6.0, 1.4 7.4, 2.8 6.6 C 3.9 6.0, 4.7 6.9, 5.3 6.7",
+  });
+  const padLine2 = el<SVGPathElement>("path", {
+    ...padInk, "stroke-width": "0.9", pathLength: "1",
+    "stroke-dasharray": "1", "stroke-dashoffset": "1",
+    d: "M-5.3 10.8 C -3.9 9.9, -2.7 11.5, -1.3 10.7 C -0.1 10.1, 1.0 11.0, 1.9 10.8",
+  });
+  pad.append(padLine1, padLine2);
+  pad.style.visibility = "hidden";
+  svg.appendChild(pad);
 
   const bird = el<SVGGElement>("g", {});
   /* everything below lives in mascot coordinates, feet mapped to (0,0) */
@@ -209,6 +344,20 @@ function buildScene(): Scene {
   bird.appendChild(mascot);
   svg.appendChild(bird);
 
+  /* sleepy z's — drift up-right from the head, hidden outside beat 3 */
+  const mkZ = (fs: number): SVGTextElement => {
+    const z = el<SVGTextElement>("text", {
+      "font-size": String(fs), "font-style": "italic", "font-weight": "600",
+      fill: "currentColor", "text-anchor": "middle",
+    });
+    z.textContent = "z";
+    z.style.visibility = "hidden";
+    svg.appendChild(z);
+    return z;
+  };
+  const zBig = mkZ(9);
+  const zSmall = mkZ(7);
+
   function apply(p: Pose): void {
     /* wire re-sampled each frame so it dips under the bird */
     let d = "";
@@ -236,6 +385,37 @@ function buildScene(): Scene {
       `translate(${(p.headDX * 0.35).toFixed(2)} ${(p.headDY * 0.35).toFixed(2)})`);
     brow.setAttribute("d", browD(p.brow));
     eye.setAttribute("ry", (0.95 * p.blink).toFixed(2));
+
+    /* monocle slip — rides the face group, so this is drift relative to the eye */
+    const slipT = `translate(${(p.slip * 0.25).toFixed(2)} ${(p.slip * 0.55).toFixed(2)})`;
+    ring.setAttribute("transform", slipT);
+    chain.setAttribute("transform", slipT);
+
+    /* note pad: hangs from the wire, drops in as it fades, swings on scribble */
+    if (p.noteVis > 0.01) {
+      const py = wireY(NOTE_X, p.x, p.weight) + (1 - p.noteVis) * 2.5;
+      pad.style.visibility = "visible";
+      pad.style.opacity = p.noteVis.toFixed(3);
+      pad.setAttribute("transform",
+        `translate(${NOTE_X} ${py.toFixed(2)}) rotate(${(p.jitter * 2.5).toFixed(2)})`);
+      padLine1.setAttribute("stroke-dashoffset", (1 - clamp01(p.scribble * 2)).toFixed(3));
+      padLine2.setAttribute("stroke-dashoffset", (1 - clamp01(p.scribble * 2 - 1)).toFixed(3));
+    } else {
+      pad.style.visibility = "hidden";
+    }
+
+    /* z's: phase 0..1 = fade in, drift up-right off the head, fade out */
+    const hx = p.x + 19, hy = gy - 27;   // head (eye) in scene coordinates
+    for (const [zel, ph] of [[zBig, p.z1], [zSmall, p.z2]] as const) {
+      if (ph > 0 && ph < 1) {
+        zel.style.visibility = "visible";
+        zel.setAttribute("x", (hx + 6 + ph * 9).toFixed(1));
+        zel.setAttribute("y", (hy - 6 - ph * 13).toFixed(1));
+        zel.style.opacity = (Math.sin(Math.PI * ph) * 0.7).toFixed(3);
+      } else {
+        zel.style.visibility = "hidden";
+      }
+    }
   }
   return { svg, apply };
 }
@@ -243,11 +423,9 @@ function buildScene(): Scene {
 export interface SetupOverlay {
   /** The root element to append to the pane. */
   readonly el: HTMLElement;
-  /** Tint the frost to a pane color-tag index (0..5). */
-  setColor(colorIndex: number): void;
   /** Reveal the cover and start the performance from the walk-in. */
   show(): void;
-  /** Hide the cover and stop the animation loop. */
+  /** Fade the cover out quickly, then stop the animation loop. */
   hide(): void;
 }
 
@@ -258,10 +436,6 @@ export function createSetupOverlay(): SetupOverlay {
   el.className = "setup-overlay";
   el.tabIndex = -1;
   el.hidden = true;
-  // The tint glow lives on __art, not on the overlay root: the root's center is
-  // the PANE's center, but the art sits above it (the stack is svg + caption),
-  // so a root-anchored gradient always read high and off to one side of the
-  // bird. Anchored here it tracks the art no matter how the pane is sized.
   el.innerHTML =
     `<div class="setup-overlay__stack">` +
     `<div class="setup-overlay__art"></div>` +
@@ -280,19 +454,24 @@ export function createSetupOverlay(): SetupOverlay {
 
   let raf = 0;
   let t0 = 0;
+  let hideTimer = 0;
 
   function tick(now: number): void {
     scene.apply(pose(now - t0));
     raf = requestAnimationFrame(tick);
   }
 
+  function stop(): void {
+    el.classList.remove("setup-overlay--closing");
+    el.hidden = true;
+    if (raf) { cancelAnimationFrame(raf); raf = 0; }
+  }
+
   return {
     el,
-    setColor(colorIndex: number) {
-      const i = ((colorIndex % 6) + 6) % 6;
-      el.style.setProperty("--setup-hint", `var(--color-pane-tag-${i})`);
-    },
     show() {
+      if (hideTimer) { window.clearTimeout(hideTimer); hideTimer = 0; }
+      el.classList.remove("setup-overlay--closing");
       el.hidden = false;
       if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
         // The STATE still reads (perched bird + caption); only motion drops.
@@ -304,8 +483,18 @@ export function createSetupOverlay(): SetupOverlay {
       raf = requestAnimationFrame(tick);
     },
     hide() {
-      el.hidden = true;
-      if (raf) { cancelAnimationFrame(raf); raf = 0; }
+      if (el.hidden || hideTimer) return;
+      if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+        stop();
+        return;
+      }
+      // Quick fade of the whole cover; the rig keeps animating through it so
+      // the bird doesn't freeze mid-gesture while the frost lifts.
+      el.classList.add("setup-overlay--closing");
+      hideTimer = window.setTimeout(() => {
+        hideTimer = 0;
+        stop();
+      }, FADE_OUT_MS + 30);
     },
   };
 }

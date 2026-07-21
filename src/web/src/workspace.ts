@@ -357,9 +357,9 @@ export class Workspace {
 
   /** Show/hide a Claude Code pane's boot cover (host-driven, pane.setup).
    *  Only terminal panes have one — URL panes are ignored. */
-  setupOverlay(paneId: string, show: boolean, colorIndex: number) {
+  setupOverlay(paneId: string, show: boolean) {
     const pane = this.findPane(paneId);
-    if (pane instanceof Pane) pane.showSetup(show, colorIndex);
+    if (pane instanceof Pane) pane.showSetup(show);
   }
 
   /** Find a pane by id across ALL stages — background sessions' panes are

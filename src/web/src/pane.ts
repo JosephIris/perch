@@ -378,9 +378,8 @@ export class Pane {
   /** Host-driven boot cover (pane.setup). While shown, the terminal is blurred
    *  and focus parks on the overlay so nothing the user types reaches cc during
    *  boot; hiding restores terminal focus if this is the active pane. */
-  showSetup(show: boolean, colorIndex: number) {
+  showSetup(show: boolean) {
     if (show) {
-      this.setup.setColor(colorIndex);
       this.setup.show();
       this.setupActive = true;
       this.term.blur();
