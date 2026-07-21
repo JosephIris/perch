@@ -2588,6 +2588,7 @@ button.pane__chip--ports:hover {
 
 .settings-page__main {
   min-height: 0;
+  position: relative;   /* anchors the bottom-right mascot */
   display: grid;
   grid-template-columns: 200px minmax(0, 1fr);
   gap: var(--sp-32);
@@ -2632,6 +2633,22 @@ button.pane__chip--ports:hover {
   min-height: 0;
   overflow-y: auto;
   padding-bottom: var(--sp-16);
+}
+/* The settings resident (settings-mascot.ts): pinned bottom-right of the
+ * main area, feet on the footer boundary. Decorative, never interactive.
+ * Hidden when the window narrows enough that he'd crowd the setting rows
+ * (panes are 720px + 200px rail + his ~170px + breathing room). */
+.settings-page__mascot {
+  position: absolute;
+  right: var(--sp-24);
+  bottom: 0;
+  width: 168px;
+  pointer-events: none;
+  color: var(--color-text-primary);
+}
+.settings-page__mascot svg { display: block; width: 100%; height: auto; }
+@media (max-width: 1180px) {
+  .settings-page__mascot { display: none; }
 }
 .settings-pane {
   max-width: 720px;

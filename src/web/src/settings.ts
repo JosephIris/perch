@@ -18,6 +18,7 @@ import { MIN_FONT_SIZE, MAX_FONT_SIZE, DEFAULT_FONT_SIZE } from "./pane.js";
 import { Dropdown } from "./dropdown.js";
 import { showOnboarding } from "./onboarding.js";
 import { confirmDialog } from "./confirm.js";
+import { buildSettingsMascot } from "./settings-mascot.js";
 
 let overlay: HTMLElement | null = null;
 let shellDropdown: Dropdown | null = null;
@@ -329,6 +330,15 @@ function buildSkeleton(): void {
   const content = document.createElement("div");
   content.className = "settings-page__content";
   main.appendChild(content);
+
+  // The resident: Monocle Guy balancing a wrench, bottom-right of the main
+  // area on every pane. Decorative; CSS hides him when the window is too
+  // narrow for him to stay clear of the setting rows.
+  const mascot = document.createElement("div");
+  mascot.className = "settings-page__mascot";
+  mascot.setAttribute("aria-hidden", "true");
+  mascot.appendChild(buildSettingsMascot());
+  main.appendChild(mascot);
 
   const panes = new Map<PaneId, HTMLElement>();
   const navButtons = new Map<PaneId, HTMLButtonElement>();
