@@ -808,12 +808,17 @@ function applyFilters(): void {
 /** Chip counts are TOTALS per kind (querySelectorAll matches hidden rows too),
  *  so they tell you what each filter would reveal, not what's showing now. */
 function updateFilterCounts(): void {
-  filterCounts.user.textContent =
-    String(streamEl.querySelectorAll(".turn-prompt, .turn-interrupt").length);
-  filterCounts.claude.textContent = String(streamEl.querySelectorAll(".beat").length);
-  filterCounts.actions.textContent = String(streamEl.querySelectorAll(".work").length);
-  filterCounts.skill.textContent = String(streamEl.querySelectorAll(".skill").length);
-  filterCounts.images.textContent = String(streamEl.querySelectorAll(".imgrow").length);
+  const set = (el: HTMLElement, n: number) => {
+    el.textContent = String(n);
+    // A zero count is noise (and width); hide it so the chip collapses to its
+    // label. The CSS gap handles the spacing either way.
+    el.classList.toggle("inspector__filter-count--zero", n === 0);
+  };
+  set(filterCounts.user, streamEl.querySelectorAll(".turn-prompt, .turn-interrupt").length);
+  set(filterCounts.claude, streamEl.querySelectorAll(".beat").length);
+  set(filterCounts.actions, streamEl.querySelectorAll(".work").length);
+  set(filterCounts.skill, streamEl.querySelectorAll(".skill").length);
+  set(filterCounts.images, streamEl.querySelectorAll(".imgrow").length);
 }
 
 // ---- Init ------------------------------------------------------------------
@@ -848,10 +853,28 @@ export function initInspector(): void {
   // clears it when everything's already on. Toggling scrolls back to latest so
   // the newest visible row stays in view.
   allBtn = $<HTMLButtonElement>("filter-all");
-  (["user", "claude", "actions", "skill", "images"] as FilterCat[]).forEach((cat) => {
+  const cats = ["user", "claude", "actions", "skill", "images"] as FilterCat[];
+  cats.forEach((cat) => {
     const btn = $<HTMLButtonElement>(`filter-${cat}`);
+    // Single click toggles this kind. DOUBLE click ISOLATES to just this kind;
+    // a second double-click on the already-isolated kind reverts to All. The
+    // single toggle is deferred a beat so a double-click can cancel it —
+    // otherwise the two clicks of a dbl would flip the kind on the way in. Timer
+    // is per-chip so fast toggling of DIFFERENT chips isn't swallowed.
+    let clickTimer = 0;
     btn.addEventListener("click", () => {
-      shown[cat] = !shown[cat];
+      if (clickTimer) return;            // 2nd click of a double — dblclick owns it
+      clickTimer = window.setTimeout(() => {
+        clickTimer = 0;
+        shown[cat] = !shown[cat];
+        applyFilters();
+        streamEl.scrollTop = streamEl.scrollHeight;
+      }, 200);
+    });
+    btn.addEventListener("dblclick", () => {
+      if (clickTimer) { clearTimeout(clickTimer); clickTimer = 0; }
+      const isolated = shown[cat] && cats.every((k) => k === cat || !shown[k]);
+      for (const k of cats) shown[k] = isolated ? true : k === cat;   // isolated → back to All
       applyFilters();
       streamEl.scrollTop = streamEl.scrollHeight;
     });

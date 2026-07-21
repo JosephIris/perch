@@ -2110,13 +2110,46 @@ button.pane__chip--ports:hover {
  * once. Selection still reads via fill alone (no stripe) — same rule as the
  * flat list, so the two modes feel like one app. */
 .session-list--nested {
-  gap: 2px;                 /* dense control: 4px grid doesn't apply inside a row list */
-  margin: 2px 0 var(--sp-4) var(--sp-12);   /* indent reads as nesting */
+  /* No row gap: the tabs touch so the tree's vertical trunk (drawn per row
+   * below) reads as ONE continuous line. Separation comes from the row padding
+   * + hover fill, not whitespace. The old left-margin indent is gone — the
+   * indent now lives in the row's left gutter, where the tree connector sits. */
+  gap: 0;
+  margin: 2px 0 var(--sp-4) 0;
+  position: relative;
 }
 .session-item--nested {
-  padding: 3px var(--sp-8);
+  position: relative;
+  /* Left gutter holds the tree connector, clear of the status dot/spinner. */
+  padding: 3px var(--sp-8) 3px 24px;
   border-color: transparent;
   border-radius: var(--r-input);
+}
+/* Tree connector: a vertical trunk down the group + a short horizontal tick into
+ * each tab, so a project → its tabs reads as a nested tree (file-explorer feel).
+ * The trunk spans each row's full height; since the rows touch (gap:0) the
+ * segments meet into one continuous line, and the LAST tab stops its trunk at
+ * the tick — the └ elbow that closes the branch. It all sits in the 24px left
+ * gutter, so a working tab's braille spinner (in the 10px status column to the
+ * right) animates untouched. */
+.session-item--nested::before {          /* vertical trunk */
+  content: "";
+  position: absolute;
+  left: 13px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--color-stroke);
+}
+.session-item--nested:last-child::before { bottom: 50%; }
+.session-item--nested::after {           /* horizontal tick into the row */
+  content: "";
+  position: absolute;
+  left: 13px;
+  top: 50%;
+  width: 7px;
+  height: 1px;
+  background: var(--color-stroke);
 }
 /* Nested rows drop a type step: the project header carries the identity, so
  * the tab can afford 13px and still read first in its group. */
@@ -5418,7 +5451,7 @@ body.show-dashboard .dashboard { display: flex; }
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 3px 7px;
+  padding: 3px 6px;
   border-radius: var(--r-pill);
   font-family: var(--font-small);
   font-size: 11px;
@@ -5440,8 +5473,14 @@ body.show-dashboard .dashboard { display: flex; }
   background: var(--color-accent-faint);
   color: var(--color-accent);
 }
-.inspector__filter-glyph { width: 8px; text-align: center; font-size: 10px; opacity: 0.9; }
+/* Leading glyphs dropped — the labels (You/Claude/Actions/Skills/Images) name
+ * each kind, and the active-state fill carries the color, so the glyph was
+ * redundant width. Hidden (not removed from markup) so it's a one-line revert. */
+.inspector__filter-glyph { display: none; }
 .inspector__filter-count { font-variant-numeric: tabular-nums; opacity: 0.6; }
+/* A zero count adds no information and just eats width — hide it (JS toggles
+ * .inspector__filter-count--zero as counts update). */
+.inspector__filter-count--zero { display: none; }
 .inspector__filter--all { color: var(--color-text-disabled); }
 .inspector__filter--all[aria-pressed="true"] {
   background: var(--color-subtle-tertiary);
