@@ -224,7 +224,8 @@ onMessage((msg) => {
       setStatus(`pane exited (${msg.code})`);
       break;
     case "pane.setup":
-      workspace.setupOverlay(msg.paneId, msg.show, msg.colorIndex);
+      // msg.colorIndex still arrives from the host; the cover no longer tints.
+      workspace.setupOverlay(msg.paneId, msg.show);
       break;
     case "toast":
       toast.show(
