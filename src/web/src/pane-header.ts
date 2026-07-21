@@ -27,6 +27,9 @@ export interface PaneHeader {
   commitsEl: HTMLElement;
   /** Chip for the auto-detected branch; hidden when empty. */
   branchEl: HTMLElement;
+  /** Clickable chip listing this pane's live dev-server port(s); hidden when
+   *  the pane has none. Click opens localhost:<port>. */
+  portsEl: HTMLButtonElement;
   /** Small badge naming the agent in this pane (CC / CX); hidden for a
    *  plain shell. */
   agentBadgeEl: HTMLElement;
@@ -85,6 +88,37 @@ const COLOR_COUNT = 6;
  *  not pane-scoped — panes sharing a worktree all see the same HEAD, so
  *  surfacing "+N commits" on every one of them was noise. Gating on focus
  *  pins it to the single pane the user is looking at. */
+/** Set the ports chip: shows this pane's live dev-server port(s) as a quiet,
+ *  clickable ":5173" (with " +N" when more than one), prefixed by a small server
+ *  glyph (a CSS ::before mask — two stacked units reading "a dev server is up
+ *  here"). Click opens localhost. Deliberately NEUTRAL, not amber —
+ *  the header already carries the pane's color tag (which can be orange), and
+ *  amber ≈ pane-tag orange would read as a third tag. Amber is reserved for the
+ *  SIDEBAR serving signal (see tokens.css --color-local). Not focus-gated: ports
+ *  are per-pane, so every pane shows its own. */
+export function applyPorts(
+  portsEl: HTMLButtonElement,
+  leaf: Extract<PaneTreeView, { kind: "leaf" }>
+) {
+  const ports = leaf.ports ?? [];
+  if (ports.length === 0) {
+    portsEl.style.display = "none";
+    portsEl.dataset.port = "";
+    portsEl.textContent = "";
+    return;
+  }
+  const primary = ports[0];
+  const more = ports.length - 1;
+  portsEl.dataset.port = String(primary);
+  // Glyph is a CSS ::before on .pane__chip--ports; the text is just the port(s).
+  portsEl.textContent = `:${primary}${more > 0 ? ` +${more}` : ""}`;
+  portsEl.title =
+    ports.length === 1
+      ? `Open http://localhost:${primary}`
+      : `Serving ${ports.map((p) => `:${p}`).join("  ")} — click opens :${primary}`;
+  portsEl.style.display = "";
+}
+
 export function applyChips(
   branchEl: HTMLElement,
   commitsEl: HTMLElement,
@@ -176,6 +210,22 @@ export function buildPaneHeader(paneId: string): PaneHeader {
   commitsEl.className = "pane__chip pane__chip--commits";
   root.appendChild(commitsEl);
 
+  // Ports chip — this pane's live dev-server port(s). Quiet mono chip; click
+  // opens localhost:<port>. Hidden until applyPorts finds a port on the leaf.
+  const portsEl = document.createElement("button");
+  portsEl.type = "button";
+  portsEl.className = "pane__chip pane__chip--ports";
+  portsEl.style.display = "none";
+  portsEl.draggable = false;
+  portsEl.dataset.port = "";
+  portsEl.setAttribute("aria-label", "Open this pane's dev server");
+  portsEl.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    const port = parseInt(portsEl.dataset.port ?? "", 10);
+    if (port > 0) send({ type: "local.open", port });
+  });
+  root.appendChild(portsEl);
+
   // State indicator (dot + word). Hidden when state is "idle" via the
   // empty label + CSS — dot stays so the visual rhythm doesn't jump.
   const stateDotEl = document.createElement("span");
@@ -204,7 +254,7 @@ export function buildPaneHeader(paneId: string): PaneHeader {
   });
   root.appendChild(close);
 
-  return { root, colorDotEl, nameEl, stateDotEl, stateLabelEl, branchEl, commitsEl, agentBadgeEl, modelEl };
+  return { root, colorDotEl, nameEl, stateDotEl, stateLabelEl, branchEl, commitsEl, portsEl, agentBadgeEl, modelEl };
 }
 
 let openPicker: HTMLElement | null = null;

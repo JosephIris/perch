@@ -174,9 +174,11 @@ test("files-changed chip is singular for one file", () => {
   assert.match(f.metaEl.textContent, /1 file(?!s)/);
 });
 
-test("ports show regardless of active state (per-pane, not repo-wide)", () => {
-  assert.match(render(leaf({ ports: [5173] }), false).metaEl.textContent, /:5173/);
-  assert.match(render(leaf({ ports: [3000] }), true).metaEl.textContent, /:3000/);
+test("ports no longer render in the footer (promoted to the header chip)", () => {
+  // Ports moved to the pane header's "⊙ :port" chip; the footer must not
+  // duplicate them. See pane-header.applyPorts.
+  assert.doesNotMatch(render(leaf({ ports: [5173] }), false).metaEl.textContent, /:5173/);
+  assert.doesNotMatch(render(leaf({ ports: [3000] }), true).metaEl.textContent, /:3000/);
 });
 
 // ---- empty collapse --------------------------------------------------------
@@ -186,9 +188,11 @@ test("an idle shell with nothing to say collapses the footer", () => {
   assert.equal(f.root.classList.contains("pane__footer--empty"), true);
 });
 
-test("a port alone keeps the footer alive even when idle", () => {
+test("a port alone now collapses the footer (ports live in the header)", () => {
+  // Previously a port kept the footer alive; now that ports moved to the header,
+  // an idle pane whose only signal was a port has an empty footer.
   const f = render(leaf({ agentState: "idle", ports: [3000] }), false);
-  assert.equal(f.root.classList.contains("pane__footer--empty"), false);
+  assert.equal(f.root.classList.contains("pane__footer--empty"), true);
 });
 
 test("idle but active with a diff still collapses (diff hidden, nothing else)", () => {
