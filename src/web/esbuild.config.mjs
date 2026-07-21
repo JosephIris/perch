@@ -35,6 +35,7 @@ async function copyStatics() {
   // window and taskbar show, which is the whole point — an empty state wearing a
   // different logo than the app is just a second, wrong logo.
   await cp(resolve(here, "perch-logo.png"), resolve(outDir, "perch-logo.png"));
+  await cp(resolve(here, "perch-glyph.png"), resolve(outDir, "perch-glyph.png"));
 }
 
 await rm(outDir, { recursive: true, force: true });

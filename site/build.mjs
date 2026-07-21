@@ -41,7 +41,7 @@ await esbuild.build({
 
 await cp(resolve(here, "index.html"), resolve(dist, "index.html"));
 await cp(resolve(repo, "docs/media/workspace.png"), resolve(dist, "media/workspace.png"));
-await cp(resolve(repo, "src/web/perch-logo.png"), resolve(dist, "perch-logo.png"));
+await cp(resolve(repo, "src/web/perch-glyph.png"), resolve(dist, "perch-glyph.png"));
 await cp(resolve(repo, "src/web/fonts/InterVariable.woff2"), resolve(dist, "fonts/InterVariable.woff2"));
 // Actions-based Pages skips Jekyll anyway; the marker makes it explicit.
 await writeFile(resolve(dist, ".nojekyll"), "");

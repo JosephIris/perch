@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>perch icon tiles — capture sheet</title>
+<!-- Renders every app-icon size on a TRANSPARENT page at exact pixel offsets
+     so one headless capture yields all of them:
+
+       msedge --headless --disable-gpu --default-background-color=00000000
+              --window-size=280,340 --virtual-time-budget=1500
+              --screenshot=sheet.png  file:///...icon-tiles.html
+
+     Crop map (x, y, w, h):
+       256 full ........ (  0,   0, 256, 256)   Store, large tiles, perch-logo.png
+        48 full ........ (  0, 260,  48,  48)   Alt-Tab, Start pin
+        32 mid ......... ( 60, 260,  32,  32)   taskbar @125%
+        24 small ....... (100, 260,  24,  24)   taskbar
+        20 min ......... (132, 260,  20,  20)   title bar @125%
+        16 min ......... (160, 260,  16,  16)   title bar, tray
+        64 min ......... (200, 260,  64,  64)   perch-glyph.png (identity mark, favicon)
+
+     Detail sheds as sizes shrink: full = brow + chain; mid drops the chain;
+     small drops the brow and thickens strokes; min is the lens + eye alone.
+     Design rationale lives in the icon-refresh mockup this was approved from. -->
+<style>
+  html, body { margin: 0; background: transparent; }
+  .t { position: absolute; }
+</style>
+</head>
+<body>
+<script>
+"use strict";
+/* Mascot geometry — verbatim from setup-overlay.ts */
+const BODY_D = "M19.9 10.0 C 19.5 7.9, 17.6 6.3, 15.4 6.5 C 13.9 6.5, 12.5 6.8, 11.4 7.4 C 9.4 7.6, 7.4 6.2, 5.7 6.7 C 5.1 6.9, 5.2 7.6, 5.9 8.1 C 7.0 8.9, 7.7 10.1, 8.5 11.1 C 9.6 12.7, 10.9 14.4, 12.6 14.4 C 14.0 14.4, 15.2 13.9, 16.1 13.0 C 17.1 12.4, 18.0 11.9, 18.6 11.2 C 19.1 10.9, 19.6 10.6, 19.9 10.0 Z";
+const BEAK_D = "M17.4 9.4 L 21.9 10.3 L 18.2 11.35 Z";
+const BROW_N = [15.9,7.3, 16.55,7.25, 17.3,7.5, 17.9,8.0];
+const BROW_R = [15.75,6.55, 16.6,6.15, 17.45,6.35, 18.0,7.15];
+function browD(r){
+  const p = BROW_N.map((v, i) => v + (BROW_R[i] - v) * r);
+  return `M${p[0]} ${p[1]} C ${p[2]} ${p[3]}, ${p[4]} ${p[5]}, ${p[6]} ${p[7]}`;
+}
+const NS = "http://www.w3.org/2000/svg";
+const el = (n, at) => { const e = document.createElementNS(NS, n);
+  for (const k in at) e.setAttribute(k, at[k]); return e; };
+const INK = "#e9eef4", EYE = "#15233b", BLUE = "#76B9ED";
+
+let gradN = 0;
+function icon(px, tier){
+  const svg = el("svg", { viewBox: "0 0 100 100", width: px, height: px });
+  const gid = "nvy" + (++gradN);
+  const defs = el("defs", {});
+  const g = el("linearGradient", { id: gid, x1: "0", y1: "0", x2: "0", y2: "1" });
+  g.append(el("stop", { offset: "0", "stop-color": "#1e2f4f" }),
+           el("stop", { offset: "1", "stop-color": "#0f1a2c" }));
+  defs.appendChild(g);
+  svg.appendChild(defs);
+  svg.appendChild(el("rect", { x: 0, y: 0, width: 100, height: 100, rx: 22.5, fill: `url(#${gid})` }));
+
+  if (tier === "min"){
+    svg.appendChild(el("circle", { cx: 52, cy: 48, r: 26, fill: "none",
+      stroke: BLUE, "stroke-width": 7 }));
+    svg.appendChild(el("circle", { cx: 52, cy: 48, r: 12.5, fill: INK }));
+    return svg;
+  }
+
+  const wsw = tier === "full" ? 1.8 : tier === "mid" ? 2.4 : 3.0;
+  let d = "";
+  for (let x = -2; x <= 102; x += 4){
+    const y = 58 + 14 * (x/100) * (1 - x/100) + 6 * Math.exp(-Math.pow((x-44)/14, 2));
+    d += (d ? " L" : "M") + x + " " + y.toFixed(1);
+  }
+  svg.appendChild(el("path", { d, fill: "none", stroke: INK, opacity: .62,
+    "stroke-width": wsw, "stroke-linecap": "round" }));
+
+  const feetY = 58 + 14 * .44 * .56 + 6;
+  const bird = el("g", { transform:
+    `translate(44 ${feetY.toFixed(1)}) scale(4.2) translate(-12.35 -15.7)` });
+  bird.appendChild(el("path", { d: "M11.3 14.1 V 15.7 M13.4 14.1 V 15.7",
+    stroke: INK, "stroke-width": tier === "small" ? 1.25 : 1.0,
+    "stroke-linecap": "round", fill: "none" }));
+  bird.appendChild(el("path", { d: BODY_D, fill: INK }));
+  bird.appendChild(el("path", { d: BEAK_D, fill: INK }));
+  if (tier !== "small")
+    bird.appendChild(el("path", { d: browD(0.5), fill: "none", stroke: EYE,
+      "stroke-width": .8, "stroke-linecap": "round" }));
+  bird.appendChild(el("circle", { cx: 17, cy: 9, r: .95, fill: EYE }));
+  bird.appendChild(el("circle", { cx: 17, cy: 9, r: 1.95, fill: "none",
+    stroke: BLUE, "stroke-width": tier === "small" ? .9 : .65 }));
+  if (tier === "full")
+    bird.appendChild(el("path", { d: "M17.6 10.8 C 17.8 11.7, 17.5 12.5, 16.9 13.1",
+      fill: "none", stroke: BLUE, "stroke-width": .5, "stroke-linecap": "round" }));
+  svg.appendChild(bird);
+  return svg;
+}
+
+const SHEET = [
+  [0,   0,   256, "full"],
+  [0,   260, 48,  "full"],
+  [60,  260, 32,  "mid"],
+  [100, 260, 24,  "small"],
+  [132, 260, 20,  "min"],
+  [160, 260, 16,  "min"],
+  [200, 260, 64,  "min"],
+];
+for (const [x, y, px, tier] of SHEET){
+  const holder = document.createElement("div");
+  holder.className = "t";
+  holder.style.left = x + "px";
+  holder.style.top = y + "px";
+  holder.appendChild(icon(px, tier));
+  document.body.appendChild(holder);
+}
+</script>
+</body>
+</html>
