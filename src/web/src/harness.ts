@@ -549,7 +549,8 @@ if (view === "hero") {
     agentType: "claude", model: "",
     active: false, flex: 1,
   }, "");
-  const cover = createSetupOverlay();
+  // shuffleIdle off: the hero capture must land on the same frame every run.
+  const cover = createSetupOverlay(false);
   bootPane.appendChild(cover.el);
   cover.show();
   rightCol.appendChild(bootPane);
