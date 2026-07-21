@@ -245,6 +245,14 @@
   --color-scroll-thumb:       rgba(255, 255, 255, 0.12);
   --color-scroll-thumb-hover: rgba(255, 255, 255, 0.24);
 
+  /* Icon glyphs (as CSS masks — the visible color comes from the consumer's
+   * currentColor/background-color, so no hue is baked in; the black stroke here
+   * only defines the mask's alpha). Single-stroke Fluent, 24×24 viewBox. The
+   * server (two stacked units) marks a ":port" chip as a live dev server — kept
+   * distinct from the header's globe "open browser pane" action so the two don't
+   * read as the same thing. */
+  --server-glyph: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect x='4' y='5' width='16' height='6' rx='1.5'/><rect x='4' y='13' width='16' height='6' rx='1.5'/><path d='M7.5 8h.01'/><path d='M7.5 16h.01'/></svg>");
+
   /* Motion. Win11 entry curve. */
   --ease-entry:   cubic-bezier(0.0, 0.0, 0.0, 1.0);
   --ease-exit:    cubic-bezier(0.3, 0.0, 1.0, 1.0);

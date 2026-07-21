@@ -800,7 +800,22 @@ export class Sidebar {
       statusEl.className = "session-item__dot";
       statusEl.dataset.state = s.agentState;
     }
-    item.appendChild(statusEl);
+    // Status column is a fixed 10px slot (keeps every title left-aligned). A tab
+    // that owns a live dev server gets a small amber "serving" pip in the corner
+    // of its status dot — the sidebar's glanceable "this tab is up on a port"
+    // signal. Amber (--color-local) is the reserved local-server hue; the exact
+    // port lives on the pane header's chip. A corner pip (not a second dot)
+    // keeps col1 at 10px so no title shifts. Wrapped so the pip can anchor to it.
+    const lead = document.createElement("span");
+    lead.className = "session-item__lead";
+    lead.appendChild(statusEl);
+    if (s.ports && s.ports.length > 0) {
+      const pip = document.createElement("span");
+      pip.className = "session-item__serving";
+      pip.title = `Serving ${s.ports.map((p) => `:${p}`).join("  ")}`;
+      lead.appendChild(pip);
+    }
+    item.appendChild(lead);
 
     // Primary line: title only. The shell rides in the footer; the row gives
     // the title the whole line for a single clean ellipsis.

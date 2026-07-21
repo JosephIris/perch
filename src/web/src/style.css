@@ -350,6 +350,34 @@ ul { list-style: none; padding: 0; margin: 0; }
   box-shadow: none;
 }
 
+/* Status column wrapper — fills the fixed 10px grid slot and anchors the
+ * serving pip. relative so the absolutely-positioned pip rides its corner. */
+.session-item__lead {
+  position: relative;
+  width: 10px;
+  height: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+/* "Serving" pip — this tab owns a live dev server (amber = --color-local, the
+ * reserved local hue). A ringed corner dot on the status indicator, like a
+ * presence badge, so it reads as attached to the tab without a second column
+ * (which would shift titles). The ring is the sidebar surface so the pip
+ * separates cleanly from whatever state color sits under it. */
+.session-item__serving {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-local);
+  box-shadow: 0 0 0 1.5px var(--color-sidebar-surface);
+  pointer-events: auto;
+}
+
 .session-item__primary {
   display: flex;
   align-items: baseline;
@@ -902,6 +930,38 @@ ul { list-style: none; padding: 0; margin: 0; }
   /* Green-tinted because it's a positive metric — agent landed work. */
   color: var(--color-success);
   background: rgba(108, 203, 95, 0.12);
+}
+/* Ports chip — clickable, mono digits (a port is data, not prose). Deliberately
+ * NEUTRAL, not amber: the header already carries the pane's color tag, and amber
+ * ≈ pane-tag orange would read as a third tag (amber is the sidebar's job).
+ * Prefixed by a server glyph (::before, masked so it takes the chip's
+ * currentColor — no hardcoded hue): two stacked units read as "a dev server is
+ * up here", kept distinct from the header's globe browser action. Click opens
+ * localhost; hover lifts the whole chip. */
+button.pane__chip--ports {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  border: none;
+  transition: background var(--dur-fast) var(--ease-entry),
+              color var(--dur-fast) var(--ease-entry);
+}
+button.pane__chip--ports::before {
+  content: "";
+  width: 11px;
+  height: 11px;
+  flex: 0 0 auto;
+  background-color: currentColor;
+  opacity: 0.85;
+  -webkit-mask: var(--server-glyph) no-repeat center / contain;
+  mask: var(--server-glyph) no-repeat center / contain;
+}
+button.pane__chip--ports:hover {
+  background: var(--color-subtle-tertiary);
+  color: var(--color-text-primary);
 }
 
 /* Agent badge — "CC" (Claude Code) / "CX" (codex). Compact tag right after

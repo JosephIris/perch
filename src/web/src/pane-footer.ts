@@ -4,14 +4,15 @@
 // produced. One quiet line, status-bar discipline (transparent, 1px top
 // hairline, caption type, tertiary text).
 //
-//   [▸ editing live-preview.ts · 2m]              [+142 −38 · 3 files] [↑2] [:5173]
+//   [▸ editing live-preview.ts · 2m]              [+142 −38 · 3 files] [↑2]
 //   [✓ finished · 4m ago]                                              ...
 //
 // Left cluster is per-pane (each pane runs its own agent/turn). Right cluster's
 // git stats are repo-wide — panes sharing a worktree see the same HEAD — so
 // they're focus-gated to the active pane, mirroring the header's commit chip.
-// Ports stay per-pane. The live "· 2m" / "· 4m ago" reuse the shared elapsed
-// ticker, so they climb without the host re-pushing state.
+// Dev-server ports moved to the header's "⊙ :port" chip (identity strip). The
+// live "· 2m" / "· 4m ago" reuse the shared elapsed ticker, so they climb
+// without the host re-pushing state.
 
 import { elapsedSpan, agoSpan } from "./elapsed.js";
 import { openCommitsPopover } from "./commits-view.js";
@@ -109,9 +110,11 @@ export function applyPaneFooter(f: PaneFooter, leaf: Leaf, active: boolean): voi
     });
     m.appendChild(a);
   }
-  for (const p of leaf.ports ?? []) m.appendChild(chip("chip", `:${p}`));
+  // Ports live in the header now (the always-visible identity strip, promoted to
+  // the neutral "⊙ :port" chip) — keeping a copy here too just doubled it up in
+  // the same pane. The footer stays focused on produced work (diff · ↑unpushed).
 
-  // Collapse to nothing for a plain idle shell with no ports/diff so the bar
+  // Collapse to nothing for a plain idle shell with no diff so the bar
   // doesn't cost a terminal row when it has nothing to say.
   const empty = a.childNodes.length === 0 && m.childElementCount === 0;
   f.root.classList.toggle("pane__footer--empty", empty);

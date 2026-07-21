@@ -13,7 +13,7 @@ import type { PaneTreeView } from "./bridge.js";
 import { cachedClipboardText, copyText } from "./clipboard.js";
 import { showLinkMenu } from "./link-menu.js";
 import { URL_RE, findLinksInLine, htmlFileToUrl } from "./link-detect.js";
-import { buildPaneHeader, applyChips, applyAgentBadge, applyModelChip } from "./pane-header.js";
+import { buildPaneHeader, applyChips, applyPorts, applyAgentBadge, applyModelChip } from "./pane-header.js";
 import { buildPaneFooter, applyPaneFooter, type PaneFooter } from "./pane-footer.js";
 import { createSetupOverlay, type SetupOverlay } from "./setup-overlay.js";
 import { attachTooltip } from "./tooltip.js";
@@ -46,6 +46,7 @@ export class Pane {
   private readonly colorDotEl: HTMLElement;
   private readonly branchEl: HTMLElement;
   private readonly commitsEl: HTMLElement;
+  private readonly portsEl: HTMLButtonElement;
   private readonly agentBadgeEl: HTMLElement;
   private readonly modelEl: HTMLButtonElement;
   private readonly footer: PaneFooter;
@@ -91,6 +92,7 @@ export class Pane {
     this.colorDotEl   = header.colorDotEl;
     this.branchEl     = header.branchEl;
     this.commitsEl    = header.commitsEl;
+    this.portsEl      = header.portsEl;
     this.agentBadgeEl = header.agentBadgeEl;
     this.modelEl      = header.modelEl;
     this.nameEl.textContent = name;
@@ -441,6 +443,7 @@ export class Pane {
     // [data-state="waiting"] rule in style.css.
     this.element.dataset.state = leaf.agentState;
     applyChips(this.branchEl, this.commitsEl, leaf, this.isActive);
+    applyPorts(this.portsEl, leaf);
     applyAgentBadge(this.agentBadgeEl, leaf.agentType);
     applyModelChip(this.modelEl, leaf.agentType, leaf.model);
     applyPaneFooter(this.footer, leaf, this.isActive);

@@ -16,7 +16,7 @@ import { Dashboard } from "./dashboard.js";
 import { confirmDialog } from "./confirm.js";
 import { showPaneChooser } from "./pane-chooser.js";
 import { buildPaneFooter, applyPaneFooter } from "./pane-footer.js";
-import { buildPaneHeader, applyModelChip, applyAgentBadge } from "./pane-header.js";
+import { buildPaneHeader, applyChips, applyPorts, applyModelChip, applyAgentBadge } from "./pane-header.js";
 import { showBrowserPrompt } from "./browser-prompt.js";
 import { showModelMenu, dismissModelMenu, setModelLimits } from "./model-menu.js";
 import { showNewTabDialog } from "./new-tab-dialog.js";
@@ -228,8 +228,8 @@ const projectSessions: SessionView[] = [
   }),
   projectTab({
     id: "s-tab3", title: "fix perms audit",
-    rootPane: leaf({ name: "fix perms audit", agentState: "working", activityDetail: "editing hook.ts", branch: "main" }),
-    agentState: "working", activityDetail: "editing hook.ts",
+    rootPane: leaf({ name: "fix perms audit", agentState: "working", activityDetail: "editing hook.ts", branch: "main", ports: [5173] }),
+    agentState: "working", activityDetail: "editing hook.ts", ports: [5173],
     workingCount: 1, turnStartMs: TWO_MIN_AGO, doneAtMs: 0, ahead: 6,
   }),
   // Long tagged title: proves the pre-title tag line survives the ellipsis
@@ -455,6 +455,54 @@ if (view === "panefooter") {
     const footer = buildPaneFooter();
     applyPaneFooter(footer, c.leaf, c.active);
     pane.append(term, footer.root);
+    wrap.append(cap, pane);
+    stage.appendChild(wrap);
+  }
+}
+
+// #paneheader — the header identity strip, exercising the NEW neutral ports
+// chip (⊙ :port) next to branch/commits, across color tags and port counts.
+if (view === "paneheader") {
+  type Leaf = Extract<PaneTreeView, { kind: "leaf" }>;
+  const cases: Array<{ label: string; leaf: Leaf; active: boolean }> = [
+    { label: "claude · orange tag · one port · working", active: true,
+      leaf: leaf({ name: "web-ui", colorIndex: 3, agentType: "claude", model: "", agentState: "working", branch: "main", ports: [5173] }) },
+    { label: "claude · green tag · two ports · done", active: false,
+      leaf: leaf({ name: "payments-api", colorIndex: 1, agentType: "claude", model: "opus", agentState: "done", branch: "feat/pay", commitCount: 2, ports: [8000, 8001] }) },
+    { label: "plain shell · one port · idle", active: false,
+      leaf: leaf({ name: "storybook", colorIndex: 5, agentState: "idle", branch: "main", ports: [6006] }) },
+    { label: "no server (control — chip hidden)", active: false,
+      leaf: leaf({ name: "docs", colorIndex: 0, agentType: "claude", model: "", agentState: "idle", branch: "main" }) },
+  ];
+  const stage = document.getElementById("workspace")!;
+  stage.style.cssText = "display:flex;flex-direction:column;gap:12px;padding:16px;";
+  for (const c of cases) {
+    const wrap = document.createElement("div");
+    wrap.style.cssText = "font:11px var(--font-small,sans-serif);color:rgba(255,255,255,0.4)";
+    const cap = document.createElement("div");
+    cap.textContent = c.label;
+    cap.style.cssText = "margin-bottom:4px";
+    const pane = document.createElement("div");
+    pane.className = "pane" + (c.active ? " pane--active" : "");
+    pane.dataset.color = String(c.leaf.colorIndex);
+    pane.dataset.state = c.leaf.agentState;
+    pane.style.width = "760px";
+    const h = buildPaneHeader(c.leaf.paneId);
+    h.colorDotEl.dataset.color = String(c.leaf.colorIndex);
+    h.nameEl.textContent = c.leaf.name;
+    applyChips(h.branchEl, h.commitsEl, c.leaf, c.active);
+    applyPorts(h.portsEl, c.leaf);
+    applyAgentBadge(h.agentBadgeEl, c.leaf.agentType);
+    applyModelChip(h.modelEl, c.leaf.agentType, c.leaf.model);
+    h.stateDotEl.dataset.state = c.leaf.agentState;
+    h.stateLabelEl.textContent =
+      c.leaf.agentState === "idle" ? "" :
+      c.leaf.agentState === "done" ? "idle" : c.leaf.agentState;
+    const term = document.createElement("div");
+    term.className = "pane__term";
+    term.style.cssText = "height:60px;display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,0.25)";
+    term.textContent = "terminal";
+    pane.append(h.root, term);
     wrap.append(cap, pane);
     stage.appendChild(wrap);
   }
