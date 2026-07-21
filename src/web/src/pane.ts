@@ -381,12 +381,12 @@ export class Pane {
   showSetup(show: boolean, colorIndex: number) {
     if (show) {
       this.setup.setColor(colorIndex);
-      this.setup.el.hidden = false;
+      this.setup.show();
       this.setupActive = true;
       this.term.blur();
       this.setup.el.focus();
     } else {
-      this.setup.el.hidden = true;
+      this.setup.hide();
       this.setupActive = false;
       if (this.isActive) this.term.focus();
     }
