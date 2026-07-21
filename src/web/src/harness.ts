@@ -308,14 +308,15 @@ if (view === "warmth") {
   const sb = new Sidebar(list, newBtn, closedEl);
   sb.rerender = () => sb.render(projectSessions, "s-tab1", [], projectsList, "projects");
   sb.rerender();
-  // #projects-tip: hold the first inactive tab's ⓘ "hovered" so the metrics
-  // tooltip is up when the screenshot fires (a real pointer can't hover in a
-  // headless capture).
+  // #projects-tip: force the first inactive tab's hover-meta open (via the
+  // --peek class) so the revealed metrics line shows in a headless capture,
+  // where a real pointer can't hover.
   if (view === "projects-tip")
     setTimeout(() => {
-      document
-        .querySelector(".session-item__info")
-        ?.dispatchEvent(new MouseEvent("mouseenter"));
+      const rows = document.querySelectorAll<HTMLElement>(".session-item--nested");
+      for (const r of rows) {
+        if (!r.classList.contains("session-item--active")) { r.classList.add("session-item--peek"); break; }
+      }
     }, 80);
 } else {
   new Sidebar(list, newBtn, closedEl).render(sessions, "s-idle", [
