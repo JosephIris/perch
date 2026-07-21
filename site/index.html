@@ -29,26 +29,28 @@
 
   <main>
     <section class="hero">
-      <h1>A power tool for<br />non&#8209;power users.</h1>
-      <p class="hero__sub">
-        perch is a Windows workspace for running Claude Code and friends
-        across your projects. Watch every agent work, see what it changed,
-        and take over in a real terminal when you want to.
-      </p>
-      <div class="hero__actions">
-        <a class="btn btn--primary" href="https://github.com/JosephIris/perch/releases/latest">
-          Download for Windows
-        </a>
-        <a class="btn" href="https://github.com/JosephIris/perch">View on GitHub</a>
+      <div class="hero__copy">
+        <h1>A power tool for non&#8209;power users.</h1>
+        <p class="hero__sub">
+          perch is a Windows workspace for running Claude Code and friends
+          across your projects. Watch every agent work, see what it changed,
+          and take over in a real terminal when you want to.
+        </p>
+        <div class="hero__actions">
+          <a class="btn btn--primary" href="https://github.com/JosephIris/perch/releases/latest">
+            Download for Windows
+          </a>
+          <a class="btn" href="https://github.com/JosephIris/perch">View on GitHub</a>
+        </div>
+        <p class="hero__micro">Free and open source &middot; Windows 10+</p>
       </div>
-      <p class="hero__micro">Free and open source &middot; Windows 10+</p>
       <div class="hero__scene" id="hero-scene"
            title="Replay with a different routine" role="img"
            aria-label="Monocle Guy, the perch mascot, performing his idle routine on a power line"></div>
     </section>
 
     <section class="shot">
-      <img src="./media/workspace.png" width="1552" height="872"
+      <img src="./media/workspace.png" width="1600" height="900" decoding="async"
            alt="The perch projects view: a sidebar of agent sessions with live state, a Claude Code pane, a dev server pane, a pane still setting up, and the inspector journal" />
       <p class="shot__caption">
         The projects view. The sidebar knows who needs you; the inspector
@@ -58,20 +60,53 @@
 
     <section class="moments">
       <div class="moment">
-        <h2>Sessions know their state</h2>
-        <p>Working, done, or waiting on you. The sidebar and the dashboard
-           keep score, so you stop babysitting terminals.</p>
+        <div class="moment__stage" id="demo-states"></div>
+        <div class="moment__text">
+          <h2>Sessions know their state</h2>
+          <p>Working, done, or waiting on you. The sidebar and the dashboard
+             keep score, so you stop babysitting terminals.</p>
+        </div>
       </div>
       <div class="moment">
-        <h2>See what it actually did</h2>
-        <p>The inspector turns an agent session into a journal: filters,
-           image previews, and the exact files it touched.</p>
+        <div class="moment__stage" id="demo-inspector"></div>
+        <div class="moment__text">
+          <h2>See what it actually did</h2>
+          <p>The inspector turns an agent session into a journal: filters,
+             image previews, and the exact files it touched.</p>
+        </div>
       </div>
       <div class="moment">
-        <h2>Boots are covered</h2>
-        <p>While Claude Code starts, Monocle Guy holds the fort. The frosted
-           glass lifts the moment your pane is ready.</p>
+        <div class="moment__stage" id="demo-boot"></div>
+        <div class="moment__text">
+          <h2>Boots are covered</h2>
+          <p>While Claude Code starts, Monocle Guy holds the fort. The
+             frosted glass lifts the moment your pane is ready.</p>
+        </div>
       </div>
+    </section>
+
+    <section class="faq">
+      <h2>Questions</h2>
+      <details>
+        <summary>Is it free?</summary>
+        <p>Yes. MIT licensed, source on GitHub, no account, no telemetry
+           decisions to agonize over.</p>
+      </details>
+      <details>
+        <summary>Does it need Claude Code?</summary>
+        <p>perch is built around Claude Code and speaks its hooks natively,
+           but any shell or agent runs happily in a pane.</p>
+      </details>
+      <details>
+        <summary>Windows only?</summary>
+        <p>Yes, Windows 10 and up, with proper Win11 polish. On a Mac,
+           <a href="https://cmux.com">cmux</a> has you covered.</p>
+      </details>
+      <details>
+        <summary>How does it know what agents are doing?</summary>
+        <p>A bundled perch CLI plus Claude Code hooks: the agent tells its
+           pane what's happening. Nothing scrapes terminal output.</p>
+      </details>
     </section>
   </main>
 
