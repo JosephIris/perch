@@ -24,6 +24,11 @@ import { RestoreProgress } from "./restore-progress.js";
 import { openCommitsPopover, openCommitsLightbox } from "./commits-view.js";
 import { showCloudPanel, applyCloudData } from "./cloud-panel.js";
 import type { SessionView, PaneTreeView } from "./bridge.js";
+import { Terminal } from "@xterm/xterm";
+import { FitAddon } from "@xterm/addon-fit";
+import { createSetupOverlay } from "./setup-overlay.js";
+import { initInspector } from "./inspector.js";
+import "@xterm/xterm/css/xterm.css";
 
 type Leaf = Extract<PaneTreeView, { kind: "leaf" }>;
 
@@ -318,6 +323,57 @@ if (view === "warmth") {
         if (!r.classList.contains("session-item--active")) { r.classList.add("session-item--peek"); break; }
       }
     }, 80);
+} else if (view === "hero") {
+  // #hero — the README / marketing 16:9 shot, staged by design-loop/hero.html.
+  // Same shape as the warmth fixtures (age ramp across two project groups),
+  // but with FICTIONAL project/tab names: this image is public-facing, so it
+  // must not leak anyone's real workspace. The active tab matches the panes
+  // built below (CC working + a vite pane on :5173 + a booting pane).
+  const heroProjects = [
+    { id: "h-shop", name: "storefront-web", path: "C:\\dev\\storefront-web" },
+    { id: "h-home", name: "home-tools", path: "C:\\dev\\home-tools" },
+  ];
+  const heroSessions: SessionView[] = [
+    projectTab({
+      id: "h-1", title: "holiday banner", projectId: "h-shop",
+      rootPane: leaf({ name: "holiday banner", agentState: "working", branch: "main" }),
+      agentState: "working", activityDetail: "adjusting the mobile breakpoint",
+      paneCount: 3, workingCount: 1, ports: [5173], ahead: 3,
+      turnStartMs: TWO_MIN_AGO, doneAtMs: 0,
+    }),
+    projectTab({
+      id: "h-2", title: "fix checkout css", projectId: "h-shop",
+      doneAtMs: Date.now() - 40_000, linesAdded: 61, linesDeleted: 17, filesChanged: 3, ahead: 3,
+    }),
+    projectTab({
+      id: "h-3", title: "seo audit pass", projectId: "h-shop",
+      doneAtMs: Date.now() - 4 * MIN_MS, linesAdded: 89, linesDeleted: 12, filesChanged: 3, ahead: 3,
+    }),
+    projectTab({
+      id: "h-4", title: "cleanup old backups", projectId: "h-shop",
+      rootPane: leaf({ name: "cleanup old backups", agentState: "working", activityDetail: "checking bucket references", branch: "main" }),
+      agentState: "working", activityDetail: "checking bucket references",
+      workingCount: 1, turnStartMs: TWO_MIN_AGO, doneAtMs: 0, ahead: 3,
+    }),
+    projectTab({
+      id: "h-5", title: "invoice export", projectId: "h-shop",
+      doneAtMs: Date.now() - 22 * MIN_MS, linesAdded: 30, linesDeleted: 9, filesChanged: 2, ahead: 3,
+    }),
+    projectTab({
+      id: "h-6", title: "photo backup sync", projectId: "h-home",
+      doneAtMs: Date.now() - 2 * 3_600_000, linesAdded: 4, linesDeleted: 1, filesChanged: 1,
+    }),
+    projectTab({
+      id: "h-7", title: "recipe importer", projectId: "h-home",
+      doneAtMs: Date.now() - 5 * 3_600_000, linesAdded: 2, linesDeleted: 0, filesChanged: 1,
+    }),
+  ];
+  const sb = new Sidebar(list, newBtn, closedEl);
+  sb.rerender = () =>
+    sb.render(heroSessions, "h-1", [
+      { id: "c-1", title: "kanban refactor", paneCount: 3, resumableCount: 2, closedAtMs: NOW - 35 * 60_000 },
+    ], heroProjects, "projects");
+  sb.rerender();
 } else {
   new Sidebar(list, newBtn, closedEl).render(sessions, "s-idle", [
     { id: "c-1", title: "kanban refactor", paneCount: 3, resumableCount: 2, closedAtMs: NOW - 5 * 60_000 },
@@ -330,6 +386,295 @@ const dash = new Dashboard(
   document.getElementById("dash-badge")!
 );
 dash.render(sessions);
+
+// ---- #hero workspace: two real panes with scripted terminal content -------
+// Everything is the shipping UI code (header/footer builders, style.css,
+// xterm with the app's theme); only the bytes written to the terminals are
+// hand-scripted, since a still image needs no PTY behind it.
+if (view === "hero") {
+  const DIM = "\x1b[90m", RST = "\x1b[0m", GRN = "\x1b[32m",
+        ORN = "\x1b[38;5;214m", BLD = "\x1b[1m", CYN = "\x1b[36m";
+
+  const ccTranscript = [
+    "",
+    `${DIM}>${RST} make the holiday banner match the shop, and show me before and after`,
+    "",
+    `⏺ I'll capture the current banner first, then restyle it against the shop`,
+    `  tokens.`,
+    "",
+    `${GRN}⏺${RST} ${BLD}Bash${RST}(node scripts/capture.mjs --route /?banner=holiday)`,
+    `  ${DIM}⎿  captured design/banner-before.png (1280x400)${RST}`,
+    "",
+    `${GRN}⏺${RST} ${BLD}Read${RST}(src/styles/tokens.css)`,
+    `  ${DIM}⎿  Read 41 lines${RST}`,
+    "",
+    `${GRN}⏺${RST} ${BLD}Update${RST}(src/banner.css)`,
+    `  ${DIM}⎿  Updated src/banner.css with 12 additions and 7 removals${RST}`,
+    "",
+    `${GRN}⏺${RST} ${BLD}Bash${RST}(node scripts/capture.mjs --route /?banner=holiday)`,
+    `  ${DIM}⎿  captured design/banner-after.png (1280x400)${RST}`,
+    "",
+    `⏺ The gradient is gone and the headline now uses the shop serif. The red`,
+    `  stays on the call-to-action only. Before and after are in the journal.`,
+    "",
+    `${DIM}>${RST} love it. tighten the mobile crop a little`,
+    "",
+    `${ORN}✳${RST} Adjusting the mobile breakpoint… ${DIM}(1m 02s · esc to interrupt)${RST}`,
+    "",
+  ].join("\r\n");
+
+  const viteTranscript = [
+    "",
+    `${DIM}PS C:\\dev\\storefront-web>${RST} npm run dev`,
+    "",
+    `  ${GRN}${BLD}VITE${RST} ${GRN}v6.0.3${RST}  ${DIM}ready in${RST} ${BLD}241${RST} ${DIM}ms${RST}`,
+    "",
+    `  ${GRN}➜${RST}  ${BLD}Local${RST}:   ${CYN}http://localhost:5173/${RST}`,
+    `  ${GRN}➜${RST}  ${DIM}Network: use --host to expose${RST}`,
+    "",
+    `  ${DIM}14:32:07${RST} ${CYN}[vite]${RST} ${GRN}hmr update${RST} ${DIM}banner.css${RST}`,
+    `  ${DIM}14:32:41${RST} ${CYN}[vite]${RST} ${GRN}hmr update${RST} ${DIM}banner.ts${RST}`,
+    "",
+  ].join("\r\n");
+
+  interface HeroPaneSpec {
+    paneId?: string;
+    name: string; colorIndex: number;
+    agentState: Leaf["agentState"]; activityDetail: string;
+    branch: string; commitCount: number; ports: number[];
+    agentType?: string; model?: string;
+    active: boolean; flex: number; turnStartMs?: number;
+  }
+
+  function heroPane(spec: HeroPaneSpec, transcript: string): HTMLElement {
+    const l = leaf({
+      ...(spec.paneId ? { paneId: spec.paneId } : {}),
+      name: spec.name, colorIndex: spec.colorIndex,
+      agentState: spec.agentState, activityDetail: spec.activityDetail,
+      branch: spec.branch, commitCount: spec.commitCount, ports: spec.ports,
+      turnStartMs: spec.turnStartMs ?? 0,
+    });
+    const el = document.createElement("div");
+    el.className = "pane" + (spec.active ? " pane--active" : "");
+    el.dataset.color = String(l.colorIndex);
+    el.dataset.state = l.agentState;
+    el.style.flexGrow = String(spec.flex);
+
+    const h = buildPaneHeader(l.paneId);
+    h.nameEl.textContent = l.name;
+    h.colorDotEl.dataset.color = String(l.colorIndex);
+    h.stateDotEl.dataset.state = l.agentState;
+    h.stateLabelEl.textContent =
+      l.agentState === "idle" ? "" :
+      l.agentState === "done" ? "idle" : l.agentState;
+    applyChips(h.branchEl, h.commitsEl, l, spec.active);
+    applyPorts(h.portsEl, l);
+    applyAgentBadge(h.agentBadgeEl, spec.agentType);
+    applyModelChip(h.modelEl, spec.agentType, spec.model);
+
+    const termHost = document.createElement("div");
+    termHost.className = "pane__term";
+
+    const f = buildPaneFooter();
+    applyPaneFooter(f, l, spec.active);
+
+    el.append(h.root, termHost, f.root);
+
+    const term = new Terminal({
+      fontFamily:
+        '"Geist Mono Variable", "Cascadia Code", "Cascadia Mono", Consolas, monospace',
+      fontSize: 13,
+      disableStdin: true,
+      cursorBlink: false,
+      theme: {
+        background: "#1f1f1f",
+        foreground: "rgba(255, 255, 255, 0.92)",
+        cursor: "#76B9ED",
+        cursorAccent: "#1f1f1f",
+        selectionBackground: "rgba(118, 185, 237, 0.32)",
+      },
+    });
+    const fitter = new FitAddon();
+    term.loadAddon(fitter);
+    term.open(termHost);
+    setTimeout(() => { fitter.fit(); term.write(transcript); }, 80);
+    return el;
+  }
+
+  // Layout: CC pane left; right column stacks the dev server over a pane
+  // still booting under the mascot cover. (Orientation classes follow
+  // workspace.ts: the class names the divider, so side-by-side is --v.)
+  const stage = document.createElement("div");
+  stage.className = "workspace__stage";
+  document.getElementById("workspace")!.appendChild(stage);
+  const split = document.createElement("div");
+  split.className = "split split--v";
+  stage.appendChild(split);
+
+  split.appendChild(heroPane({
+    paneId: "hero-cc",
+    name: "holiday banner", colorIndex: 0,
+    agentState: "working", activityDetail: "adjusting the mobile breakpoint",
+    branch: "main", commitCount: 2, ports: [],
+    agentType: "claude", model: "opus",
+    active: true, flex: 1.7, turnStartMs: TWO_MIN_AGO,
+  }, ccTranscript));
+
+  const outerGutter = document.createElement("div");
+  outerGutter.className = "split__gutter split__gutter--v";
+  split.appendChild(outerGutter);
+
+  const rightCol = document.createElement("div");
+  rightCol.className = "split split--h";
+  rightCol.style.flexGrow = "1";
+  split.appendChild(rightCol);
+
+  rightCol.appendChild(heroPane({
+    name: "dev server", colorIndex: 2,
+    agentState: "idle", activityDetail: "",
+    branch: "main", commitCount: 0, ports: [5173],
+    active: false, flex: 1,
+  }, viteTranscript));
+
+  const innerGutter = document.createElement("div");
+  innerGutter.className = "split__gutter split__gutter--h";
+  rightCol.appendChild(innerGutter);
+
+  // Booting pane: empty terminal under the real "Setting up…" cover, so the
+  // shot carries the mascot mid-performance.
+  const bootPane = heroPane({
+    name: "gift guide draft", colorIndex: 5,
+    agentState: "idle", activityDetail: "",
+    branch: "main", commitCount: 0, ports: [],
+    agentType: "claude", model: "",
+    active: false, flex: 1,
+  }, "");
+  const cover = createSetupOverlay();
+  bootPane.appendChild(cover.el);
+  cover.show();
+  rightCol.appendChild(bootPane);
+
+  // Sidebar extras the shot should carry: the needs-you badge, the local
+  // dev-server card, the cloud card, and an honest status line.
+  const badge = document.getElementById("dash-badge")!;
+  badge.textContent = "5";
+  badge.style.display = "";
+  document.getElementById("status-text")!.textContent = "7 sessions";
+  const localArea = document.getElementById("local-area");
+  if (localArea) {
+    localArea.hidden = false;
+    document.getElementById("local-card-title")!.textContent = "vite";
+    document.getElementById("local-card-port")!.textContent = ":5173";
+    document.getElementById("local-card-sub")!.textContent = "holiday banner";
+  }
+  const cloudArea = document.getElementById("cloud-area");
+  if (cloudArea) {
+    cloudArea.hidden = false;
+    document.getElementById("cloud-card-title")!.textContent = "2 machines";
+    document.getElementById("cloud-card-rate")!.textContent = "$0.41/hr";
+    document.getElementById("cloud-card-sub")!.textContent = "e2-standard-4 · build-runner";
+  }
+
+  // ---- Inspector: fed through the hero.html host stub -------------------
+  // The rail is the real inspector.ts following the CC pane; the stub answers
+  // its inspector.request with a fixture journal (prompts, beats, tool calls,
+  // two image rows) and serves the image bytes as inline SVG thumbnails.
+  const isoAgo = (min: number, sec = 0) =>
+    new Date(Date.now() - min * 60_000 - sec * 1000).toISOString();
+  const iev = (kind: string, ts: string, over: Record<string, unknown> = {}) =>
+    ({ kind, ts, text: "", verb: "", target: "", note: "", repeat: 1, ...over });
+
+  const BANNER_BEFORE_SVG =
+    '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="200">' +
+    '<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">' +
+    '<stop offset="0" stop-color="#7b2ff7"/><stop offset="1" stop-color="#f107a3"/>' +
+    '</linearGradient></defs>' +
+    '<rect width="640" height="200" fill="url(#g)"/>' +
+    '<text x="320" y="102" text-anchor="middle" font-family="Segoe UI, sans-serif" ' +
+    'font-size="44" font-weight="800" fill="#ffffff">HOLIDAY SALE</text>' +
+    '<text x="320" y="146" text-anchor="middle" font-family="Segoe UI, sans-serif" ' +
+    'font-size="18" fill="#ffe9ff">UP TO 70% OFF EVERYTHING</text></svg>';
+  const BANNER_AFTER_SVG =
+    '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="200">' +
+    '<rect width="640" height="200" fill="#f6f1e8"/>' +
+    '<rect x="1" y="1" width="638" height="198" fill="none" stroke="#e4dccd" stroke-width="2"/>' +
+    '<text x="56" y="92" font-family="Georgia, serif" font-size="40" fill="#1e2a3a">The Holiday Shop</text>' +
+    '<text x="58" y="128" font-family="Segoe UI, sans-serif" font-size="17" fill="#5d6570">' +
+    'Considered gifts, wrapped and shipped by the 22nd</text>' +
+    '<rect x="56" y="148" width="118" height="34" rx="17" fill="#b4372f"/>' +
+    '<text x="115" y="170" text-anchor="middle" font-family="Segoe UI, sans-serif" ' +
+    'font-size="15" font-weight="600" fill="#ffffff">Shop gifts</text></svg>';
+
+  const inspectorData = {
+    type: "inspector.data",
+    paneId: "hero-cc",
+    hasAgent: true,
+    events: [
+      iev("prompt", isoAgo(9), { text: "make the holiday banner match the rest of the shop, and show me before and after" }),
+      iev("beat", isoAgo(8, 55), { text: "I'll capture the current banner first, then restyle it against the shop tokens." }),
+      iev("work", isoAgo(8, 30), { verb: "Bash", target: "scripts/capture.mjs", note: "banner-before.png" }),
+      iev("image", isoAgo(8, 20), { verb: "shared", target: "img-before" }),
+      iev("work", isoAgo(8), { verb: "Read", target: "src/styles/tokens.css", note: "41 lines" }),
+      iev("work", isoAgo(7), { verb: "Update", target: "src/banner.css", note: "+12 −7", repeat: 2 }),
+      iev("work", isoAgo(6), { verb: "Update", target: "src/banner.ts", note: "+6 −2" }),
+      iev("work", isoAgo(5, 30), { verb: "Bash", target: "scripts/capture.mjs", note: "banner-after.png" }),
+      iev("image", isoAgo(5, 20), { verb: "shared", target: "img-after" }),
+      iev("beat", isoAgo(5), { text: "The gradient is gone and the headline now uses the shop serif. The red stays on the call-to-action only." }),
+      iev("prompt", isoAgo(2), { text: "love it. tighten the mobile crop a little" }),
+      iev("work", isoAgo(1), { verb: "Update", target: "src/banner.css", note: "+3 −1" }),
+    ],
+    vitals: {
+      model: "opus", inputTokens: 48210, outputTokens: 9834,
+      cacheReadTokens: 512000, cacheWriteTokens: 88000, costUsd: 1.87,
+      contextTokens: 61400, contextMax: 200000,
+    },
+    files: [
+      { path: "src/banner.css", added: 38, deleted: 21 },
+      { path: "src/banner.ts", added: 6, deleted: 2 },
+      { path: "index.html", added: 2, deleted: 0 },
+    ],
+    added: 46,
+    deleted: 23,
+  };
+
+  (window as any).__heroRoute = (msg: { type: string; imageId?: string; paneId?: string; variant?: string }) => {
+    if (msg.type === "inspector.request") return [inspectorData];
+    if (msg.type === "inspector.image") {
+      const svg = msg.imageId === "img-before" ? BANNER_BEFORE_SVG : BANNER_AFTER_SVG;
+      return [{
+        type: "inspector.image.data", paneId: msg.paneId, imageId: msg.imageId,
+        variant: msg.variant, mediaType: "image/svg+xml", data: btoa(svg),
+      }];
+    }
+    return [];
+  };
+
+  initInspector();
+  // Minimal state push so the rail follows the CC pane (name, tag, live poll).
+  (window as any).__heroPush?.({
+    type: "state",
+    activeSessionId: "h-1",
+    activePaneId: "hero-cc",
+    homeDir: "C:\\Users\\demo",
+    sessions: [projectTab({
+      id: "h-1", title: "holiday banner", projectId: "h-shop",
+      agentState: "working", activityDetail: "adjusting the mobile breakpoint",
+      paneCount: 3, workingCount: 1, ports: [5173],
+      turnStartMs: TWO_MIN_AGO, doneAtMs: 0,
+      rootPane: {
+        kind: "split", id: "hero-split", orientation: "v",
+        children: [
+          leaf({ paneId: "hero-cc", name: "holiday banner", agentState: "working", colorIndex: 0, branch: "main" }),
+          leaf({ paneId: "hero-dev", name: "dev server", agentState: "idle", colorIndex: 2, branch: "main", ports: [5173] }),
+          leaf({ paneId: "hero-boot", name: "gift guide draft", agentState: "idle", colorIndex: 5, branch: "main" }),
+        ],
+      },
+    })],
+    projects: [],
+    closedSessions: [],
+    prefs: { inspectorOpen: true },
+  });
+}
 
 // #modelmenu — the per-pane Claude model picker: mock pane headers wearing the
 // quiet model chip, plus the flyout in both states (no usage data — the normal
