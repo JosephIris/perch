@@ -447,6 +447,12 @@ function buildScene(): Scene {
   return { svg, apply };
 }
 
+/* Shared with site/ (the landing page hero renders the same bird from the
+ * same source, so the demo can't drift from the app). Nothing else should
+ * need these. */
+export { pose, buildScene, shuffledOrder, CANONICAL_ORDER, REST_T, INTRO_MS, IDLE_MS };
+export type { BeatOrder, Scene };
+
 export interface SetupOverlay {
   /** The root element to append to the pane. */
   readonly el: HTMLElement;
