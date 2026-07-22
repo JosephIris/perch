@@ -281,16 +281,17 @@ a:focus-visible, button:focus-visible {
 
 /* ==== Hero: the live workspace demo =================================== */
 .wsdemo-wrap {
-  max-width: 1180px;
-  margin: 30px auto 0;
+  max-width: 1240px;
+  margin: 34px auto 0;
   padding: 0 24px;
   text-align: center;
 }
 /* On narrow viewports the dense three-column workspace can't reflow, so it
- * scrolls horizontally inside its own frame — the page body never does. */
+ * scrolls horizontally inside its own frame; the page body never does. */
 .wsdemo-scroll { overflow-x: auto; overflow-y: hidden; border-radius: var(--r-window); }
 .wsdemo {
-  min-width: 940px;
+  position: relative;             /* anchor for the animated cursor */
+  min-width: 1040px;
   display: flex;
   flex-direction: column;
   border: 1px solid var(--color-stroke);
@@ -327,9 +328,9 @@ a:focus-visible, button:focus-visible {
 /* Body grid: sidebar | workspace | inspector. */
 .wsdemo__body {
   display: grid;
-  grid-template-columns: 214px 1fr 300px;
+  grid-template-columns: 244px 1fr 326px;
   column-gap: var(--sp-8);
-  height: 588px;
+  height: 664px;
   padding: 0 var(--sp-8) var(--sp-8);
   background: #141414;
   min-height: 0;
@@ -395,23 +396,20 @@ a:focus-visible, button:focus-visible {
 .wscard--local .wscard__dot { background: var(--color-local); }
 .wscard--local .wscard__meta { color: var(--color-local); }
 
-/* Workspace column: big main pane + right column (dev over boot). */
-.wsdemo__workspace { display: flex; gap: var(--sp-8); min-width: 0; min-height: 0; }
-.wsdemo__rightcol { display: flex; flex-direction: column; gap: var(--sp-8); flex: 1 1 0; min-width: 0; }
-/* Dev + boot split the right column evenly (both clip their overflow). */
-.wsdemo__rightcol > .wspane { flex: 1 1 0; min-height: 0; }
+/* Workspace column: agent pane (top) stacked over the console pane (bottom). */
+.wsdemo__workspace { display: flex; flex-direction: column; gap: var(--sp-8); min-width: 0; min-height: 0; }
 .wspane {
   display: flex; flex-direction: column; min-height: 0; min-width: 0;
   background: var(--color-terminal-bg);
   border-radius: var(--r-card);
   overflow: hidden;
 }
-.wspane--large { flex: 1.35 1 0; }
+.wspane--agent   { flex: 1.75 1 0; }
+.wspane--console { flex: 1 1 0; }
 .wspane__body { flex: 1 1 auto; min-height: 0; overflow: hidden; padding: var(--sp-8) var(--sp-12); }
-.wspane__body--boot { position: relative; padding: var(--sp-8) var(--sp-12); }
 
 /* Terminal text. */
-.wst { font-family: var(--font-mono); font-size: 10.5px; line-height: 1.55; color: var(--color-text-secondary); }
+.wst { font-family: var(--font-mono); font-size: 11.5px; line-height: 1.6; color: var(--color-text-secondary); }
 .wst__l { white-space: pre-wrap; word-break: break-word; }
 .wst__sub { color: var(--color-text-disabled); }
 .wst b { color: var(--color-text-primary); font-weight: 600; }
@@ -430,6 +428,29 @@ a:focus-visible, button:focus-visible {
   border-radius: 0 0 var(--r-card) var(--r-card);
 }
 .wsdemo__inspector .demo-inspector { height: 100%; border-radius: 0; }
+
+/* Animated cursor for the auto-playing demo. */
+.wscursor {
+  position: absolute; left: 50%; top: 90%; z-index: 20;
+  width: 22px; height: 22px; margin: -2px 0 0 -2px;
+  pointer-events: none; opacity: 0;
+  transition: left 0.62s cubic-bezier(0.4, 0, 0.2, 1),
+              top 0.62s cubic-bezier(0.4, 0, 0.2, 1),
+              opacity 0.3s ease, transform 0.12s ease;
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.5));
+}
+.wscursor svg { display: block; }
+.wscursor--down { transform: scale(0.8); }
+.wscursor__ring {
+  position: absolute; z-index: 19;
+  width: 8px; height: 8px; margin: -4px 0 0 -4px;
+  border-radius: 50%; border: 2px solid var(--color-accent);
+  pointer-events: none; animation: wscursor-ring 0.5s ease-out forwards;
+}
+@keyframes wscursor-ring {
+  from { opacity: 0.7; transform: scale(0.4); }
+  to   { opacity: 0; transform: scale(3.4); }
+}
 
 /* --- widget: boot cover ------------------------------------------------ */
 #demo-boot { padding: 0; cursor: pointer; }
@@ -543,38 +564,44 @@ a:focus-visible, button:focus-visible {
 .section-head + .moments { margin-top: 32px; }
 
 /* ==== Windows-first wedge ============================================== */
-.wedge { max-width: 1000px; margin: 0 auto; padding: 0 24px; }
-.wedge__grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 16px;
-  margin-top: 32px;
+.wedge { max-width: 720px; margin: 0 auto; padding: 0 24px; }
+
+/* Monocle Guy frowning at an apple (a Mac stand-in). */
+.apple-scene-wrap { margin: 12px auto 0; display: flex; justify-content: center; }
+.apple-scene {
+  position: relative;
+  width: min(440px, 90%);
+  aspect-ratio: 3 / 1.7;
 }
-@media (max-width: 760px) { .wedge__grid { grid-template-columns: 1fr; } }
-.wedge__card {
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 20px 22px;
+.apple-scene__bird {
+  display: block; width: 100%; height: 100%;
+  overflow: visible;
+  color: var(--ink);
+  --color-accent: var(--accent);
 }
-.wedge__card--us {
-  border-color: var(--accent-soft, rgba(118, 185, 237, 0.4));
-  background: rgba(118, 185, 237, 0.06);
+.apple-scene__apple {
+  position: absolute;
+  right: 9%; bottom: 26%;
+  animation: apple-bob 2.8s ease-in-out infinite;
 }
-.wedge__name { font-size: 16px; font-weight: 640; color: var(--ink); }
-.wedge__card--us .wedge__name { color: var(--accent); }
-.wedge__plat {
-  margin-top: 4px;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--ink-faint);
+.apple-scene__apple svg { display: block; filter: drop-shadow(0 3px 4px rgba(0, 0, 0, 0.35)); }
+@keyframes apple-bob {
+  0%, 100% { transform: translateY(0) rotate(-3deg); }
+  50%      { transform: translateY(-7px) rotate(3deg); }
 }
-.wedge__note { margin: 12px 0 0; font-size: 14px; color: var(--ink-dim); }
-.wedge__foot {
-  max-width: 640px;
-  margin: 22px auto 0;
-  text-align: center;
-  font-size: 13.5px;
-  color: var(--ink-faint);
+.apple-scene__frown {
+  position: absolute;
+  left: 38%; top: 5%;
+  transform-origin: center bottom;
+  animation: frown-furrow 3.2s ease-in-out infinite;
 }
-.wedge__foot em { font-style: normal; color: var(--ink-dim); }
+.apple-scene__frown svg { display: block; }
+@keyframes frown-furrow {
+  0%, 18%   { opacity: 0.15; transform: translateY(3px) scaleY(0.55); }
+  38%, 82%  { opacity: 1;    transform: translateY(0) scaleY(1); }
+  100%      { opacity: 0.15; transform: translateY(3px) scaleY(0.55); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .apple-scene__apple, .apple-scene__frown { animation: none; }
+  .apple-scene__frown { opacity: 1; }
+}

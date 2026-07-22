@@ -12,6 +12,7 @@ import { startSpinnerTicker } from "../../src/web/src/spinner.js";
 import { startElapsedTicker } from "../../src/web/src/elapsed.js";
 import { buildInspector } from "./inspector-demo.js";
 import { buildWorkspaceDemo } from "./workspace-demo.js";
+import { buildAppleScene } from "./apple-scene.js";
 
 const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 
@@ -92,6 +93,9 @@ function mountScene(host: HTMLElement, viewBox: string): () => void {
 /* ---- hero interactive workspace demo -------------------------------- */
 const heroDemoHost = document.getElementById("hero-demo");
 if (heroDemoHost) heroDemoHost.appendChild(buildWorkspaceDemo(DEMO_SESSIONS, DEMO_PROJECTS));
+
+const appleHost = document.getElementById("apple-scene");
+if (appleHost) appleHost.appendChild(buildAppleScene());
 
 /* ---- hero ----------------------------------------------------------- */
 const heroHost = document.getElementById("hero-scene");
