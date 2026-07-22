@@ -199,6 +199,10 @@ internal static class StateProjection
             linesDeleted = diffLeaves.Sum(p => p.LinesDeleted),
             filesChanged = diffLeaves.Sum(p => p.FilesChanged),
             ahead        = leaves.Select(p => p.Ahead).DefaultIfEmpty(0).Max(),
+            // Commits THIS session's agents claimed via the git.commit hook,
+            // still unpushed. Summed, not Maxed: each sha is claimed by exactly
+            // one pane (the one whose Bash call made it), so panes are disjoint.
+            aheadMine    = leaves.Sum(p => p.AheadMine),
             // Earliest working pane's start → "this session has been
             // working Xm". 0 when nothing is working.
             turnStartMs  = leaves
@@ -264,6 +268,10 @@ internal static class StateProjection
                 linesDeleted = node.LinesDeleted,
                 filesChanged = node.FilesChanged,
                 ahead        = node.Ahead,
+                /* Of those, the ones THIS pane's agent made (hook-claimed shas
+                 * ∩ unpushed) — the honest per-tab number where several tabs
+                 * share one branch and `ahead` reads the same on all of them. */
+                aheadMine    = node.AheadMine,
                 /* Unix-ms the pane started its current working spell (0 when
                  * not working) — the page ticks "working · 2m" against it. */
                 turnStartMs  = node.TurnStartUnixMs,

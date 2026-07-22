@@ -48,6 +48,7 @@ function leaf(over: Partial<Leaf>): Leaf {
     linesDeleted: 0,
     filesChanged: 0,
     ahead: 0,
+    aheadMine: 0,
     turnStartMs: 0,
     doneAtMs: 0,
     ...over,
@@ -80,6 +81,7 @@ const sessions: SessionView[] = [
     linesDeleted: 0,
     filesChanged: 0,
     ahead: 0,
+    aheadMine: 0,
     turnStartMs: TWO_MIN_AGO,
     doneAtMs: 0,
     lastActivity: "now",
@@ -113,6 +115,7 @@ const sessions: SessionView[] = [
     linesDeleted: 38,
     filesChanged: 7,
     ahead: 2,
+    aheadMine: 0,
     turnStartMs: 0,
     doneAtMs: FOUR_MIN_AGO,
     lastActivity: "4m ago",
@@ -137,6 +140,7 @@ const sessions: SessionView[] = [
     linesDeleted: 0,
     filesChanged: 0,
     ahead: 0,
+    aheadMine: 0,
     turnStartMs: 0,
     doneAtMs: 0,
     lastActivity: "2h ago",
@@ -161,6 +165,7 @@ const sessions: SessionView[] = [
     linesDeleted: 0,
     filesChanged: 0,
     ahead: 0,
+    aheadMine: 0,
     turnStartMs: 0,
     doneAtMs: 0,
     lastActivity: "now",
@@ -206,20 +211,25 @@ function projectTab(over: Partial<SessionView> & { id: string; title: string }):
     linesDeleted: 0,
     filesChanged: 0,
     ahead: 0,
+    aheadMine: 0,
     turnStartMs: 0,
     doneAtMs: 0,
     lastActivity: "now",
     ...over,
   };
 }
+// The three p-ptp tabs share `main`, so all carry the BRANCH ahead of 6 (a
+// git fact — see the shared-tree note above), but their hover chips show each
+// tab's OWN unpushed commits (aheadMine): 3 + 2 + 1 = 6, no double counting,
+// and no two tabs reading the same uninformative number.
 const projectSessions: SessionView[] = [
   projectTab({
     id: "s-tab1", title: "coldstart auds",
     // colorIndex still set on fixtures (the pane header shows it); the
     // sidebar row deliberately renders no color mark — see renderItem.
-    rootPane: leaf({ name: "coldstart auds", agentState: "done", branch: "main", colorIndex: 5 }),
+    rootPane: leaf({ name: "coldstart auds", agentState: "done", branch: "main", colorIndex: 5, ahead: 6, aheadMine: 3 }),
     doneAtMs: Date.now() - 47_000, linesAdded: 143, linesDeleted: 131, filesChanged: 6,
-    ahead: 6,
+    ahead: 6, aheadMine: 3,
   }),
   // The reported mixed-tab scenario: aggregate state is "done" (host ranks
   // Done above Working) but ONE of the two panes is still working — the row
@@ -227,15 +237,15 @@ const projectSessions: SessionView[] = [
   // projected from the working pane, exactly as the host does.
   projectTab({
     id: "s-tab2", title: "generate tt/b4rec",
-    rootPane: leaf({ name: "generate tt/b4rec", agentState: "done", branch: "main", colorIndex: 1 }),
+    rootPane: leaf({ name: "generate tt/b4rec", agentState: "done", branch: "main", colorIndex: 1, ahead: 6, aheadMine: 2 }),
     doneAtMs: Date.now() - 31_000, linesAdded: 89, linesDeleted: 12, filesChanged: 3,
-    paneCount: 2, ahead: 6, workingCount: 1, turnStartMs: TWO_MIN_AGO,
+    paneCount: 2, ahead: 6, aheadMine: 2, workingCount: 1, turnStartMs: TWO_MIN_AGO,
   }),
   projectTab({
     id: "s-tab3", title: "fix perms audit",
-    rootPane: leaf({ name: "fix perms audit", agentState: "working", activityDetail: "editing hook.ts", branch: "main", ports: [5173] }),
+    rootPane: leaf({ name: "fix perms audit", agentState: "working", activityDetail: "editing hook.ts", branch: "main", ports: [5173], ahead: 6, aheadMine: 1 }),
     agentState: "working", activityDetail: "editing hook.ts", ports: [5173],
-    workingCount: 1, turnStartMs: TWO_MIN_AGO, doneAtMs: 0, ahead: 6,
+    workingCount: 1, turnStartMs: TWO_MIN_AGO, doneAtMs: 0, ahead: 6, aheadMine: 1,
   }),
   // Permission-blocked tab in a NESTED row — the compact treatment: red dot +
   // a small caution "permission" tag on the right edge, ONE line (the two-line

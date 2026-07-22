@@ -395,6 +395,18 @@ internal sealed class PaneNode
     [JsonIgnore] public int FilesChanged { get; set; }
     [JsonIgnore] public int Ahead { get; set; }
 
+    /// Short shas of commits THIS pane's agent created — the post-tool-use
+    /// hook parses them from `git commit`'s "[branch abc1234]" output marker.
+    /// PERSISTED (unlike the rest of the git signal): unpushed commits survive
+    /// an app restart, so who-made-them must too. Host caps the list on
+    /// append; shas that get pushed or rebased away just stop matching.
+    public List<string> CommitShas { get; set; } = new();
+    /// How many of the repo's CURRENT unpushed commits this pane's shas claim
+    /// — the per-tab "↑N mine". Recomputed against `@{upstream}..HEAD` on the
+    /// same git refresh that maintains Ahead; Ahead stays the branch-wide
+    /// truth (every same-branch tab honestly shares it), this is the split.
+    [JsonIgnore] public int AheadMine { get; set; }
+
     /// Unix-ms timestamp the pane entered its current Working spell, so the
     /// UI can tick "working · 2m". 0 whenever the pane isn't working. Wall
     /// clock (not Stopwatch) because the page compares against Date.now() on

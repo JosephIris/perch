@@ -216,6 +216,19 @@ internal static class HookHandler
                     if (!string.IsNullOrWhiteSpace(touched))
                         Send(pipeName, new { type = "git.touched", path = touched });
                 }
+                // A Bash `git commit` that just ran: claim its new sha(s) for
+                // THIS pane, parsed from the "[branch abc1234]" marker in the
+                // tool's OUTPUT. Output-parse, never `rev-parse HEAD` — this
+                // hook also fires when the commit FAILED, and HEAD would then
+                // name someone else's commit. The claim is what lets the
+                // sidebar split "↑N unpushed" per tab on a shared branch.
+                else if (editTool is "Bash")
+                {
+                    var bashCmd = ToolInputString(root, "command") ?? "";
+                    if (bashCmd.IndexOf("git commit", StringComparison.OrdinalIgnoreCase) >= 0)
+                        foreach (var sha in CommitShaMarkers(RawToolResponse(root)))
+                            Send(pipeName, new { type = "git.commit", sha });
+                }
                 break;
 
             default:
@@ -342,6 +355,42 @@ internal static class HookHandler
         }
         if (s != null && maxLen > 0 && s.Length > maxLen) s = s.Substring(0, maxLen) + "…";
         return s;
+    }
+
+    /// The raw JSON text of the hook's tool_response, whatever shape this cc
+    /// version gives it (string, {stdout,...} object, array of content
+    /// blocks). We only regex it for commit markers, so shape doesn't matter.
+    private static string RawToolResponse(JsonElement? root)
+    {
+        if (root is not JsonElement el) return "";
+        static string From(JsonElement h)
+            => h.TryGetProperty("tool_response", out var tr) ? tr.GetRawText() : "";
+        var s = From(el);
+        if (s.Length == 0)
+            foreach (var wrap in new[] { "hook_input", "data" })
+                if (el.TryGetProperty(wrap, out var w) && w.ValueKind == JsonValueKind.Object)
+                { s = From(w); if (s.Length > 0) break; }
+        return s;
+    }
+
+    /// Short shas from `git commit`'s "[branch abc1234] subject" marker —
+    /// also matches "[main (root-commit) abc1234]" and "[detached HEAD
+    /// abc1234]". Requires whitespace or '(' before the hex run so a JSON
+    /// array like [1234567] can't masquerade as one. Capped at 4: one Bash
+    /// call rarely commits more, and a pathological match list must not
+    /// flood the pipe.
+    internal static System.Collections.Generic.List<string> CommitShaMarkers(string text)
+    {
+        var shas = new System.Collections.Generic.List<string>();
+        if (string.IsNullOrEmpty(text)) return shas;
+        foreach (System.Text.RegularExpressions.Match m in
+                 System.Text.RegularExpressions.Regex.Matches(text, @"[\s(]([0-9a-f]{7,40})\]"))
+        {
+            var sha = m.Groups[1].Value;
+            if (!shas.Contains(sha)) shas.Add(sha);
+            if (shas.Count >= 4) break;
+        }
+        return shas;
     }
 
     /// Pull a string field out of the hook's `tool_input` object (Edit's
