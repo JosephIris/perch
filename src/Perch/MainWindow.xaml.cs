@@ -128,6 +128,13 @@ public partial class MainWindow : FluentWindow
     /// repaint QUIETS → hide. Each step is gated on output going quiet rather
     /// than a fixed delay, so it tracks the machine. Cap force-finishes the
     /// whole thing if any step never arrives.
+    ///
+    /// Escape hatch for prompts that block BEFORE the session starts (the
+    /// "Do you trust the files in this folder?" gate, the first-run theme picker,
+    /// a login screen): the session hook never lands for those, so a pre-session
+    /// watchdog (PreQuiet) uncovers once cc paints then goes quiet with no hook,
+    /// letting the user answer instead of sitting trapped behind the cover until
+    /// the boot cap. See OnPreSessionQuiet.
     private sealed class SetupState
     {
         /// `/color` name still to be typed; null once written (or never wanted).
@@ -138,6 +145,15 @@ public partial class MainWindow : FluentWindow
         public System.Windows.Threading.DispatcherTimer? Quiet;
         /// Hard cap — finishes the cover even if cc never reports or never quiets.
         public System.Windows.Threading.DispatcherTimer? Cap;
+        /// Pre-session watchdog: cc painted a screenful then went silent BEFORE
+        /// its session-start hook landed → it's parked on an interactive prompt
+        /// (trust-this-folder, theme picker, login). Fires to uncover so the user
+        /// can answer. Stopped the moment the hook arrives (healthy boot).
+        public System.Windows.Threading.DispatcherTimer? PreQuiet;
+        /// Cumulative bytes cc has emitted while SessionUp is still false — used
+        /// both to gate the watchdog (a lone spinner byte is not "cc is blocked")
+        /// and, under PERCH_SETUP_DIAG, to trace the pre-session paint.
+        public long PreSessionBytes;
         // Setup-timing trace (surfaced by PERCH_SETUP_DIAG=1). These pinned the
         // ~1.4s inter-paint boot lulls behind the /color race; kept as the
         // standing diagnostic for this choreography, which has no cheaper probe.
@@ -188,6 +204,24 @@ public partial class MainWindow : FluentWindow
     /// the cap only catches a cc that painted but never went quiet. On expiry we
     /// DO type the pending /color before uncovering (cc is provably up).
     private static readonly int SetupPaintCapMs = EnvInt("PERCH_SETUP_PAINTCAP_MS", 12000);
+    /// PRE-SESSION gate — how long cc may stay QUIET, after painting something,
+    /// while its session-start hook still hasn't landed, before we conclude it's
+    /// blocked on an interactive prompt (the "Do you trust the files in this
+    /// folder?" gate, the first-run theme picker, a login screen — all of which
+    /// appear BEFORE any session starts) and uncover so the user can answer.
+    /// Without this the cover just sits until SetupBootCapMs (20s) while focus is
+    /// parked on it, trapping the user behind a prompt they can't reach. cc's
+    /// session hook fires early on a healthy boot ("listening but not painted"),
+    /// so a long POST-PAINT pre-hook silence isn't a normal lull — it's cc
+    /// waiting on the user. Well under SetupBootCapMs so the reveal is prompt;
+    /// comfortably over a normal pre-hook paint gap so a slow-but-healthy boot
+    /// still settles the usual way instead of tripping this early.
+    private static readonly int SetupPromptMs = EnvInt("PERCH_SETUP_PROMPT_MS", 4000);
+    /// A prompt paints a screenful; a lone spinner byte does not mean cc is
+    /// blocked. Only arm the pre-session watchdog once cc has painted at least
+    /// this much, so a boot that dribbles a byte then loads silently isn't
+    /// mistaken for a prompt. cc's trust box is far larger than this floor.
+    private const int SetupPromptMinBytes = 256;
     // Panes shown in the restore-progress lightbox → whether the pane has
     // reported "alive again" (its resumed session-start hook fired). Empty when
     // no restore is in flight. _restoreTimeout force-completes a batch whose
@@ -1580,11 +1614,14 @@ public partial class MainWindow : FluentWindow
 
         if (!_setup.TryGetValue(paneId, out var st)) _setup[paneId] = st = new SetupState();
         st.SessionUp = false;
+        st.PreSessionBytes = 0;
         st.Color = CcColorNames[((colorIndex % CcColorNames.Length) + CcColorNames.Length) % CcColorNames.Length];
 
         st.Quiet ??= NewSetupTimer(SetupSettleMs, () => OnSetupQuiet(paneId));
         st.Cap ??= NewSetupTimer(SetupBootCapMs, () => FinishSetup(paneId, capped: true));
+        st.PreQuiet ??= NewSetupTimer(SetupPromptMs, () => OnPreSessionQuiet(paneId));
         st.Quiet.Stop();          // idle until the session-start hook arms it
+        st.PreQuiet.Stop();       // idle until cc paints something pre-session
         st.Cap.Stop();
         st.Cap.Interval = TimeSpan.FromMilliseconds(SetupBootCapMs);
         st.Cap.Start();
@@ -1607,6 +1644,10 @@ public partial class MainWindow : FluentWindow
         if (!_setup.TryGetValue(paneId, out var st)) return;
         st.SessionUp = true;
         st.SessionUpAt = DateTime.Now;
+        // Healthy boot reached the session hook — cc was not blocked on a
+        // pre-session prompt after all. Kill the pre-session watchdog so it can't
+        // fire mid-settle and yank the cover while /color is still landing.
+        st.PreQuiet?.Stop();
         if (SetupDiagVerbose)
             Log.Info("SetupDiag", $"pane {paneId:N} session hook landed; arming {SetupSettleMs}ms settle watch");
         // The generous boot cap (waiting for the hook) gives way to the paint
@@ -1627,7 +1668,8 @@ public partial class MainWindow : FluentWindow
     // painting. UI thread only (called from PostPaneOut's dispatch).
     private void NoteSetupOutput(Guid paneId, int byteCount)
     {
-        if (_setup.TryGetValue(paneId, out var st) && st.SessionUp)
+        if (!_setup.TryGetValue(paneId, out var st)) return;
+        if (st.SessionUp)
         {
             // Every chunk restarts the settle timer — the gate fires only once cc
             // truly stops, so it tracks the machine's real pace instead of a fixed
@@ -1643,7 +1685,45 @@ public partial class MainWindow : FluentWindow
             }
             st.LastOutputAt = now;
             RestartSetupQuiet(st);
+            return;
         }
+        // Pre-session: cc is emitting but its session-start hook hasn't landed. On
+        // a healthy boot the hook fires within a few seconds and we never reach
+        // the watchdog (NoteSetupSessionUp stops it). If cc instead paints a
+        // screenful and then goes SILENT, it's parked on an interactive prompt
+        // only the user can clear (trust-this-folder, theme picker, login) — arm a
+        // debounce, restarted by each chunk, whose fire means "painted, then quiet
+        // before the session started" → uncover (see OnPreSessionQuiet).
+        st.PreSessionBytes += byteCount;
+        if (SetupDiagVerbose)
+            Log.Info("SetupDiag", $"pane {paneId:N} pre-session chunk bytes={byteCount} cum={st.PreSessionBytes}");
+        if (st.PreSessionBytes < SetupPromptMinBytes) return;
+        st.PreQuiet?.Stop();
+        st.PreQuiet?.Start();
+    }
+
+    // Pre-session watchdog fired: cc painted a screenful and then went silent
+    // while its session-start hook still hasn't landed. Reaching here means cc is
+    // waiting on an interactive prompt that only the user can clear — the "Do you
+    // trust the files in this folder?" gate, the first-run theme picker, a login
+    // screen — all of which appear BEFORE the session begins. Uncover so the user
+    // can answer. There's no /color to type (cc never started a session), and we
+    // deliberately do NOT re-cover when the session finally does start: typing
+    // /color onto a pane the user is now driving is the exact race the cover
+    // exists to prevent, so we forfeit the auto-color for this one interrupted
+    // boot. Runs on the UI thread (DispatcherTimer tick).
+    private void OnPreSessionQuiet(Guid paneId)
+    {
+        if (!_setup.TryGetValue(paneId, out var st)) return;
+        st.PreQuiet?.Stop();
+        // The session hook raced in just as this tick was queued — the boot is
+        // healthy after all; the post-session settle path owns the cover now.
+        if (st.SessionUp) return;
+        _setup.Remove(paneId);
+        st.Quiet?.Stop();
+        st.Cap?.Stop();
+        Log.Info("Setup", $"pane {paneId:N} quiet before session-start ({st.PreSessionBytes}B painted, no hook) — cc is on an interactive prompt (trust/theme/login); uncovering so it can be answered");
+        PostToPage(new { type = "pane.setup", paneId = paneId.ToString("D"), show = false, colorIndex = 0 });
     }
 
     private static void RestartSetupQuiet(SetupState st)
@@ -1702,6 +1782,7 @@ public partial class MainWindow : FluentWindow
         {
             st.Quiet?.Stop();
             st.Cap?.Stop();
+            st.PreQuiet?.Stop();
             // Only type on the capped path if cc actually came up. Capping in
             // phase 1 means the session-start hook never arrived — writing then
             // would push /color into a PTY with no reader attached, which is the
@@ -1725,6 +1806,7 @@ public partial class MainWindow : FluentWindow
         if (!_setup.Remove(paneId, out var st)) return;
         st.Quiet?.Stop();
         st.Cap?.Stop();
+        st.PreQuiet?.Stop();
         PostToPage(new { type = "pane.setup", paneId = paneId.ToString("D"), show = false, colorIndex = 0 });
     });
 
