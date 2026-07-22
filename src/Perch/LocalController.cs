@@ -29,6 +29,12 @@ internal sealed class LocalController : IDisposable
     /// scan's await so attribution runs against an immutable copy — no off-thread
     /// read of session/pane state.
     private readonly Func<IReadOnlyList<PaneProc>> _snapshotPanes;
+    /// Hands each scan's pane attribution (paneId "N" guid → listening ports)
+    /// back to the host, which projects it onto PaneNode.Ports — the source of
+    /// the tab/header ":port" chips. This is the ONLY feeder of pane ports:
+    /// nothing ever sent the `meta --port` IPC message the chips were first
+    /// built against, which is why they never lit.
+    private readonly Action<IReadOnlyDictionary<string, int[]>> _applyPanePorts;
 
     private DispatcherTimer? _timer;
     private CancellationTokenSource? _inflight;
@@ -40,11 +46,15 @@ internal sealed class LocalController : IDisposable
     private const int IdleMs = 30 * 1000;
     private const int FastMs = 3 * 1000;
 
-    public LocalController(Dispatcher dispatcher, Action<object> push, Func<IReadOnlyList<PaneProc>> snapshotPanes)
+    public LocalController(
+        Dispatcher dispatcher, Action<object> push,
+        Func<IReadOnlyList<PaneProc>> snapshotPanes,
+        Action<IReadOnlyDictionary<string, int[]>> applyPanePorts)
     {
         _dispatcher = dispatcher;
         _push = push;
         _snapshotPanes = snapshotPanes;
+        _applyPanePorts = applyPanePorts;
     }
 
     public void Start()
@@ -78,8 +88,21 @@ internal sealed class LocalController : IDisposable
         {
             var listeners = await _poller.ScanAsync(panes, cts.Token);
             if (cts.IsCancellationRequested) return;
+            // Null = the SCAN failed (timeout, corrupt output), not "no servers".
+            // Keep the last good picture rather than flickering every port chip
+            // off for 30s; a legitimately empty scan still clears everything.
+            if (listeners == null) return;
             _last = Classify(listeners);
             Push();
+
+            // Project the live attributions onto pane state (tab/header chips).
+            // Continuation of an awaited call started on the dispatcher timer,
+            // so this runs on the UI thread — safe to touch pane state.
+            var byPane = new Dictionary<string, int[]>();
+            foreach (var g in _last.Where(v => v.Kind == "live" && v.PaneId != null)
+                                   .GroupBy(v => v.PaneId!))
+                byPane[g.Key] = g.Select(v => v.Port).Distinct().OrderBy(p => p).ToArray();
+            _applyPanePorts(byPane);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { Log.Error("LocalController.Refresh", ex); }

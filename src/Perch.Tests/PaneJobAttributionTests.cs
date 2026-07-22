@@ -83,8 +83,14 @@ public class PaneJobAttributionTests
             var noJob = new[] { new PaneProc(shell.Id, "pane1", "test-pane", "idle", null) };
 
             // The same live server, the same scan — two attribution strategies.
-            var viaJob = (await poller.ScanAsync(withJob)).FirstOrDefault(l => l.Port == port);
-            var viaAncestry = (await poller.ScanAsync(noJob)).FirstOrDefault(l => l.Port == port);
+            // ScanAsync returns null only when the scan subprocess itself fails,
+            // which here would be an environment problem worth failing loudly on.
+            var jobScan = await poller.ScanAsync(withJob);
+            var ancestryScan = await poller.ScanAsync(noJob);
+            Assert.NotNull(jobScan);
+            Assert.NotNull(ancestryScan);
+            var viaJob = jobScan!.FirstOrDefault(l => l.Port == port);
+            var viaAncestry = ancestryScan!.FirstOrDefault(l => l.Port == port);
 
             // Guard: if the ancestry walk can still find this, the server isn't
             // really orphaned and the test would prove nothing.
