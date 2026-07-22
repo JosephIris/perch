@@ -2181,6 +2181,12 @@ button.pane__chip--ports:hover {
   font-size: 13px;
   line-height: 1;
   color: var(--color-state-working);
+  /* Optical correction, measured not chosen: braille glyphs draw their 6-dot
+   * ring in the UPPER ¾ of the 8-dot cell (row 4 is reserved for dots 7/8,
+   * which cc's frames never use), so flex-centering the em box leaves the
+   * visible ring ~1.7px above the tree tick the resting dot sits on. Nudge
+   * the ink down so the ring's center lands on the tick like the circles do. */
+  transform: translateY(1.5px);
 }
 
 /* Working tab's ticking elapsed, right edge — same grid cell as the
@@ -2198,6 +2204,35 @@ button.pane__chip--ports:hover {
   transition: opacity var(--dur-fast) var(--ease-entry);
 }
 .session-item:hover .session-item__chip { opacity: 0; }
+
+/* Nested permission row's tag — the one-line replacement for the two-line
+ * "Claude needs your permission" note. The dot stays red (state palette);
+ * the tag is caution-tinted because it's the ASK, not the alarm. Same cell
+ * and hover-fade contract as the elapsed chip above. */
+.session-item__perm-tag {
+  grid-column: 3 / 4;
+  grid-row: 1;
+  align-self: center;
+  justify-self: end;
+  padding: 1px 6px;
+  border-radius: var(--r-input);
+  font-family: var(--font-small);
+  font-size: 10px;
+  color: var(--color-caution);
+  background: color-mix(in srgb, var(--color-caution) 14%, transparent);
+  transition: opacity var(--dur-fast) var(--ease-entry);
+}
+.session-item:hover .session-item__perm-tag:not(.session-item__perm-tag--inline) {
+  opacity: 0;
+}
+/* Active row variant: rides the end of the title line (the ✕ owns the chip
+ * cell), forming the same right-edge column the inactive tags sit in. */
+.session-item__perm-tag--inline {
+  grid-column: auto;
+  grid-row: auto;
+  margin-left: auto;
+  flex: 0 0 auto;
+}
 
 /* Age on a DONE (= your-turn) row. Mono numerals because this label is
  * rewritten by the 1Hz ticker and tabular-nums is what keeps the row from
