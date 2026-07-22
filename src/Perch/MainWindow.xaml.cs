@@ -264,7 +264,7 @@ public partial class MainWindow : FluentWindow
         // so this is always on, but invisible until something is listening. The
         // snapshot of live pane pids is taken on THIS (UI) thread each scan, so
         // attribution never reads session/pane state off-thread.
-        _local = new LocalController(Dispatcher, PostToPage, SnapshotLivePanes);
+        _local = new LocalController(Dispatcher, PostToPage, SnapshotLivePanes, ApplyPanePorts);
         _local.Start();
         EnsurePaneNames();
         // Persist immediately on first launch so external tools (the perch
@@ -1517,6 +1517,27 @@ public partial class MainWindow : FluentWindow
                         pty.Job));
         }
         return list;
+    }
+
+    /// Scan results → pane state: each live pane's Ports becomes exactly the
+    /// set the local scan attributed to it (empty when it serves nothing).
+    /// This drives the tab/header ":port" chips and the sidebar serving pip.
+    /// The scan is authoritative — a stale `meta --port` value gets corrected
+    /// on the next pass. Runs on the UI thread (LocalController guarantees it).
+    private void ApplyPanePorts(IReadOnlyDictionary<string, int[]> byPane)
+    {
+        var changed = false;
+        foreach (var sess in _store.Sessions)
+        {
+            if (sess.ClosedAtUnixMs > 0) continue;
+            foreach (var pane in AllLeaves(sess.Root))
+            {
+                var want = byPane.TryGetValue(pane.Id.ToString("N"), out var p)
+                    ? p : Array.Empty<int>();
+                if (!want.SequenceEqual(pane.Ports)) { pane.Ports = want; changed = true; }
+            }
+        }
+        if (changed) PushState();
     }
 
     /// Open a localhost URL in the system default browser. Host-side (not a

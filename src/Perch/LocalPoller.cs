@@ -59,7 +59,10 @@ internal sealed class LocalPoller
              ForEach-Object {
                $ms=0
                if ($_.CreationDate) { try { $ms=[int64]([datetimeoffset]$_.CreationDate).ToUnixTimeMilliseconds() } catch {} }
-               [pscustomobject]@{ pid=[int]$_.ProcessId; ppid=[int]$_.ParentProcessId; name=[string]$_.Name; cmd=[string]$_.CommandLine; startMs=$ms }
+               # Strip raw control chars from name/cmdline: a process launched with
+               # e.g. a BEL in its arguments produced JSON System.Text.Json rejects,
+               # and one such process poisoned EVERY scan until the app restarted.
+               [pscustomobject]@{ pid=[int]$_.ProcessId; ppid=[int]$_.ParentProcessId; name=[string]($_.Name -replace '[\x00-\x1F\x7F]',' '); cmd=[string]($_.CommandLine -replace '[\x00-\x1F\x7F]',' '); startMs=$ms }
              }
         [pscustomobject]@{ listeners=@($L); procs=@($P) } | ConvertTo-Json -Depth 3 -Compress
         """;
@@ -76,18 +79,44 @@ internal sealed class LocalPoller
         "yarn", "esbuild", "http-server", "live-server", "serve",
     };
 
-    public async Task<IReadOnlyList<LocalListener>> ScanAsync(
+    /// Null means "the scan itself failed" (subprocess error, timeout, bad
+    /// JSON) — distinct from an empty list, which means "scanned fine, nothing
+    /// is listening". The controller keeps its last good state on null instead
+    /// of wrongly clearing every pane's ports.
+    public async Task<IReadOnlyList<LocalListener>?> ScanAsync(
         IReadOnlyList<PaneProc> panes, CancellationToken ct = default)
     {
         var (code, stdout, stderr) = await RunAsync(Script, 15_000, ct);
         if (code != 0 || string.IsNullOrWhiteSpace(stdout))
         {
             if (code != 0) Log.Info($"LocalPoller: scan failed ({code}): {stderr.Trim()}");
-            return Array.Empty<LocalListener>();
+            return null;
         }
 
-        try { return Parse(stdout, panes); }
-        catch (Exception ex) { Log.Error("LocalPoller.Parse", ex); return Array.Empty<LocalListener>(); }
+        // Belt to the script's braces: any raw control byte that still reaches
+        // us (a codepage surprise, a PowerShell version that doesn't escape)
+        // would fail the strict JSON parse and cost the whole scan.
+        try { return Parse(StripControlChars(stdout), panes); }
+        catch (Exception ex) { Log.Error("LocalPoller.Parse", ex); return null; }
+    }
+
+    /// Replace raw C0 control chars (minus the JSON-legal whitespace \t \r \n)
+    /// with spaces. Inside JSON string values these are always invalid, and the
+    /// structural characters JSON actually uses are all printable, so this is
+    /// safe on well-formed output and healing on corrupt output.
+    internal static string StripControlChars(string s)
+    {
+        StringBuilder? sb = null;
+        for (var i = 0; i < s.Length; i++)
+        {
+            var c = s[i];
+            if (c < 0x20 && c != '\t' && c != '\r' && c != '\n' || c == 0x7F)
+            {
+                sb ??= new StringBuilder(s);
+                sb[i] = ' ';
+            }
+        }
+        return sb?.ToString() ?? s;
     }
 
     private sealed record ProcRow(int Pid, int Ppid, string Name, string Cmd, long StartMs);
