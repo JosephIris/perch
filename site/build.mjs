@@ -45,5 +45,9 @@ await cp(resolve(repo, "src/web/perch-glyph.png"), resolve(dist, "perch-glyph.pn
 await cp(resolve(repo, "src/web/fonts/InterVariable.woff2"), resolve(dist, "fonts/InterVariable.woff2"));
 // Actions-based Pages skips Jekyll anyway; the marker makes it explicit.
 await writeFile(resolve(dist, ".nojekyll"), "");
+// Custom domain. The workflow deploy source (unlike branch-based Pages) never
+// commits a CNAME, so emit it into every artifact to keep buildwithperch.com
+// pinned — a redeploy can't silently drop the domain.
+await writeFile(resolve(dist, "CNAME"), "buildwithperch.com\n");
 
 console.log("[site] built ->", dist);
