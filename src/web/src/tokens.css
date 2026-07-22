@@ -141,6 +141,10 @@
    * the blue accent (working), green (done) and red (interrupt). */
   --color-skill:            #C792EA;
   --color-skill-faint:      rgba(199, 146, 234, 0.14);
+  /* Images / media — rose, a warmer pink than the skill violet beside it in
+   * the inspector filter bar, and used for nothing else in the chrome. */
+  --color-image:            #E993B8;
+  --color-image-faint:      rgba(233, 147, 184, 0.14);
   /* Foreground that reads ON the accent fill. The accent is a light blue, so
    * text/knobs over it must be the dark navy below (NOT white). Used by the
    * toggle knob and the accent button (which still inlines the same value as
