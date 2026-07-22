@@ -907,10 +907,26 @@ export class Sidebar {
       }
     }
 
-    // Note line — only in the Needs-you section. Shows the agent's ask; falls
-    // back to a state phrase when the hook didn't push notify text. 2-line
-    // clamp keeps the framed row tight.
-    if (showNote) {
+    // Note line — the agent's ask; falls back to a state phrase when the hook
+    // didn't push notify text. 2-line clamp keeps the framed row tight.
+    //
+    // EXCEPT a nested permission row, which stays ONE line: the red dot is
+    // already the alarm, and the generic "Claude needs your permission" prose
+    // added a whole row without adding information. A small caution tag names
+    // the state instead; the real ask (when the hook pushed one) rides the
+    // tag's tooltip. Inactive rows put the tag in the right-edge chip cell
+    // (it fades as the hover ✕ arrives, same as the elapsed chip); the active
+    // row's ✕ owns that cell permanently, so its tag rides the title line.
+    if (showNote && compact && s.agentState === "permission") {
+      const tag = document.createElement("span");
+      tag.className =
+        "session-item__perm-tag" +
+        (active ? " session-item__perm-tag--inline" : "");
+      tag.textContent = "permission";
+      if (s.notification?.text) tag.title = s.notification.text;
+      if (active) primary.appendChild(tag);
+      else item.appendChild(tag);
+    } else if (showNote) {
       const level =
         s.notification?.level ?? (s.agentState === "permission" ? "error" : "warn");
       const text =

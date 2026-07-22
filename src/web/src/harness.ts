@@ -237,6 +237,15 @@ const projectSessions: SessionView[] = [
     agentState: "working", activityDetail: "editing hook.ts", ports: [5173],
     workingCount: 1, turnStartMs: TWO_MIN_AGO, doneAtMs: 0, ahead: 6,
   }),
+  // Permission-blocked tab in a NESTED row — the compact treatment: red dot +
+  // a small caution "permission" tag on the right edge, ONE line (the two-line
+  // note is sessions-mode only). The actual ask rides the tag's tooltip.
+  projectTab({
+    id: "s-tab-perm", title: "disc vm",
+    rootPane: leaf({ name: "disc vm", agentState: "permission", branch: "main", notification: { text: "Allow running `gcloud compute instances delete`?", level: "error" } }),
+    agentState: "permission", waitingCount: 1,
+    notification: { text: "Allow running `gcloud compute instances delete`?", level: "error" },
+  }),
   // Long tagged title: proves the pre-title tag line survives the ellipsis
   // (the old trailing dot was swallowed with the clipped text).
   projectTab({
