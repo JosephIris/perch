@@ -566,42 +566,18 @@ a:focus-visible, button:focus-visible {
 /* ==== Windows-first wedge ============================================== */
 .wedge { max-width: 720px; margin: 0 auto; padding: 0 24px; }
 
-/* Monocle Guy frowning at an apple (a Mac stand-in). */
-.apple-scene-wrap { margin: 12px auto 0; display: flex; justify-content: center; }
+/* Monocle Guy strolls in whistling, meets an apple (a Mac stand-in), and the
+ * camera pushes in on his disgust. All motion is driven from apple-scene.ts
+ * (rig poses + a viewBox camera); the CSS only sizes the stage. The svg keeps
+ * its default overflow:hidden so the camera crops at the frame edge. */
+.apple-scene-wrap { margin: 20px auto 0; display: flex; justify-content: center; }
 .apple-scene {
   position: relative;
-  width: min(440px, 90%);
-  aspect-ratio: 3 / 1.7;
+  width: min(640px, 94%);
+  aspect-ratio: 260 / 66;
 }
 .apple-scene__bird {
   display: block; width: 100%; height: 100%;
-  overflow: visible;
   color: var(--ink);
   --color-accent: var(--accent);
-}
-.apple-scene__apple {
-  position: absolute;
-  right: 9%; bottom: 26%;
-  animation: apple-bob 2.8s ease-in-out infinite;
-}
-.apple-scene__apple svg { display: block; filter: drop-shadow(0 3px 4px rgba(0, 0, 0, 0.35)); }
-@keyframes apple-bob {
-  0%, 100% { transform: translateY(0) rotate(-3deg); }
-  50%      { transform: translateY(-7px) rotate(3deg); }
-}
-.apple-scene__frown {
-  position: absolute;
-  left: 38%; top: 5%;
-  transform-origin: center bottom;
-  animation: frown-furrow 3.2s ease-in-out infinite;
-}
-.apple-scene__frown svg { display: block; }
-@keyframes frown-furrow {
-  0%, 18%   { opacity: 0.15; transform: translateY(3px) scaleY(0.55); }
-  38%, 82%  { opacity: 1;    transform: translateY(0) scaleY(1); }
-  100%      { opacity: 0.15; transform: translateY(3px) scaleY(0.55); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .apple-scene__apple, .apple-scene__frown { animation: none; }
-  .apple-scene__frown { opacity: 1; }
 }
