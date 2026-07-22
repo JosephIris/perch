@@ -389,6 +389,33 @@ internal static class GitProc
         return int.TryParse(stdout.Trim(), out var n) ? n : 0;
     }
 
+    /// Full shas of the unpushed commits (`@{upstream}..HEAD`). Null when the
+    /// command fails (no upstream / not a repo) — same fold as AheadAsync:
+    /// nothing to push, so callers keep whatever attribution they had.
+    public static async Task<IReadOnlySet<string>?> UnpushedShasAsync(string cwd)
+    {
+        var (ok, stdout) = await RunAsync("git", "rev-list @{upstream}..HEAD", cwd);
+        if (!ok) return null;
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var line in stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            set.Add(line.Trim());
+        return set;
+    }
+
+    /// How many of the repo's unpushed commits this pane's recorded shas claim.
+    /// The hook records the SHORT sha `git commit` printed, so match by prefix;
+    /// 7+ hex chars can't collide within one repo's unpushed set in practice,
+    /// and a stale claim (rebased away, already pushed) simply stops matching.
+    public static int CountAttributed(IReadOnlySet<string> unpushedFull, IReadOnlyList<string> paneShas)
+    {
+        var n = 0;
+        foreach (var full in unpushedFull)
+            foreach (var mine in paneShas)
+                if (mine.Length >= 7 && full.StartsWith(mine, StringComparison.OrdinalIgnoreCase))
+                { n++; break; }
+        return n;
+    }
+
     /// The unpushed commits (`@{upstream}..HEAD`, newest first) with per-commit
     /// diff stats and file lists — the data behind the "↑N ready to push" recap.
     /// Each commit is tagged InSession when it's reachable from

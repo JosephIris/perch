@@ -271,6 +271,10 @@ export type PaneTreeView =
       linesDeleted: number;
       filesChanged: number;
       ahead: number;
+      /* Of `ahead`, the commits THIS pane's agent made (the host intersects
+       * hook-claimed shas with @{upstream}..HEAD). Always ≤ ahead; 0 when the
+       * agent has nothing unpushed of its own. */
+      aheadMine: number;
       /* Unix-ms the pane entered its current working spell (0 when not
        * working). The page ticks elapsed against Date.now(). */
       turnStartMs: number;
@@ -320,6 +324,11 @@ export type SessionView = {
   linesDeleted: number;
   filesChanged: number;
   ahead: number;
+  /* Of `ahead`, the commits this session's own agents made (summed across
+   * panes; each sha is claimed by exactly one pane). Projects-mode tab rows
+   * show THIS instead of `ahead`, which is a branch fact and reads the same
+   * on every tab sharing the branch. */
+  aheadMine: number;
   /* Unix-ms the earliest working pane started (0 when nothing's working) —
    * drives the live "working · 2m" elapsed in the sidebar/dashboard. */
   turnStartMs: number;

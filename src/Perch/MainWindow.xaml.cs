@@ -243,6 +243,7 @@ public partial class MainWindow : FluentWindow
         _panes.AgentMeta += OnAgentMeta;
         _panes.GitBaseline += OnGitBaseline;
         _panes.GitTouched += OnGitTouched;
+        _panes.GitCommitted += OnGitCommitted;
         _panes.AgentTitle += OnAgentTitle;
         _panes.NameReset += OnNameReset;
         _panes.AgentType += OnAgentType;
@@ -1902,9 +1903,14 @@ public partial class MainWindow : FluentWindow
             ? GitProc.SessionStatsAsync(baseline, cwd, pane.UntrackedBaseline, pathFilter, touched)
             : System.Threading.Tasks.Task.FromResult<GitSessionStats?>(null);
         var aheadT = GitProc.AheadAsync(cwd);
-        await System.Threading.Tasks.Task.WhenAll(statsT, aheadT);
+        // The per-pane attributed split rides the same refresh: a push (or
+        // rebase) shrinks the unpushed set, and the "↑N mine" counts must
+        // follow without waiting for another commit to trigger them.
+        var minesT = GitProc.UnpushedShasAsync(cwd);
+        await System.Threading.Tasks.Task.WhenAll(statsT, aheadT, minesT);
         var stats = await statsT;
         var ahead = await aheadT;
+        var mines = await minesT;
         await Dispatcher.InvokeAsync(() =>
         {
             var changed = false;
@@ -1930,6 +1936,7 @@ public partial class MainWindow : FluentWindow
             // same tree that pushed without a status change of its own would keep
             // the Max-based ↑N chip inflated. Passive path — no hover needed.
             if (ahead is int a && ReconcileAheadForCwd(cwd, a)) changed = true;
+            if (mines != null && ReconcileAheadMineForCwd(cwd, mines)) changed = true;
             if (changed) PushState();
         });
     }
@@ -2344,6 +2351,58 @@ public partial class MainWindow : FluentWindow
                     && _paneCwd.TryGetValue(p.Id, out var pc)
                     && string.Equals(pc, cwd, StringComparison.OrdinalIgnoreCase))
                 { p.Ahead = ahead; changed = true; }
+        return changed;
+    }
+
+    /// The hook parsed a "[branch abc1234]" marker out of a `git commit` this
+    /// pane's agent just ran: claim the sha for the pane (persisted — unpushed
+    /// commits outlive restarts) and recompute the repo's per-pane split now,
+    /// since this is exactly the moment the counts change.
+    private void OnGitCommitted(Session sess, Guid paneId, GitCommitMessage msg)
+    {
+        var pane = FindPane(sess, paneId);
+        var sha = msg.Sha?.Trim();
+        if (pane == null || string.IsNullOrEmpty(sha) || sha!.Length < 7) return;
+        if (!pane.CommitShas.Contains(sha, StringComparer.OrdinalIgnoreCase))
+        {
+            pane.CommitShas.Add(sha);
+            // Bounded so sessions.json can't grow without limit under a
+            // long-lived never-pushing pane; oldest claims age out first —
+            // they're also the first to push and stop mattering.
+            while (pane.CommitShas.Count > 200) pane.CommitShas.RemoveAt(0);
+            _store.Save();
+        }
+        if (_paneCwd.TryGetValue(paneId, out var cwd) && !string.IsNullOrEmpty(cwd))
+            _ = RefreshAheadMineAsync(cwd);
+    }
+
+    private async System.Threading.Tasks.Task RefreshAheadMineAsync(string cwd)
+    {
+        var unpushed = await GitProc.UnpushedShasAsync(cwd);
+        if (unpushed == null) return;
+        await Dispatcher.InvokeAsync(() =>
+        {
+            if (ReconcileAheadMineForCwd(cwd, unpushed)) PushState();
+        });
+    }
+
+    /// Recompute every same-repo pane's attributed unpushed count against a
+    /// fresh `@{upstream}..HEAD` set. Sibling panes reconcile together for the
+    /// same reason ReconcileAheadForCwd does: a push from one pane changes the
+    /// answer for all of them. UI thread only.
+    private bool ReconcileAheadMineForCwd(string cwd, IReadOnlySet<string> unpushedFull)
+    {
+        if (string.IsNullOrEmpty(cwd)) return false;
+        var changed = false;
+        foreach (var s in _store.Sessions)
+            foreach (var p in AllLeaves(s.Root))
+                if (_paneCwd.TryGetValue(p.Id, out var pc)
+                    && string.Equals(pc, cwd, StringComparison.OrdinalIgnoreCase))
+                {
+                    var mine = p.CommitShas.Count == 0
+                        ? 0 : GitProc.CountAttributed(unpushedFull, p.CommitShas);
+                    if (p.AheadMine != mine) { p.AheadMine = mine; changed = true; }
+                }
         return changed;
     }
 

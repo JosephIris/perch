@@ -32,9 +32,17 @@ function leaves(node: PaneTreeView): Array<Extract<PaneTreeView, { kind: "leaf" 
   return node.kind === "leaf" ? [node] : node.children.flatMap(leaves);
 }
 
-/** The pane whose unpushed-commit recap the session's ↑N represents. */
-function aheadPaneId(s: SessionView): string | null {
+/** The pane whose unpushed-commit recap the session's ↑N represents. When the
+ *  chip shows the session's OWN commits (`mine`, projects-mode tab rows), the
+ *  anchor is the pane claiming the most of them; otherwise the pane matching
+ *  the branch-wide count. */
+function aheadPaneId(s: SessionView, mine = false): string | null {
   const ls = leaves(s.rootPane);
+  if (mine) {
+    let best: (typeof ls)[number] | null = null;
+    for (const l of ls) if (l.aheadMine > 0 && (!best || l.aheadMine > best.aheadMine)) best = l;
+    return (best ?? ls[0])?.paneId ?? null;
+  }
   return (ls.find((l) => l.ahead === s.ahead && s.ahead > 0) ?? ls[0])?.paneId ?? null;
 }
 
@@ -1013,7 +1021,16 @@ export class Sidebar {
     // The unpushed-commit chip rides just after the branch. Rendered as its own
     // accent-colored, interactive span (hover → recap, click → details), so it
     // can't be a plain text suffix anymore.
-    const aheadItem = s.ahead > 0 ? { text: "", ahead: s.ahead } : null;
+    //
+    // Which count: compact (projects-mode) tab rows show aheadMine — the
+    // commits THIS tab's agent made. `ahead` is `@{upstream}..HEAD`, a fact
+    // about the BRANCH: N tabs sharing a branch all honestly wear the same
+    // number, which tells you nothing about who did what (the group header
+    // already carries the branch total). A tab with no commits of its own
+    // shows no chip at all. Session-mode rows are one-per-session and keep
+    // the branch-wide count — there's no sibling to disambiguate from.
+    const aheadN = compact ? s.aheadMine : s.ahead;
+    const aheadItem = aheadN > 0 ? { text: "", ahead: aheadN } : null;
 
     if (s.agentState === "working") {
       metaItems.push({ text: `▸ ${s.activityDetail || "working"}`, turnStart: withTime ? s.turnStartMs : undefined });
@@ -1070,7 +1087,7 @@ export class Sidebar {
       if (mi.ahead) {
         // Accent-blue, interactive "↑N ready to push" chip (shared builder —
         // the project header wears the same chip for the group's sum).
-        meta.appendChild(aheadChip(mi.ahead, aheadPaneId(s)));
+        meta.appendChild(aheadChip(mi.ahead, aheadPaneId(s, compact)));
         continue;
       }
       const span = document.createElement("span");

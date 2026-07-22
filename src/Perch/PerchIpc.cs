@@ -28,6 +28,7 @@ internal sealed class PerchIpcServer : IDisposable
     public event Action<OpenMessage>? OnOpen;
     public event Action<GitBaselineMessage>? OnGitBaseline;
     public event Action<GitTouchedMessage>? OnGitTouched;
+    public event Action<GitCommitMessage>? OnGitCommit;
     public event Action<TitleMessage>? OnTitle;
     public event Action<NameResetMessage>? OnNameReset;
     public event Action<AgentMessage>? OnAgent;
@@ -141,6 +142,10 @@ internal sealed class PerchIpcServer : IDisposable
                     var gt = JsonSerializer.Deserialize<GitTouchedMessage>(json, IpcJson.Options);
                     if (gt != null) _dispatcher.BeginInvoke(() => OnGitTouched?.Invoke(gt));
                     break;
+                case "git.commit":
+                    var gc = JsonSerializer.Deserialize<GitCommitMessage>(json, IpcJson.Options);
+                    if (gc != null) _dispatcher.BeginInvoke(() => OnGitCommit?.Invoke(gc));
+                    break;
                 case "title":
                     var t = JsonSerializer.Deserialize<TitleMessage>(json, IpcJson.Options);
                     if (t != null) _dispatcher.BeginInvoke(() => OnTitle?.Invoke(t));
@@ -227,6 +232,15 @@ internal sealed record GitBaselineMessage(
 /// filtered to its own agent's files instead of every tab wearing the union.
 internal sealed record GitTouchedMessage(
     [property: JsonPropertyName("path")] string? Path);
+
+/// Sent by the cc HookHandler after a Bash tool call whose command ran
+/// `git commit`, carrying the short sha parsed from the "[branch abc1234]"
+/// marker in the tool's output. The host records it on the pane, and each
+/// git refresh intersects the pane's claimed shas with `@{upstream}..HEAD`
+/// to produce the per-tab "↑N mine" count — the branch-wide ahead is a fact
+/// about the BRANCH and reads identically on every tab sharing it.
+internal sealed record GitCommitMessage(
+    [property: JsonPropertyName("sha")] string? Sha);
 
 /// Sent by the cc HookHandler on Claude's first UserPromptSubmit. Carries the
 /// (already length-bounded) prompt text the host uses to auto-name a still-
