@@ -1,3 +1,11 @@
+/* Pull in the REAL app chrome (tokens.css + every component class) so the
+ * reused Sidebar / Dashboard / pane-header render pixel-exact and the hand-
+ * built inspector journal matches. Must lead the file — @import has to precede
+ * all other rules. The app stylesheet's only bare-element globals are
+ * html/body/button/ul/scrollbars; the LP rules below re-declare the html/body
+ * bits they need and win on cascade (equal specificity, later wins). */
+@import "../../src/web/src/style.css";
+
 /* perch landing page. Deliberately single-theme dark: the product is a dark
  * terminal workspace and the page commits to its world. Tokens mirror the
  * app's tokens.css values; type is the bundled Inter Variable with the same
@@ -26,10 +34,13 @@
 
 * { box-sizing: border-box; }
 
-html { background: var(--ground); }
+/* Undo the app's `html, body { height:100% }` (it pins the shell to the
+ * viewport); the landing page is a tall scrolling document. */
+html { background: var(--ground); height: auto; }
 body {
   margin: 0;
   min-height: 100vh;
+  height: auto;
   background:
     radial-gradient(1200px 640px at 30% -12%, #1b2534 0%, transparent 60%),
     var(--ground);
@@ -78,27 +89,37 @@ a:focus-visible, button:focus-visible {
 /* Two columns: copy left, the live scene right, both left-aligned. Stacks
  * on narrow viewports with the scene after the copy. */
 .hero {
-  max-width: 1100px;
+  max-width: 780px;
   margin: 0 auto;
-  padding: 56px 24px 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
-  align-items: center;
-  gap: 40px;
+  padding: 64px 24px 0;
+  text-align: center;
 }
-@media (max-width: 860px) {
-  .hero { grid-template-columns: 1fr; gap: 8px; }
-}
-.hero h1 {
+.hero__title {
   margin: 0;
-  font-size: clamp(36px, 4.6vw, 52px);
-  line-height: 1.08;
-  font-weight: 650;
-  letter-spacing: -0.015em;
+  font-family: var(--font-display);
+  font-size: clamp(46px, 6.6vw, 74px);
+  line-height: 0.98;
+  font-weight: 680;
+  letter-spacing: -0.035em;
   text-wrap: balance;
 }
+/* The mascot's wire runs directly under the headline — the monocle bird flies
+ * in and perches on it (literally "perch"). Click replays the routine. The
+ * rig's viewBox is cropped to the wire band in main.ts. */
+.hero__wire {
+  margin: 4px 0 0;
+  cursor: pointer;
+}
+.hero__wire svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+  color: var(--ink);
+  --color-accent: var(--accent);
+}
 .hero__sub {
-  margin: 20px 0 0;
+  margin: 20px auto 0;
   max-width: 52ch;
   font-size: 17px;
   color: var(--ink-dim);
@@ -107,6 +128,7 @@ a:focus-visible, button:focus-visible {
 .hero__actions {
   margin-top: 28px;
   display: flex;
+  justify-content: center;
   gap: 12px;
   flex-wrap: wrap;
 }
@@ -132,39 +154,12 @@ a:focus-visible, button:focus-visible {
   color: var(--ink-faint);
 }
 
-/* The live scene: the same pose(t) rig the app ships. Click to replay with
- * a freshly shuffled routine (main.ts wires it). Overflow hidden because
- * the site crops the rig's viewBox to the action band. */
-.hero__scene {
-  cursor: pointer;
-  min-width: 0;
-}
-.hero__scene svg {
-  display: block;
-  width: 100%;
-  height: auto;
-  overflow: hidden;
-  color: var(--ink);
-  --color-accent: var(--accent);   /* the rig's monocle reads this token */
-}
-
-/* ---- product shot ---------------------------------------------------- */
-.shot {
-  max-width: 1100px;
-  margin: 26px auto 0;
-  padding: 0 24px;
-  text-align: center;
-}
-.shot img {
-  width: 100%;
-  height: auto;
-  border-radius: 10px;
-  border: 1px solid var(--line);
-}
+/* ---- workspace-demo caption (reused from the old product shot) -------- */
 .shot__caption {
   margin: 14px 0 0;
   font-size: 14px;
   color: var(--ink-faint);
+  text-align: center;
 }
 
 /* ---- moments --------------------------------------------------------- */
@@ -219,74 +214,222 @@ a:focus-visible, button:focus-visible {
 }
 .stage-tag--bottom { top: auto; bottom: 10px; }
 
-/* --- widget: session states ------------------------------------------- */
-.srow {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 9px 10px;
-  border-radius: 6px;
-  font-size: 13.5px;
+/* --- REAL-component demo stages --------------------------------------- */
+/* These cards mount the app's actual chrome (Sidebar, inspector journal),
+ * which brings its own #181818 surface and internal padding — so the stage
+ * goes edge-to-edge, matches that surface, and clips the component to the
+ * card. Taller than the default 208px stage to show a meaningful slice. */
+#demo-states,
+#demo-inspector {
+  padding: 0;
+  height: 300px;
+  background: var(--color-sidebar-surface);
 }
-.srow--active { background: rgba(255, 255, 255, 0.06); }
-.srow__dot {
-  width: 8px; height: 8px; border-radius: 50%;
-  background: #6CCB5F; flex: none;
-}
-.srow__dot--idle { background: transparent; box-shadow: inset 0 0 0 1.5px var(--ink-faint); }
-.srow__spin {
-  width: 14px; flex: none; text-align: center;
-  color: var(--accent);
-  font-family: var(--font-mono); font-size: 12px;
-}
-.srow__title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.srow__meta {
-  margin-left: auto; flex: none;
-  font-family: var(--font-mono); font-size: 11px;
-  color: var(--ink-faint);
-}
-.srow__chip {
-  margin-left: auto; flex: none;
-  font-family: var(--font-mono); font-size: 11px;
-  padding: 2px 7px; border-radius: 9px;
-}
-.srow__chip--hot  { background: rgba(108, 203, 95, 0.16); color: #8fdb81; }
-.srow__chip--warm { background: rgba(252, 225, 0, 0.13); color: #e8d675; }
-.srow__chip--cool { background: rgba(255, 158, 94, 0.12); color: #d9a583; }
 
-/* --- widget: inspector filters ----------------------------------------- */
-.idemo__chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
-.ichip {
-  border: 1px solid var(--line);
-  background: transparent;
-  color: var(--ink-dim);
-  border-radius: 12px;
-  padding: 3px 10px;
-  font: 550 11.5px var(--font-text);
-  cursor: pointer;
+/* Sidebar: fill the card; give the list the app's breathing room (the app's
+ * sidebar chrome we don't render — New session / Dashboard — normally supplies
+ * the top padding). */
+.demo-sidebar { height: 100%; width: 100%; overflow: hidden; }
+.demo-sidebar .sidebar__scroll {
+  height: 100%;
+  overflow: hidden;
+  padding: var(--sp-12) var(--sp-8) 0;
 }
-.ichip[aria-pressed="true"] {
-  background: rgba(118, 185, 237, 0.14);
-  border-color: rgba(118, 185, 237, 0.4);
-  color: var(--ink);
+
+/* Inspector rail: fill the card (drop the fixed 336px + card radius so it sits
+ * flush), let the stream clip. */
+.demo-inspector {
+  width: 100%; height: 100%;
+  border-radius: 0;
+  display: flex; flex-direction: column;
+  overflow: hidden;
 }
-.ichip__n { color: var(--ink-faint); margin-left: 4px; }
-.irow {
+.demo-inspector .inspector__stream { flex: 1 1 auto; overflow-y: auto; }
+/* Changes body follows the bar's aria-expanded (the feature card collapses it
+ * to a one-line signal; the hero demo expands it). */
+.demo-inspector .changes__body { display: none; }
+.demo-inspector .changes__bar[aria-expanded="true"] + .changes__body { display: block; }
+
+/* Inspector head/vitals — the app builds these from live state we don't have,
+ * so they're re-created here to the same visual contract. */
+.demo-inspector__head {
+  display: flex; align-items: center; gap: var(--sp-8);
+  padding: var(--sp-8) var(--sp-12);
+  flex: 0 0 auto;
+}
+.demo-inspector__dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+.demo-inspector__dot[data-state="working"] { background: var(--color-state-working); }
+.demo-inspector__title {
+  font-size: var(--type-caption-size); font-weight: 500;
+  color: var(--color-text-primary);
+}
+.demo-inspector__vitals {
+  display: flex; align-items: center; gap: var(--sp-8);
+  padding: var(--sp-8) var(--sp-12);
+  border-top: 1px solid var(--color-sidebar-stroke);
+  font-family: var(--font-small); font-size: 11px;
+  color: var(--color-text-tertiary);
+  flex: 0 0 auto;
+}
+.demo-inspector__cost { margin-right: auto; }
+
+/* Keep the boot card the same height as the two reused-component cards so the
+ * feature row stays even; the bootpane grows to fill. */
+#demo-boot { height: 300px; display: flex; flex-direction: column; }
+#demo-boot .bootpane__head { flex: 0 0 auto; }
+#demo-boot .bootpane__body { flex: 1 1 auto; height: auto; }
+
+/* ==== Hero: the live workspace demo =================================== */
+.wsdemo-wrap {
+  max-width: 1180px;
+  margin: 30px auto 0;
+  padding: 0 24px;
+  text-align: center;
+}
+/* On narrow viewports the dense three-column workspace can't reflow, so it
+ * scrolls horizontally inside its own frame — the page body never does. */
+.wsdemo-scroll { overflow-x: auto; overflow-y: hidden; border-radius: var(--r-window); }
+.wsdemo {
+  min-width: 940px;
   display: flex;
-  gap: 8px;
-  padding: 5px 2px;
-  font-size: 12.5px;
-  color: var(--ink-dim);
-  align-items: baseline;
+  flex-direction: column;
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--r-window);
+  overflow: hidden;
+  background: #141414;
+  box-shadow: 0 24px 60px -30px rgba(0, 0, 0, 0.7);
+  text-align: left;
 }
-.irow__glyph { flex: none; width: 12px; color: var(--ink-faint); font-family: var(--font-mono); }
-.irow--user { color: var(--ink); }
-.irow--work { font-family: var(--font-mono); font-size: 11.5px; }
-.irow--image img, .irow--image svg { border-radius: 4px; display: block; }
-.idemo--hide-user .irow--user,
-.idemo--hide-claude .irow--claude,
-.idemo--hide-work .irow--work,
-.idemo--hide-image .irow--image { display: none; }
+
+/* Title bar — the WPF FluentWindow chrome. */
+.wsdemo__titlebar {
+  display: flex; align-items: center;
+  height: 34px; padding: 0 12px;
+  border-bottom: 1px solid var(--color-sidebar-stroke);
+  background: #1a1a1a;
+  flex: 0 0 auto;
+}
+.wsdemo__brand {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: 12px; font-weight: 600; color: var(--color-text-secondary);
+}
+.wsdemo__glyph {
+  width: 13px; height: 13px; border-radius: 50%;
+  background: radial-gradient(circle at 50% 50%, #e9eef4 0 34%, transparent 36%),
+              var(--color-accent);
+  box-shadow: inset 0 0 0 1.5px var(--color-accent);
+}
+.wsdemo__winbtns { margin-left: auto; display: inline-flex; gap: 18px; }
+.wsdemo__winbtns i { width: 11px; height: 1px; background: var(--color-text-tertiary); display: block; align-self: center; }
+.wsdemo__winbtns i:nth-child(2) { width: 9px; height: 9px; border: 1px solid var(--color-text-tertiary); background: none; }
+.wsdemo__winbtns .wsdemo__x { transform: rotate(45deg); position: relative; }
+
+/* Body grid: sidebar | workspace | inspector. */
+.wsdemo__body {
+  display: grid;
+  grid-template-columns: 214px 1fr 300px;
+  column-gap: var(--sp-8);
+  height: 588px;
+  padding: 0 var(--sp-8) var(--sp-8);
+  background: #141414;
+  min-height: 0;
+}
+/* The reused .sidebar carries `grid-area: sidebar` (named for the app's own
+ * grid); pin explicit columns so all three land where we want here. */
+.wsdemo__sidebar   { grid-area: auto; grid-column: 1; grid-row: 1; }
+.wsdemo__workspace { grid-column: 2; grid-row: 1; }
+.wsdemo__inspector { grid-column: 3; grid-row: 1; }
+
+/* Sidebar column: real .sidebar surface, our top chrome + resource cards. */
+.wsdemo__sidebar {
+  display: flex; flex-direction: column; min-height: 0;
+  background: var(--color-sidebar-surface);
+  border-radius: 0 0 var(--r-card) var(--r-card);
+  padding: var(--sp-8) var(--sp-8) var(--sp-12);
+  overflow: hidden;
+}
+.wsdemo__sidebar .sidebar__scroll {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
+  margin: 0 calc(-1 * var(--sp-4));
+  padding: 0 var(--sp-4);
+}
+.wsside__top { flex: 0 0 auto; display: flex; flex-direction: column; gap: 2px; margin-bottom: var(--sp-8); }
+.wsside__seg {
+  display: flex; gap: 2px; padding: 3px; margin-bottom: var(--sp-4);
+  background: var(--color-subtle-secondary); border-radius: var(--r-input);
+}
+.wsside__seg-btn {
+  flex: 1; padding: 4px 0; border-radius: 3px; font-size: 11.5px;
+  color: var(--color-text-tertiary); text-align: center;
+}
+.wsside__seg-btn--on { background: var(--color-subtle-tertiary); color: var(--color-text-primary); }
+.wsside__action {
+  display: flex; align-items: center; gap: var(--sp-8);
+  padding: 6px var(--sp-8); border-radius: var(--r-input);
+  font-size: 13px; color: var(--color-text-secondary);
+}
+.wsside__plus { color: var(--color-text-tertiary); font-size: 14px; }
+.wsside__grid { width: 12px; height: 12px; border-radius: 2px; box-shadow: inset 0 0 0 1px var(--color-text-tertiary); }
+.wsside__badge {
+  margin-left: auto; font-size: 10px; font-weight: 600; color: #fff;
+  background: #e5484d; border-radius: 8px; padding: 0 6px; line-height: 15px;
+}
+.wsside__res { flex: 0 0 auto; margin-top: var(--sp-8); }
+.wsside__reslabel {
+  font-family: var(--font-small); font-size: 10px; letter-spacing: 0.6px;
+  text-transform: uppercase; color: var(--color-text-tertiary);
+  margin: var(--sp-8) 0 var(--sp-4); padding: 0 var(--sp-4);
+}
+.wscard {
+  position: relative; display: grid;
+  grid-template-columns: auto 1fr auto; align-items: center; gap: 6px;
+  padding: var(--sp-8); border-radius: var(--r-card); font-size: 12px;
+}
+.wscard__sub { grid-column: 1 / -1; font-size: 11px; color: var(--color-text-tertiary); }
+.wscard__dot { width: 7px; height: 7px; border-radius: 50%; }
+.wscard__meta { font-family: var(--font-mono); font-size: 11px; }
+.wscard--cloud { background: var(--color-cloud-faint); }
+.wscard--cloud .wscard__dot { background: var(--color-cloud); }
+.wscard--cloud .wscard__meta { color: var(--color-cloud); }
+.wscard--local { background: var(--color-local-faint); box-shadow: inset 0 0 0 1px var(--color-local-frame); }
+.wscard--local .wscard__dot { background: var(--color-local); }
+.wscard--local .wscard__meta { color: var(--color-local); }
+
+/* Workspace column: big main pane + right column (dev over boot). */
+.wsdemo__workspace { display: flex; gap: var(--sp-8); min-width: 0; min-height: 0; }
+.wsdemo__rightcol { display: flex; flex-direction: column; gap: var(--sp-8); flex: 1 1 0; min-width: 0; }
+/* Dev + boot split the right column evenly (both clip their overflow). */
+.wsdemo__rightcol > .wspane { flex: 1 1 0; min-height: 0; }
+.wspane {
+  display: flex; flex-direction: column; min-height: 0; min-width: 0;
+  background: var(--color-terminal-bg);
+  border-radius: var(--r-card);
+  overflow: hidden;
+}
+.wspane--large { flex: 1.35 1 0; }
+.wspane__body { flex: 1 1 auto; min-height: 0; overflow: hidden; padding: var(--sp-8) var(--sp-12); }
+.wspane__body--boot { position: relative; padding: var(--sp-8) var(--sp-12); }
+
+/* Terminal text. */
+.wst { font-family: var(--font-mono); font-size: 10.5px; line-height: 1.55; color: var(--color-text-secondary); }
+.wst__l { white-space: pre-wrap; word-break: break-word; }
+.wst__sub { color: var(--color-text-disabled); }
+.wst b { color: var(--color-text-primary); font-weight: 600; }
+.wst-user { color: var(--color-text-primary); }
+.wst-b { color: var(--color-success); }
+.wst-work { color: var(--color-accent); }
+.wst-add { color: var(--color-success); }
+.wst-del { color: var(--color-error); }
+.wst-vite { color: var(--color-success); font-weight: 600; }
+.wst-arrow { color: var(--color-success); }
+.wst-link { color: var(--color-accent); }
+
+/* Inspector column: the real rail, full height. */
+.wsdemo__inspector {
+  min-height: 0; overflow: hidden;
+  border-radius: 0 0 var(--r-card) var(--r-card);
+}
+.wsdemo__inspector .demo-inspector { height: 100%; border-radius: 0; }
 
 /* --- widget: boot cover ------------------------------------------------ */
 #demo-boot { padding: 0; cursor: pointer; }
@@ -374,3 +517,64 @@ a:focus-visible, button:focus-visible {
 @media (max-width: 640px) {
   .footer__credit { margin-left: 0; }
 }
+
+/* ==== Section headers ================================================== */
+.section-head {
+  max-width: 720px;
+  margin: 88px auto 0;
+  padding: 0 24px;
+  text-align: center;
+}
+.section-head__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: clamp(26px, 3.4vw, 34px);
+  font-weight: 680;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+.section-head__sub {
+  margin: 14px auto 0;
+  max-width: 60ch;
+  font-size: 16px;
+  color: var(--ink-dim);
+  text-wrap: pretty;
+}
+.section-head + .moments { margin-top: 32px; }
+
+/* ==== Windows-first wedge ============================================== */
+.wedge { max-width: 1000px; margin: 0 auto; padding: 0 24px; }
+.wedge__grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin-top: 32px;
+}
+@media (max-width: 760px) { .wedge__grid { grid-template-columns: 1fr; } }
+.wedge__card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 20px 22px;
+}
+.wedge__card--us {
+  border-color: var(--accent-soft, rgba(118, 185, 237, 0.4));
+  background: rgba(118, 185, 237, 0.06);
+}
+.wedge__name { font-size: 16px; font-weight: 640; color: var(--ink); }
+.wedge__card--us .wedge__name { color: var(--accent); }
+.wedge__plat {
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+.wedge__note { margin: 12px 0 0; font-size: 14px; color: var(--ink-dim); }
+.wedge__foot {
+  max-width: 640px;
+  margin: 22px auto 0;
+  text-align: center;
+  font-size: 13.5px;
+  color: var(--ink-faint);
+}
+.wedge__foot em { font-style: normal; color: var(--ink-dim); }

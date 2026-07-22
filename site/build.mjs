@@ -35,14 +35,23 @@ await esbuild.build({
   bundle: true,
   minify: true,
   loader: { ".woff2": "copy" },
-  external: ["./fonts/*"],
+  // ./fonts/* — the LP's own @font-face; /fonts/* — the app tokens.css
+  // @font-face (root-absolute). Both resolve at runtime against dist/fonts.
+  external: ["./fonts/*", "/fonts/*"],
   outfile: resolve(dist, "app.css"),
 });
 
 await cp(resolve(here, "index.html"), resolve(dist, "index.html"));
 await cp(resolve(repo, "docs/media/workspace.png"), resolve(dist, "media/workspace.png"));
 await cp(resolve(repo, "src/web/perch-glyph.png"), resolve(dist, "perch-glyph.png"));
+// The app icon (monocled bird) — the projects-empty state and any real chrome
+// we mount reference /perch-logo.png at the server root.
+await cp(resolve(repo, "src/web/perch-glyph.png"), resolve(dist, "perch-logo.png"));
 await cp(resolve(repo, "src/web/fonts/InterVariable.woff2"), resolve(dist, "fonts/InterVariable.woff2"));
+// Geist Mono — the app's terminal/mono face. The real chrome we reuse (sidebar
+// meta, inspector work rows) reads var(--font-mono) from the app's tokens.css,
+// whose @font-face points at /fonts/GeistMonoVariable.woff2.
+await cp(resolve(repo, "src/web/fonts/GeistMonoVariable.woff2"), resolve(dist, "fonts/GeistMonoVariable.woff2"));
 // Actions-based Pages skips Jekyll anyway; the marker makes it explicit.
 await writeFile(resolve(dist, ".nojekyll"), "");
 // Custom domain. The workflow deploy source (unlike branch-based Pages) never

@@ -3,12 +3,18 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>perch — a Windows workspace for coding agents</title>
-  <meta name="description" content="perch runs Claude Code and friends across your projects: live agent state in the sidebar, a journal of what changed, and a real terminal when you want your hands on it. Free and open source." />
-  <meta property="og:title" content="perch — a Windows workspace for coding agents" />
-  <meta property="og:description" content="A power tool for non-power users. Watch every agent work, see what it changed, take over in a real terminal." />
-  <meta property="og:image" content="https://josephiris.github.io/perch/media/workspace.png" />
+  <title>perch — the native Windows workspace for coding agents</title>
+  <meta name="description" content="perch runs Claude Code and friends across your projects: live agent state in the sidebar, a journal of what changed, and a real terminal when you want your hands on it. Built Windows-first — native WPF + Win11 Mica. Free and open source." />
+  <link rel="canonical" href="https://buildwithperch.com/" />
+  <meta property="og:title" content="perch — the native Windows workspace for coding agents" />
+  <meta property="og:description" content="A power tool for non-power users. Watch every agent work, see what it changed, take over in a real terminal. Built Windows-first." />
+  <meta property="og:image" content="https://buildwithperch.com/media/workspace.png" />
+  <meta property="og:url" content="https://buildwithperch.com/" />
   <meta property="og:type" content="website" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="perch — the native Windows workspace for coding agents" />
+  <meta name="twitter:description" content="Watch every agent work, see what it changed, take over in a real terminal. Built Windows-first." />
+  <meta name="twitter:image" content="https://buildwithperch.com/media/workspace.png" />
   <link rel="icon" type="image/png" href="./perch-glyph.png" />
   <link rel="stylesheet" href="./app.css" />
 </head>
@@ -30,11 +36,14 @@
   <main>
     <section class="hero">
       <div class="hero__copy">
-        <h1>A power tool for non&#8209;power users.</h1>
+        <h1 class="hero__title">A power tool for<br>non&#8209;power&nbsp;users.</h1>
+        <div class="hero__wire" id="hero-scene"
+             title="Replay the routine" role="img"
+             aria-label="Monocle Guy, the perch mascot, perched on a wire beneath the title"></div>
         <p class="hero__sub">
-          perch is a Windows workspace for running Claude Code and friends
-          across your projects. Watch every agent work, see what it changed,
-          and take over in a real terminal when you want to.
+          perch is a native Windows workspace for running Claude Code and
+          friends across your projects. Watch every agent work, see what it
+          changed, and take over in a real terminal when you want to.
         </p>
         <div class="hero__actions">
           <a class="btn btn--primary" href="https://github.com/JosephIris/perch/releases/latest">
@@ -44,19 +53,26 @@
         </div>
         <p class="hero__micro">Free and open source &middot; Windows 10+</p>
       </div>
-      <div class="hero__scene" id="hero-scene"
-           title="Replay with a different routine" role="img"
-           aria-label="Monocle Guy, the perch mascot, performing his idle routine on a power line"></div>
     </section>
 
-    <section class="shot">
-      <img src="./media/workspace.png" width="1600" height="900" decoding="async"
-           alt="The perch projects view: a sidebar of agent sessions with live state, a Claude Code pane, a dev server pane, a pane still setting up, and the inspector journal" />
+    <section class="wsdemo-wrap" aria-label="A live view of the perch workspace">
+      <div class="wsdemo-scroll">
+        <div id="hero-demo"></div>
+      </div>
       <p class="shot__caption">
-        The projects view. The sidebar knows who needs you; the inspector
-        shows what happened.
+        A live slice of the workspace — real components, fixture data. Spinners
+        tick, the ages warm, the journal filters. Nothing here is a screenshot.
       </p>
     </section>
+
+    <header class="section-head">
+      <h2 class="section-head__title">Every agent, in one place</h2>
+      <p class="section-head__sub">
+        perch reads each Claude Code session through its hooks, not by scraping
+        the terminal, so the workspace always knows who's working, who's done,
+        and who needs you. These are the app's real components, live.
+      </p>
+    </header>
 
     <section class="moments">
       <div class="moment">
@@ -83,6 +99,43 @@
              frosted glass lifts the moment your pane is ready.</p>
         </div>
       </div>
+    </section>
+
+    <section class="wedge">
+      <header class="section-head">
+        <h2 class="section-head__title">Built Windows-first, and actually native</h2>
+        <p class="section-head__sub">
+          Most tools for running coding agents are Mac-first, or a cross-platform
+          port where Windows is an afterthought. perch is the only agent
+          workspace built on native Windows tech — WPF, WebView2, and real Win11
+          Mica — so it sits next to Windows Terminal and the Settings app, not
+          like a Mac app in a browser tab.
+        </p>
+      </header>
+      <div class="wedge__grid">
+        <div class="wedge__card wedge__card--us">
+          <div class="wedge__name">perch</div>
+          <div class="wedge__plat">Windows-native · WPF + WebView2 + Mica</div>
+          <p class="wedge__note">Designed for Windows from the first pixel.
+             No Electron, no browser tab, no WSL.</p>
+        </div>
+        <div class="wedge__card">
+          <div class="wedge__name">cmux · Conductor</div>
+          <div class="wedge__plat">macOS only</div>
+          <p class="wedge__note">The category's other native apps don't run
+             on Windows at all.</p>
+        </div>
+        <div class="wedge__card">
+          <div class="wedge__name">Vibe Kanban · Cursor · Windsurf</div>
+          <div class="wedge__plat">Cross-platform — Electron / browser</div>
+          <p class="wedge__note">They run on Windows, but as a web build or a
+             tab, not native Win11 chrome.</p>
+        </div>
+      </div>
+      <p class="wedge__foot">
+        Anthropic's own Claude Code Desktop runs on Windows too — perch is the
+        one built <em>for</em> Windows, not ported <em>to</em> it.
+      </p>
     </section>
 
     <section class="faq">

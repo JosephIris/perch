@@ -6,8 +6,68 @@ import {
   pose, buildScene, shuffledOrder, REST_T,
   type BeatOrder,
 } from "../../src/web/src/setup-overlay.js";
+// The REAL app chrome, driven by fixtures — exact replicas, not recreations.
+import { Sidebar } from "../../src/web/src/sidebar.js";
+import { startSpinnerTicker } from "../../src/web/src/spinner.js";
+import { startElapsedTicker } from "../../src/web/src/elapsed.js";
+import { buildInspector } from "./inspector-demo.js";
+import { buildWorkspaceDemo } from "./workspace-demo.js";
 
 const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+
+// One shared spinner + elapsed ticker drives every reused component's braille
+// spinner and live "2m"/"now" timestamps (keyed on [data-spinner] / [data-*]).
+startSpinnerTicker();
+startElapsedTicker();
+
+/* ---- fixtures: the storefront-web scenario -------------------------- */
+// Loose objects (esbuild strips types, so only the fields the components read
+// at runtime matter). Mirrors the product screenshot: a storefront-web project
+// mid-redesign plus a home-tools project, all at rest.
+const T0 = Date.now();
+function fxLeaf(id: string, o: any = {}): any {
+  return {
+    kind: "leaf", paneId: id + "-p", name: o.title ?? "", colorIndex: 0,
+    agentState: o.agentState ?? "idle", activityDetail: o.activityDetail ?? "",
+    branch: o.branch ?? "main", ports: o.ports ?? [], notification: null,
+    commitCount: 0, linesAdded: o.linesAdded ?? 0, linesDeleted: o.linesDeleted ?? 0,
+    filesChanged: 0, ahead: o.ahead ?? 0, aheadMine: o.aheadMine ?? 0,
+    turnStartMs: o.turnStartMs ?? 0,
+  };
+}
+function fxSession(o: any): any {
+  return {
+    shell: "pwsh", worktreeBranch: "", projectId: o.projectId ?? "",
+    branch: "main", ports: [], notification: null, paneCount: 1,
+    waitingCount: 0, workingCount: o.agentState === "working" ? 1 : 0,
+    linesAdded: 0, linesDeleted: 0, filesChanged: 0, ahead: 0, aheadMine: 0,
+    turnStartMs: 0, doneAtMs: 0, activityDetail: "",
+    ...o, rootPane: fxLeaf(o.id, o),
+  };
+}
+const DEMO_SESSIONS: any[] = [
+  fxSession({ id: "holiday-banner", title: "holiday banner", projectId: "sw",
+    agentState: "working", activityDetail: "adjusting the mobile breakpoint",
+    turnStartMs: T0 - 125_000, ahead: 3, aheadMine: 2 }),
+  fxSession({ id: "fix-checkout", title: "fix checkout css", projectId: "sw",
+    agentState: "done", doneAtMs: T0 - 49_000, linesAdded: 12, linesDeleted: 7,
+    ahead: 3, aheadMine: 1 }),
+  fxSession({ id: "seo-audit", title: "seo audit pass", projectId: "sw",
+    agentState: "done", doneAtMs: T0 - 240_000 }),
+  fxSession({ id: "cleanup", title: "cleanup old backups", projectId: "sw",
+    agentState: "working", activityDetail: "removing stale archives",
+    turnStartMs: T0 - 130_000 }),
+  fxSession({ id: "invoice", title: "invoice export", projectId: "sw",
+    agentState: "done", doneAtMs: T0 - 1_320_000 }),
+  fxSession({ id: "photo-sync", title: "photo backup sync", projectId: "ht",
+    agentState: "done", doneAtMs: T0 - 7_200_000 }),
+  fxSession({ id: "recipe", title: "recipe importer", projectId: "ht",
+    agentState: "done", doneAtMs: T0 - 18_000_000 }),
+];
+const DEMO_PROJECTS: any[] = [
+  { id: "sw", name: "storefront-web", path: "C:\\dev\\storefront-web" },
+  { id: "ht", name: "home-tools", path: "C:\\dev\\home-tools" },
+];
 
 /** Mount a live (or reduced-motion static) rig scene into `host`. Returns a
  *  replay hook. The site crops the rig's viewBox to the action band. */
@@ -29,126 +89,52 @@ function mountScene(host: HTMLElement, viewBox: string): () => void {
   return () => { order = shuffledOrder(); t0 = performance.now(); };
 }
 
+/* ---- hero interactive workspace demo -------------------------------- */
+const heroDemoHost = document.getElementById("hero-demo");
+if (heroDemoHost) heroDemoHost.appendChild(buildWorkspaceDemo(DEMO_SESSIONS, DEMO_PROJECTS));
+
 /* ---- hero ----------------------------------------------------------- */
 const heroHost = document.getElementById("hero-scene");
 if (heroHost) {
-  const replay = mountScene(heroHost, "20 35 280 100");
+  const replay = mountScene(heroHost, "18 70 288 50");
   if (reduce) heroHost.style.cursor = "default";
   else heroHost.addEventListener("click", replay);
 }
 
-/* ---- widget: session states ----------------------------------------- */
-// One live row cycles working -> your turn -> aging (time-lapse), beside two
-// static rows showing where the age ramp lands later.
+/* ---- widget: session states (REAL Sidebar) -------------------------- */
+// Mount the app's actual Sidebar with fixture sessions — exact rendering, not
+// a recreation. Projects mode shows the nested worktree tabs, live spinners on
+// working rows, the warmth-decaying "done" ages, and the ↑N ready-to-push chip.
 const statesHost = document.getElementById("demo-states");
 if (statesHost) {
-  const el = (tag: string, cls: string, text = "") => {
-    const e = document.createElement(tag);
-    e.className = cls;
-    if (text) e.textContent = text;
-    return e;
-  };
-  const tag = el("span", "stage-tag", "time-lapse");
-  statesHost.appendChild(tag);
+  const wrap = document.createElement("div");
+  wrap.className = "sidebar demo-sidebar";
+  const scroll = document.createElement("div");
+  scroll.className = "sidebar__scroll";
+  const listEl = document.createElement("div");
+  const newBtn = document.createElement("button");   // unused affordance
+  const closedEl = document.createElement("div");
+  scroll.append(listEl, closedEl);
+  wrap.appendChild(scroll);
+  statesHost.appendChild(wrap);
 
-  const live = el("div", "srow srow--active");
-  const liveLead = el("span", "srow__spin", "");
-  const liveTitle = el("span", "srow__title", "fix checkout css");
-  const liveMeta = el("span", "srow__meta", "");
-  live.append(liveLead, liveTitle, liveMeta);
-  statesHost.appendChild(live);
-
-  const mk = (title: string, chip: string, warmth: string) => {
-    const r = el("div", "srow");
-    r.append(el("span", "srow__dot", ""),
-             el("span", "srow__title", title),
-             el("span", `srow__chip srow__chip--${warmth}`, chip));
-    return r;
-  };
-  statesHost.append(mk("seo audit pass", "4m", "warm"),
-                    mk("invoice export", "22m", "cool"));
-
-  const SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
-  // (phase length ms, render(tick ms into phase))
-  const script: Array<[number, (t: number) => void]> = [
-    [4500, (t) => {   // working: spinner + honest elapsed
-      liveLead.className = "srow__spin";
-      liveLead.textContent = reduce ? "•" : SPIN[Math.floor(t / 80) % SPIN.length];
-      liveMeta.className = "srow__meta";
-      liveMeta.textContent = `editing checkout.css · ${Math.floor(t / 1000)}s`;
-    }],
-    [1800, () => {    // turn handed back: fresh chip
-      liveLead.className = "srow__dot";
-      liveLead.textContent = "";
-      liveMeta.className = "srow__chip srow__chip--hot";
-      liveMeta.textContent = "now";
-    }],
-    [1800, () => { liveMeta.textContent = "49s"; }],
-    [1800, () => {    // the nag warms as it sits
-      liveMeta.className = "srow__chip srow__chip--warm";
-      liveMeta.textContent = "4m";
-    }],
-    [1800, () => {
-      liveMeta.className = "srow__chip srow__chip--cool";
-      liveMeta.textContent = "22m";
-    }],
-  ];
-  const total = script.reduce((s, [ms]) => s + ms, 0);
-  const start = performance.now();
-  const step = () => {
-    let t = (performance.now() - start) % total;
-    for (const [ms, render] of script) {
-      if (t < ms) { render(t); break; }
-      t -= ms;
-    }
-    if (!reduce) requestAnimationFrame(step);
-  };
-  if (reduce) script[0][1](2000);
-  else requestAnimationFrame(step);
+  const sb = new Sidebar(listEl, newBtn, closedEl);
+  sb.render(DEMO_SESSIONS, "holiday-banner", [], DEMO_PROJECTS, "projects");
 }
 
-/* ---- widget: inspector filters --------------------------------------- */
+/* ---- widget: inspector journal (REAL classes, hand-built) ------------ */
+// The app's exact journal markup (turn-prompt / beat / work / imgrow / changes
+// / inspector__filter), styled by the app's real style.css. Filters are live.
 const idemoHost = document.getElementById("demo-inspector");
 if (idemoHost) {
-  idemoHost.classList.add("idemo");
-  idemoHost.insertAdjacentHTML("beforeend", `
-    <span class="stage-tag stage-tag--bottom">try the filters</span>
-    <div class="idemo__chips" role="group" aria-label="Filter the journal">
-      <button class="ichip" data-all aria-pressed="true">All</button>
-      <button class="ichip" data-cat="user" aria-pressed="true">You</button>
-      <button class="ichip" data-cat="claude" aria-pressed="true">Claude</button>
-      <button class="ichip" data-cat="work" aria-pressed="true">Actions</button>
-      <button class="ichip" data-cat="image" aria-pressed="true">Images</button>
-    </div>
-    <div class="irow irow--user"><span class="irow__glyph">&gt;</span>make the holiday banner match the shop</div>
-    <div class="irow irow--claude"><span class="irow__glyph">&#9679;</span>I'll restyle it against the shop tokens.</div>
-    <div class="irow irow--work"><span class="irow__glyph">&#9474;</span>Update src/banner.css&nbsp;&nbsp;+12 &#8722;7</div>
-    <div class="irow irow--image"><span class="irow__glyph">&#9635;</span>
-      <svg width="110" height="34" viewBox="0 0 640 200" aria-label="Banner preview image">
-        <rect width="640" height="200" fill="#f6f1e8"/>
-        <text x="56" y="102" font-family="Georgia, serif" font-size="46" fill="#1e2a3a">The Holiday Shop</text>
-        <rect x="56" y="130" width="132" height="40" rx="20" fill="#b4372f"/>
-      </svg></div>
-  `);
-  const chips = [...idemoHost.querySelectorAll<HTMLButtonElement>(".ichip[data-cat]")];
-  const allBtn = idemoHost.querySelector<HTMLButtonElement>(".ichip[data-all]")!;
-  const sync = () => {
-    for (const c of chips)
-      idemoHost.classList.toggle(`idemo--hide-${c.dataset.cat}`,
-        c.getAttribute("aria-pressed") !== "true");
-    allBtn.setAttribute("aria-pressed",
-      String(chips.every((c) => c.getAttribute("aria-pressed") === "true")));
-  };
-  for (const c of chips)
-    c.addEventListener("click", () => {
-      c.setAttribute("aria-pressed",
-        String(c.getAttribute("aria-pressed") !== "true"));
-      sync();
-    });
-  allBtn.addEventListener("click", () => {
-    const target = !chips.every((c) => c.getAttribute("aria-pressed") === "true");
-    for (const c of chips) c.setAttribute("aria-pressed", String(target));
-    sync();
+  const rail = buildInspector({ changesOpen: false });
+  idemoHost.appendChild(rail);
+  // Scroll the stream so a banner preview is in view — image-in-a-terminal is
+  // the card's whole point.
+  requestAnimationFrame(() => {
+    const stream = rail.querySelector<HTMLElement>(".inspector__stream");
+    const img = rail.querySelector<HTMLElement>(".imgrow");
+    if (stream && img) stream.scrollTop = Math.max(0, img.offsetTop - 44);
   });
 }
 
