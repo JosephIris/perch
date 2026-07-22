@@ -5559,6 +5559,12 @@ body.show-dashboard .dashboard { display: flex; }
   background: var(--color-skill-faint);
   color: var(--color-skill);
 }
+/* Images chip wears rose the same way — its own hue, so the two non-accent
+ * categories don't read as one family at a glance. */
+.inspector__filter--images[aria-pressed="true"] {
+  background: var(--color-image-faint);
+  color: var(--color-image);
+}
 
 .inspector__vitals {
   flex: none;
