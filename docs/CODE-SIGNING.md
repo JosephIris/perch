@@ -1,5 +1,14 @@
 # Code signing
 
+> **Primary channel is now the Microsoft Store (MSIX), which signs the package
+> for us.** For the non-power-user segment Perch targets, the Store removes the
+> SmartScreen / Smart App Control / Defender friction that signing was meant to
+> address, at no cost and with a one-click install. See **`docs/MSIX-STORE.md`**.
+> The paths below (SignPath / Authenticode) now only concern the *Velopack
+> GitHub channel* kept for power users and sideloading. From Israel, Azure
+> Artifact Signing is unavailable (US/CA individuals only); the Israel-viable
+> Authenticode options are Certum OSS (~$50-90/yr) or SSL.com IV (~$200/yr).
+
 > **⚠ Pipeline moved to Velopack — this doc's CI steps are partly stale.**
 > Distribution is now Velopack (`vpk pack` → `Setup.exe` + `.nupkg` feed), not
 > the Inno installer + portable zip. The **SignPath *account* onboarding below

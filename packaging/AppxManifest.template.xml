@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  MSIX manifest TEMPLATE for the Microsoft Store build of Perch.
+
+  Do NOT hand-fill the Store-assigned identity here. pack-msix.ps1 substitutes
+  the {{tokens}} below from packaging/identity.json (gitignored) at pack time,
+  so the assigned Name/Publisher never land in source control.
+
+  Get the three identity values from:
+    Partner Center -> Perch -> Product management -> Product identity
+      Package/Identity/Name              -> {{PackageName}}
+      Package/Identity/Publisher         -> {{Publisher}}         (a CN=... string)
+      Package/Properties/PublisherDisplayName -> {{PublisherDisplayName}}
+
+  runFullTrust is the load-bearing capability: it is what lets Perch spawn
+  ConPTY shells, run git/claude/node, and host WebView2 exactly as the
+  unpackaged build does. It is a restricted capability, so the Store submission
+  asks for a one-line justification — "a terminal/agent workspace runs local
+  developer tools on the user's behalf" is the honest and accepted answer.
+  Windows Terminal ships to the Store the same way.
+-->
+<Package
+    xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+    xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+    xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+    IgnorableNamespaces="uap rescap">
+
+  <Identity
+      Name="{{PackageName}}"
+      Publisher="{{Publisher}}"
+      Version="{{Version}}"
+      ProcessorArchitecture="x64" />
+
+  <Properties>
+    <!-- MUST exactly match a name reserved in Partner Center. "Perch" was taken,
+         so the reserved product name is "Perch Workspace". -->
+    <DisplayName>Perch Workspace</DisplayName>
+    <PublisherDisplayName>{{PublisherDisplayName}}</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <!-- Win11 floor: the whole aesthetic (Mica, rounded corners) is Win11-first.
+         Drop MinVersion to 10.0.19041.0 if you decide to support Win10 too. -->
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.22000.0" MaxVersionTested="10.0.26200.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+
+  <Applications>
+    <Application Id="Perch" Executable="Perch.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+          DisplayName="Perch Workspace"
+          Description="A native Windows workspace for running coding agents."
+          BackgroundColor="#16233C"
+          Square150x150Logo="Assets\Square150x150Logo.png"
+          Square44x44Logo="Assets\Square44x44Logo.png">
+        <uap:DefaultTile Square71x71Logo="Assets\Square71x71Logo.png" ShortName="Perch" />
+      </uap:VisualElements>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+</Package>

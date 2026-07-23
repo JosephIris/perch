@@ -74,6 +74,13 @@ public partial class App : System.Windows.Application
         {
             var appDir = System.AppContext.BaseDirectory;
             var toolsDir = System.IO.Path.Combine(appDir, "tools");
+            // Under MSIX the install dir (Program Files\WindowsApps) denies the
+            // ConPTY pane shell execute rights on our CLI shims: running
+            // `claude` / `perch` from a pane fails with "Access is denied".
+            // Stage the tools to a writable per-user dir and put THAT on PATH
+            // instead. Harmless no-op for the unpackaged build.
+            if (PackagedRuntime.IsPackaged && System.IO.Directory.Exists(toolsDir))
+                toolsDir = StageTools(toolsDir);
             if (System.IO.Directory.Exists(toolsDir))
             {
                 var current = Environment.GetEnvironmentVariable("PATH") ?? "";
@@ -97,5 +104,41 @@ public partial class App : System.Windows.Application
             Log.Error("Dispatcher.UnhandledException", e.Exception);
             e.Handled = true;
         };
+    }
+
+    /// Copy the packaged CLI tools out of the read-only install dir into a
+    /// writable per-user dir so the pane shell can actually execute them (the
+    /// WindowsApps ACL denies execute to the ConPTY child). Re-copies only when
+    /// the source changes across an install/update — keyed by the source
+    /// perch.exe write time — so ordinary launches don't pay the copy. Returns
+    /// the staged dir, or the source dir if staging fails (best effort: PATH
+    /// still points somewhere, and the unpackaged path is unaffected).
+    private static string StageTools(string srcTools)
+    {
+        var dest = System.IO.Path.Combine(AppPaths.DataRoot, "perch", "tools");
+        try
+        {
+            var srcExe = System.IO.Path.Combine(srcTools, "perch.exe");
+            var stampPath = System.IO.Path.Combine(dest, ".stamp");
+            var token = System.IO.File.Exists(srcExe)
+                ? System.IO.File.GetLastWriteTimeUtc(srcExe).Ticks.ToString()
+                : "0";
+
+            if (System.IO.File.Exists(stampPath) &&
+                System.IO.File.ReadAllText(stampPath) == token &&
+                System.IO.File.Exists(System.IO.Path.Combine(dest, "perch.exe")))
+                return dest;
+
+            System.IO.Directory.CreateDirectory(dest);
+            foreach (var f in System.IO.Directory.GetFiles(srcTools))
+                System.IO.File.Copy(f, System.IO.Path.Combine(dest, System.IO.Path.GetFileName(f)), overwrite: true);
+            System.IO.File.WriteAllText(stampPath, token);
+            return dest;
+        }
+        catch (Exception ex)
+        {
+            Log.Error("StageTools", ex);
+            return srcTools;
+        }
     }
 }

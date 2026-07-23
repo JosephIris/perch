@@ -46,3 +46,11 @@ src/Perch/wwwroot/
 src/web/node_modules/
 src/web/.test-out/
 site/dist/
+
+# MSIX / Microsoft Store packaging
+# The Store-assigned identity is confidential to the account — keep it local.
+packaging/identity.json
+packaging/stage/
+packaging/out/
+packaging/*.pfx
+packaging/*.cer

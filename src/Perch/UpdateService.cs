@@ -31,8 +31,15 @@ internal sealed class UpdateService
         => _mgr = new UpdateManager(new GithubSource(RepoUrl, null, false));
 
     /// True only for a real Velopack-installed copy. Dev runs and portable
-    /// unzips return false (and every method below short-circuits).
-    public bool IsUpdatable => _mgr.IsInstalled;
+    /// unzips return false (and every method below short-circuits). A Store
+    /// (MSIX) install also returns false: the Store owns updates there, so the
+    /// in-app updater must not run — see IsManagedExternally.
+    public bool IsUpdatable => !PackagedRuntime.IsPackaged && _mgr.IsInstalled;
+
+    /// True when something OTHER than us handles updates — currently only the
+    /// Microsoft Store (MSIX). Lets Settings show "Updates are managed by the
+    /// Microsoft Store" instead of a dead "Check now" that could never apply.
+    public bool IsManagedExternally => PackagedRuntime.IsPackaged;
 
     /// The version this copy is running as (the release it was installed from),
     /// or null when it can't be determined — e.g. a dev `dotnet run` / portable
@@ -47,6 +54,8 @@ internal sealed class UpdateService
     /// available, or null when up to date (or not a Velopack install).
     public async Task<string?> CheckAsync()
     {
+        // Never reach for the GitHub feed on a Store install — the Store updates us.
+        if (PackagedRuntime.IsPackaged) return null;
         if (!_mgr.IsInstalled) return null;
         _pending = await _mgr.CheckForUpdatesAsync();
         return _pending?.TargetFullRelease?.Version?.ToString();

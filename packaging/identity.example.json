@@ -1,0 +1,7 @@
+{
+  "_comment": "Copy this file to identity.json (gitignored) and paste the real values from Partner Center -> Perch -> Product management -> Product identity. Version must be 4-part; the Store reserves the 4th part, so keep it .0.",
+  "Name": "00000PublisherName.Perch",
+  "Publisher": "CN=XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX",
+  "PublisherDisplayName": "Your Name",
+  "Version": "1.0.0.0"
+}
