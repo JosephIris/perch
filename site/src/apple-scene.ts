@@ -1,35 +1,44 @@
-// The Windows-first brand moment: Monocle Guy strolls in whistling, spots an
-// apple (a Mac stand-in), and the camera pushes in on his disgust before the
-// scene fades and loops.
+// Variant C — INSTANT-MENACE with a strut-off payoff.
 //
-// The bird is the REAL mascot rig (setup-overlay.ts) — same silhouette, same
-// brow/blink/monocle channels — but the rig's own beats are wire-perch
-// theatre, so this scene drives the rig with its own acting track: we build
-// full Pose frames per-frame as a pure function of loop time, exactly like
-// the rig does. The rig's power line is hidden (no wire in this scene) and
-// the ground is kept flat by solving the rig's wire-sag model through the
-// `weight` channel (weight only feeds bird-y once the wire is invisible).
-// The camera is a per-frame viewBox interpolation on the same SVG, so the
-// push-in crops at the frame edge like a real lens instead of scaling a div.
+// Monocle Guy saunters in whistling, chin up, notes floating off his beak —
+// a bird without a care. He clocks the Apple logo and it registers in a
+// single sharp beat: eyes narrow, brow drains, and the camera EXPLODES into
+// a dramatic-chipmunk extreme close-up of his monocled glare — brow slammed,
+// lens glinting, breath heaving. He holds the fury... whips his beak into
+// the air, and STRUTS off frame right — high knees, eyes shut, tail flick
+// as he passes the logo without a glance — leaving the apple alone on
+// stage. Loop.
 //
-// Timeline (ms; loops at 7600):
-//    0-2600   walks in from the left, jaunty, whistling (notes off the beak)
-// 2600-3650   pulls up; cranes at the apple; squints... wait a minute
-// 3650-3950   the POP: recoil hop, monocle jolt, eyes wide
-// 3950-6900   camera pushes into his face; brow slams flat (ugh, a Mac),
-//             an indignant shudder, then the "hmph": eyes shut, beak aloft
-// 6900-7600   fade to nothing, loop
+// Same idiom as apple-scene.ts (per-frame Pose acting track, viewBox
+// camera, flat ground via the weight channel, ?scene-t scrub) but its own
+// acting and props (the monocle glint — his monocle never slips; he is far
+// too composed for that) and its own exit payoff.
+//
+// Timeline (ms; loops at 6250):
+//    0-1400   carefree whistling saunter in from the left; brakes at the mark
+// 1400-1650   INSTANT recognition: quick crane down, eyes narrow, brow
+//             drains — one sharp beat, no lingering
+// 1650-1910   SNAP ZOOM 1x -> 4.5x, brow slams to fury, eyes pop, camera
+//             shakes off the punch, monocle glint sweep
+// 1910-3550   the MENACE hold: camera creeps to 4.75x, head lowers, eyes
+//             narrow, fury breathing, a rage tremble right at the peak
+// 3550-3900   whip zoom-out; simultaneously the SNUB: beak whips aloft,
+//             eyes slam shut, body rocks back
+// 3900-5600   the STRUT-OFF: high-step prance out frame RIGHT, eyes
+//             closed the whole way, tail flick as he passes the apple
+// 5600-6250   the apple sits there, alone, judged; fade, loop
 
 import { pose, buildScene, REST_T } from "../../src/web/src/setup-overlay.js";
 
 /* ---------- staging ---------- */
-const LOOP_MS = 7600;
-const GROUND_Y = 106.5;              // scene y the feet ride on
-const APPLE_X = 230;                 // apple's spot, right of the confrontation
+const LOOP_MS = 6250;
+const GROUND_Y = 106.5;             // scene y the feet ride on
+const APPLE_X = 230;                // the logo's spot, right of the stop mark
+const STOP_X = 140;                 // where he plants for the glare
 const BAND = { x: 30, y: 52, w: 260, h: 66 };   // resting camera frame
-const STILL_T = 5450;                // reduced-motion frame: mid-glare
+const STILL_T = 1600;               // reduced-motion frame: just clocked it
 
-/* ---------- easing / keyframes (mirrors the rig's kf) ---------- */
+/* ---------- easing / keyframes (same shapes the rig uses) ---------- */
 const clamp01 = (u: number) => Math.min(1, Math.max(0, u));
 const EASE = {
   lin: (u: number) => u,
@@ -52,107 +61,146 @@ const blinkV = (t: number, at: number) => {
   return d > 70 ? 1 : Math.max(0.12, d / 70);
 };
 
-/* The rig places the bird at wire height: sag(x) + weight * birdScale. With
- * the wire hidden, weight has no other visible effect, so solve it per-x to
- * pin the feet to a flat floor. */
+/* The rig seats the bird at wire height sag(x) + weight * birdScale; with the
+ * wire hidden, weight is free — solve it per-x so the feet ride a flat floor. */
 const sag = (x: number) => 92 + 40 * (x / 320) * (1 - x / 320);
 const flatWeight = (x: number) => (GROUND_Y - sag(x)) / 1.6;
 
-/* walk-in x: enters offscreen-left, strides across, brakes; a small hop-back
- * recoil on the realization pop. Pure in t, so note spawns can re-query it. */
+/* walk-in from offscreen left; brakes at the mark; a haughty little back-rock
+ * wind-up at 3950; then the strut carries him out past the apple, offscreen
+ * right. Pure in t so shadows and note spawns can re-query it. */
 const birdX = (t: number) =>
   kf(t, [
-    [0, -26, "lin"], [2150, 124, "lin"], [2600, 150, "out"],
-    [3650, 150, "lin"], [3760, 142, "back"], [4400, 146, "inout"],
+    [0, -30, "lin"], [1150, 126, "lin"], [1400, STOP_X, "out"],
+    [3950, STOP_X, "lin"], [4130, 133, "inout"],
+    [5600, 348, "lin"],
   ]);
 
 /* ---------- the acting track: a full rig Pose for any loop time ---------- */
-const BASE = pose(REST_T);   // valid Pose scaffold; every channel is overridden
+const BASE = pose(REST_T);   // valid Pose scaffold; every channel overridden
 
 function birdPose(t: number) {
   const x = birdX(t);
-  const mv = 1 - clamp01((t - 2150) / 450);          // walking → stopped
-  const stride = (2 * Math.PI * t) / 420;
-  const settled = clamp01((t - 2600) / 400);
-  /* indignant shudder during the glare */
-  const shud = t > 4900 && t < 5280
-    ? Math.sin((2 * Math.PI * (t - 4900)) / 70) * clamp01((t - 4900) / 60) * clamp01((5280 - t) / 90)
+  const mv1 = 1 - clamp01((t - 1150) / 260);       // walk-in -> stopped
+  const mv2 = clamp01((t - 4130) / 200);           // stopped -> strut-out
+  const stride1 = (2 * Math.PI * t) / 340;
+  const stride2 = (2 * Math.PI * (t - 4130)) / 380;
+  const settled = clamp01((t - 1400) / 300) * (1 - mv2);
+  /* rage tremble right at the peak of the hold, just before the snub */
+  const trem = t > 3200 && t < 3530
+    ? Math.sin((2 * Math.PI * (t - 3200)) / 70) * clamp01((t - 3200) / 80) * clamp01((3530 - t) / 90)
     : 0;
+  /* fury breathing — visible heave at 4.5x zoom */
+  const fury = clamp01((t - 1950) / 400) * clamp01((3550 - t) / 250);
   return {
     ...BASE,
     noteVis: 0, scribble: 0, jitter: 0, z1: 0, z2: 0,
+    slip: 0,                       // the monocle NEVER moves. He is composed.
     x,
     weight: flatWeight(x),
-    bob: -Math.abs(Math.sin(stride)) * 1.8 * mv
-       + kf(t, [[3640, 0], [3730, -3.4, "out"], [3940, 0, "inout"]]),   // startle hop
-    legSwing: Math.sin(stride) * 17 * mv,
-    crouch: kf(t, [[2450, 0], [2650, 0.22, "out"], [3620, 0.18, "lin"],
-                   [3700, 0.5, "back"], [4300, 0.15, "inout"]]),
-    bodyRot: 4.5 * mv + kf(t, [[2800, 0], [3100, 3, "inout"], [3620, 3, "lin"],
-                               [3720, -2, "back"], [4450, -4, "inout"], [5600, -4, "lin"],
-                               [6050, -6.5, "inout"]]),
-    /* negative tilt = chin up. Jaunty chin-up walk → crane down at the apple
-     * → recoil → disdain chin-up → full "hmph" beak-aloft */
-    headTilt: (-6 + Math.sin(stride - 0.9) * 3) * mv
-      + kf(t, [[2750, 0], [3080, 13, "inout"], [3620, 13, "lin"],
-               [3720, -6, "back"], [4150, -6, "lin"], [4450, -10, "inout"],
-               [5550, -10, "lin"], [6050, -17, "inout"]])
-      + shud * 1.2,
-    headDX: kf(t, [[2750, 0], [3080, 2.2, "inout"], [3620, 2.2, "lin"],
-                   [3720, -1.6, "back"], [4450, -1.8, "inout"], [5600, -1.8, "lin"],
-                   [6050, -1.2, "inout"]]),
-    headDY: kf(t, [[2750, 0], [3080, 1.2, "inout"], [3620, 1.2, "lin"],
-                   [3720, -0.8, "back"], [4450, -0.6, "inout"], [5600, -0.6, "lin"],
-                   [6050, -1.6, "inout"]]) + shud * 0.25,
-    tailAng: (5 + Math.sin(stride + 1.2) * 3) * mv
-      + kf(t, [[2600, 0], [3000, 5, "out"], [3550, 5, "lin"], [3700, 19, "back"],
-               [4200, 6, "out"], [6250, 6, "lin"], [6400, 16, "back"], [6800, 6, "out"]]) * settled,
-    /* squint at it... eyes POP wide... one slow contempt blink... shut for the
-     * hmph. Walk blinks mixed in v-shaped, like the rig. */
+    bob: -Math.abs(Math.sin(stride1)) * 2 * mv1
+      + kf(t, [[1670, 0], [1760, -2.6, "out"], [1970, 0, "inout"],
+               [3800, 0, "lin"], [3890, -2.2, "out"], [4080, 0, "inout"]])
+      - Math.abs(Math.sin(stride2)) * 3.4 * mv2,   // prancing strut bounce
+    legSwing: Math.sin(stride1) * 17 * mv1
+      + Math.sin(stride2) * 24 * mv2,              // exaggerated high-step
+    crouch: kf(t, [[1250, 0], [1450, 0.3, "out"], [1670, 0.22, "inout"],
+                   [1790, 0.34, "out"],                                // coil on the snap
+                   [3550, 0.34, "lin"], [3850, 0.02, "back"], [4210, 0.1, "inout"]]),
+    bodyRot: 4.5 * mv1
+      + kf(t, [[1400, 0], [1560, 2.5, "out"], [1630, 2.5, "lin"],
+               [1800, 1, "out"], [3350, 2.2, "lin"], [3550, 2.2, "lin"],
+               [3850, -7, "back"], [4300, -6, "inout"]])               // leans BACK, snooty
+      + Math.sin(stride2) * 1.6 * mv2,
+    /* negative tilt = chin up. Chin-up whistling saunter -> fast crane at
+     * the logo -> slow menacing head-lower through the glare -> beak-aloft
+     * snub whip -> stays aloft the whole strut */
+    headTilt: (-8 + Math.sin(stride1 - 0.9) * 2.5) * mv1
+      + kf(t, [[1320, 0], [1480, 12, "out"], [1650, 12, "lin"],
+               [1800, 4.5, "out"], [2250, 5, "lin"], [3350, 8.5, "lin"],
+               [3550, 8.5, "lin"], [3850, -25, "back"], [4300, -20, "inout"]])
+      + Math.sin(stride2 - 0.9) * 2 * mv2
+      + trem * 1.1,
+    headDX: kf(t, [[1320, 0], [1480, 2.6, "out"], [1650, 2.7, "lin"],
+                   [2250, 2.4, "lin"], [3350, 3.4, "lin"],             // creeping closer
+                   [3550, 3.4, "lin"], [3850, -2.2, "back"], [4350, -1.4, "inout"]])
+      + trem * 0.3,
+    headDY: kf(t, [[1320, 0], [1480, 1.5, "out"], [1650, 1.5, "lin"],
+                   [1800, 0.8, "out"], [3350, 1.6, "lin"],
+                   [3550, 1.6, "lin"], [3850, -1.8, "back"], [4350, -1.3, "inout"]]),
+    tailAng: (5 + Math.sin(stride1 + 1.2) * 3) * mv1
+      + kf(t, [[1400, 0], [1600, 6, "out"], [3730, 6, "lin"],
+               [3880, 18, "back"], [4250, 9, "out"],                   // flick on the snub
+               [4710, 9, "lin"], [4850, 17, "back"], [5210, 9, "out"]])// flick passing the apple
+      + Math.sin(stride2 + 1.2) * 3 * mv2,
+    /* the lids: a hard narrowing squint the instant he clocks it, a
+     * pop-wide on the snap, a long narrowing through the hold, then
+     * slammed shut for the entire strut */
     blink: Math.min(
-      kf(t, [[3150, 1], [3350, 0.5, "inout"], [3600, 0.5, "lin"], [3670, 1.18, "back"],
-             [4300, 1.05, "lin"], [4800, 1, "lin"], [5250, 0.78, "inout"],
-             [5550, 0.78, "lin"], [5950, 0.1, "inout"]]),
-      blinkV(t, 900), blinkV(t, 1800), blinkV(t, 5150),
+      kf(t, [[500, 1], [1440, 1, "lin"],
+             [1560, 0.55, "out"],                  // sees it. eyes NARROW. instantly.
+             [1640, 0.55, "lin"],
+             [1760, 1.18, "back"],                 // POP on the snap
+             [2050, 1.08, "lin"], [3300, 0.6, "lin"],  // narrowing menace
+             [3550, 0.6, "lin"], [3820, 0.1, "inout"]]),  // shut. done. leaving.
+      blinkV(t, 620),
     ),
-    /* the personality channel: happy-raised on the stroll, "hm?" flicker,
-     * shock-raise on the pop, then slammed flat and judgy */
-    brow: 0.55 * mv
-      + kf(t, [[2600, 0], [3050, 0.15, "inout"], [3550, 0.15, "lin"], [3660, 1.05, "back"],
-               [4050, 1.05, "lin"], [4450, -0.42, "inout"], [5900, -0.42, "lin"],
-               [6150, -0.3, "inout"]]) * settled
-      + (mv > 0 && mv < 1 ? 0.15 * mv : 0),
-    breathe: Math.sin((2 * Math.PI * t) / 2600) * 0.014 * settled,
-    slip: kf(t, [[3640, 0], [3760, 0.75, "out"], [4150, 0, "inout"]]),  // monocle jolt
+    /* brow: pleased whistling saunter -> drains flat the instant he
+     * registers -> SLAMMED to fury -> deeper at the peak -> maximum smug
+     * for the exit */
+    brow: kf(t, [[0, 0.55], [1400, 0.55, "lin"], [1540, 0.1, "out"],
+                 [1660, 0.1, "lin"],
+                 [1780, -0.5, "back"], [3150, -0.5, "lin"],
+                 [3500, -0.68, "inout"], [3830, 1, "inout"]]),
+    breathe: Math.sin((2 * Math.PI * t) / 2400) * 0.014 * settled
+      + Math.sin((2 * Math.PI * t) / 850) * 0.02 * fury,
   };
 }
 
-/* ---------- camera: fast push onto the face, then a slow menace creep ---------- */
+/* ---------- camera ----------
+ * Resting band; the SNAP runs 1x -> 4.5x in 260ms with overshoot, landing
+ * the monocled glare filling the frame; creeps to 4.75x through the hold
+ * (drifting down as the head lowers); whips back out in 310ms for the snub. */
 function camera(t: number) {
-  const z = kf(t, [[3950, 1], [4800, 2.02, "inout"], [6900, 2.42, "lin"]]);
-  const cx = kf(t, [[3950, BAND.x + BAND.w / 2, "lin"], [4800, 167, "inout"]]);
-  const cy = kf(t, [[3950, BAND.y + BAND.h / 2, "lin"], [4800, 78, "inout"]]);
+  const z = kf(t, [[1650, 1, "lin"], [1910, 4.5, "back"], [3550, 4.75, "lin"], [3860, 1, "out"]]);
+  const cx = kf(t, [[1650, 160, "lin"], [1910, 166, "back"], [3550, 166.5, "lin"], [3860, 160, "out"]]);
+  const cy = kf(t, [[1650, 85, "lin"], [1910, 81, "back"], [3550, 82.5, "lin"], [3860, 85, "out"]]);
   const w = BAND.w / z, h = BAND.h / z;
-  return { x: cx - w / 2, y: cy - h / 2, w, h };
+  let vx = cx - w / 2, vy = cy - h / 2;
+  if (t > 1910 && t < 2210) {              // impact shake as the snap lands
+    const amp = 1.3 * Math.exp(-(t - 1910) / 110);
+    vx += amp * Math.sin(t / 21);
+    vy += 0.6 * amp * Math.sin(t / 15 + 2);
+  }
+  return { x: vx, y: vy, w, h };
 }
 
 const sceneAlpha = (t: number) =>
-  kf(t, [[0, 0], [350, 1, "out"], [6900, 1, "lin"], [7600, 0, "inout"]]);
+  kf(t, [[0, 0], [300, 1, "out"], [5650, 1, "lin"], [6200, 0, "inout"]]);
 
-/* ---------- whistled notes: spawn on the stroll, hang in the world ---------- */
-const NOTE_SPAWN = [480, 1130, 1780];
-const NOTE_DUR = 1050;
+/* ---------- whistled notes: off the beak on the saunter, gone by the snap */
+const NOTE_AT = [350, 720, 1050];
+const NOTE_DUR = 1000;
 const NOTE_GLYPHS = ["♪", "♫", "♪"];
 
 export function buildAppleScene(): HTMLElement {
   const wrap = document.createElement("div");
-  wrap.className = "apple-scene";
+  wrap.className = "apple-scene-c";
+
+  /* visually self-contained: scoped style injected once */
+  if (!document.getElementById("apple-scene-c-style")) {
+    const st = document.createElement("style");
+    st.id = "apple-scene-c-style";
+    st.textContent =
+      `.apple-scene-c{display:block;width:100%;color:var(--ink,#e9eef4)}` +
+      `.apple-scene-c svg{display:block;width:100%;height:auto}`;
+    document.head.appendChild(st);
+  }
 
   const scene = buildScene();
   const svg = scene.svg;
-  svg.classList.add("apple-scene__bird");
 
-  /* no wire in this scene — the rig appends it first, so hide that node */
+  /* no wire in this scene — the rig appends it first; hide that node */
   (svg.firstElementChild as SVGElement).style.display = "none";
 
   const NS = "http://www.w3.org/2000/svg";
@@ -162,38 +210,60 @@ export function buildAppleScene(): HTMLElement {
     return e;
   };
 
-  /* scenery under the bird: contact shadows + the apple (silver, bitten) */
+  /* scenery under the bird: contact shadows + THE Apple logo (parody — flat
+   * Mac-aluminum silver, bitten on the right, detached leaf; hand-authored) */
   const scenery = el<SVGGElement>("g", {});
   const birdShadow = el<SVGEllipseElement>("ellipse", {
     cy: String(GROUND_Y + 2.6), rx: "15", ry: "2.1", fill: "#000", opacity: "0.17",
   });
   const appleShadow = el<SVGEllipseElement>("ellipse", {
-    cx: String(APPLE_X), cy: String(GROUND_Y + 2.4), rx: "11", ry: "1.9",
+    cx: String(APPLE_X), cy: String(GROUND_Y + 2.4), rx: "10", ry: "1.9",
     fill: "#000", opacity: "0.2",
   });
+  const APPLE_S = 1.15;              // authored ~24 units tall -> ~26 scene units
   const apple = el<SVGGElement>("g", {
-    transform: `translate(${APPLE_X - 36 * 0.34} ${GROUND_Y + 2 - 72 * 0.34}) scale(0.34)`,
+    transform: `translate(${(APPLE_X - 12 * APPLE_S).toFixed(1)} ` +
+      `${(GROUND_Y + 1.5 - 22 * APPLE_S).toFixed(1)}) scale(${APPLE_S})`,
   });
   apple.innerHTML =
-    `<path d="M36 22 C 23 9, 7 16, 9 33 C 11 51, 23 72, 36 72 C 49 72, 61 51, 63 33 C 65 16, 49 9, 36 22 Z" fill="#c4c8ce"/>` +
-    `<path d="M45 17 C 50 8, 59 6, 61 4 C 59 13, 53 19, 46 20 Z" fill="#9aa0a8"/>` +
-    `<path d="M36 22 C 36 17, 37 13, 39 10" stroke="#7c8189" stroke-width="2.6" fill="none" stroke-linecap="round"/>` +
-    `<path d="M63 33 C 56 30, 51 36, 53 43 C 55 49, 62 49, 63 41 Z" fill="#131316"/>`;
+    /* leaf: a lens shape angled up-right, detached above the body */
+    `<path fill="#bfc4cb" d="M14.2 5.4 C 14.1 3.9, 15.2 2.4, 16.9 2.1 ` +
+    `C 17.1 3.7, 16.0 5.2, 14.2 5.4 Z"/>` +
+    /* body: top dip, two-lobe bottom, one concave bite out of the right */
+    `<path fill="#bfc4cb" d="M13.0 6.8 C 13.9 6.2, 15.3 5.9, 16.5 6.3 ` +
+    `C 17.6 6.7, 18.5 7.6, 19.0 8.7 ` +
+    `C 17.2 9.6, 16.3 11.1, 16.4 12.7 C 16.5 14.1, 17.4 15.3, 18.7 15.9 ` +
+    `C 18.3 17.5, 17.5 19.2, 16.4 20.4 C 15.6 21.3, 14.6 22.0, 13.6 21.9 ` +
+    `C 12.9 21.85, 12.6 21.4, 12.0 21.4 C 11.4 21.4, 11.1 21.85, 10.4 21.9 ` +
+    `C 9.2 22.0, 8.2 21.2, 7.4 20.2 C 6.0 18.4, 5.0 16.0, 4.9 13.6 ` +
+    `C 4.8 11.2, 5.6 8.9, 7.3 7.5 C 8.4 6.6, 9.9 6.2, 11.2 6.6 ` +
+    `C 11.9 6.8, 12.4 7.0, 13.0 6.8 Z"/>`;
   scenery.append(birdShadow, appleShadow, apple);
   svg.insertBefore(scenery, svg.children[1]);   // above the hidden wire, below the bird
 
-  /* the whistled notes float above everything */
+  /* the whistled notes float above everything, accent-colored */
   const noteEls = NOTE_GLYPHS.map((g, i) => {
     const n = el<SVGTextElement>("text", {
       "font-size": i === 1 ? "9.5" : "8",
       "font-family": `"Segoe UI Symbol", sans-serif`,
-      fill: "var(--color-accent)", "text-anchor": "middle",
+      fill: "var(--color-accent,#76B9ED)", "text-anchor": "middle",
     });
     n.textContent = g;
     n.style.visibility = "hidden";
     svg.appendChild(n);
     return n;
   });
+
+  /* the monocle glint — two parallel streaks swept across the lens on the
+   * snap (the monocle stays seated; only the light moves) */
+  const glint = el<SVGGElement>("g", {});
+  const glintAt = { stroke: "var(--ink,#e9eef4)", "stroke-linecap": "round", fill: "none" };
+  glint.append(
+    el<SVGPathElement>("path", { ...glintAt, "stroke-width": "1.0", d: "M156.6 80.2 L 161.0 76.0" }),
+    el<SVGPathElement>("path", { ...glintAt, "stroke-width": "0.65", d: "M159.4 82.2 L 162.4 79.3" }),
+  );
+  glint.style.visibility = "hidden";
+  svg.appendChild(glint);
 
   const setVB = (r: { x: number; y: number; w: number; h: number }) =>
     svg.setAttribute("viewBox",
@@ -206,20 +276,31 @@ export function buildAppleScene(): HTMLElement {
     birdShadow.setAttribute("rx", (15 + p.bob * 0.9).toFixed(2));
 
     for (let i = 0; i < noteEls.length; i++) {
-      const ph = (t - NOTE_SPAWN[i]) / NOTE_DUR;
+      const ph = (t - NOTE_AT[i]) / NOTE_DUR;
       if (!still && ph > 0 && ph < 1) {
-        /* off the beak, then up fast enough that the walk doesn't catch them */
-        const nx = birdX(NOTE_SPAWN[i]) + 41 + ph * 12;
-        const ny = GROUND_Y - 26.5 - 22 * EASE.out(ph);
+        /* off the beak, drifting up-right with a lazy sway */
+        const nx = birdX(NOTE_AT[i]) + 40 + ph * 14 + Math.sin(ph * Math.PI * 2.4) * 2;
+        const ny = GROUND_Y - 25 - 24 * EASE.out(ph);
         noteEls[i].style.visibility = "visible";
         noteEls[i].setAttribute("x", nx.toFixed(1));
         noteEls[i].setAttribute("y", ny.toFixed(1));
         noteEls[i].setAttribute("transform",
-          `rotate(${(Math.sin(ph * Math.PI * 3) * 9).toFixed(1)} ${nx.toFixed(1)} ${ny.toFixed(1)})`);
+          `rotate(${(Math.sin(ph * Math.PI * 3) * 10).toFixed(1)} ${nx.toFixed(1)} ${ny.toFixed(1)})`);
         noteEls[i].style.opacity = (Math.sin(Math.PI * ph) * 0.9).toFixed(3);
       } else {
         noteEls[i].style.visibility = "hidden";
       }
+    }
+
+    if (!still && t > 1830 && t < 2370) {
+      const u = (t - 1830) / 540;
+      glint.style.visibility = "visible";
+      glint.style.opacity =
+        kf(t, [[1830, 0], [1970, 0.95, "out"], [2130, 0.95, "lin"], [2370, 0]]).toFixed(3);
+      const s = (u * 3.4 - 1.2).toFixed(2);
+      glint.setAttribute("transform", `translate(${s} ${s})`);
+    } else {
+      glint.style.visibility = "hidden";
     }
 
     setVB(still ? BAND : camera(t));
@@ -229,12 +310,12 @@ export function buildAppleScene(): HTMLElement {
   wrap.appendChild(svg);
 
   if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
-    drawFrame(STILL_T, true);   // already met the apple; visibly unimpressed
+    drawFrame(STILL_T, true);   // just clocked the apple; instantly unimpressed
     return wrap;
   }
 
-  /* scrub hook: ?scene-t=4600 freezes the loop at that ms, like the rig's
-   * design-loop mockups — every reviewed frame is reproducible by number */
+  /* scrub hook: ?scene-t=2000 freezes the loop at that ms — every reviewed
+   * frame reproducible by number, like the rig's design-loop mockups */
   const scrub = new URLSearchParams(location.search).get("scene-t");
   if (scrub !== null) {
     drawFrame(((+scrub % LOOP_MS) + LOOP_MS) % LOOP_MS);

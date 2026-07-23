@@ -566,18 +566,9 @@ a:focus-visible, button:focus-visible {
 /* ==== Windows-first wedge ============================================== */
 .wedge { max-width: 720px; margin: 0 auto; padding: 0 24px; }
 
-/* Monocle Guy strolls in whistling, meets an apple (a Mac stand-in), and the
- * camera pushes in on his disgust. All motion is driven from apple-scene.ts
- * (rig poses + a viewBox camera); the CSS only sizes the stage. The svg keeps
- * its default overflow:hidden so the camera crops at the frame edge. */
-.apple-scene-wrap { margin: 20px auto 0; display: flex; justify-content: center; }
-.apple-scene {
-  position: relative;
-  width: min(640px, 94%);
-  aspect-ratio: 260 / 66;
-}
-.apple-scene__bird {
-  display: block; width: 100%; height: 100%;
-  color: var(--ink);
-  --color-accent: var(--accent);
-}
+/* Monocle Guy saunters in whistling, meets an apple (a Mac stand-in), the
+ * camera snaps into an extreme close-up of his glare, and he struts off. All
+ * motion + the scene's own sizing live in apple-scene.ts (rig poses + a viewBox
+ * camera; the scene is self-contained and injects its own scoped styles); this
+ * wrapper only bounds and centers the stage. */
+.apple-scene-wrap { max-width: 660px; margin: 20px auto 0; display: flex; justify-content: center; }
