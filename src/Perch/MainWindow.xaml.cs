@@ -451,7 +451,14 @@ public partial class MainWindow : FluentWindow
                     VirtualHost, _webRoot, CoreWebView2HostResourceAccessKind.Allow);
 
             core.Settings.AreDefaultContextMenusEnabled = false;
+            // DevTools only in Debug builds or under the test harness. A shipped
+            // Release build (incl. the Store MSIX) leaves them off so an end user
+            // can't open a console in the app's webview. (Audit issue #1, item 3.)
+#if DEBUG
             core.Settings.AreDevToolsEnabled = true;
+#else
+            core.Settings.AreDevToolsEnabled = ControlIpcServer.IsEnabled;
+#endif
             core.Settings.IsStatusBarEnabled = false;
             core.Settings.IsZoomControlEnabled = false;
             core.Settings.AreBrowserAcceleratorKeysEnabled = false;
