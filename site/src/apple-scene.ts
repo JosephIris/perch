@@ -18,9 +18,9 @@
 //    0-1400   carefree whistling saunter in from the left; brakes at the mark
 // 1400-1650   INSTANT recognition: quick crane down, eyes narrow, brow
 //             drains — one sharp beat, no lingering
-// 1650-1910   SNAP ZOOM 1x -> 4.5x, brow slams to fury, eyes pop, camera
+// 1650-1910   SNAP ZOOM 1x -> 5x, brow slams to fury, eyes pop, camera
 //             shakes off the punch, monocle glint sweep
-// 1910-3550   the MENACE hold: camera creeps to 4.75x, head lowers, eyes
+// 1910-3550   the MENACE hold: camera creeps to 5.3x, head lowers, eyes
 //             narrow, fury breathing, a rage tremble right at the peak
 // 3550-3900   whip zoom-out; simultaneously the SNUB: beak whips aloft,
 //             eyes slam shut, body rocks back
@@ -35,7 +35,12 @@ const LOOP_MS = 6250;
 const GROUND_Y = 106.5;             // scene y the feet ride on
 const APPLE_X = 230;                // the logo's spot, right of the stop mark
 const STOP_X = 140;                 // where he plants for the glare
-const BAND = { x: 30, y: 52, w: 260, h: 66 };   // resting camera frame
+/* Resting camera frame. 2.5:1 — tall enough that the walk-in has sky for
+ * the whistled notes and the close-up has real headroom on mobile. The
+ * stage div is FIXED to this aspect (see injected style) with the svg
+ * filling it, so the viewBox zoom crops inside a stable box and the
+ * scene's layout height never changes mid-loop. */
+const BAND = { x: 30, y: 22, w: 260, h: 104 };
 const STILL_T = 1600;               // reduced-motion frame: just clocked it
 
 /* ---------- easing / keyframes (same shapes the rig uses) ---------- */
@@ -158,13 +163,13 @@ function birdPose(t: number) {
 }
 
 /* ---------- camera ----------
- * Resting band; the SNAP runs 1x -> 4.5x in 260ms with overshoot, landing
- * the monocled glare filling the frame; creeps to 4.75x through the hold
+ * Resting band; the SNAP runs 1x -> 5x in 260ms with overshoot, landing
+ * the monocled glare filling the frame; creeps to 5.3x through the hold
  * (drifting down as the head lowers); whips back out in 310ms for the snub. */
 function camera(t: number) {
-  const z = kf(t, [[1650, 1, "lin"], [1910, 4.5, "back"], [3550, 4.75, "lin"], [3860, 1, "out"]]);
+  const z = kf(t, [[1650, 1, "lin"], [1910, 5.0, "back"], [3550, 5.3, "lin"], [3860, 1, "out"]]);
   const cx = kf(t, [[1650, 160, "lin"], [1910, 166, "back"], [3550, 166.5, "lin"], [3860, 160, "out"]]);
-  const cy = kf(t, [[1650, 85, "lin"], [1910, 81, "back"], [3550, 82.5, "lin"], [3860, 85, "out"]]);
+  const cy = kf(t, [[1650, 74, "lin"], [1910, 81, "back"], [3550, 82.5, "lin"], [3860, 74, "out"]]);
   const w = BAND.w / z, h = BAND.h / z;
   let vx = cx - w / 2, vy = cy - h / 2;
   if (t > 1910 && t < 2210) {              // impact shake as the snap lands
@@ -185,15 +190,21 @@ const NOTE_GLYPHS = ["♪", "♫", "♪"];
 
 export function buildAppleScene(): HTMLElement {
   const wrap = document.createElement("div");
-  wrap.className = "apple-scene-c";
+  wrap.className = "apple-scene-stage";
 
-  /* visually self-contained: scoped style injected once */
-  if (!document.getElementById("apple-scene-c-style")) {
+  /* visually self-contained: scoped style injected once.
+   * The stage is a FIXED-aspect box (matching BAND) with overflow hidden
+   * and the svg absolutely filling it — the camera's viewBox zoom crops
+   * within this stable box, so the scene's layout height is constant
+   * across the whole loop and can never push into the section below. */
+  if (!document.getElementById("apple-scene-stage-style")) {
     const st = document.createElement("style");
-    st.id = "apple-scene-c-style";
+    st.id = "apple-scene-stage-style";
     st.textContent =
-      `.apple-scene-c{display:block;width:100%;color:var(--ink,#e9eef4)}` +
-      `.apple-scene-c svg{display:block;width:100%;height:auto}`;
+      `.apple-scene-stage{position:relative;display:block;width:100%;` +
+      `aspect-ratio:${BAND.w}/${BAND.h};overflow:hidden;color:var(--ink,#e9eef4)}` +
+      `.apple-scene-stage svg{position:absolute;inset:0;display:block;` +
+      `width:100%;height:100%}`;
     document.head.appendChild(st);
   }
 
@@ -278,9 +289,10 @@ export function buildAppleScene(): HTMLElement {
     for (let i = 0; i < noteEls.length; i++) {
       const ph = (t - NOTE_AT[i]) / NOTE_DUR;
       if (!still && ph > 0 && ph < 1) {
-        /* off the beak, drifting up-right with a lazy sway */
+        /* off the beak, drifting up-right with a lazy sway — the taller
+         * stage gives them sky to climb into */
         const nx = birdX(NOTE_AT[i]) + 40 + ph * 14 + Math.sin(ph * Math.PI * 2.4) * 2;
-        const ny = GROUND_Y - 25 - 24 * EASE.out(ph);
+        const ny = GROUND_Y - 25 - 30 * EASE.out(ph);
         noteEls[i].style.visibility = "visible";
         noteEls[i].setAttribute("x", nx.toFixed(1));
         noteEls[i].setAttribute("y", ny.toFixed(1));
