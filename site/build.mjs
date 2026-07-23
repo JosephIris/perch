@@ -42,6 +42,9 @@ await esbuild.build({
 });
 
 await cp(resolve(here, "index.html"), resolve(dist, "index.html"));
+// Privacy policy page. Self-contained (its own inline styles + the shared
+// Inter face from /fonts), served at /privacy for the Microsoft Store listing.
+await cp(resolve(here, "privacy.html"), resolve(dist, "privacy.html"));
 await cp(resolve(repo, "docs/media/workspace.png"), resolve(dist, "media/workspace.png"));
 await cp(resolve(repo, "src/web/perch-glyph.png"), resolve(dist, "perch-glyph.png"));
 // The app icon (monocled bird) — the projects-empty state and any real chrome
