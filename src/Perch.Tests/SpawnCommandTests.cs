@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using Xunit;
 
 namespace Perch.Tests;
@@ -19,7 +20,16 @@ namespace Perch.Tests;
 // the suite says why not.
 public class SpawnCommandTests
 {
-    private const string Pwsh = @"C:\Program Files\PowerShell\7\pwsh.exe";
+    // Pre-quoted on purpose. Shell.NormalizeShellPath disambiguates a spaced,
+    // unquoted exe path by probing File.Exists at each space boundary, so an
+    // unquoted literal here only reaches the pwsh branch on machines that
+    // actually have PowerShell 7 installed at the default location. Everywhere
+    // else the exe token splits at "C:\Program" and the whole line degrades to
+    // the unrecognized-shell default, failing these tests for a reason that has
+    // nothing to do with what they pin. The quotes short-circuit that probe.
+    // AnUnquotedShellPathWithSpacesIsStillRecognizedAsPwsh covers the probe
+    // itself, against a file it creates.
+    private const string Pwsh = "\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\"";
 
     /// The command a project tab hands to the lazy spawn, mirroring
     /// MainWindow.OnProjectTabNew.
@@ -66,6 +76,34 @@ public class SpawnCommandTests
             Assert.NotEqual("", token);              // never an empty --name
             Assert.DoesNotContain("\"", token);
             Assert.DoesNotContain(" ", token);
+        }
+    }
+
+    /// The other half of what the unquoted constant used to cover by accident:
+    /// a spaced exe path with no quotes still has to be recognized as pwsh
+    /// rather than falling through to the default branch (which would ship a
+    /// pane with no IPC env and no cwd). Pinned against a file this test
+    /// creates, so it holds on a machine with no PowerShell 7.
+    [Fact]
+    public void AnUnquotedShellPathWithSpacesIsStillRecognizedAsPwsh()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "perch shell " + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var exe = Path.Combine(dir, "pwsh.exe");
+        File.WriteAllBytes(exe, Array.Empty<byte>());
+        try
+        {
+            var line = Shell.BuildStartupCommandLine(exe, null, Guid.NewGuid(), TabCommand("loc diff fix", "abc-123"));
+
+            // Quoted back up, pwsh branch taken (env injection + -Command), and
+            // the spliced name still a single bare token.
+            Assert.StartsWith($"\"{exe}\" -NoExit -Command \"", line);
+            Assert.Contains("$env:PERCH_PIPE=", line);
+            Assert.Contains("--name loc-diff-fix", line);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { }
         }
     }
 }

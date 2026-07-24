@@ -119,7 +119,7 @@ function render(l: Leaf, active: boolean) {
 
 test("working shows the activity verb + a live elapsed span", () => {
   const f = render(leaf({ agentState: "working", activityDetail: "editing live-preview.ts", turnStartMs: 1000 }), true);
-  assert.match(f.activityEl.textContent, /^▸ editing live-updates\.ts · /);
+  assert.match(f.activityEl.textContent, /^▸ editing live-preview\.ts · /);
   // the elapsed span carries the turn-start for the shared ticker
   const span = f.activityEl.childNodes.find((n: any) => n.dataset?.turnStart) as any;
   assert.equal(span?.dataset.turnStart, "1000");

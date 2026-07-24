@@ -128,7 +128,7 @@ public class GcloudLabelsTests
 
     [Theory]
     [InlineData("Joseph", "joseph")]
-    [InlineData("Offline Eval", "nightly-report")]
+    [InlineData("Nightly Report", "nightly-report")]
     [InlineData("com.example.shop", "com-example-shop")]   // dots are illegal in a label
     [InlineData("!!!", "")]
     [InlineData("", "")]
