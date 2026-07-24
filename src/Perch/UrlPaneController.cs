@@ -91,6 +91,16 @@ internal sealed class UrlPaneController
         var id = msg.PaneId;
         var url = msg.Url;
         if (string.IsNullOrEmpty(url)) return;
+        // Defense in depth (audit issue #1, item 2): the page already filters to
+        // http/https, but the host must never create or re-navigate a native
+        // WebView2 pane to any other scheme (file:, javascript:, data:, ...)
+        // even if a malformed message slips through. Every layout message —
+        // first-sight create and subsequent re-navigate — funnels through here.
+        if (!IsAllowedUrl(url))
+        {
+            Log.Info("UrlPane.reject", $"pane={id:N} non-http(s) url rejected");
+            return;
+        }
         var (x, y, w, h) = (msg.X, msg.Y, msg.W, msg.H);
 
         var (px, py, pw, ph) = DipsToPixels(x, y, w, h);
@@ -188,4 +198,9 @@ internal sealed class UrlPaneController
         catch { return 0; }
     }
 
+    /// True only for an absolute http/https URL. Host-side gate so a native
+    /// URL pane can never be pointed at file:, javascript:, data: and friends.
+    private static bool IsAllowedUrl(string url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
+        (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
 }

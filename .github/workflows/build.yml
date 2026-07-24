@@ -8,17 +8,20 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# Allow the workflow to create releases when a tag is pushed, plus the two
-# scopes the build-provenance attestation needs (OIDC token + attestation
-# store). Nothing here grants write to code or other repos.
+# Least-privilege default: the workflow token is read-only. Only the build
+# job is elevated to the write scopes it actually needs (release publish +
+# provenance attestation), so any future job added here starts read-only.
+# (Audit issue #1, item 5.)
 permissions:
-  contents: write      # create the GitHub Release + upload its assets
-  id-token: write      # OIDC token used to sign the build-provenance attestation
-  attestations: write  # write that attestation to the repo's attestation store
+  contents: read
 
 jobs:
   build:
     runs-on: windows-latest
+    permissions:
+      contents: write      # create the GitHub Release + upload its assets
+      id-token: write      # OIDC token used to sign the build-provenance attestation
+      attestations: write  # write that attestation to the repo's attestation store
 
     # Expose the SignPath token as a job-level env so steps can gate on its
     # presence in `if:` (secrets can't be referenced directly in `if:`; promoting

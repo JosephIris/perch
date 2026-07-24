@@ -79,6 +79,23 @@ real terminal grid when you want your hands on it.
 
 `Ctrl+D`, `Ctrl+S`, `Ctrl+W` stay with the shell, as they should.
 
+## What perch changes inside your shell
+
+perch isn't a passive terminal host — to wire agents to their chrome it makes
+a few deliberate, visible changes inside each pane's shell:
+
+- **`PATH`**: perch's bundled `tools/` directory is prepended, so `claude`,
+  `codex`, and `perch` resolve to perch's wrappers first. `claude.cmd` /
+  `codex.cmd` hand off to `perch.exe`, which execs the *real* binary with
+  Claude Code's hook settings injected. The wrappers launch and observe your
+  agent; they don't intercept, reroute, or transmit its data.
+- **`PERCH_PIPE` / `PERCH_PANE_ID`**: set per pane so the `perch` CLI can
+  report status, branch, ports, and notifications to the host over a per-pane
+  named pipe. Outside a perch pane both are unset and every `perch` subcommand
+  is a silent no-op.
+
+Nothing leaves your machine as a result — see [PRIVACY.md](PRIVACY.md).
+
 ## Stack
 
 - **WPF (.NET 8):** a thin [WPF-UI](https://github.com/lepoco/wpfui)
@@ -117,6 +134,23 @@ installer and the portable exe:
 ```pwsh
 git tag v0.1.0
 git push origin v0.1.0
+```
+
+## Verify your download
+
+Every release is signed with a build-provenance attestation, so you can confirm
+an asset was built by this repo's CI and hasn't been tampered with. With the
+[GitHub CLI](https://cli.github.com):
+
+```pwsh
+gh attestation verify .\Perch-Setup.exe --repo JosephIris/perch
+```
+
+Or check the file's hash directly against the SHA-256 GitHub records for the
+asset:
+
+```pwsh
+Get-FileHash .\Perch-Setup.exe -Algorithm SHA256
 ```
 
 ## Docs
