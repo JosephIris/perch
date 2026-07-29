@@ -162,6 +162,18 @@ public class ProtocolTests
     }
 
     [Fact]
+    public void BoardEditAndPickFile()
+    {
+        var ed = Round<BoardEditMsg>(
+            $"{{\"type\":\"board.edit\",\"paneId\":\"{G1}\",\"nodeId\":\"n4\",\"text\":\"after login\"}}");
+        Assert.Equal((Guid.Parse(G1), "n4", "after login"), (ed.PaneId, ed.NodeId, ed.Text));
+
+        var pick = Round<BoardPickFileMsg>(
+            $"{{\"type\":\"board.pickFile\",\"paneId\":\"{G2}\",\"x\":16,\"y\":48}}");
+        Assert.Equal((Guid.Parse(G2), 16d, 48d), (pick.PaneId, pick.X, pick.Y));
+    }
+
+    [Fact]
     public void BoardPaste_CarriesNoPayload()
     {
         // The absence of image bytes here is the design: the host reads the

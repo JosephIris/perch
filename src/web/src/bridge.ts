@@ -108,14 +108,22 @@ export type OutMessage =
    * folder on first use. One board per tab — asking twice just opens another
    * window onto the same one. */
   | { type: "board.new"; paneId: string }
-  /* Add something to a board. kind:"note" forces a typed note; kind:"auto" lets
-   * the HOST classify the text (url / file path / note) — the page can't,
-   * because deciding whether a path is inside the repo needs the repo root. */
+  /* Add something to a board. kind:"note" forces a typed note; kind:"path" is a
+   * file the user picked, so a path outside the project is worth an error;
+   * kind:"auto" lets the HOST classify the text (url / file path / else a note)
+   * — the page can't, because deciding whether a path is inside the repo needs
+   * the repo root. */
   /* `origin: "user"` marks a deliberate human gesture, and is the ONLY thing
    * that lets a path outside the project be staged — board.md is an agent's
    * read list, so an agent staging an external path would be widening its own
    * read scope. Omitting the field is the safe default, on purpose. */
-  | { type: "board.add"; paneId: string; kind: "note" | "auto"; text: string; note?: string; x: number; y: number; origin?: "user" }
+  | { type: "board.add"; paneId: string; kind: "note" | "path" | "auto"; text: string; note?: string; x: number; y: number; origin?: "user" }
+  /* Replace a node's text: a note's body, or the caption under a file / image /
+   * reference card. */
+  | { type: "board.edit"; paneId: string; nodeId: string; text: string }
+  /* Open the host's file picker and add whatever comes back at (x, y). The
+   * dialog has to be the host's — the page cannot browse the user's disk. */
+  | { type: "board.pickFile"; paneId: string; x: number; y: number }
   /* A paste landed at (x, y). Deliberately carries NO payload: the host reads
    * the clipboard itself, because a multi-MB image as base64 over this bridge
    * is several transient copies of itself in a process that has already died of
@@ -686,9 +694,15 @@ export type InMessage =
   /* The whole board after any change. Full state, not a diff: a board is tens
    * of nodes, and a full replace can't drift from the file on disk. */
   | { type: "board.state"; paneId: string; title: string; nodes: BoardNodeView[]; links: BoardLinkView[] }
-  /* The board could not be read (folder gone, index unparseable). The pane
-   * shows the reason — an empty grid reads as "nothing here yet". */
-  | { type: "board.error"; paneId: string; message: string }
+  /* Something went wrong with a board. `fatal` says which kind, and the pane
+   * renders them completely differently:
+   *   true  — the board can't be read at all (folder gone, index unparseable).
+   *           The reason replaces the surface, because an empty grid reads as
+   *           "nothing here yet".
+   *   false — one action failed (a link that wouldn't fetch, a picked file
+   *           outside the project). A strip along the bottom; blanking a board
+   *           full of work to report it is the bigger loss. */
+  | { type: "board.error"; paneId: string; message: string; fatal?: boolean }
   /* A card-sized JPEG preview for one image node. `data` empty means the file
    * is gone or undecodable — the card says so rather than showing an empty
    * frame. */

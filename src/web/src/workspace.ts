@@ -481,10 +481,10 @@ export class Workspace {
     }
   }
 
-  showBoardError(paneId: string, message: string) {
+  showBoardError(paneId: string, message: string, fatal: boolean) {
     for (const st of this.stages.values()) {
       const pane = st.panes.get(paneId);
-      if (pane instanceof BoardPane) { pane.showError(message); return; }
+      if (pane instanceof BoardPane) { pane.showError(message, fatal); return; }
     }
   }
 
@@ -503,8 +503,9 @@ export class Workspace {
   handlePaste(): boolean {
     const pane = this.getActivePane();
     if (!(pane instanceof BoardPane)) return false;
-    pane.handlePaste();
-    return true;
+    // The BOARD decides: it declines while one of its own text fields has
+    // focus, so Ctrl+V into a note being typed pastes into the note.
+    return pane.handlePaste();
   }
 
   /** A board image preview arrived. */

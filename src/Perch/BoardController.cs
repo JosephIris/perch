@@ -37,8 +37,21 @@ internal sealed class BoardController
     /// Send a board's contents to the page.
     public event Action<Guid, BoardDoc>? StateReady;
 
-    /// Tell the page a board can't be read, with a reason the pane will show.
-    public event Action<Guid, string>? Failed;
+    /// Tell the page something went wrong, with a reason the pane will show.
+    ///
+    /// The bool is FATAL: does this break the whole board, or just the thing
+    /// that was attempted? Only the host can tell the difference — "the folder
+    /// is gone" and "that link 404'd" arrive on the same channel — and the pane
+    /// renders them completely differently: a fatal error replaces the surface,
+    /// anything else is a strip along the bottom. Getting this wrong in the
+    /// first version meant one refused paste blanked a board full of work.
+    public event Action<Guid, string, bool>? Failed;
+
+    /// A one-action failure: reported without costing the user the board.
+    private void Warn(Guid paneId, string message) => Failed?.Invoke(paneId, message, false);
+
+    /// This board cannot be shown at all.
+    private void Fatal(Guid paneId, string message) => Failed?.Invoke(paneId, message, true);
 
     public BoardController(Func<Guid, Session?> sessionOfPane, Action<Action> uiPost)
     {
@@ -54,7 +67,7 @@ internal sealed class BoardController
 
         if (string.IsNullOrEmpty(sess.BoardPath))
         {
-            Failed?.Invoke(msg.PaneId, "This tab has no board.");
+            Fatal(msg.PaneId, "This tab has no board.");
             return;
         }
 
@@ -65,12 +78,12 @@ internal sealed class BoardController
             // or someone deleted it. Say which path we looked for; a bare "not
             // found" leaves the user with nothing to act on.
             Log.Info("Board.missing", $"session={sess.Id:N} path={sess.BoardPath}");
-            Failed?.Invoke(msg.PaneId, $"The board folder is missing: {sess.BoardPath}");
+            Fatal(msg.PaneId, $"The board folder is missing: {sess.BoardPath}");
             return;
         }
         if (!store.Readable)
         {
-            Failed?.Invoke(msg.PaneId, store.Problem);
+            Fatal(msg.PaneId, store.Problem);
             return;
         }
         StateReady?.Invoke(msg.PaneId, store.Doc);
@@ -206,7 +219,7 @@ internal sealed class BoardController
         var store = StoreFor(sess);
         if (store == null || !store.Readable)
         {
-            Failed?.Invoke(paneId, store?.Problem ?? "This tab's board can't be opened.");
+            Fatal(paneId, store?.Problem ?? "This tab's board can't be opened.");
             return false;
         }
         if (!mutate(store)) return false;
@@ -227,6 +240,16 @@ internal sealed class BoardController
     /// is decided HERE, not by the page — classification needs the repo root
     /// (to make a path repo-relative and to reject one that escapes it), and
     /// the page has neither.
+    ///
+    /// `msg.Kind` says how hard to insist:
+    ///   - "note" — always a note, whatever the text looks like.
+    ///   - "path" — the user PICKED a file (the toolbar's file button), so a
+    ///     path that isn't in the project is an error worth showing.
+    ///   - "auto" — a paste. A note is the FALLBACK, not an error: text that
+    ///     isn't a URL and isn't a file in this project is just text. This is
+    ///     the whole point of the surface — you throw things at it — and the
+    ///     first version got it backwards, refusing every prose paste with
+    ///     "that path is outside this project".
     public void OnAdd(BoardAddMsg msg)
     {
         var text = (msg.Text ?? "").Trim();
@@ -235,9 +258,10 @@ internal sealed class BoardController
         Mutate(msg.PaneId, store =>
         {
             var node = new BoardNode { Id = store.Doc.NextId(), X = msg.X, Y = msg.Y };
+            var kind = string.IsNullOrEmpty(msg.Kind) ? "auto" : msg.Kind;
             var repoRoot = RepoRootFor(msg.PaneId);
 
-            if (msg.Kind == "note")
+            if (kind == "note")
             {
                 node.Kind = "note";
                 node.Text = text;
@@ -258,26 +282,50 @@ internal sealed class BoardController
                 // ASSUMED to be a path, so arbitrary text fell through to the
                 // containment check and came back wearing a message written for
                 // paths — a shell command staged as "That path is outside this
-                // project". Text that was never a path isn't a scope failure and
-                // must not be reported as one.
-                Failed?.Invoke(msg.PaneId,
-                    "That doesn't look like a file path or a URL. " +
-                    "Stage it as a note if you meant to keep the text.");
-                return false;
+                // project".
+                //
+                // Naming it correctly wasn't enough: for an "auto" add — a
+                // paste — text that isn't a path is a NOTE, not a failure. This
+                // surface exists to be thrown things at, and refusing prose
+                // (however politely) while offering no way to keep it was the
+                // whole complaint. Only a deliberate pick still fails, because
+                // there the user asserted it WAS a file.
+                if (kind == "path")
+                {
+                    Warn(msg.PaneId, "That doesn't look like a file path.");
+                    return false;
+                }
+                node.Kind = "note";
+                node.Text = text;
             }
             else
             {
-                var rel = repoRoot == null ? null : BoardStore.ToRepoRelative(repoRoot, text);
-                if (rel != null && rel.Length > 0)
+                // Resolve BEFORE asking whether it's inside the project. A
+                // repo-relative path ("src/auth/session.ts", straight out of a
+                // terminal) measured against the raw text resolves against the
+                // PROCESS's working directory — the install folder — so the
+                // commonest paste of all looked external. Containment is
+                // unweakened: ToRepoRelative still judges the resolved path, and
+                // resolving is what normalizes the ".." it exists to catch.
+                var abs = BoardPaths.TryAbsolute(text, repoRoot);
+                var rel = abs == null || repoRoot == null
+                    ? null
+                    : BoardStore.ToRepoRelative(repoRoot, abs);
+                var inRepo = rel != null && rel.Length > 0;
+
+                if (inRepo && System.IO.File.Exists(System.IO.Path.Combine(repoRoot!, rel!)))
                 {
-                    if (!System.IO.File.Exists(System.IO.Path.Combine(repoRoot!, rel)))
-                    {
-                        Failed?.Invoke(msg.PaneId, $"No such file: {rel}");
-                        return false;
-                    }
                     node.Kind = "path";
                     node.Ref = rel;
                     node.Text = msg.Note ?? "";
+                }
+                else if (inRepo)
+                {
+                    // Path-shaped, inside the project, not there. A pick says
+                    // so; a paste keeps the text rather than losing it.
+                    if (kind == "path") { Warn(msg.PaneId, $"No such file: {rel}"); return false; }
+                    node.Kind = "note";
+                    node.Text = text;
                 }
                 else
                 {
@@ -287,28 +335,53 @@ internal sealed class BoardController
                     // read scope — the exact thing containment prevents. A
                     // person referencing a file they already have open is a
                     // different act, and refusing it was over-broad.
+                    //
+                    // No note fallback on THIS branch, deliberately: for a
+                    // non-user add the refusal is the answer, and quietly
+                    // keeping the path as prose would land the same hint in the
+                    // same file by another route.
                     if (!msg.IsUserStaged)
                     {
-                        Failed?.Invoke(msg.PaneId,
+                        Warn(msg.PaneId,
                             "That file is outside this project, so it can only be added by you, " +
                             "not by an agent.");
                         return false;
                     }
-                    var full = BoardPaths.TryAbsolute(text, repoRoot);
-                    if (full == null || !System.IO.File.Exists(full))
+                    if (abs == null || !System.IO.File.Exists(abs))
                     {
-                        Failed?.Invoke(msg.PaneId, $"No such file: {text}");
-                        return false;
+                        if (kind == "path") { Warn(msg.PaneId, $"No such file: {text}"); return false; }
+                        node.Kind = "note";
+                        node.Text = text;
                     }
-                    node.Kind = "path";
-                    node.ExtRef = full;
-                    node.Text = msg.Note ?? "";
+                    else
+                    {
+                        node.Kind = "path";
+                        node.ExtRef = abs;
+                        node.Text = msg.Note ?? "";
+                    }
                 }
             }
             store.Doc.Nodes.Add(node);
             return true;
         });
     }
+
+    /// Retype a node's text from an inline edit on the card: a note's body, or
+    /// the caption under a file/image/reference. Captions are why this exists
+    /// for non-notes too — "the broken state after login" is what makes a
+    /// screenshot legible to an agent that can only read board.md.
+    public void OnEdit(BoardEditMsg msg) =>
+        Mutate(msg.PaneId, store =>
+        {
+            var n = store.Doc.Find(msg.NodeId);
+            if (n == null) return false;
+            var text = (msg.Text ?? "").Trim();
+            // Opening an editor and closing it unchanged must not rewrite
+            // board.md — that would be a git-visible change for a glance.
+            if (n.Text == text) return false;
+            n.Text = text;
+            return true;
+        });
 
     /// Reposition a node. `final` false is the continuous part of a drag: the
     /// in-memory doc moves so a later save is correct, but nothing is written
@@ -409,7 +482,7 @@ internal sealed class BoardController
                 if (markdown == null)
                 {
                     node.FetchedUtc = null;
-                    if (problem != null) Failed?.Invoke(paneId, problem);
+                    if (problem != null) Warn(paneId, problem);
                     // Still worth persisting: the title may have landed.
                     return true;
                 }
@@ -426,7 +499,7 @@ internal sealed class BoardController
                 catch (Exception ex)
                 {
                     Log.Error("Board.writeRef", ex);
-                    Failed?.Invoke(paneId, "Couldn't save the fetched page.");
+                    Warn(paneId, "Couldn't save the fetched page.");
                     return false;
                 }
 
@@ -477,7 +550,7 @@ internal sealed class BoardController
                 catch (Exception ex)
                 {
                     Log.Error("Board.writeAsset", ex);
-                    Failed?.Invoke(paneId, "Couldn't save the pasted image.");
+                    Warn(paneId, "Couldn't save the pasted image.");
                     return false;
                 }
                 store.Doc.Nodes.Add(new BoardNode
@@ -510,7 +583,7 @@ internal sealed class BoardController
             return;
         }
 
-        Failed?.Invoke(paneId, "There's nothing on the clipboard to add.");
+        Warn(paneId, "There's nothing on the clipboard to add.");
     }
 
     /// An unused "<stem>-N.png" inside the board's assets/.
@@ -569,8 +642,11 @@ internal sealed class BoardController
     }
 
     /// The repo the pane's board lives in — the board dir is
-    /// &lt;repo&gt;/.perch/boards/&lt;slug&gt;, so the root is three levels up.
-    private string? RepoRootFor(Guid paneId)
+    /// &lt;repo&gt;/.perch/boards/&lt;slug&gt;, so the root is three levels up. Public
+    /// because the file picker roots its dialog here: the only files a board can
+    /// hold are ones inside the project, so opening the dialog anywhere else
+    /// invites a pick we then have to refuse.
+    public string? RepoRootFor(Guid paneId)
     {
         var sess = _sessionOfPane(paneId);
         if (sess == null || string.IsNullOrEmpty(sess.BoardPath)) return null;

@@ -304,6 +304,99 @@ try {
     Check "the card shows the cached ref" `
         ((Cdp-Eval "(()=>{const e=[...document.querySelectorAll('.board-node--url .board-node__ref')];return e.some(x=>x.textContent.includes('refs/'))?1:0})()") -eq '1')
 
+    # --- 3f. pasted prose ----------------------------------------------------
+    # THE bug this section exists for: the classifier had two outcomes for a
+    # paste - a URL or a file path - so every sentence anyone ever pasted came
+    # back as "that path is outside this project", added nothing, and (because
+    # the error rendered as a full-surface message) blanked the whole board on
+    # its way out. A note is the FALLBACK now. Driven through the real
+    # clipboard, because the host reads it itself.
+    Write-Host "`n[3f] pasted prose becomes a note instead of a failed path"
+    if (-not (Set-Clip { [System.Windows.Clipboard]::SetText('the login flow breaks on the second attempt') })) {
+        throw "could not put text on the clipboard: $script:LastClipError"
+    }
+    Start-Sleep -Milliseconds 300
+    [void](Cdp-Eval "(()=>{window.chrome.webview.postMessage(JSON.stringify({type:'board.paste',paneId:'$paneId',x:16,y:420}));return 1})()")
+    Check "a note card appeared" `
+        (Wait-Until { (Cdp-Eval "document.querySelectorAll('.board-node--note').length") -eq '1' } 10)
+    Check "the card carries the pasted text" `
+        ((Cdp-Eval "(()=>{const e=[...document.querySelectorAll('.board-node--note .board-node__body')];return e.some(x=>x.textContent.includes('breaks on the second attempt'))?1:0})()") -eq '1')
+    Check "the board was NOT replaced by an error message" `
+        ((Cdp-Eval "document.querySelectorAll('.board-message').length") -eq '0')
+    Check "the note reached board.md" `
+        ((Get-Content ($mdFiles[0].FullName) -Raw) -match 'breaks on the second attempt')
+
+    # --- 3g. the toolbar -----------------------------------------------------
+    Write-Host "`n[3g] the toolbar's note button opens a draft that commits"
+    Check "the tool cluster is on the surface" `
+        ((Cdp-Eval "document.querySelectorAll('.board__tools .board__tool').length") -eq '6')
+    # Index 0 is "add a note" - see buildTools' order. An attribute selector
+    # would need quote-escaping through PowerShell for no gain.
+    [void](Cdp-Eval "(()=>{document.querySelectorAll('.board__tool')[0].click();return 1})()")
+    Check "a draft card opened" `
+        ((Cdp-Eval "document.querySelectorAll('.board-node--draft .board-node__field').length") -eq '1')
+    Check "nothing was written for an empty draft" `
+        (-not ((Get-Content ($mdFiles[0].FullName) -Raw) -match '\(empty note\)'))
+    # Autofocus so you can just type. Reported separately from the commit below,
+    # because a focus that doesn't land is a UX bug, not a data-loss bug.
+    Check "the draft field took keyboard focus" `
+        ((Cdp-Eval "(document.activeElement||{}).className||''") -match 'board-node__field')
+    # Type, then press the editor's own Add button. Deliberately NOT blur: this
+    # window isn't OS-focused, and Chromium won't fire blur in a document that
+    # doesn't have focus — which is also why the visible buttons exist rather
+    # than blur-and-Ctrl+Enter being the only ways out.
+    $add = "(()=>{const f=document.querySelector('.board-node--draft .board-node__field');" +
+           "f.value='typed straight onto the board';f.dispatchEvent(new Event('input'));" +
+           "const b=[...document.querySelectorAll('.board-node--draft .board-node__editbtn')]" +
+           ".find(x=>x.textContent==='Add');if(!b)return 'no Add button';b.click();return 'ok'})()"
+    $addResult = Cdp-Eval $add
+    Check "the draft has an Add button" ($addResult -match 'ok') "- said: $addResult"
+    Start-Sleep -Milliseconds 900
+    Check "the typed note reached board.md" `
+        ((Get-Content ($mdFiles[0].FullName) -Raw) -match 'typed straight onto the board')
+    Check "the draft card became a real one" `
+        ((Cdp-Eval "document.querySelectorAll('.board-node--draft').length") -eq '0')
+
+    # --- 3h. editing in place ------------------------------------------------
+    Write-Host "`n[3h] double-click edits a note and the edit persists"
+    $edit = @"
+(()=>{const c=[...document.querySelectorAll('.board-node--note')]
+.find(x=>x.textContent.includes('typed straight onto the board'));
+if(!c)return 'no card';
+c.dispatchEvent(new MouseEvent('dblclick',{bubbles:true}));
+const f=c.querySelector('.board-node__field');
+if(!f)return 'no field';
+if(f.value!=='typed straight onto the board')return 'field was empty: '+f.value;
+f.value='edited in place';f.dispatchEvent(new Event('input'));
+const b=[...c.querySelectorAll('.board-node__editbtn')].find(x=>x.textContent==='Save');
+if(!b)return 'no Save button';b.click();return 'ok';})()
+"@
+    $editResult = Cdp-Eval $edit
+    Check "the editor opened prefilled and committed" ($editResult -match 'ok') "- said: $editResult"
+    Start-Sleep -Milliseconds 900
+    $mdAfterEdit = Get-Content ($mdFiles[0].FullName) -Raw
+    Check "the new text is in board.md" ($mdAfterEdit -match 'edited in place')
+    Check "the old text is gone" (-not ($mdAfterEdit -match 'typed straight onto the board'))
+
+    # --- 3i. a refused file ---------------------------------------------------
+    # An error about ONE action must not cost you the board. This is the other
+    # half of the 3f regression: the message channel is shared, so a fetch
+    # failure or a bad pick used to blank a surface full of work.
+    Write-Host "`n[3i] a file outside the project is refused in a strip, not by blanking the board"
+    $outside = Join-Path $DataDir 'outside.txt'
+    Set-Content -Path $outside -Value 'not in the repo' -Encoding utf8
+    $nodesBefore = [int](Cdp-Eval "document.querySelectorAll('.board-node').length")
+    $outsideJs = $outside.Replace('\', '/')
+    [void](Cdp-Eval "(()=>{window.chrome.webview.postMessage(JSON.stringify({type:'board.add',paneId:'$paneId',kind:'path',text:'$outsideJs',x:16,y:16}));return 1})()")
+    Check "an error strip appeared" `
+        (Wait-Until { (Cdp-Eval "document.querySelectorAll('.board-banner--on').length") -eq '1' } 10)
+    Check "it names the actual problem" `
+        ((Cdp-Eval "(()=>{const b=document.querySelector('.board-banner__text');return b&&b.textContent.includes('outside this project')?1:0})()") -eq '1')
+    Check "every card survived" `
+        ([int](Cdp-Eval "document.querySelectorAll('.board-node').length") -eq $nodesBefore)
+    Check "no full-surface error state" `
+        ((Cdp-Eval "document.querySelectorAll('.board-message').length") -eq '0')
+
     # --- 3d. zoom ------------------------------------------------------------
     Write-Host "`n[3d] zoom scales the canvas and Ctrl+0 resets it"
     # Ctrl+= reaches the active pane through the SAME path the terminal font
@@ -317,8 +410,10 @@ return c.style.transform;})()
 "@
     $t = Cdp-Eval $zoomIn
     Check "Ctrl+= scales the canvas up" ($t -match 'scale\(1\.[1-9]') "- transform was: $t"
-    Check "a zoom readout appears" `
-        ((Cdp-Eval "document.querySelectorAll('.board__zoom--on').length") -eq '1')
+    # The readout lives in the toolbar and is permanent now (it replaced a badge
+    # that faded), so this asserts the NUMBER rather than the appearance.
+    Check "the toolbar readout tracks the zoom" `
+        ((Cdp-Eval "document.querySelector('.board__pct').textContent") -match '1[1-9][0-9]%')
     # A board must NOT write the terminal font pref when zoomed - changeFontSize
     # returns 0 precisely so main.ts skips the prefs.set.
     Check "zooming did not touch the font preference" `
@@ -327,6 +422,8 @@ return c.style.transform;})()
     $t0 = Cdp-Eval "(()=>{window.dispatchEvent(new KeyboardEvent('keydown',{code:'Digit0',ctrlKey:true,bubbles:true}));return document.querySelector('.board__canvas').style.transform;})()"
     Check "Ctrl+0 resets to 100% at the origin" `
         ($t0 -match 'translate\(0px, 0px\) scale\(1\)') "- transform was: $t0"
+    Check "the readout says 100% again" `
+        ((Cdp-Eval "document.querySelector('.board__pct').textContent") -match '100%')
 
     # --- 4. a missing board folder shows a reason ---------------------------
     Write-Host "`n[4] a board whose folder vanished says so"

@@ -31,6 +31,22 @@ const KIND_LABEL: Record<string, string> = {
   note: "note", path: "file", image: "image", url: "reference",
 };
 
+/** Toolbar icons, same 24x24 single-stroke family as the card icons. */
+const TOOL_ICON: Record<string, string> = {
+  note:  "M5 4h14v11l-4 5H5z M15 20v-5h4 M9 9h6 M9 13h3",
+  file:  KIND_ICON.path,
+  link:  "M10.5 13.5a4 4 0 0 0 5.66 0l2.5-2.5a4 4 0 0 0-5.66-5.66l-1 1"
+       + " M13.5 10.5a4 4 0 0 0-5.66 0l-2.5 2.5a4 4 0 0 0 5.66 5.66l1-1",
+  paste: "M9 4h6v3H9z M9 5.5H6.5a1.5 1.5 0 0 0-1.5 1.5v11a1.5 1.5 0 0 0 1.5 1.5h11"
+       + "a1.5 1.5 0 0 0 1.5-1.5V7a1.5 1.5 0 0 0-1.5-1.5H15",
+  minus: "M5 12h14",
+  plus:  "M12 5v14 M5 12h14",
+};
+
+/** How long an error banner stays up before fading. Long enough to read a
+ *  sentence, short enough that it doesn't sit over a card you're using. */
+const BANNER_MS = 7000;
+
 /** Default card size per kind, used when a node has never been resized (w/h 0).
  *  Images get a taller box because they lead with a picture. */
 const DEFAULT_SIZE: Record<string, { w: number; h: number }> = {
@@ -63,7 +79,11 @@ export class BoardPane {
   private readonly surface: HTMLElement;
   /** Zoom layer holding the cards. See the constructor. */
   private readonly canvas: HTMLElement;
-  private readonly zoomBadge: HTMLElement;
+  /** Live zoom readout in the toolbar; also the reset-view button. */
+  private readonly zoomPctEl: HTMLElement;
+  /** Transient error strip. Kept as one element and re-used, like Toast. */
+  private bannerEl: HTMLElement | null = null;
+  private bannerTimer = 0;
   /** View scale. A VIEW preference, so it lives in memory and never reaches
    *  board.md — how far you happen to be zoomed in is not content, and writing
    *  it would make every zoom a file write and a git-visible change. */
@@ -72,8 +92,14 @@ export class BoardPane {
    *  pointer. */
   private panX = 0;
   private panY = 0;
-  private zoomBadgeTimer = 0;
   private boardPath = "";
+  /** The open editor, if any: an existing node's text, or a card that doesn't
+   *  exist yet (nodeId null). Held HERE rather than only in the DOM because a
+   *  state push replaces every card — see applyBoardState — and losing what you
+   *  were typing to somebody else's drag would be unforgivable. */
+  private editor:
+    | { nodeId: string | null; kind: "note" | "link"; text: string; x: number; y: number }
+    | null = null;
   /** Last state pushed by the host. Read during a drag so the gesture works
    *  from the node's committed position rather than the DOM's. */
   private nodes: BoardNodeView[] = [];
@@ -116,9 +142,14 @@ export class BoardPane {
     this.canvas.className = "board__canvas";
     this.surface.appendChild(this.canvas);
 
-    this.zoomBadge = document.createElement("div");
-    this.zoomBadge.className = "board__zoom";
-    this.surface.appendChild(this.zoomBadge);
+    // Tools sit ON the surface rather than in the pane header: the header is
+    // shared with terminals and browser panes and says what the PANE is, while
+    // these act on the board under them. Always visible, not hover-revealed —
+    // the first version had no controls at all and "paste and hope" was the
+    // entire discoverable surface.
+    const tools = this.buildTools();
+    this.zoomPctEl = tools.querySelector(".board__pct") as HTMLElement;
+    this.surface.appendChild(tools);
 
     // Ctrl+wheel zooms about the pointer, the way every canvas app does it.
     // Plain wheel is left alone: there is nothing to scroll yet, and hijacking
@@ -138,7 +169,8 @@ export class BoardPane {
     // reach it.
     this.surface.addEventListener("pointerdown", (ev) => {
       if (ev.button !== 0) return;
-      if ((ev.target as HTMLElement).closest(".board-node")) return;  // card drag owns it
+      // Cards own their own drag; the tools and the error strip own their clicks.
+      if ((ev.target as HTMLElement).closest(".board-node, .board__tools, .board-banner")) return;
       const startX = ev.clientX, startY = ev.clientY;
       const p0x = this.panX, p0y = this.panY;
       this.surface.setPointerCapture(ev.pointerId);
@@ -209,6 +241,299 @@ export class BoardPane {
     applyChips(this.branchEl, this.commitsEl, leaf, false);
   }
 
+  // ---- tools --------------------------------------------------------------
+
+  /** The floating control cluster: add a note, add a file, add a link, paste,
+   *  then zoom. Ordered by how often you reach for it, with the two view
+   *  controls fenced off after a separator because they change nothing on the
+   *  board itself. */
+  private buildTools(): HTMLElement {
+    const bar = document.createElement("div");
+    bar.className = "board__tools";
+    // Never let a tool click become a pan gesture, and never let it steal the
+    // pane-focus mousedown either — stopPropagation on pointerdown only, so the
+    // click still lands on the button.
+    bar.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+
+    const sep = document.createElement("span");
+    sep.className = "board__tools-sep";
+
+    const pct = document.createElement("button");
+    pct.type = "button";
+    pct.className = "board__pct";
+    pct.title = "Reset view (Ctrl+0)";
+    pct.setAttribute("aria-label", "Reset view");
+    pct.textContent = "100%";
+    pct.addEventListener("click", () => this.resetFontSize());
+
+    bar.append(
+      this.toolButton("note", "Add a note", () => this.openDraft("note")),
+      this.toolButton("file", "Add a file from this project", () => this.pickFile()),
+      this.toolButton("link", "Add a link", () => this.openDraft("link")),
+      this.toolButton("paste", "Paste clipboard (Ctrl+V)", () => this.handlePaste()),
+      sep,
+      this.toolButton("minus", "Zoom out", () => this.setZoom(this.zoom / 1.1, this.viewCentre())),
+      pct,
+      this.toolButton("plus", "Zoom in", () => this.setZoom(this.zoom * 1.1, this.viewCentre())),
+    );
+    return bar;
+  }
+
+  private toolButton(icon: string, label: string, onClick: () => void): HTMLElement {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "board__tool";
+    btn.title = label;
+    btn.setAttribute("aria-label", label);
+    btn.appendChild(svgIcon(TOOL_ICON[icon] ?? TOOL_ICON.note, 14));
+    btn.addEventListener("click", (ev) => { ev.stopPropagation(); onClick(); });
+    return btn;
+  }
+
+  /** Ask the host to open a file picker. The dialog can only be the host's —
+   *  the page has no way to browse the disk — and the board only accepts files
+   *  from inside the project, so the host roots it there. */
+  private pickFile() {
+    if (!this.requireBoard()) return;
+    const p = this.freeSpot();
+    send({ type: "board.pickFile", paneId: this.paneId, x: p.x, y: p.y });
+  }
+
+  /** Say so, once, when a control is pressed on a pane that has no board.
+   *  Silence here reads as a broken button. */
+  private requireBoard(): boolean {
+    if (this.boardPath) return true;
+    this.showBanner("This tab has no board yet.");
+    return false;
+  }
+
+  // ---- adding and editing text --------------------------------------------
+
+  /** Open a card that doesn't exist yet. Nothing is sent to the host until
+   *  there's text to send: an empty note node in board.md is a line an agent
+   *  has to read past, and a file write for a mis-click is a git-visible
+   *  change. */
+  private openDraft(kind: "note" | "link") {
+    if (!this.requireBoard()) return;
+    this.closeEditor();
+    const p = this.freeSpot(kind === "note" ? "note" : "url");
+    this.editor = { nodeId: null, kind, text: "", x: p.x, y: p.y };
+    this.clearMessage();          // a draft is content; drop the empty state
+    this.mountEditor();
+  }
+
+  /** Edit an existing node: a note's body, or the caption under a file, image
+   *  or reference. Captions are the point for non-notes — "the broken state
+   *  after login" is what makes a screenshot mean anything to an agent that
+   *  only reads board.md. */
+  private openEdit(n: BoardNodeView) {
+    this.closeEditor();
+    this.editor = { nodeId: n.id, kind: "note", text: n.text ?? "", x: n.x, y: n.y };
+    this.mountEditor();
+  }
+
+  /** Put the open editor on screen. Called on open and again after every state
+   *  push, because a push rebuilds every card. */
+  private mountEditor() {
+    const ed = this.editor;
+    if (!ed) return;
+
+    if (ed.nodeId === null) {
+      this.canvas.appendChild(this.buildDraftCard(ed));
+      return;
+    }
+    const card = this.cardFor(ed.nodeId);
+    if (!card) { this.editor = null; return; }   // node removed under us
+
+    // Replace the card's text row with a field of the same shape, so the card
+    // doesn't jump when it goes editable. A card with no caption yet gets the
+    // field above its path line, where the caption will end up living.
+    const body = card.querySelector<HTMLElement>(".board-node__body[data-caption]");
+    const ref = card.querySelector<HTMLElement>(".board-node__ref");
+    const field = this.buildField(ed, card);
+    if (body) body.replaceWith(field);
+    else if (ref) card.insertBefore(field, ref);
+    else card.appendChild(field);
+    field.after(this.buildEditorActions(card, "Save"));
+    card.classList.add("board-node--editing");
+    focusEnd(field);
+  }
+
+  /** A card for something not yet on the board: same frame as a real card so
+   *  the result of pressing "note" looks like what you'll get. */
+  private buildDraftCard(ed: { kind: "note" | "link"; x: number; y: number }): HTMLElement {
+    const el = document.createElement("div");
+    const kind = ed.kind === "note" ? "note" : "url";
+    el.className = `board-node board-node--${kind} board-node--draft board-node--editing`;
+    const def = DEFAULT_SIZE[kind];
+    el.style.left = `${ed.x}px`;
+    el.style.top = `${ed.y}px`;
+    el.style.width = `${def.w}px`;
+    el.style.height = `${def.h}px`;
+
+    const bar = document.createElement("div");
+    bar.className = "board-node__bar";
+    bar.appendChild(kindIcon(kind));
+    const kindEl = document.createElement("span");
+    kindEl.textContent = ed.kind === "note" ? "new note" : "new link";
+    bar.append(kindEl);
+    el.appendChild(bar);
+
+    el.appendChild(this.buildField(this.editor!, el));
+    el.appendChild(this.buildEditorActions(el, "Add"));
+    // Draft cards are not draggable — there is nothing to move yet — so the
+    // pan handler must not treat this as empty space either. .board-node in the
+    // class list already covers that.
+    setTimeout(() => focusEnd(el.querySelector(".board-node__field") as HTMLElement), 0);
+    return el;
+  }
+
+  /** The actual input. A note gets a textarea (notes wrap and have paragraphs);
+   *  a link gets a single-line input, where Enter can mean commit. */
+  private buildField(
+    ed: { nodeId: string | null; kind: "note" | "link"; text: string },
+    card: HTMLElement,
+  ): HTMLElement {
+    const multiline = ed.kind === "note";
+    const field = document.createElement(multiline ? "textarea" : "input") as
+      HTMLTextAreaElement | HTMLInputElement;
+    // A union-typed element loses the typed addEventListener overloads, so the
+    // listeners below bind through this HTMLElement view of the same node.
+    const el: HTMLElement = field;
+    field.className = "board-node__field";
+    field.value = ed.text;
+    field.placeholder = multiline
+      ? (ed.nodeId ? "" : "Type a note…")
+      : "https://…";
+    field.spellcheck = false;
+
+    // Keep the model in step with every keystroke, so a state push mid-typing
+    // can re-mount the editor with what's actually been typed.
+    field.addEventListener("input", () => { if (this.editor) this.editor.text = field.value; });
+
+    el.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape") {
+        ev.stopPropagation();          // don't let Esc reach the dashboard
+        this.cancelEditor(card);
+        return;
+      }
+      // Commit on Enter for a link, Ctrl+Enter for a note (plain Enter there is
+      // a newline, which is the whole reason a note is a textarea).
+      if (ev.key === "Enter" && (!multiline || ev.ctrlKey)) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        this.commitEditor(card);
+      }
+      // Everything else stays local: the app's shortcuts are on document in
+      // capture phase and would eat Ctrl+A, arrows and the like.
+      ev.stopPropagation();
+    });
+
+    // Clicking away commits. The alternative — discarding — throws away typing
+    // for a mis-click, which is the worse failure.
+    field.addEventListener("blur", () => {
+      if (this.editor && this.editorCard() === card) this.commitEditor(card);
+    });
+    // A field must own its own pointer events or the card's drag steals them.
+    field.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+    return field;
+  }
+
+  /** Commit / cancel under an open field.
+   *
+   *  Not decoration: blur-to-commit and Ctrl+Enter are both invisible, and an
+   *  editor whose only exits are gestures you have to already know is an editor
+   *  people abandon. `label` is "Add" for a card that doesn't exist yet and
+   *  "Save" for one that does, because those are different promises. */
+  private buildEditorActions(card: HTMLElement, label: string): HTMLElement {
+    const row = document.createElement("div");
+    row.className = "board-node__editrow";
+
+    const hint = document.createElement("span");
+    hint.className = "board-node__edithint";
+    hint.textContent = "Ctrl+Enter";
+
+    const cancel = editorButton("Cancel", () => this.cancelEditor(card));
+    const commit = editorButton(label, () => this.commitEditor(card));
+    commit.classList.add("board-node__editbtn--primary");
+
+    row.append(hint, cancel, commit);
+    return row;
+  }
+
+  private editorCard(): HTMLElement | null {
+    return this.canvas.querySelector<HTMLElement>(".board-node--editing");
+  }
+
+  private cardFor(nodeId: string): HTMLElement | null {
+    return this.canvas.querySelector<HTMLElement>(
+      `.board-node[data-node-id="${cssEscape(nodeId)}"]`);
+  }
+
+  /** Send what was typed, if anything, and put the card back. */
+  private commitEditor(card: HTMLElement) {
+    const ed = this.editor;
+    if (!ed) return;
+    this.editor = null;                          // before send: the state push
+    const text = ed.text.trim();                 // that follows must not re-mount
+
+    if (ed.nodeId === null) {
+      card.remove();
+      if (text.length === 0) { this.restoreEmptyState(); return; }
+      // A note is forced; a link goes through the host's classifier so a path
+      // or a plain sentence typed into the link box still lands as something.
+      send({
+        type: "board.add", paneId: this.paneId,
+        kind: ed.kind === "note" ? "note" : "auto",
+        text, x: ed.x, y: ed.y,
+      });
+      return;
+    }
+    send({ type: "board.edit", paneId: this.paneId, nodeId: ed.nodeId, text });
+    // The host echoes full state after the write; until then, show what was
+    // typed rather than an input the user has finished with.
+    this.demoteField(card, text);
+  }
+
+  private cancelEditor(card: HTMLElement) {
+    const ed = this.editor;
+    this.editor = null;
+    if (!ed) return;
+    if (ed.nodeId === null) { card.remove(); this.restoreEmptyState(); return; }
+    this.demoteField(card, ed.text);
+    // Re-request rather than trusting our own repaint: the node's real text is
+    // the host's, and cancelling should show exactly that.
+    if (this.boardPath) send({ type: "board.request", paneId: this.paneId });
+  }
+
+  /** Turn an open field back into a static text row. */
+  private demoteField(card: HTMLElement, text: string) {
+    card.classList.remove("board-node--editing");
+    card.querySelector(".board-node__editrow")?.remove();
+    const field = card.querySelector<HTMLElement>(".board-node__field");
+    if (!field) return;
+    const isNote = card.classList.contains("board-node--note");
+    if (!isNote && text.length === 0) { field.remove(); return; }
+    const body = document.createElement("div");
+    body.className = "board-node__body";
+    body.dataset.caption = "1";
+    body.textContent = text || "(empty note)";
+    field.replaceWith(body);
+  }
+
+  /** Drop any open editor without sending. Used when another one opens. */
+  private closeEditor() {
+    if (!this.editor) return;
+    const card = this.editorCard();
+    if (card) this.cancelEditor(card);
+    else this.editor = null;
+  }
+
+  /** Back to the empty state after a draft was abandoned on a bare board. */
+  private restoreEmptyState() {
+    if (this.nodes.length === 0 && !this.canvas.firstChild) this.renderEmpty();
+  }
+
   // ---- host pushes --------------------------------------------------------
 
   /** Render the whole board. The host sends the complete state after every
@@ -219,7 +544,9 @@ export class BoardPane {
     this.canvas.replaceChildren();
     this.nodes = nodes;
 
-    if (nodes.length === 0) { this.renderEmpty(); return; }
+    // An open draft counts as content: showing "nothing on this board yet"
+    // underneath the note someone is typing would be its own small joke.
+    if (nodes.length === 0 && !this.editor) { this.renderEmpty(); return; }
 
     for (const n of nodes) this.canvas.appendChild(this.buildNode(n));
     // Ask for previews only for images we don't already hold. A state push
@@ -230,6 +557,10 @@ export class BoardPane {
       if (this.imageCache.has(n.id)) this.paintImage(n.id, this.imageCache.get(n.id)!);
       else send({ type: "board.image", paneId: this.paneId, nodeId: n.id });
     }
+    // An open editor survives the rebuild. A push arrives after ANY mutation in
+    // the tab — a fetch finishing, the other window onto this board moving a
+    // card — and none of those are a reason to lose a half-typed note.
+    this.mountEditor();
     // Links are rendered in a later phase; accepted here so the message shape
     // is stable from the start.
     void links;
@@ -261,10 +592,55 @@ export class BoardPane {
     slot.appendChild(img);
   }
 
-  /** The host could not read this board. Say why — an empty grid would look
-   *  exactly like a board nobody has put anything on yet. */
-  showError(message: string) {
-    this.renderMessage("This board can’t be opened", message, this.boardPath);
+  /** Something went wrong. Two very different cases share this one message, and
+   *  only the HOST can tell them apart (see BoardController.Failed):
+   *
+   *   - fatal → the board can't be opened at all. The full-surface explanation,
+   *     because an empty grid looks exactly like a board nobody has filled in
+   *     yet, and every card we're still holding is stale.
+   *   - otherwise → one action failed (a fetch 404'd, a picked file was outside
+   *     the project). A strip: blanking a board full of work to report that one
+   *     paste didn't land is a far bigger loss than the error itself, and the
+   *     first version did exactly that.
+   */
+  showError(message: string, fatal = false) {
+    if (fatal) {
+      this.nodes = [];
+      this.editor = null;
+      this.renderMessage("This board can’t be opened", message, this.boardPath);
+      return;
+    }
+    this.showBanner(message);
+  }
+
+  /** Transient error strip along the bottom of the surface. */
+  private showBanner(message: string) {
+    if (!this.bannerEl) {
+      const el = document.createElement("div");
+      el.className = "board-banner";
+      const text = document.createElement("span");
+      text.className = "board-banner__text";
+      const close = document.createElement("button");
+      close.type = "button";
+      close.className = "board-banner__close";
+      close.title = "Dismiss";
+      close.setAttribute("aria-label", "Dismiss");
+      close.textContent = "✕";
+      close.addEventListener("click", () => this.hideBanner());
+      el.append(text, close);
+      this.surface.appendChild(el);
+      this.bannerEl = el;
+    }
+    (this.bannerEl.querySelector(".board-banner__text") as HTMLElement).textContent = message;
+    this.bannerEl.title = message;
+    this.bannerEl.classList.add("board-banner--on");
+    clearTimeout(this.bannerTimer);
+    this.bannerTimer = window.setTimeout(() => this.hideBanner(), BANNER_MS);
+  }
+
+  private hideBanner() {
+    clearTimeout(this.bannerTimer);
+    this.bannerEl?.classList.remove("board-banner--on");
   }
 
   // ---- rendering ----------------------------------------------------------
@@ -285,7 +661,18 @@ export class BoardPane {
 
     const body = document.createElement("div");
     body.className = "board-message__body";
-    body.textContent = "Paste a screenshot, a file path, a link, or type a note.";
+    body.textContent = "Paste a screenshot, add a file, drop in a link, or write a note.";
+
+    // Buttons, not just a keyboard hint: an empty board is exactly where you
+    // don't yet know what this surface takes, and the tools in the corner are
+    // small. Same three actions the toolbar has, spelled out.
+    const actions = document.createElement("div");
+    actions.className = "board-message__actions";
+    actions.append(
+      messageButton("Add a note", () => this.openDraft("note")),
+      messageButton("Add a file", () => this.pickFile()),
+      messageButton("Add a link", () => this.openDraft("link")),
+    );
 
     const hint = document.createElement("div");
     hint.className = "board-message__hint";
@@ -294,7 +681,11 @@ export class BoardPane {
       kbd.textContent = k;
       hint.appendChild(kbd);
     }
-    box.append(title, body, hint);
+    const hintText = document.createElement("span");
+    hintText.textContent = "to paste";
+    hint.appendChild(hintText);
+
+    box.append(title, body, actions, hint);
     this.surface.appendChild(box);
   }
 
@@ -355,6 +746,15 @@ export class BoardPane {
     this.wireDrag(el, n.id);
     el.appendChild(this.buildResizeHandle(el, n.id));
 
+    // Double-click to edit: a note's body, or the caption on anything else.
+    // Double-click rather than single, because a single click on a card is the
+    // start of a drag and turning that into an editor would fight the gesture.
+    el.addEventListener("dblclick", (ev) => {
+      if ((ev.target as HTMLElement).closest(".board-node__resize, .board-node__remove")) return;
+      ev.stopPropagation();
+      this.openEdit(n);
+    });
+
     // An image leads with the picture: that IS the content, and a filename
     // tells you nothing about which screenshot this is.
     if (n.kind === "image") {
@@ -368,6 +768,10 @@ export class BoardPane {
     if (n.kind === "note") {
       const body = document.createElement("div");
       body.className = "board-node__body";
+      // Marked as THE editable row: a url card has two more .board-node__body
+      // lines (its caption and its provenance) and an editor that replaced the
+      // wrong one would look like the card had lost its source.
+      body.dataset.caption = "1";
       body.textContent = n.text || "(empty note)";
       el.appendChild(body);
       return el;
@@ -382,6 +786,7 @@ export class BoardPane {
     if (n.text) {
       const body = document.createElement("div");
       body.className = "board-node__body";
+      body.dataset.caption = "1";
       body.textContent = n.text;
       el.appendChild(body);
     }
@@ -431,7 +836,6 @@ export class BoardPane {
     }
     this.zoom = z;
     this.applyTransform();
-    this.flashZoomBadge();
   }
 
   private applyTransform() {
@@ -441,16 +845,10 @@ export class BoardPane {
     // while the cards move and the whole surface reads as broken.
     this.surface.style.backgroundSize = `${16 * this.zoom}px ${16 * this.zoom}px`;
     this.surface.style.backgroundPosition = `${this.panX}px ${this.panY}px`;
-  }
-
-  /** Show the percentage briefly after a change. Zoom is otherwise invisible
-   *  state — without this, "why is everything small" has no answer on screen. */
-  private flashZoomBadge() {
-    this.zoomBadge.textContent = `${Math.round(this.zoom * 100)}%`;
-    this.zoomBadge.classList.add("board__zoom--on");
-    clearTimeout(this.zoomBadgeTimer);
-    this.zoomBadgeTimer = window.setTimeout(
-      () => this.zoomBadge.classList.remove("board__zoom--on"), 1100);
+    // The readout is permanent now that it lives in the toolbar and doubles as
+    // the reset button. Zoom used to be invisible state announced by a badge
+    // that faded; a control you can point at is better than a hint that leaves.
+    this.zoomPctEl.textContent = `${Math.round(this.zoom * 100)}%`;
   }
 
   /** Centre of the surface, in surface coordinates — the anchor for keyboard
@@ -587,26 +985,48 @@ export class BoardPane {
   }
 
   /** A paste landed while this pane was active. Sends only the drop point —
-   *  the host reads the clipboard itself. */
-  handlePaste() {
-    if (!this.boardPath) return;
+   *  the host reads the clipboard itself.
+   *
+   *  Returns whether the board TOOK it. False while an editor is open, so
+   *  Ctrl+V into a note being typed pastes text into the note instead of
+   *  becoming a second card — the caller only calls preventDefault when this
+   *  says yes. */
+  handlePaste(): boolean {
+    if (!this.boardPath || this.editor) return false;
     const p = this.freeSpot();
     send({ type: "board.paste", paneId: this.paneId, x: p.x, y: p.y });
+    return true;
   }
 
   /** Somewhere to put a new card that isn't on top of an existing one. Walks a
-   *  coarse grid and takes the first free cell; falls back to the origin when
-   *  the board is full, which is better than refusing to add the thing. */
-  private freeSpot(): { x: number; y: number } {
-    const step = 232, padding = 16;
-    const cols = Math.max(1, Math.floor((this.surface.clientWidth - padding) / step));
-    const taken = new Set(this.nodes.map((n) => `${Math.round(n.x)},${Math.round(n.y)}`));
+   *  coarse grid and takes the first free cell; falls back to the top-left when
+   *  the board is full, which is better than refusing to add the thing.
+   *
+   *  Anchored to what's ON SCREEN, not to board (0,0): after panning or zooming
+   *  out, board space's origin can be far outside the viewport, and a new card
+   *  you can't see is a card you'll assume never got added. */
+  private freeSpot(kind = "note"): { x: number; y: number } {
+    const step = 232, rowStep = 168, padding = 16;
+    const originX = Math.round(-this.panX / this.zoom) + padding;
+    const originY = Math.round(-this.panY / this.zoom) + padding;
+    const cols = Math.max(1, Math.floor(
+      (this.surface.clientWidth / this.zoom - padding) / step));
+    const size = DEFAULT_SIZE[kind] ?? DEFAULT_SIZE.note;
     for (let i = 0; i < 200; i++) {
-      const x = padding + (i % cols) * step;
-      const y = padding + Math.floor(i / cols) * 168;
-      if (!taken.has(`${x},${y}`)) return { x, y };
+      const x = originX + (i % cols) * step;
+      const y = originY + Math.floor(i / cols) * rowStep;
+      // Rectangle overlap against each card's ACTUAL size — not a proximity
+      // test on origins, which ignores how tall a card is: a 250px-tall
+      // screenshot spans two grid rows, and comparing only top-left corners
+      // called the row below it free and dropped the new card on top of it.
+      const clash = this.nodes.some((n) => {
+        const s = sizeOf(n);
+        return x < n.x + s.w && n.x < x + size.w
+            && y < n.y + s.h && n.y < y + size.h;
+      });
+      if (!clash) return { x, y };
     }
-    return { x: padding, y: padding };
+    return { x: originX, y: originY };
   }
 
   // ---- LeafPane members ----------------------------------------------------
@@ -636,16 +1056,20 @@ export class BoardPane {
     this.panY = 0;
     this.zoom = 1;
     this.applyTransform();
-    this.flashZoomBadge();
     return 0;
   }
 }
 
 function kindIcon(kind: string): SVGSVGElement {
+  return svgIcon(KIND_ICON[kind] ?? KIND_ICON.note, 12, "board-node__icon");
+}
+
+/** One single-stroke Fluent-family glyph from a 24x24 path. */
+function svgIcon(d: string, size: number, cls = "board__tool-icon"): SVGSVGElement {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("class", "board-node__icon");
-  svg.setAttribute("width", "12");
-  svg.setAttribute("height", "12");
+  svg.setAttribute("class", cls);
+  svg.setAttribute("width", String(size));
+  svg.setAttribute("height", String(size));
   svg.setAttribute("viewBox", "0 0 24 24");
   svg.setAttribute("fill", "none");
   svg.setAttribute("stroke", "currentColor");
@@ -653,9 +1077,44 @@ function kindIcon(kind: string): SVGSVGElement {
   svg.setAttribute("stroke-linecap", "round");
   svg.setAttribute("stroke-linejoin", "round");
   const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  path.setAttribute("d", KIND_ICON[kind] ?? KIND_ICON.note);
+  path.setAttribute("d", d);
   svg.appendChild(path);
   return svg;
+}
+
+/** A button under an open editor. preventDefault on pointerdown is what makes
+ *  "Cancel" actually cancel: without it the mousedown moves focus out of the
+ *  field first, blur commits, and the click lands on an editor that has already
+ *  saved. */
+function editorButton(label: string, onClick: () => void): HTMLElement {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "board-node__editbtn";
+  btn.textContent = label;
+  btn.addEventListener("pointerdown", (ev) => { ev.preventDefault(); ev.stopPropagation(); });
+  btn.addEventListener("click", (ev) => { ev.stopPropagation(); onClick(); });
+  return btn;
+}
+
+/** A text button for the empty state. */
+function messageButton(label: string, onClick: () => void): HTMLElement {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "board-message__btn";
+  btn.textContent = label;
+  btn.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+  btn.addEventListener("click", (ev) => { ev.stopPropagation(); onClick(); });
+  return btn;
+}
+
+/** Focus a field and put the caret after the existing text, so editing an
+ *  existing note continues it rather than replacing it. */
+function focusEnd(el: HTMLElement | null) {
+  if (!el) return;
+  const field = el as HTMLTextAreaElement | HTMLInputElement;
+  field.focus();
+  try { field.setSelectionRange(field.value.length, field.value.length); }
+  catch { /* not a text field; focus alone is enough */ }
 }
 
 /** Last path segment, for the card title. Exported for tests. */

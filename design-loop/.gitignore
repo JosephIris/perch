@@ -14,3 +14,5 @@ validate-*.png
 current-tip.png
 indicator-preview.png
 board-current.png
+board-draft.png
+board-empty.png

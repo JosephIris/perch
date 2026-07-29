@@ -718,6 +718,8 @@ public partial class MainWindow : FluentWindow
         .Add<PaneRef>("board.request", m => _boardCtrl.OnRequest(m))
         .Add<PaneRef>("board.new", OnBoardNew)
         .Add<BoardAddMsg>("board.add", m => _boardCtrl.OnAdd(m))
+        .Add<BoardEditMsg>("board.edit", m => _boardCtrl.OnEdit(m))
+        .Add<BoardPickFileMsg>("board.pickFile", OnBoardPickFile)
         .Add<BoardPasteMsg>("board.paste", OnBoardPaste)
         .Add<BoardMoveMsg>("board.move", m => _boardCtrl.OnMove(m))
         .Add<BoardResizeMsg>("board.resize", m => _boardCtrl.OnResize(m))
@@ -3687,7 +3689,7 @@ public partial class MainWindow : FluentWindow
     private void WireBoardController()
     {
         _boardCtrl.StateReady += (paneId, doc) => PostBoardState(paneId, doc);
-        _boardCtrl.Failed += (paneId, message) => PostBoardError(paneId, message);
+        _boardCtrl.Failed += (paneId, message, fatal) => PostBoardError(paneId, message, fatal);
         _boardCtrl.ImageReady += (paneId, nodeId, data) => PostBoardImage(paneId, nodeId, data);
     }
 
@@ -3759,10 +3761,54 @@ public partial class MainWindow : FluentWindow
             // The clipboard can be locked by another app mid-read. That's a
             // "try again", not a crash.
             Log.Error("Board.paste.clipboard", ex);
-            PostBoardError(msg.PaneId, "Couldn't read the clipboard just then. Try again.");
+            PostBoardError(msg.PaneId, "Couldn't read the clipboard just then. Try again.", fatal: false);
             return;
         }
         _boardCtrl.OnPaste(msg.PaneId, png, text, msg.X, msg.Y);
+    }
+
+    /// The board's "add a file" button. Rooted at the project, because a board
+    /// can only hold files from inside it (BoardStore.ToRepoRelative rejects the
+    /// rest) — starting the dialog anywhere else would invite a pick we then
+    /// have to refuse.
+    ///
+    /// Multi-select is on: staging four files for one task is the normal case,
+    /// and the cards cascade so the last pick doesn't sit exactly on the first.
+    private void OnBoardPickFile(BoardPickFileMsg msg)
+    {
+        try
+        {
+            var root = _boardCtrl.RepoRootFor(msg.PaneId);
+            if (root == null)
+            {
+                PostBoardError(msg.PaneId, "This tab has no board to add a file to.", fatal: false);
+                return;
+            }
+            var dlg = new Microsoft.Win32.OpenFileDialog
+            {
+                Title = "Add a file to the board",
+                InitialDirectory = root,
+                Multiselect = true,
+                CheckFileExists = true,
+            };
+            if (dlg.ShowDialog(this) != true) return;
+
+            var (x, y) = (msg.X, msg.Y);
+            foreach (var file in dlg.FileNames)
+            {
+                _boardCtrl.OnAdd(new BoardAddMsg
+                {
+                    PaneId = msg.PaneId, Kind = "path", Text = file, X = x, Y = y,
+                    // Choosing a file in a modal dialog is as human a gesture as
+                    // Ctrl+V, so it carries the same provenance — otherwise a
+                    // reference file outside the repo would be refused with
+                    // "only you can add that", to the person who just did.
+                    Origin = "user",
+                });
+                x += 24; y += 24;
+            }
+        }
+        catch (Exception ex) { Log.Error("OnBoardPickFile", ex); }
     }
 
     private void PostBoardImage(Guid paneId, string nodeId, string? data)
@@ -3786,7 +3832,10 @@ public partial class MainWindow : FluentWindow
         });
     }
 
-    private void PostBoardError(Guid paneId, string message)
+    /// `fatal` decides how the pane shows it: true replaces the whole surface
+    /// (this board cannot be opened), false is a strip along the bottom (one
+    /// action failed). See BoardController.Failed.
+    private void PostBoardError(Guid paneId, string message, bool fatal)
     {
         Dispatcher.BeginInvoke(() =>
         {
@@ -3797,6 +3846,7 @@ public partial class MainWindow : FluentWindow
                     type = "board.error",
                     paneId = paneId.ToString("D"),
                     message,
+                    fatal,
                 }));
             }
             catch (Exception ex) { Log.Error("PostBoardError", ex); }

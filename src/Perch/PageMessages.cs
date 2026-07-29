@@ -170,10 +170,11 @@ internal sealed record UrlPaneVisibleMsg
     public required bool Visible { get; init; }
 }
 
-/// Add something to a board. `Kind` is "note" to force a typed note, or "auto"
-/// to let the host classify the text (a URL, a file path, or a note) — the page
-/// can't classify it itself, because deciding whether a path is inside the repo
-/// needs the repo root.
+/// Add something to a board. `Kind` is "note" to force a typed note, "path" for
+/// a file the user explicitly picked, or "auto" to let the host classify the
+/// text (a URL, a file path, or — the fallback — a note). The page can't
+/// classify it itself, because deciding whether a path is inside the repo needs
+/// the repo root.
 internal sealed record BoardAddMsg
 {
     public required Guid PaneId { get; init; }
@@ -198,6 +199,25 @@ internal sealed record BoardAddMsg
     public string? Origin { get; init; }
 
     public bool IsUserStaged => string.Equals(Origin, "user", StringComparison.Ordinal);
+}
+
+/// Replace a node's text from an inline edit on the card: a note's body, or the
+/// caption under a file/image/reference.
+internal sealed record BoardEditMsg
+{
+    public required Guid PaneId { get; init; }
+    public required string NodeId { get; init; }
+    public required string Text { get; init; }
+}
+
+/// Open a file picker and add what comes back at (X, Y). The DIALOG is the
+/// host's job — the page has no way to browse the user's disk, and typing a
+/// repo-relative path from memory is the kind of chore a board exists to avoid.
+internal sealed record BoardPickFileMsg
+{
+    public required Guid PaneId { get; init; }
+    public double X { get; init; }
+    public double Y { get; init; }
 }
 
 /// A paste landed on a board at (X, Y). Carries NO payload — the host reads the

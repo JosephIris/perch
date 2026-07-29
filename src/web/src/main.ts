@@ -267,7 +267,7 @@ onMessage((msg) => {
       workspace.applyBoardState(msg.paneId, msg.nodes, msg.links);
       break;
     case "board.error":
-      workspace.showBoardError(msg.paneId, msg.message);
+      workspace.showBoardError(msg.paneId, msg.message, msg.fatal === true);
       break;
     case "board.image.data":
       workspace.applyBoardImage(

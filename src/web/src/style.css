@@ -1203,24 +1203,115 @@ button.pane__chip--ports:hover {
   /* No transition: zoom follows the wheel, and easing here reads as lag. */
 }
 
-/* Transient zoom readout. Zoom is otherwise invisible state — without this,
- * "why is everything small" has nothing on screen to answer it. */
-.board__zoom {
+/* The tool cluster, top-right of the surface. One control group, so it wears a
+ * single hairline border rather than one per button, and the two view controls
+ * are fenced off after a separator because they change nothing on the board.
+ * The zoom readout lives here and is permanent — it replaced a badge that faded,
+ * because a control you can point at beats a hint that leaves. */
+.board__tools {
   position: absolute;
-  right: var(--sp-8);
+  /* BOTTOM-right, where the zoom badge used to sit. Cards fill from the
+   * top-left (see freeSpot), so a cluster in the top-right is under the SECOND
+   * card you add — the first screenshot of it had the tools sitting across a
+   * card's title bar. */
   bottom: var(--sp-8);
-  padding: 2px var(--sp-8);
+  right: var(--sp-8);
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
   border-radius: var(--r-input);
-  background: var(--color-layer-alt);
+  /* Opaque, not the translucent layer token: this floats over cards, and with
+   * a see-through fill the card underneath reads straight through the icons.
+   * terminal-bg is the board surface's own colour, so it reads as part of it. */
+  background: var(--color-terminal-bg);
   border: 1px solid var(--color-stroke);
+}
+.board__tool {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-input);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: background 150ms cubic-bezier(0, 0, 0, 1);
+}
+.board__tool:hover { background: var(--color-subtle-secondary); color: var(--color-text-primary); }
+.board__tool:active { background: var(--color-subtle-tertiary); }
+.board__tools-sep {
+  width: 1px;
+  height: 14px;
+  margin: 0 2px;
+  background: var(--color-stroke);
+}
+.board__pct {
+  min-width: 40px;
+  height: 24px;
+  padding: 0 var(--sp-4);
+  border: 0;
+  border-radius: var(--r-input);
+  background: transparent;
   font-family: var(--font-mono);
   font-size: 11px;
-  color: var(--color-text-secondary);
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  transition: background 150ms cubic-bezier(0, 0, 0, 1);
+}
+.board__pct:hover { background: var(--color-subtle-secondary); color: var(--color-text-secondary); }
+
+/* Transient error strip. An error about ONE action must not blank a board that
+ * has work on it, so it's a strip instead of replacing the surface.
+ * Top-left, because the bottom edge belongs to the tool cluster and a strip
+ * that slides under it would lose its dismiss button. Left-aligned: it's a
+ * sentence, not an empty state. Opaque for the same reason the tools are. */
+.board-banner {
+  position: absolute;
+  left: var(--sp-8);
+  top: var(--sp-8);
+  z-index: 2;
+  max-width: calc(100% - var(--sp-16));
+  box-sizing: border-box;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-8);
+  padding: var(--sp-8) var(--sp-8) var(--sp-8) var(--sp-12);
+  border-radius: var(--r-card);
+  border: 1px solid var(--color-stroke);
+  background: var(--color-terminal-bg);
   opacity: 0;
   pointer-events: none;
   transition: opacity 200ms cubic-bezier(0, 0, 0, 1);
 }
-.board__zoom--on { opacity: 1; }
+.board-banner--on { opacity: 1; pointer-events: auto; }
+.board-banner__text {
+  font-size: var(--type-caption-size);
+  line-height: var(--type-body-line);
+  color: var(--color-error);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+.board-banner__close {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-input);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+}
+.board-banner__close:hover { background: var(--color-subtle-secondary); color: var(--color-text-primary); }
 
 /* Drag empty space to pan. grab/grabbing is the universal signal for it. */
 .board { cursor: grab; }
@@ -1262,7 +1353,33 @@ button.pane__chip--ports:hover {
   direction: rtl;            /* keep the tail visible when it elides */
   text-align: center;
 }
-.board-message__hint { display: flex; gap: var(--sp-4); margin-top: var(--sp-4); }
+/* The three ways in, spelled out. An empty board is exactly where you don't yet
+ * know what the surface takes, and the tools in the corner are 24px of icon.
+ * Subtle/outline, never filled — these are offers, not a primary action. */
+.board-message__actions { display: flex; gap: var(--sp-8); margin-top: var(--sp-4); }
+.board-message__btn {
+  padding: var(--sp-4) var(--sp-12);
+  border: 1px solid var(--color-stroke-strong);
+  border-radius: var(--r-card);
+  background: transparent;
+  font-family: inherit;
+  font-size: var(--type-caption-size);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: background 150ms cubic-bezier(0, 0, 0, 1);
+}
+.board-message__btn:hover {
+  background: var(--color-subtle-secondary);
+  color: var(--color-text-primary);
+}
+.board-message__hint {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  margin-top: var(--sp-4);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+}
 .board-message__hint kbd {
   font-family: var(--font-mono);
   font-size: 11px;
@@ -1416,6 +1533,79 @@ button.pane__chip--ports:hover {
 .board-node--image .board-node__icon { color: var(--color-image); }
 .board-node--url   .board-node__icon { color: var(--color-cloud); }
 .board-node--note .board-node__body { color: var(--color-text-primary); font-size: 12px; }
+
+/* A card that is being typed into. The field takes the exact geometry of the
+ * text row it replaced, so going editable doesn't move anything — the card
+ * changes state, not shape. */
+.board-node--editing {
+  cursor: default;
+  border-color: var(--color-accent-soft);
+  /* Not a 2px ring and not a glow: one hairline in the accent, per the focus
+   * rule in the constitution. */
+  user-select: text;
+  /* Room for the field AND the commit row. A 116px note card (the un-resized
+   * default) squeezed the textarea to two scrolling lines the moment the row
+   * appeared under it. min-height clamps the inline height, so this reverts by
+   * itself when the class comes off — no saved-geometry bookkeeping. */
+  min-height: 180px;
+}
+.board-node__field {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: var(--sp-4) var(--sp-12) var(--sp-12);
+  padding: var(--sp-4) var(--sp-8);
+  box-sizing: border-box;
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--r-input);
+  background: var(--color-terminal-bg);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: var(--type-body-line);
+  color: var(--color-text-primary);
+  resize: none;
+  outline: none;
+}
+.board-node__field:focus { border-color: var(--color-accent-soft); }
+.board-node__field::placeholder { color: var(--color-text-tertiary); }
+/* Commit / cancel under the field. Right-aligned with the keyboard equivalent
+ * on the left, so the shortcut is learnable from the control rather than from
+ * documentation nobody opens. */
+.board-node__editrow {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  margin: 0 var(--sp-12) var(--sp-8);
+}
+.board-node__edithint {
+  flex: 1 1 auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+}
+.board-node__editbtn {
+  padding: 2px var(--sp-8);
+  border: 1px solid transparent;
+  border-radius: var(--r-input);
+  background: transparent;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: background 150ms cubic-bezier(0, 0, 0, 1);
+}
+.board-node__editbtn:hover { background: var(--color-subtle-secondary); color: var(--color-text-primary); }
+/* The affirmative one is outlined, not filled: a filled accent button on a card
+ * this small reads as the loudest thing on the board. */
+.board-node__editbtn--primary {
+  border-color: var(--color-stroke-strong);
+  color: var(--color-text-primary);
+}
+
+/* A draft is not on disk yet. Dashed edge says exactly that, and it's the one
+ * place a dashed border is honest rather than decorative. */
+.board-node--draft { border-style: dashed; }
+.board-node--draft .board-node__bar { color: var(--color-text-secondary); }
 
 /* Refused-address state. The WebView2 that normally covers .pane__urlcontent
  * was never created (WebUrlPolicy said no), so this is all the user would

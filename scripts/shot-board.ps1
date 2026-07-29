@@ -13,7 +13,14 @@ param(
     [string]$ExePath  = "$PSScriptRoot\..\src\Perch\bin\Debug\net8.0-windows\win10-x64\Perch.exe",
     [string]$ToolsDir = "$PSScriptRoot\..\src\Perch\bin\Debug\net8.0-windows\win10-x64\tools",
     [string]$OutFile  = "$PSScriptRoot\..\design-loop\board-current.png",
-    [int]$CdpPort = 9336
+    [int]$CdpPort = 9336,
+    # Open the "add a note" editor before shooting, so the draft card, its field
+    # and its Add/Cancel row are in the frame. The one state a static board.md
+    # can't produce.
+    [switch]$Draft,
+    # Shoot the EMPTY board instead of the fixture, with an error strip up:
+    # the two states a board with content can't show you.
+    [switch]$Empty
 )
 $ErrorActionPreference = 'Stop'
 
@@ -136,10 +143,30 @@ try {
 ],"links":[{"from":"n3","to":"n2","label":"shows"}]}
 '@
     $md = "# login bug`n`n## Files`n- ``src/auth/session.ts`` - where the cookie is set`n`n<!-- perch:layout`n$layout`n-->`n"
-    Set-Content -Path (Join-Path $boardDir 'board.md') -Value $md -Encoding utf8
+    if (-not $Empty) { Set-Content -Path (Join-Path $boardDir 'board.md') -Value $md -Encoding utf8 }
 
     [void](Cdp-Eval "(()=>{const p=document.querySelector('.pane--board');window.chrome.webview.postMessage(JSON.stringify({type:'board.request',paneId:p.dataset.paneId}));return 1;})()")
     Start-Sleep -Milliseconds 1200
+
+    if ($Empty) {
+        # A refused pick, so the error strip is in frame alongside the empty
+        # state. Non-fatal, so it must NOT replace the surface.
+        $outside = (Join-Path $env:TEMP 'shot-outside.txt')
+        Set-Content -Path $outside -Value 'not in the repo' -Encoding utf8
+        $js = $outside.Replace('\', '/')
+        [void](Cdp-Eval "(()=>{const p=document.querySelector('.pane--board');window.chrome.webview.postMessage(JSON.stringify({type:'board.add',paneId:p.dataset.paneId,kind:'path',text:'$js',x:16,y:16}));return 1})()")
+        Start-Sleep -Milliseconds 700
+    }
+
+    if ($Draft) {
+        # Tool 0 is "add a note" (see buildTools' order), then type into the
+        # field the way a user would so the shot shows real text, not a
+        # placeholder.
+        [void](Cdp-Eval "(()=>{document.querySelectorAll('.board__tool')[0].click();return 1})()")
+        Start-Sleep -Milliseconds 400
+        [void](Cdp-Eval "(()=>{const f=document.querySelector('.board-node--draft .board-node__field');f.value='Ask whether the refresh token is rotated on every call, or only on expiry.';f.dispatchEvent(new Event('input'));return 1})()")
+        Start-Sleep -Milliseconds 300
+    }
 
     # Opaque background first, else the workspace composites as white and the
     # hairlines and light text vanish into it.
