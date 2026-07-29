@@ -39,6 +39,13 @@ public partial class App : System.Windows.Application
         // it to silence a cosmetic warning.
         try { VelopackApp.Build().Run(); } catch (Exception ex) { Log.Error("Velopack.Run", ex); }
 
+        // Second launch against the same data dir? Focus the window that's
+        // already there and get out. Runs AFTER the Velopack hooks (those are
+        // short-lived non-UI invocations that must still complete during an
+        // update) and BEFORE we touch the console, PATH, or spawn anything, so
+        // a deferred launch leaves no trace.
+        if (!SingleInstance.TryAcquire()) Environment.Exit(0);
+
         // Detach from any inherited console state BEFORE we ever spawn a
         // shell. The danger path: a console parent (`dotnet run`, bash,
         // Tabby) launches us with STARTF_USESTDHANDLES forwarding its
