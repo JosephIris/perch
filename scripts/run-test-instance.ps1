@@ -1,11 +1,11 @@
 <#
 .SYNOPSIS
-Launch an ISOLATED Perch instance for hands-on testing — separate sessions,
+Launch an ISOLATED Perch instance for hands-on testing - separate sessions,
 settings, WebView2 profile and log under C:\tmp\perch-test, so it never touches
 your real/prod Perch (no shared state, no WebView2 lock conflict).
 
 State PERSISTS between runs of this script, so you can test the full
-close-the-app → reopen → "Resume previous sessions?" flow: just run it again
+close-the-app -> reopen -> "Resume previous sessions?" flow: just run it again
 (without -Fresh) after closing the window.
 
 .PARAMETER Fresh
@@ -22,7 +22,9 @@ and handles `--resume`. The real shim is restored when you close the window
   ./scripts/run-test-instance.ps1 -Fresh          # clean slate
   ./scripts/run-test-instance.ps1 -Mock -Fresh    # token-free resume demo
 #>
-[CmdletBinding()]
+# NOTE: no [CmdletBinding()] here on purpose -- under Windows PowerShell 5.1 it
+# makes $PSScriptRoot EMPTY inside param() defaults when the script is run as
+# `powershell -File ...`, silently collapsing the paths below to "\..\src\...".
 param(
     [switch]$Fresh,
     [switch]$Mock,
@@ -40,7 +42,7 @@ if (-not (Test-Path $ExePath)) {
 }
 
 # Stop a PRIOR test instance (same isolated data dir would otherwise hit a
-# WebView2 single-writer lock). Narrow to bin\Debug builds — never touches an
+# WebView2 single-writer lock). Narrow to bin\Debug builds - never touches an
 # installed/prod Perch.
 Get-Process -Name Perch -EA SilentlyContinue |
     Where-Object { $_.Path -like '*\bin\Debug\*' } |
@@ -58,7 +60,7 @@ $env:PERCH_DATA_DIR = $DataDir
 
 $mockText = @'
 @echo off
-rem MOCK claude (test instance) — simulates Claude Code's SessionStart hook so
+rem MOCK claude (test instance) - simulates Claude Code's SessionStart hook so
 rem the host captures a session id, writes a stub transcript so the resume
 rem pre-flight passes, and handles `claude --resume <id>`.
 setlocal

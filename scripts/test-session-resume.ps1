@@ -5,11 +5,11 @@
 # SessionStart hook (incl. `claude --resume <id>`). No real Claude needed.
 #
 # What it proves:
-#   Phase 0  per-pane cwd is persisted (OSC 7 → pane.Cwd in sessions.json).
+#   Phase 0  per-pane cwd is persisted (OSC 7 -> pane.Cwd in sessions.json).
 #   Phase 1  the SessionStart hook's session_id is captured + persisted on
 #            the pane (run a mock `claude` IN a real pane via the PTY).
 #   Phase 2  on relaunch a resumable pane DEFERS its spawn until the resume
-#            decision, then spawns with `claude --resume <id>` injected — and
+#            decision, then spawns with `claude --resume <id>` injected - and
 #            the resumed mock re-fires its hook (host re-captures the id).
 #   Phase 3  closing archives to Recently-closed; restore brings it back;
 #            purge drops it for good.
@@ -19,7 +19,9 @@
 # state via `perch test state.dump` (STATE_DUMP json in errors.log) +
 # sessions.json. Window stays minimized; no keystroke synthesis.
 
-[CmdletBinding()]
+# NOTE: no [CmdletBinding()] here on purpose -- under Windows PowerShell 5.1 it
+# makes $PSScriptRoot EMPTY inside param() defaults when the script is run as
+# `powershell -File ...`, silently collapsing the paths below to "\..\src\...".
 param(
     [string]$OutDir = "$PSScriptRoot\..\src\Perch\bin\Debug\net8.0-windows\win10-x64",
     [switch]$KeepVisible
@@ -32,7 +34,7 @@ $PerchExe  = Join-Path $ToolsDir 'perch.exe'
 $ClaudeCmd = Join-Path $ToolsDir 'claude.cmd'
 $ClaudeBak = Join-Path $ToolsDir 'claude.cmd.realbak'
 # Isolated data root (PERCH_DATA_DIR) so the test instance never collides with
-# a real/running Perch — separate sessions.json, settings, errors.log AND
+# a real/running Perch - separate sessions.json, settings, errors.log AND
 # WebView2 user-data folder (a shared WebView2 folder is locked single-writer,
 # which is what 0x8007139F means). Short path to dodge WebView2's deep dirs.
 $DataDir   = 'C:\tmp\perch-resume-test'
@@ -124,7 +126,7 @@ function Fail($msg, $proc) {
 
 $mock = @'
 @echo off
-rem MOCK claude — session-resume self-test. Simulates Claude Code's
+rem MOCK claude - session-resume self-test. Simulates Claude Code's
 rem SessionStart hook so the host captures/persists a session id, AND writes a
 rem stub transcript under CLAUDE_CONFIG_DIR\projects so the host's resume
 rem pre-flight (TranscriptExists) sees a resumable session. Reads PERCH_PIPE
@@ -162,7 +164,7 @@ try {
     if (-not (Wait-Pattern -Pattern 'Pane\.spawn' -TimeoutSec 15)) { Fail "initial pane never spawned" $p }
     Start-Sleep -Seconds 3   # let pwsh reach an interactive prompt
 
-    # Type `claude` into the active pane → runs the mock → fires the hook.
+    # Type `claude` into the active pane -> runs the mock -> fires the hook.
     Test-Verb -Verb 'pty.send' -Fields @{ text = "claude`r`n" }
 
     $st = $null
@@ -190,7 +192,7 @@ try {
     if (-not (Test-Path $Transcript)) { Fail "mock did not write a stub transcript at $Transcript" $p }
     Write-Host "  [+] stub transcript present (resume pre-flight will pass)"
 
-    # --- Phase 2: relaunch → defer → resume injection ------------------------
+    # --- Phase 2: relaunch -> defer -> resume injection ----------------------
     Write-Host "`nPhase 2: relaunch defers + injects claude --resume"
     Stop-Process -Id $p.Id -Force -EA SilentlyContinue
     Start-Sleep -Milliseconds 500
@@ -209,13 +211,13 @@ try {
     if (-not $spawn) { Fail "spawn command did not inject 'claude --resume $SID'" $p }
     Write-Host "  [+] resume injected into spawn command"
 
-    # The resumed mock re-fires the SessionStart hook → host re-receives it.
+    # The resumed mock re-fires the SessionStart hook -> host re-receives it.
     if (-not (Wait-Pattern -Pattern 'PerchIpc\.recv .* type=session' -TimeoutSec 12)) {
         Fail "resumed claude did not re-report its session id" $p
     }
     Write-Host "  [+] resumed agent re-reported (restore-progress 'ready' signal)"
 
-    # --- Phase 2b: NO transcript → pre-flight suppresses resume ---------------
+    # --- Phase 2b: NO transcript -> pre-flight suppresses resume --------------
     Write-Host "`nPhase 2b: stale id (no transcript) spawns a clean shell, no resume"
     Stop-Process -Id $p.Id -Force -EA SilentlyContinue
     Start-Sleep -Milliseconds 500
@@ -232,7 +234,7 @@ try {
     if ($logTxt -match 'claude --resume')      { Fail "injected resume for a session with no transcript" $p }
     Write-Host "  [+] no-transcript session spawned a clean shell (no defer, no resume)"
 
-    # --- Phase 3: archive → restore → purge ----------------------------------
+    # --- Phase 3: archive -> restore -> purge --------------------------------
     Write-Host "`nPhase 3: archive / restore / purge"
     Test-Verb -Verb 'session.new'
     Start-Sleep -Milliseconds 800

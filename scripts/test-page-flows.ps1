@@ -15,7 +15,9 @@ Companion to scripts/cdp-drive.mjs (the node CDP driver). Requires node 22+
 .EXAMPLE
   ./scripts/test-page-flows.ps1
 #>
-[CmdletBinding()]
+# NOTE: no [CmdletBinding()] here on purpose -- under Windows PowerShell 5.1 it
+# makes $PSScriptRoot EMPTY inside param() defaults when the script is run as
+# `powershell -File ...`, silently collapsing the paths below to "\..\src\...".
 param(
     [string]$OutDir = "$PSScriptRoot\..\src\Perch\bin\Debug\net8.0-windows\win10-x64",
     [string]$Driver = "$PSScriptRoot\cdp-drive.mjs"
@@ -95,7 +97,7 @@ try {
     if ($errors) { $errors | ForEach-Object { Write-Warning $_ }; throw "FAIL: unexpected errors in log" }
 
     Write-Host ""
-    Write-Host "PASS: chooser, URL pane, update check, commits round-trip, resume prompt — all proven against the real page." -ForegroundColor Green
+    Write-Host "PASS: chooser, URL pane, update check, commits round-trip, resume prompt - all proven against the real page." -ForegroundColor Green
 }
 finally {
     if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force -EA SilentlyContinue }

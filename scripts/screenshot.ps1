@@ -2,7 +2,7 @@
 .SYNOPSIS
 Capture the perch window into design-loop/. Uses PrintWindow with
 PW_RENDERFULLCONTENT so Mica chrome AND native HwndHost children (terminal
-HWND, WebView2 panes) all render — unlike screen CopyFromScreen which depends
+HWND, WebView2 panes) all render - unlike screen CopyFromScreen which depends
 on z-order and fails for occluded windows.
 
 .PARAMETER ProcessName
@@ -19,11 +19,16 @@ $OutDir/history. Defaults to the repo's design-loop/.
 ./scripts/screenshot.ps1
 ./scripts/screenshot.ps1 -ProcessId 12345
 #>
-[CmdletBinding()]
+# NOTE: no [CmdletBinding()] and no [Parameter()] attributes here on purpose --
+# either one makes the script advanced-function-bound, and under Windows
+# PowerShell 5.1 that leaves $PSScriptRoot EMPTY inside param() defaults when the
+# script is run as `powershell -File ...`. None of these params need advanced
+# binding (no Mandatory, no pipeline input), so the attributes just cost us the
+# default below.
 param(
-    [Parameter()][string]$ProcessName = 'Perch',
-    [Parameter()][int]$ProcessId,
-    [Parameter()][string]$OutDir = (Join-Path $PSScriptRoot '..\design-loop' | Resolve-Path -Relative -ErrorAction SilentlyContinue)
+    [string]$ProcessName = 'Perch',
+    [int]$ProcessId,
+    [string]$OutDir = (Join-Path $PSScriptRoot '..\design-loop' | Resolve-Path -Relative -ErrorAction SilentlyContinue)
 )
 
 if (-not $OutDir) {

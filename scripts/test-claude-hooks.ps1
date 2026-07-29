@@ -1,15 +1,17 @@
 # Phase 4 live test: Claude Code wrapper + hook event handler.
 #
 # We don't need the real Claude CLI for this. Instead we stage a tiny
-# fake-claude.cmd that echoes its argv to stdout — that's enough to verify:
+# fake-claude.cmd that echoes its argv to stdout - that's enough to verify:
 #   * The perch wrapper finds it on PATH (skipping its own dir)
 #   * Inside perch, the wrapper injected --settings <hooks-json>
 #   * Outside perch, the wrapper is a transparent passthrough (no --settings)
 #
 # Separately we exercise `perch hooks claude <event>` directly against a live
-# pane — confirming the full hook → IPC → Session → sidebar pipeline.
+# pane - confirming the full hook -> IPC -> Session -> sidebar pipeline.
 
-[CmdletBinding()]
+# NOTE: no [CmdletBinding()] here on purpose -- under Windows PowerShell 5.1 it
+# makes $PSScriptRoot EMPTY inside param() defaults when the script is run as
+# `powershell -File ...`, silently collapsing the paths below to "\..\src\...".
 param(
     [string]$ExePath  = "$PSScriptRoot\..\src\Perch\bin\Debug\net8.0-windows\win10-x64\Perch.exe",
     [string]$ToolsDir = "$PSScriptRoot\..\src\Perch\bin\Debug\net8.0-windows\win10-x64\tools",
@@ -38,7 +40,7 @@ echo FAKE-CLAUDE-END
 $perchExe = Join-Path $ToolsDir 'perch.exe'
 if (-not (Test-Path $perchExe)) { throw "perch.exe not found at $perchExe" }
 
-# ---- 2. Passthrough mode: no PERCH_PIPE → no --settings ----
+# ---- 2. Passthrough mode: no PERCH_PIPE -> no --settings ----
 $env:PERCH_PIPE = $null
 $env:PATH = "$ToolsDir;$fakeDir;$env:PATH"
 $out1 = & $perchExe wrap-claude --version test-arg 2>&1
@@ -56,7 +58,7 @@ if ($out1Joined -notmatch 'ARG: --version' -or $out1Joined -notmatch 'ARG: test-
 }
 Write-Host "  PASS: passthrough forwards args without injecting --settings"
 
-# ---- 3. Perch-pane mode: PERCH_PIPE set → --settings <path> prepended ----
+# ---- 3. Perch-pane mode: PERCH_PIPE set -> --settings <path> prepended ----
 # The wrapper now writes the JSON to a temp file (path passed as the arg) so
 # it survives cmd.exe parsing when real claude is an npm-installed .cmd shim.
 $env:PERCH_PIPE  = '\\.\pipe\perch\fake-test'
@@ -85,7 +87,7 @@ Write-Host "  hooks JSON ($hooksFile):"
 Write-Host "    $($hooksContent.Substring(0, [Math]::Min(180, $hooksContent.Length)))..."
 
 # PreToolUse is intentionally omitted by the wrapper (would fire many times
-# per second during agentic work — see ClaudeWrapper.cs comment). Check only
+# per second during agentic work - see ClaudeWrapper.cs comment). Check only
 # the events we actually register.
 foreach ($evt in 'SessionStart','Stop','Notification','UserPromptSubmit','SessionEnd','SubagentStop') {
     if ($hooksContent -notmatch $evt) { throw "hooks JSON missing event: $evt" }
@@ -117,7 +119,7 @@ $pipe = "\\.\pipe\perch\$paneId"
 function Send-HookEvent {
     param([string]$EventName, [string]$StdinJson)
     # Windows PowerShell 5.1 (.NET Framework) has no ArgumentList collection
-    # on ProcessStartInfo — only the legacy Arguments string. Event names
+    # on ProcessStartInfo - only the legacy Arguments string. Event names
     # are simple ASCII (session-start, prompt-submit, ...) so quoting is moot.
     $psi = [System.Diagnostics.ProcessStartInfo]::new($perchExe)
     $psi.Arguments = "hooks claude $EventName"

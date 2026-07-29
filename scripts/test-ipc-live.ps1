@@ -3,9 +3,11 @@
 #   1. errors.log contains the dispatch line from PerchIpc.Dispatch.
 #   2. Screenshot saved so we can eyeball the sidebar showing the notification.
 #
-# Adapted from scripts/test-features.ps1 — same HWND-finding pattern.
+# Adapted from scripts/test-features.ps1 - same HWND-finding pattern.
 
-[CmdletBinding()]
+# NOTE: no [CmdletBinding()] here on purpose -- under Windows PowerShell 5.1 it
+# makes $PSScriptRoot EMPTY inside param() defaults when the script is run as
+# `powershell -File ...`, silently collapsing the paths below to "\..\src\...".
 param(
     [string]$ExePath = "$PSScriptRoot\..\src\Perch\bin\Debug\net8.0-windows\win10-x64\Perch.exe",
     [string]$LogPath = "$env:APPDATA\perch\errors.log",
@@ -103,7 +105,7 @@ Start-Sleep -Milliseconds 300
 # WM_CHAR injection into PowerShell crashes PSReadLine on non-translatable
 # keys (anything outside 0..255 fails the ConsoleKey ctor), so we don't use
 # the shell. The thing we actually want to verify is that the host's IPC
-# server is listening on the pane's pipe and dispatches the message — that
+# server is listening on the pane's pipe and dispatches the message - that
 # only needs the pipe path, which we can derive from sessions.json.
 $sessionsJson = Get-Content "$env:APPDATA\perch\sessions.json" -Raw | ConvertFrom-Json
 $paneGuid = $sessionsJson.Sessions[0].Root.Id

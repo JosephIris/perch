@@ -1,19 +1,19 @@
 <#
 .SYNOPSIS
-Build the web bundle AND copy it into the running host's output — in one step.
+Build the web bundle AND copy it into the running host's output - in one step.
 
 .DESCRIPTION
 `npm run build` (esbuild) writes the bundle to src/Perch/wwwroot, but the app
 serves the COPY under src/Perch/bin/<cfg>/.../wwwroot that `dotnet build`
 produces. So editing the web and only running esbuild leaves a launched app on
-the STALE bundle — the gotcha that bit us during the onboarding work. This runs
+the STALE bundle - the gotcha that bit us during the onboarding work. This runs
 both, in order, so what you launch is what you just built.
 
 Runs from anywhere (resolves the repo via $PSScriptRoot).
 
 .PARAMETER SkipTypecheck
 Skip `tsc --noEmit`. Faster, but esbuild does NOT type-check, so you lose TS
-error detection — use only for quick iteration.
+error detection - use only for quick iteration.
 
 .PARAMETER Configuration
 dotnet build configuration. Default: Debug.
@@ -50,4 +50,4 @@ Write-Host '> dotnet build (copies wwwroot into bin)' -ForegroundColor Cyan
 dotnet build $csproj -c $Configuration -clp:ErrorsOnly
 if ($LASTEXITCODE -ne 0) { throw 'dotnet build failed' }
 
-Write-Host '✓ built — host output now has the fresh bundle' -ForegroundColor Green
+Write-Host '[+] built - host output now has the fresh bundle' -ForegroundColor Green

@@ -6,7 +6,9 @@
 #   * `send` injected text into that session's pane (visible echo in terminal)
 #   * `focus` brought it active (status bar shows the new session/pane)
 
-[CmdletBinding()]
+# NOTE: no [CmdletBinding()] here on purpose -- under Windows PowerShell 5.1 it
+# makes $PSScriptRoot EMPTY inside param() defaults when the script is run as
+# `powershell -File ...`, silently collapsing the paths below to "\..\src\...".
 param(
     [string]$ExePath  = "$PSScriptRoot\..\src\Perch\bin\Debug\net8.0-windows\win10-x64\Perch.exe",
     [string]$CliPath  = "$PSScriptRoot\..\src\Perch\bin\Debug\net8.0-windows\win10-x64\tools\perch.exe",
@@ -38,18 +40,18 @@ Start-Sleep -Seconds 5
 if ($p.HasExited) { throw "Perch exited $($p.ExitCode)" }
 Write-Host "Launched pid=$($p.Id)"
 
-# Origin pipe — the main session's pane.
+# Origin pipe - the main session's pane.
 $sessions = Get-Content "$env:APPDATA\perch\sessions.json" -Raw | ConvertFrom-Json
 $mainPaneId = $sessions.Sessions[0].Root.Id -replace '-', ''
 $mainPipe = "\\.\pipe\perch\$mainPaneId"
 Write-Host "Origin pipe: $mainPipe"
 
-# 1) open — create a target session.
+# 1) open - create a target session.
 Invoke-Cli -PipePath $mainPipe -CliArgs @('open', '--name', 'test-target')
 Start-Sleep -Milliseconds 1500
 
 # Re-read sessions.json to discover the new pane id (so we can address it
-# directly for send verification — this is what the agent would do too).
+# directly for send verification - this is what the agent would do too).
 $sessions = Get-Content "$env:APPDATA\perch\sessions.json" -Raw | ConvertFrom-Json
 $target = $sessions.Sessions | Where-Object { $_.Title -eq 'test-target' } | Select-Object -First 1
 if (-not $target) { throw "open: 'test-target' session not created" }
@@ -60,14 +62,14 @@ Write-Host "Target pipe: $targetPipe"
 # Give the target shell a moment to boot fully before we send into it.
 Start-Sleep -Milliseconds 2000
 
-# 2) send — inject a marker line into the target pane. Newline included so
+# 2) send - inject a marker line into the target pane. Newline included so
 #    the shell actually runs whatever's there. Use a literal echo so the
 #    terminal shows the marker in its scrollback.
 $marker = "addr-test-$([Guid]::NewGuid().ToString('N').Substring(0,8))"
 Invoke-Cli -PipePath $mainPipe -CliArgs @('send', 'test-target:pane-1', "echo $marker`n")
 Start-Sleep -Milliseconds 600
 
-# 3) focus — bring test-target into view, then screenshot.
+# 3) focus - bring test-target into view, then screenshot.
 Invoke-Cli -PipePath $mainPipe -CliArgs @('focus', 'test-target:pane-1')
 Start-Sleep -Milliseconds 800
 

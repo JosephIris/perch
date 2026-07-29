@@ -1,7 +1,9 @@
 # Phase 2 live test: pushes status + meta via perch.exe into the running app
 # and screenshots the sidebar to verify the chips render.
 
-[CmdletBinding()]
+# NOTE: no [CmdletBinding()] here on purpose -- under Windows PowerShell 5.1 it
+# makes $PSScriptRoot EMPTY inside param() defaults when the script is run as
+# `powershell -File ...`, silently collapsing the paths below to "\..\src\...".
 param(
     [string]$ExePath  = "$PSScriptRoot\..\src\Perch\bin\Debug\net8.0-windows\win10-x64\Perch.exe",
     [string]$CliPath  = "$PSScriptRoot\..\src\Perch\bin\Debug\net8.0-windows\win10-x64\tools\perch.exe",
@@ -39,7 +41,7 @@ $paneId = $sessions.Sessions[0].Root.Id -replace '-', ''
 $pipe = "\\.\pipe\perch\$paneId"
 Write-Host "Pipe: $pipe"
 
-# Three pushes — a complete agent narrative in miniature.
+# Three pushes - a complete agent narrative in miniature.
 Invoke-Cli -PipePath $pipe -CliArgs @('status', 'working', 'running', 'tests')
 Invoke-Cli -PipePath $pipe -CliArgs @('meta', '--branch', 'feature/agent-hooks', '--port', '3000', '--port', '5173')
 Invoke-Cli -PipePath $pipe -CliArgs @('notify', '--level', 'success', 'tests passing')

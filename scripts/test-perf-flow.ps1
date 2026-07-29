@@ -6,14 +6,14 @@
 # handling and the whole UI froze (renderer process at 1.5 GB, keystrokes not
 # landing at all).
 #
-# THE FIX: ConPty applies backpressure — it stops reading once the page is
+# THE FIX: ConPty applies backpressure - it stops reading once the page is
 # ~256 KB behind on rendering (the page acks each drained xterm write), so the
 # renderer never falls arbitrarily behind and stays responsive.
 #
 # HOW THIS TEST PROVES IT (and proves it actually detects the bug):
 #   We flood TWO panes hard, then measure two things while they stream:
 #     1. peak unacked backlog per pane  (how far the renderer fell behind)
-#     2. render-ping round-trip latency (a faithful proxy for keystroke lag —
+#     2. render-ping round-trip latency (a faithful proxy for keystroke lag -
 #        the ping is serviced on the SAME main-thread queue as keystrokes)
 #   We run the identical scenario twice:
 #     - FIXED  : flow control on  -> backlog stays bounded, pings stay fast
@@ -24,7 +24,7 @@
 #
 # Keystroke-free, like the other harnesses: driven entirely via the control
 # IPC pipe. The window is parked OFF-SCREEN (not minimized) so the renderer is
-# not throttled by Chromium's hidden-window backgrounding — minimizing would
+# not throttled by Chromium's hidden-window backgrounding - minimizing would
 # invalidate the measurement.
 
 [CmdletBinding()]

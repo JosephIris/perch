@@ -18,12 +18,14 @@ host errors. Throws (non-zero exit) on any failure.
 .EXAMPLE
 ./scripts/test-attention.ps1
 #>
-[CmdletBinding()]
+# NOTE: no [CmdletBinding()] here on purpose -- under Windows PowerShell 5.1 it
+# makes $PSScriptRoot EMPTY inside param() defaults when the script is run as
+# `powershell -File ...`, silently collapsing the paths below to "\..\src\...".
 param(
   [string]$Exe     = "$PSScriptRoot\..\src\Perch\bin\Debug\net8.0-windows\win10-x64\Perch.exe",
   # Unique dir per run under C:\tmp: a reused dir keeps a WebView2 profile whose
   # lingering child processes lock files and stall the next cold init. (Use
-  # C:\tmp, not %TEMP% — WebView2 user-data init under %LOCALAPPDATA%\Temp can
+  # C:\tmp, not %TEMP% - WebView2 user-data init under %LOCALAPPDATA%\Temp can
   # stall on a fresh profile.)
   [string]$DataDir = (Join-Path 'C:\tmp' "perch-attn-test-$(Get-Random)"),
   [string]$ShotPath = 'C:\tmp\perch-attn-sidebar.png'

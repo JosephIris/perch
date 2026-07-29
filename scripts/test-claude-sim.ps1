@@ -1,7 +1,7 @@
 # Full Claude-Code-style end-to-end test.
 #
 # Unlike test-state-live.ps1, the perch CLI is invoked from inside a *real*
-# spawned pane shell — so this exercises:
+# spawned pane shell - so this exercises:
 #   * BuildStartupCommandLine env injection (PERCH_PIPE, PERCH_PANE_ID reach the shell)
 #   * The tools/ dir being on the inherited PATH (`perch` resolves)
 #   * perch.exe connecting from inside the agent's process tree
@@ -11,7 +11,9 @@
 # Trigger: we use `perch open --cmd "pwsh -NoExit -File <agent-sim.ps1>"` from
 # the default pane, so the new pane's startup command IS the simulator.
 
-[CmdletBinding()]
+# NOTE: no [CmdletBinding()] here on purpose -- under Windows PowerShell 5.1 it
+# makes $PSScriptRoot EMPTY inside param() defaults when the script is run as
+# `powershell -File ...`, silently collapsing the paths below to "\..\src\...".
 param(
     [string]$ExePath  = "$PSScriptRoot\..\src\Perch\bin\Debug\net8.0-windows\win10-x64\Perch.exe",
     [string]$CliPath  = "$PSScriptRoot\..\src\Perch\bin\Debug\net8.0-windows\win10-x64\tools\perch.exe",
@@ -51,7 +53,7 @@ Start-Sleep -Seconds 5
 if ($p.HasExited) { throw "Perch exited $($p.ExitCode)" }
 Write-Host "Launched pid=$($p.Id)"
 
-# Origin: the active session's first leaf — that's the one with a running
+# Origin: the active session's first leaf - that's the one with a running
 # IPC server, since IPC servers only spin up when the session is materialized.
 $sessions = Get-Content $sessionsPath -Raw | ConvertFrom-Json
 $activeId = $sessions.ActiveSessionId
@@ -80,7 +82,7 @@ $lines | Where-Object { $_ -match 'PerchIpc|ERROR' } | ForEach-Object { Write-Ho
 
 Stop-Process -Id $p.Id -EA SilentlyContinue
 
-# Tally by type — every verb the simulator emits should arrive at least once.
+# Tally by type - every verb the simulator emits should arrive at least once.
 $counts = @{
     notify = ($lines | Where-Object { $_ -match 'PerchIpc\.recv.*type=notify' }).Count
     status = ($lines | Where-Object { $_ -match 'PerchIpc\.recv.*type=status' }).Count

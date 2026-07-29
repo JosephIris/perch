@@ -11,7 +11,7 @@ $ErrorActionPreference = 'Stop'
 $repo  = Split-Path $PSScriptRoot -Parent
 $perch  = Join-Path $repo 'src\Perch\bin\Debug\net8.0-windows\win10-x64\tools\perch.exe'
 if (-not (Test-Path $perch)) {
-    throw "perch.exe not found at $perch — build the host first (dotnet build src/Perch)"
+    throw "perch.exe not found at $perch - build the host first (dotnet build src/Perch)"
 }
 
 Add-Type -AssemblyName System.Core

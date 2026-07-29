@@ -1,18 +1,18 @@
-# Self-test for the "Setting up…" boot cover + /color choreography.
+# Self-test for the "Setting up..." boot cover + /color choreography.
 #
-# Launches an ISOLATED Perch (PERCH_DATA_DIR → a scratch dir, so the user's real
+# Launches an ISOLATED Perch (PERCH_DATA_DIR -> a scratch dir, so the user's real
 # session store is never touched), drives a project tab over the test control
 # pipe, and asserts the ordering AND the timing the feature exists to guarantee:
 #
-#     session-start hook  →  /color typed (only after cc SETTLES)  →  uncovered
+#     session-start hook  ->  /color typed (only after cc SETTLES)  ->  uncovered
 #
 # Two bugs this pins down:
 #  1. The cover used to drop ON the session-start hook, which fires before cc has
 #     painted; an earlier fix typed /color on a timeout that could expire BEFORE
-#     the hook — i.e. into a PTY with no reader attached. (ordering asserts)
+#     the hook - i.e. into a PTY with no reader attached. (ordering asserts)
 #  2. The 150ms quiet gate fired inside cc's FIRST inter-paint boot lull (~250ms
 #     in, 3 chunks), typing /color into a not-yet-ready cc and uncovering while
-#     it was still painting. Ordering alone did NOT catch this — the phase-1
+#     it was still painting. Ordering alone did NOT catch this - the phase-1
 #     SETTLE gate must hold /color until cc genuinely goes quiet, so /color must
 #     land well after the hook, not a few hundred ms later. (timing assert below)
 #
@@ -66,7 +66,7 @@ try {
     $w.WriteLine((@{ verb = 'project.add'; path = $repo } | ConvertTo-Json -Compress))
     Start-Sleep -Seconds 2
 
-    # Projects live in their own store (Project.cs → projects.json), not sessions.json.
+    # Projects live in their own store (Project.cs -> projects.json), not sessions.json.
     $projFile = Join-Path $sandbox "perch\projects.json"
     if (-not (Test-Path $projFile)) { throw "project.add wrote no projects.json" }
     # ProjectStore serializes as { "Projects": [ ... ] }.
@@ -81,7 +81,7 @@ try {
     # cc cold start has measured up to 7.3s; allow generous headroom.
     if (-not (Wait-ForLog "Setup: .* settled; uncovering" 60)) {
         Get-Content $log -Tail 30
-        throw "cover never settled — check for a 'gave up' or capped line above"
+        throw "cover never settled - check for a 'gave up' or capped line above"
     }
 
     $seq = Get-Content $log | Select-String "type=session|CcColor:|Setup:" | ForEach-Object { $_.Line }
@@ -93,13 +93,13 @@ try {
 
     if (-not $iSession) { throw "FAIL: cc session-start hook never arrived" }
     if (-not $iColor)   { throw "FAIL: /color was never typed" }
-    if ($iColor -lt $iSession) { throw "FAIL: /color typed BEFORE the session hook — PTY had no reader attached" }
+    if ($iColor -lt $iSession) { throw "FAIL: /color typed BEFORE the session hook - PTY had no reader attached" }
     if ($iUncover -lt $iColor) { throw "FAIL: uncovered BEFORE /color was applied" }
     if ($seq | Select-String "capped|gave up") { throw "FAIL: hit a cap instead of settling naturally" }
 
     # TIMING assert (bug #2): /color must land only AFTER cc's boot settles, not
     # inside the first ~250ms inter-paint lull. The settle gate structurally can't
-    # fire until cc has been quiet for SetupSettleMs, so the hook→/color delta is
+    # fire until cc has been quiet for SetupSettleMs, so the hook->/color delta is
     # necessarily > ~1s on a healthy boot; the bug produced ~250ms. Parse the
     # "[HH:mm:ss.fff]" stamps and require a clear separation.
     function Stamp([string]$line) {
@@ -114,7 +114,7 @@ try {
         $deltaMs = ($tColor - $tSession).TotalMilliseconds
         Write-Host ("hook -> /color delta: {0:N0}ms" -f $deltaMs)
         if ($deltaMs -lt 1000) {
-            throw "FAIL: /color typed only ${deltaMs}ms after the hook — the settle gate did NOT hold; it fired inside a boot lull (the pre-fix bug)."
+            throw "FAIL: /color typed only ${deltaMs}ms after the hook - the settle gate did NOT hold; it fired inside a boot lull (the pre-fix bug)."
         }
     } else {
         Write-Host "WARN: could not parse timestamps for the timing assert" -ForegroundColor Yellow

@@ -1,6 +1,6 @@
 <#
 Regression test: switching away from a tab with a URL (WebView2) pane and back
-must NOT reload it — the native WebView2 controller is HIDDEN, not disposed.
+must NOT reload it - the native WebView2 controller is HIDDEN, not disposed.
 
 Decisive signal (capture methods lie in this app; the log does not): the host
 logs "UrlPaneHost.Init.begin" once per WebView2 controller creation. Across a
@@ -19,7 +19,12 @@ NOTE: the running app serves wwwroot from the BIN OUTPUT, so a page-side change
 needs `dotnet build src/Perch/Perch.csproj` (not just `npm run build`) to reach
 this test. Build first.
 #>
-[CmdletBinding()]
+# NOTE: no [CmdletBinding()] here on purpose. Under Windows PowerShell 5.1 it
+# makes the script advanced-function-bound and $PSScriptRoot then evaluates to
+# EMPTY inside param() defaults -- but ONLY when the script is launched as
+# `powershell -File ...` (invoking it with & from a session is fine). The
+# defaults silently became "\..\src\..." and the script died with
+# "Perch.exe not found (build first)" on a repo that had just built.
 param(
     [string]$ExePath  = "$PSScriptRoot\..\src\Perch\bin\Debug\net8.0-windows\win10-x64\Perch.exe",
     [string]$ToolsDir = "$PSScriptRoot\..\src\Perch\bin\Debug\net8.0-windows\win10-x64\tools"
@@ -81,7 +86,7 @@ try {
     # Pre-flight: if a test-IPC control pipe is ALREADY up, another instance owns
     # it and `perch test` verbs could be routed to the wrong app. Abort.
     if (Test-Path '\\.\pipe\perch\control') {
-        throw "control pipe already exists — another test-IPC Perch is running. Aborting to avoid driving the wrong instance."
+        throw "control pipe already exists - another test-IPC Perch is running. Aborting to avoid driving the wrong instance."
     }
 
     Remove-Item $DataDir -Recurse -Force -EA SilentlyContinue

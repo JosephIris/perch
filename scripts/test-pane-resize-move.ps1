@@ -8,10 +8,12 @@
 #
 # ISOLATION: runs against a throwaway PERCH_DATA_DIR so it never reads or
 # writes the user's real session store, and only ever kills Perch.exe whose
-# path is under bin\Debug (its own instance) — never the installed prod app in
+# path is under bin\Debug (its own instance) - never the installed prod app in
 # %APPDATA%\perch.
 
-[CmdletBinding()]
+# NOTE: no [CmdletBinding()] here on purpose -- under Windows PowerShell 5.1 it
+# makes $PSScriptRoot EMPTY inside param() defaults when the script is run as
+# `powershell -File ...`, silently collapsing the paths below to "\..\src\...".
 param(
     [string]$ExePath  = "$PSScriptRoot\..\src\Perch\bin\Debug\net8.0-windows\win10-x64\Perch.exe",
     [string]$ToolsDir = "$PSScriptRoot\..\src\Perch\bin\Debug\net8.0-windows\win10-x64\tools",
@@ -39,7 +41,7 @@ namespace Perch { public static class WinShowRM {
 }
 
 function Stop-MyPerch {
-    # ONLY our own bin\Debug instance — never the installed prod app.
+    # ONLY our own bin\Debug instance - never the installed prod app.
     Get-Process -Name Perch -EA SilentlyContinue |
         Where-Object { $_.Path -like '*\bin\Debug\*' } |
         Stop-Process -Force -EA SilentlyContinue
@@ -101,7 +103,7 @@ New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
 Write-Host "Phase 1: cold launch (isolated data dir: $DataDir)"
 $p = Launch-Perch
 Write-Host "  perch pid=$($p.Id)"
-# Wait for the initial Pane.spawn — that only fires after the page is ready and
+# Wait for the initial Pane.spawn - that only fires after the page is ready and
 # the host has set the active pane, so split-active in Phase 2 won't no-op on a
 # null active id (a warmup race).
 function Spawn-Count { (Get-Content $LogPath -EA SilentlyContinue | Where-Object { $_ -match 'Pane\.spawn' }).Count }
@@ -121,7 +123,7 @@ $splitId = $root.Id
 $L0 = $root.Children[0].Id
 $L1 = $root.Children[1].Id
 Write-Host "  [+] vertical split id=$splitId  L0=$L0  L1=$L1"
-# Default weights must both be 1.0 (even — no behavior change from before).
+# Default weights must both be 1.0 (even - no behavior change from before).
 if ($root.Children[0].Weight -ne 1 -or $root.Children[1].Weight -ne 1) {
     Fail $p "default weights expected 1/1, got $($root.Children[0].Weight)/$($root.Children[1].Weight)"
 }

@@ -1,19 +1,21 @@
 <#
 .SYNOPSIS
 End-to-end smoke of the host dispatch pipeline against a LIVE isolated
-instance: launch → lazy PTY spawn → flat splits → CSV weights → both moveDir
-spellings → string-typed prefs/settings → session close/restore/purge →
+instance: launch -> lazy PTY spawn -> flat splits -> CSV weights -> both moveDir
+spellings -> string-typed prefs/settings -> session close/restore/purge ->
 malformed-payload probe. Asserts on errors.log + persisted state, then kills
 ONLY the PID it started. No screenshots, no focus games.
 
-Isolated under C:\tmp\perch-smoke (PERCH_DATA_DIR) — never touches prod state.
+Isolated under C:\tmp\perch-smoke (PERCH_DATA_DIR) - never touches prod state.
 Exit code 0 = PASS. Run after any change to the message router, PaneManager,
 PaneTree or StateProjection.
 
 .EXAMPLE
   ./scripts/test-smoke.ps1
 #>
-[CmdletBinding()]
+# NOTE: no [CmdletBinding()] here on purpose -- under Windows PowerShell 5.1 it
+# makes $PSScriptRoot EMPTY inside param() defaults when the script is run as
+# `powershell -File ...`, silently collapsing the paths below to "\..\src\...".
 param(
     [string]$OutDir = "$PSScriptRoot\..\src\Perch\bin\Debug\net8.0-windows\win10-x64"
 )
@@ -81,7 +83,7 @@ try {
     if (($weights -join ',') -ne '2,1,1') { throw "FAIL: weights not persisted, got $($weights -join ',')" }
     Write-Host "weights + moveDir + string flags OK" -ForegroundColor Green
 
-    # -- Session lifecycle: close → Recently closed; restore → live; purge → gone.
+    # -- Session lifecycle: close -> Recently closed; restore -> live; purge -> gone.
     Send-Verbs @(('{"verb":"session.close","id":"' + $firstSessionId + '"}'))
     Start-Sleep -Seconds 1
     $store = Get-Store

@@ -95,7 +95,7 @@ function Wait-ForControlPipe {
 
 function Wait-ForPanePipe {
     param([string]$PaneId, [int]$TimeoutSec = 10)
-    # PerchIpcServer pipe name is `perch\{Guid:N}` — no dashes — while
+    # PerchIpcServer pipe name is `perch\{Guid:N}` - no dashes - while
     # sessions.json stores the GUID with dashes. Normalize.
     $bare = $PaneId -replace '-', ''
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
@@ -274,7 +274,7 @@ Write-Host ("  .blur( in bundle             : {0}" -f $blurInJs)
 # Bundle-level check: xterm needs to be told it's driven by a ConPTY so
 # its reflow logic on resize matches what ConPTY actually emits. Without
 # it, a width change mid-output leaves wrapped fragments stranded in
-# scrollback. We just verify the option survived bundling — behavioural
+# scrollback. We just verify the option survived bundling - behavioural
 # verification requires watching a real resize on a streaming TUI.
 # ==========================================================================
 Write-Host ""

@@ -3,14 +3,16 @@
 # Two sessions are created (main + a `perch open`-spawned one). After the
 # open call, the newly-spawned session becomes active. We then push state
 # from BOTH panes' pipes:
-#   * Push A from the BACKGROUND pane (no longer active) → should be IGNORED
-#   * Push B from the ACTIVE pane → should LAND on the sidebar
+#   * Push A from the BACKGROUND pane (no longer active) -> should be IGNORED
+#   * Push B from the ACTIVE pane -> should LAND on the sidebar
 #
 # We verify by reading the log (both pushes get a PerchIpc.recv line because
 # the gate happens on the UI side, not at dispatch) and by screenshot
 # (active session's row should only show push B's state, not A's).
 
-[CmdletBinding()]
+# NOTE: no [CmdletBinding()] here on purpose -- under Windows PowerShell 5.1 it
+# makes $PSScriptRoot EMPTY inside param() defaults when the script is run as
+# `powershell -File ...`, silently collapsing the paths below to "\..\src\...".
 param(
     [string]$ExePath  = "$PSScriptRoot\..\src\Perch\bin\Debug\net8.0-windows\win10-x64\Perch.exe",
     [string]$CliPath  = "$PSScriptRoot\..\src\Perch\bin\Debug\net8.0-windows\win10-x64\tools\perch.exe",
@@ -60,12 +62,12 @@ $secondaryPipe = "\\.\pipe\perch\$secondaryPaneId"
 Write-Host "secondary pipe: $secondaryPipe  (this one is now active)"
 Start-Sleep -Milliseconds 1500
 
-# Push from BACKGROUND (main) — should be ignored.
+# Push from BACKGROUND (main) - should be ignored.
 Invoke-Cli -PipePath $mainPipe -CliArgs @('status', 'waiting', 'BG-from-main')
 Invoke-Cli -PipePath $mainPipe -CliArgs @('notify', '--level', 'error', 'BG-notif-from-main')
 Start-Sleep -Milliseconds 400
 
-# Push from ACTIVE (secondary) — should land.
+# Push from ACTIVE (secondary) - should land.
 Invoke-Cli -PipePath $secondaryPipe -CliArgs @('status', 'done', 'FG-from-secondary')
 Invoke-Cli -PipePath $secondaryPipe -CliArgs @('notify', '--level', 'success', 'FG-notif-from-secondary')
 Start-Sleep -Milliseconds 600

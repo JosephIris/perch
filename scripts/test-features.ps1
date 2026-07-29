@@ -186,7 +186,7 @@ if ($termHwnd -ne [IntPtr]::Zero) {
     Start-Sleep -Milliseconds 1200
 
     # Synthesize a drag-select across the URL on the echo output line, then
-    # right-click — same as a user dragging across the URL and right-clicking.
+    # right-click - same as a user dragging across the URL and right-clicking.
     $termInfo = Get-HwndInfo $termHwnd
     $cellW = $termInfo.W / 80.0
     $cellH = $termInfo.H / 29.0

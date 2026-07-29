@@ -3,7 +3,7 @@
 #   2. The per-pane X button rendered outside the app window
 #   3. App crashed on normal use
 #
-# IMPORTANT — keystroke-free.
+# IMPORTANT - keystroke-free.
 # An earlier version of this script drove the app with [SendKeys]::SendWait.
 # That sends keys to whatever has the foreground; the moment perch lost focus
 # (which happens on every split/redraw) the Ctrl+Shift+W shortcuts spilled
@@ -13,7 +13,9 @@
 # active when PERCH_ENABLE_TEST_IPC=1 in the launching process. You can keep
 # using the machine normally while this runs.
 
-[CmdletBinding()]
+# NOTE: no [CmdletBinding()] here on purpose -- under Windows PowerShell 5.1 it
+# makes $PSScriptRoot EMPTY inside param() defaults when the script is run as
+# `powershell -File ...`, silently collapsing the paths below to "\..\src\...".
 param(
     [string]$ExePath  = "$PSScriptRoot\..\src\Perch\bin\Debug\net8.0-windows\win10-x64\Perch.exe",
     [string]$ToolsDir = "$PSScriptRoot\..\src\Perch\bin\Debug\net8.0-windows\win10-x64\tools",
@@ -67,7 +69,7 @@ function Reset-PerchState {
 
 function Start-PerchForTest {
     # PERCH_ENABLE_TEST_IPC must be in the LAUNCHED process's env, not just
-    # ours — Start-Process inherits the current shell's env by default.
+    # ours - Start-Process inherits the current shell's env by default.
     $env:PERCH_ENABLE_TEST_IPC = '1'
     $p = Start-Process -PassThru -FilePath $ExePath
     # Wait for the main window to appear; we don't care if it's focused.
@@ -93,7 +95,7 @@ function Wait-ForControlPipe {
 
 function Invoke-PerchTest {
     param([string]$Verb)
-    # Stderr → stdout join so PowerShell surfaces error text. Exit 0 = success.
+    # Stderr -> stdout join so PowerShell surfaces error text. Exit 0 = success.
     $stderr = & $PerchExe test $Verb 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "perch test $Verb exited $LASTEXITCODE`: $stderr"
@@ -148,7 +150,7 @@ try {
     if (-not (Wait-ForControlPipe)) { throw "control pipe never appeared (PERCH_ENABLE_TEST_IPC not honored?)" }
     Hide-Perchdow -P $p
 
-    # Drive 2 splits via the control pipe → 3 panes total. Even minimized,
+    # Drive 2 splits via the control pipe -> 3 panes total. Even minimized,
     # WPF processes the dispatcher actions and updates the visual tree (UIA
     # still sees the buttons), so we don't need to restore the window.
     Invoke-PerchTest 'split-right'; Start-Sleep -Milliseconds 200
@@ -162,7 +164,7 @@ try {
         throw "expected at least 2 close buttons after splits, got $($before.Count)"
     }
 
-    # UIA Invoke is the cleanest non-keyboard click — fires the exact same
+    # UIA Invoke is the cleanest non-keyboard click - fires the exact same
     # Click handler as a real mouse click on the X.
     $pattern = $before[0].GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
     $pattern.Invoke()
@@ -185,7 +187,7 @@ try {
 # Test 3: stress for the native AV crash
 #
 # Drive split/close cycles entirely through the control pipe. Each iteration
-# splits twice then closes twice — pane count oscillates 1→2→3→2→1 so the
+# splits twice then closes twice - pane count oscillates 1->2->3->2->1 so the
 # final close never targets the last pane (closing the last pane would shut
 # down the app and look like a crash to the harness).
 # ==========================================================================
