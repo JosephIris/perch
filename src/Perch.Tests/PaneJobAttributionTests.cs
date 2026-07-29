@@ -171,12 +171,14 @@ public class PaneJobAttributionTests
         Assert.Fail("the server's parent never exited — nothing was orphaned, so the test can't distinguish the two strategies");
     }
 
+    /// Was a PowerShell one-liner through LocalPoller.RunAsync; the probe hands
+    /// back ppid for every process directly, so this is now a snapshot lookup
+    /// rather than a subprocess — and this helper runs in a polling loop.
     private static int ParentPid(int pid)
     {
-        var (code, so, _) = LocalPoller.RunAsync(
-            $"(Get-CimInstance Win32_Process -Filter \"ProcessId={pid}\").ParentProcessId", 15_000, default)
-            .GetAwaiter().GetResult();
-        return code == 0 && int.TryParse(so.Trim(), out var ppid) ? ppid : 0;
+        var (_, procs) = new WindowsSystemProbe().Probe();
+        foreach (var p in procs) if (p.Pid == pid) return p.Ppid;
+        return 0;
     }
 
     private static async Task<int> WaitForPid(string pidFile, TimeSpan timeout)

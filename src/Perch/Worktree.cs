@@ -174,19 +174,8 @@ internal static class Worktree
     /// Directory.CreateSymbolicLink would fail for most users. A junction needs
     /// no privilege and behaves the same for reads.
     private static async Task JunctionAsync(string link, string target)
-    {
-        using var p = Process.Start(new ProcessStartInfo
-        {
-            FileName = "cmd.exe",
-            Arguments = $"/c mklink /J \"{link}\" \"{target}\"",
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-        });
-        if (p == null) return;
-        await p.WaitForExitAsync();
-    }
+        => await ProcRunner.RunAsync(
+            "cmd.exe", $"/c mklink /J \"{link}\" \"{target}\"", site: "mklink");
 
     /// Tears down a tab's worktree. Keeps the BRANCH — the commits are the work,
     /// and closing a tab must never destroy them. Junctioned dependency dirs are

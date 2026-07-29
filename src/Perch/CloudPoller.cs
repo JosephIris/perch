@@ -412,38 +412,10 @@ internal sealed class CloudPoller
     internal static async Task<(int Code, string Stdout, string Stderr)> RunAsync(
         string args, int timeoutMs, CancellationToken ct)
     {
-        try
-        {
-            using var p = new Process
-            {
-                StartInfo = new ProcessStartInfo
-                {
-                    FileName = "cmd.exe",
-                    Arguments = $"/c gcloud {args}",
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                },
-            };
-            if (!p.Start()) return (-1, "", "failed to start gcloud");
-
-            var stdout = p.StandardOutput.ReadToEndAsync();
-            var stderr = p.StandardError.ReadToEndAsync();
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeout.CancelAfter(timeoutMs);
-            try { await p.WaitForExitAsync(timeout.Token); }
-            catch (OperationCanceledException)
-            {
-                try { p.Kill(entireProcessTree: true); } catch { }
-                return (-1, "", "gcloud timed out");
-            }
-            return (p.ExitCode, await stdout, await stderr);
-        }
-        catch (Exception ex)
-        {
-            Log.Error("CloudPoller.Run", ex);
-            return (-1, "", ex.Message);
-        }
+        var verb = args.Split(' ', StringSplitOptions.RemoveEmptyEntries) is { Length: > 0 } p
+            ? p[0] : "?";
+        return await ProcRunner.RunAsync(
+            "cmd.exe", $"/c gcloud {args}", site: $"gcloud.{verb}",
+            timeoutMs: timeoutMs, ct: ct);
     }
 }

@@ -59,12 +59,31 @@ function requestInspector(paneId: string): Promise<InspectorDataMessage> {
   return new Promise<InspectorDataMessage>((resolve) => {
     const timer = window.setTimeout(() => {
       inflight.delete(paneId);
-      resolve(empty(paneId));
+      // A timeout means "the host didn't answer in time", NOT "this pane has
+      // no agent" — and those rendered identically, because the fabricated
+      // payload carried hasAgent:false. Under load (a build, a busy machine)
+      // the host misses this deadline routinely, so a pane with a running
+      // agent flashed "No agent in this pane" and back, repeatedly.
+      //
+      // Last known good is always a better answer than a confident wrong one.
+      // Only a real reply from the host may say a pane has no agent; see
+      // LocalPoller, which draws the same distinction for the same reason.
+      const known = cache.get(paneId);
+      resolve(known ?? unknown(paneId));
     }, FETCH_TIMEOUT_MS);
     inflight.set(paneId, { resolve, timer });
     send({ type: "inspector.request", paneId });
   });
 }
+
+/// Nothing is known about this pane YET — we've never had a reply for it and
+/// the request timed out. Distinct from a host reply with hasAgent:false, which
+/// is a fact; this is the absence of one, and the rail says so rather than
+/// asserting the pane is empty.
+const unknown = (paneId: string): InspectorDataMessage => ({
+  type: "inspector.data", paneId, hasAgent: false, pending: true,
+  events: [], vitals: null, files: [], added: 0, deleted: 0,
+});
 
 const empty = (paneId: string): InspectorDataMessage => ({
   type: "inspector.data", paneId, hasAgent: false,
@@ -505,16 +524,40 @@ function renderEvent(e: InspectorEventView, i: number): HTMLElement {
   return w;
 }
 
+/** What the rail says when it has no rows to show.
+ *
+ *  THREE states, not two. `pending` — the page synthesized this payload because
+ *  a request timed out — used to be folded into "no agent", so a pane with a
+ *  running agent announced "No agent in this pane" whenever the host was slow
+ *  to answer. On a busy machine that is constant, and it reads as the app
+ *  losing track of your agents.
+ *
+ *  Exported for test: this is the whole decision, and it is worth pinning
+ *  without standing up a DOM. */
+export function emptyState(
+  data: Pick<InspectorDataMessage, "hasAgent" | "pending">,
+): { title: string; body: string } {
+  if (data.pending)  return { title: "Reading…", body: "Still waiting on this pane." };
+  if (data.hasAgent) return { title: "Nothing yet", body: "The agent hasn't said anything yet." };
+  return {
+    title: "No agent in this pane",
+    body: "Start Claude here and its work shows up in this rail.",
+  };
+}
+
 function renderStream(host: HTMLElement, data: InspectorDataMessage): void {
+  // A still-pending read must not tear down what's on screen. Returning early
+  // (rather than rendering an empty state) is what stops the rail flickering
+  // while the machine is busy: no reply yet means no reason to repaint.
+  if (data.pending && host.childElementCount > 0) return;
+
   host.replaceChildren();
 
   if (!data.events.length) {
     const e = el("div", "inspector__empty");
-    e.appendChild(elText("div", "inspector__empty-title",
-      data.hasAgent ? "Nothing yet" : "No agent in this pane"));
-    e.appendChild(elText("div", "inspector__empty-body", data.hasAgent
-      ? "The agent hasn't said anything yet."
-      : "Start Claude here and its work shows up in this rail."));
+    const { title, body } = emptyState(data);
+    e.appendChild(elText("div", "inspector__empty-title", title));
+    e.appendChild(elText("div", "inspector__empty-body", body));
     host.appendChild(e);
     prevEventCount = 0;
     return;

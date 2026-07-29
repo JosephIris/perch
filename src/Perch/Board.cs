@@ -45,6 +45,20 @@ internal sealed class BoardNode
     /// Repo-relative path to this node's artifact. Null for notes.
     public string? Ref { get; set; }
 
+    /// Absolute path to a file the user deliberately staged from OUTSIDE this
+    /// project. Separate from Ref rather than folded into it, for two reasons.
+    ///
+    /// Portability: Ref is the repo-relative list that survives a board being
+    /// shared, committed, or opened on another machine. An absolute path is
+    /// meaningful on exactly one box, so mixing it into Ref would quietly
+    /// break that guarantee for every consumer.
+    ///
+    /// Legibility: "which files here are outside the project" is a question the
+    /// UI, board.md, and any future review step all need to answer, and a
+    /// separate field answers it by construction instead of by re-testing every
+    /// path for containment.
+    public string? ExtRef { get; set; }
+
     /// Note body, or the one-line caption shown under a file/image/reference.
     public string Text { get; set; } = "";
 

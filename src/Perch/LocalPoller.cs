@@ -37,35 +37,23 @@ internal sealed record LocalListener(
 
 /// Enumerates loopback TCP listeners and attributes each to the pane that spawned
 /// it. Unlike the cloud poller there's nothing to authenticate and nothing to
-/// bill — a port scan is cheap and always available on Windows — so this feature
-/// is always on, but still invisible until something is actually listening.
+/// bill — reading the listener table is cheap and always available on Windows —
+/// so this feature is always on, but still invisible until something is actually
+/// listening.
 ///
-/// One PowerShell subprocess does the I/O: Get-NetTCPConnection for the listener
-/// set, Get-CimInstance Win32_Process for the pid → (parent, name, command line,
-/// start time) map. Both are native to Windows; the whole thing degrades to "no
-/// servers" if either is unavailable rather than ever throwing into the UI.
+/// The I/O is in-process (see WindowsSystemProbe): iphlpapi for the listener
+/// table, Toolhelp32 for the process tree, and a pid-filtered WMI query for the
+/// few command lines framework detection needs. It previously shelled out to
+/// `powershell.exe -EncodedCommand` every 3 seconds while the panel was open,
+/// which cost ~200-300ms of CPU in interpreter startup before doing any work and
+/// made this the most expensive spawn in the app.
+///
+/// Every layer degrades to "no servers" rather than throwing into the UI.
 internal sealed class LocalPoller
 {
-    // Loopback + wildcard addresses. A server on 0.0.0.0 is still reachable at
-    // localhost, so it counts; a server bound to a specific LAN NIC is not a
-    // "localhost dev server" and is deliberately excluded.
-    private const string Script = """
-        $ErrorActionPreference='SilentlyContinue'
-        $loop=@('127.0.0.1','::1','0.0.0.0','::')
-        $L = Get-NetTCPConnection -State Listen |
-             Where-Object { $loop -contains $_.LocalAddress } |
-             ForEach-Object { [pscustomobject]@{ port=[int]$_.LocalPort; pid=[int]$_.OwningProcess; addr=[string]$_.LocalAddress } }
-        $P = Get-CimInstance Win32_Process |
-             ForEach-Object {
-               $ms=0
-               if ($_.CreationDate) { try { $ms=[int64]([datetimeoffset]$_.CreationDate).ToUnixTimeMilliseconds() } catch {} }
-               # Strip raw control chars from name/cmdline: a process launched with
-               # e.g. a BEL in its arguments produced JSON System.Text.Json rejects,
-               # and one such process poisoned EVERY scan until the app restarted.
-               [pscustomobject]@{ pid=[int]$_.ProcessId; ppid=[int]$_.ParentProcessId; name=[string]($_.Name -replace '[\x00-\x1F\x7F]',' '); cmd=[string]($_.CommandLine -replace '[\x00-\x1F\x7F]',' '); startMs=$ms }
-             }
-        [pscustomobject]@{ listeners=@($L); procs=@($P) } | ConvertTo-Json -Depth 3 -Compress
-        """;
+    private readonly ISystemProbe _probe;
+
+    public LocalPoller(ISystemProbe? probe = null) => _probe = probe ?? new WindowsSystemProbe();
 
     /// Runtimes a dev server actually runs on. Used ONLY to keep the "other"
     /// bucket (servers Perch didn't launch) about dev work instead of a wall of
@@ -86,18 +74,16 @@ internal sealed class LocalPoller
     public async Task<IReadOnlyList<LocalListener>?> ScanAsync(
         IReadOnlyList<PaneProc> panes, CancellationToken ct = default)
     {
-        var (code, stdout, stderr) = await RunAsync(Script, 15_000, ct);
-        if (code != 0 || string.IsNullOrWhiteSpace(stdout))
+        try
         {
-            if (code != 0) Log.Info($"LocalPoller: scan failed ({code}): {stderr.Trim()}");
-            return null;
+            // The probe is syscalls plus one small WMI query — fast, but not
+            // free, and the UI thread is the one thing that must never wait on
+            // it. Off-thread keeps the old subprocess's threading contract.
+            var (listeners, procs) = await Task.Run(() => _probe.Probe(), ct);
+            return Build(listeners, procs, panes);
         }
-
-        // Belt to the script's braces: any raw control byte that still reaches
-        // us (a codepage surprise, a PowerShell version that doesn't escape)
-        // would fail the strict JSON parse and cost the whole scan.
-        try { return Parse(StripControlChars(stdout), panes); }
-        catch (Exception ex) { Log.Error("LocalPoller.Parse", ex); return null; }
+        catch (OperationCanceledException) { return null; }
+        catch (Exception ex) { Log.Error("LocalPoller.Scan", ex); return null; }
     }
 
     /// Replace raw C0 control chars (minus the JSON-legal whitespace \t \r \n)
@@ -119,21 +105,16 @@ internal sealed class LocalPoller
         return sb?.ToString() ?? s;
     }
 
-    private sealed record ProcRow(int Pid, int Ppid, string Name, string Cmd, long StartMs);
-
-    internal IReadOnlyList<LocalListener> Parse(string json, IReadOnlyList<PaneProc> panes)
+    /// Attribution proper: raw kernel facts in, panel rows out. Pure and
+    /// synchronous, which is what makes it testable — the probe supplies the
+    /// facts, so a fixture can stand in for a live machine.
+    internal IReadOnlyList<LocalListener> Build(
+        IReadOnlyList<RawListener> listeners,
+        IReadOnlyList<RawProc> procs,
+        IReadOnlyList<PaneProc> panes)
     {
-        using var doc = JsonDocument.Parse(json);
-        var root = doc.RootElement;
-
-        var procs = new Dictionary<int, ProcRow>();
-        if (root.TryGetProperty("procs", out var pe) && pe.ValueKind == JsonValueKind.Array)
-            foreach (var el in pe.EnumerateArray())
-            {
-                var pid = Int(el, "pid");
-                if (pid <= 0) continue;
-                procs[pid] = new ProcRow(pid, Int(el, "ppid"), Str(el, "name") ?? "", Str(el, "cmd") ?? "", Long(el, "startMs"));
-            }
+        var byPid = new Dictionary<int, RawProc>();
+        foreach (var p in procs) if (p.Pid > 0) byPid[p.Pid] = p;
 
         // pid → owning pane. Built with the indexer (not ToDictionary) so a
         // duplicated pid — impossible in practice, but cheap to be safe about —
@@ -144,45 +125,42 @@ internal sealed class LocalPoller
         var result = new List<LocalListener>();
         var seen = new HashSet<(int, int)>();
 
-        if (root.TryGetProperty("listeners", out var le) && le.ValueKind == JsonValueKind.Array)
-            foreach (var el in le.EnumerateArray())
-            {
-                var port = Int(el, "port");
-                var pid = Int(el, "pid");
-                if (port <= 0 || pid <= 4) continue;          // 0/4 = System / Idle
-                // A dev server binds both 127.0.0.1 and ::1 → two rows, one pid.
-                // Collapse to a single row keyed by (port, pid).
-                if (!seen.Add((port, pid))) continue;
+        foreach (var l in listeners)
+        {
+            if (l.Port <= 0 || l.Pid <= 4) continue;          // 0/4 = System / Idle
+            // A dev server binds both 127.0.0.1 and ::1 → two rows, one pid.
+            // Collapse to a single row keyed by (port, pid).
+            if (!seen.Add((l.Port, l.Pid))) continue;
 
-                procs.TryGetValue(pid, out var proc);
-                var name = BaseName(proc?.Name ?? "");
+            byPid.TryGetValue(l.Pid, out var proc);
+            var name = BaseName(proc?.Name ?? "");
 
-                var owner = FindOwner(pid, procs, paneByPid, panes);
-                // System loopback noise (svchost, etc.) that no pane owns and no
-                // dev runtime explains is dropped — the panel is about dev
-                // servers, not every socket on the box.
-                if (owner == null && !IsDevRuntime(name)) continue;
+            var owner = FindOwner(l.Pid, byPid, paneByPid, panes);
+            // System loopback noise (svchost, etc.) that no pane owns and no
+            // dev runtime explains is dropped — the panel is about dev
+            // servers, not every socket on the box.
+            if (owner == null && !IsDevRuntime(name)) continue;
 
-                var (framework, command) = Describe(proc, name);
-                result.Add(new LocalListener(
-                    Port: port,
-                    Pid: pid,
-                    Addr: Str(el, "addr") ?? "127.0.0.1",
-                    ProcName: name,
-                    Command: command,
-                    Framework: framework,
-                    StartedUnixMs: proc?.StartMs ?? 0,
-                    OwnerPaneId: owner?.PaneId,
-                    OwnerName: owner?.Name,
-                    OwnerState: owner?.State));
-            }
+            var (framework, command) = Describe(proc, name);
+            result.Add(new LocalListener(
+                Port: l.Port,
+                Pid: l.Pid,
+                Addr: string.IsNullOrEmpty(l.Addr) ? "127.0.0.1" : l.Addr,
+                ProcName: name,
+                Command: command,
+                Framework: framework,
+                StartedUnixMs: proc?.StartMs ?? 0,
+                OwnerPaneId: owner?.PaneId,
+                OwnerName: owner?.Name,
+                OwnerState: owner?.State));
+        }
 
         return result;
     }
 
     /// Which live pane, if any, does this listener belong to?
     private static PaneProc? FindOwner(
-        int pid, Dictionary<int, ProcRow> procs, Dictionary<int, PaneProc> paneByPid,
+        int pid, Dictionary<int, RawProc> procs, Dictionary<int, PaneProc> paneByPid,
         IReadOnlyList<PaneProc> panes)
         => FindOwnerByJob(pid, panes) ?? FindOwnerByAncestry(pid, procs, paneByPid);
 
@@ -209,7 +187,7 @@ internal sealed class LocalPoller
     /// a job answers first. Bounded and cycle-guarded — a corrupt ppid chain
     /// must not spin — and it gives up the moment an ancestor is missing,
     /// because a dead pid ends the chain.
-    private static PaneProc? FindOwnerByAncestry(int pid, Dictionary<int, ProcRow> procs, Dictionary<int, PaneProc> paneByPid)
+    private static PaneProc? FindOwnerByAncestry(int pid, Dictionary<int, RawProc> procs, Dictionary<int, PaneProc> paneByPid)
     {
         var visited = new HashSet<int>();
         var cur = pid;
@@ -230,7 +208,7 @@ internal sealed class LocalPoller
     /// (framework tag, cleaned command). The framework is a best-effort read of
     /// the command line — the port and command carry the real weight, so a miss
     /// just falls back to the runtime name rather than lying.
-    private static (string Framework, string Command) Describe(ProcRow? proc, string baseName)
+    private static (string Framework, string Command) Describe(RawProc? proc, string baseName)
     {
         var cmd = proc?.Cmd ?? "";
         var lc = cmd.ToLowerInvariant();
@@ -336,68 +314,4 @@ internal sealed class LocalPoller
         return procName;
     }
 
-    private static int Int(JsonElement el, string name)
-        => el.TryGetProperty(name, out var v)
-            ? v.ValueKind switch
-            {
-                JsonValueKind.Number => v.TryGetInt32(out var i) ? i : 0,
-                JsonValueKind.String => int.TryParse(v.GetString(), out var i) ? i : 0,
-                _ => 0,
-            }
-            : 0;
-
-    private static long Long(JsonElement el, string name)
-        => el.TryGetProperty(name, out var v)
-            ? v.ValueKind switch
-            {
-                JsonValueKind.Number => v.TryGetInt64(out var i) ? i : 0,
-                JsonValueKind.String => long.TryParse(v.GetString(), out var i) ? i : 0,
-                _ => 0,
-            }
-            : 0;
-
-    private static string? Str(JsonElement el, string name)
-        => el.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
-
-    /// Run the scan off the UI thread via Windows PowerShell (5.1, always present
-    /// — pwsh may not be). The script goes in as -EncodedCommand so no quoting
-    /// survives to be mangled.
-    internal static async Task<(int Code, string Stdout, string Stderr)> RunAsync(
-        string script, int timeoutMs, CancellationToken ct)
-    {
-        try
-        {
-            var b64 = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
-            using var p = new Process
-            {
-                StartInfo = new ProcessStartInfo
-                {
-                    FileName = "powershell.exe",
-                    Arguments = $"-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {b64}",
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                },
-            };
-            if (!p.Start()) return (-1, "", "failed to start powershell");
-
-            var stdout = p.StandardOutput.ReadToEndAsync();
-            var stderr = p.StandardError.ReadToEndAsync();
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeout.CancelAfter(timeoutMs);
-            try { await p.WaitForExitAsync(timeout.Token); }
-            catch (OperationCanceledException)
-            {
-                try { p.Kill(entireProcessTree: true); } catch { }
-                return (-1, "", "scan timed out");
-            }
-            return (p.ExitCode, await stdout, await stderr);
-        }
-        catch (Exception ex)
-        {
-            Log.Error("LocalPoller.Run", ex);
-            return (-1, "", ex.Message);
-        }
-    }
 }

@@ -183,6 +183,21 @@ internal sealed record BoardAddMsg
     public string? Note { get; init; }
     public double X { get; init; }
     public double Y { get; init; }
+
+    /// Who staged this: "user" for a deliberate human gesture (typing, pasting,
+    /// dropping onto the canvas), anything else for everyone.
+    ///
+    /// This decides whether an out-of-repo path is allowed, and it defaults to
+    /// NOT-user on purpose. board.md is handed to an agent as a list of files
+    /// to open, so a path that escapes the project widens what the agent can
+    /// read. A human choosing to stage a reference file is an informed
+    /// decision; an agent staging one would be widening its own read scope,
+    /// which is the thing containment exists to prevent. An omitted field
+    /// (older page bundle, replayed message, anything synthesized) must
+    /// therefore land on the restrictive side.
+    public string? Origin { get; init; }
+
+    public bool IsUserStaged => string.Equals(Origin, "user", StringComparison.Ordinal);
 }
 
 /// A paste landed on a board at (X, Y). Carries NO payload — the host reads the

@@ -64,6 +64,20 @@ public partial class MainWindow : FluentWindow
     // activity signal, and the agent's first byte can lag it by seconds.
     private readonly Dictionary<Guid, long> _lastByteCounts = new();
     private readonly Dictionary<Guid, int> _activityStreak = new();
+
+    /// Per-pane signature of everything RefreshGitStatsAsync's answers depend
+    /// on. Equal signature → equal answers → skip the git walks entirely. See
+    /// the gate in RefreshGitStatsAsync for why this exists.
+    private readonly Dictionary<Guid, string> _lastGitSig = new();
+
+    /// Working-tree watchers. The .git fingerprint can't see a file an agent's
+    /// Bash command created, so without these the gate above would go stale.
+    private RepoWatchers? _repoWatchers;
+
+    /// Bumped every time a working tree changes on disk. Folded into the
+    /// refresh signature so a filesystem event invalidates it — this is what
+    /// makes the gate event-driven rather than merely cached.
+    private readonly Dictionary<string, long> _worktreeEpoch = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<Guid, long> _lastSustainedTicks = new();
 
     private System.Windows.Threading.DispatcherTimer? _idleWatchdog;
@@ -373,10 +387,12 @@ public partial class MainWindow : FluentWindow
             };
             _idleWatchdog.Tick += OnIdleWatchdogTick;
             _idleWatchdog.Start();
+            _repoWatchers = new RepoWatchers(OnWorktreeChanged);
         };
         Closed += (_, _) =>
         {
             _idleWatchdog?.Stop();
+            _repoWatchers?.Dispose();
             _updateTimer?.Stop();
             _usageTimer?.Stop();
             _usage?.Dispose();
@@ -1995,6 +2011,24 @@ public partial class MainWindow : FluentWindow
         if (refresh) await RefreshGitStatsAsync(pane);
     }
 
+    /// A working tree changed on disk (debounced by RepoWatcher). Bump its
+    /// epoch so every gated signature for that tree differs, then refresh the
+    /// panes sitting in it. This is the event that replaced the 1Hz poll: the
+    /// git walks now run when something HAPPENED, not when a timer fired.
+    private void OnWorktreeChanged(string root)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            _worktreeEpoch[root] = _worktreeEpoch.GetValueOrDefault(root, 0) + 1;
+            GitProc.InvalidateCache(root);
+            foreach (var sess in _store.Sessions)
+                foreach (var pane in AllLeaves(sess.Root))
+                    if (_paneCwd.TryGetValue(pane.Id, out var c)
+                        && string.Equals(c, root, StringComparison.OrdinalIgnoreCase))
+                        _ = RefreshGitStatsAsync(pane);
+        });
+    }
+
     private async System.Threading.Tasks.Task RefreshGitStatsAsync(PaneNode pane)
     {
         // Ahead-of-upstream is meaningful for ANY repo pane — a plain shell (or
@@ -2037,6 +2071,30 @@ public partial class MainWindow : FluentWindow
         // commands created still count. Empty until the agent's first edit, which
         // correctly reads as 0 tracked loc rather than crediting your hand-edits.
         var touched = new HashSet<string>(pane.TouchedFiles, StringComparer.OrdinalIgnoreCase);
+
+        // Nothing changed since the last refresh for this pane? Then the answers
+        // are the ones already on screen, and the three git walks below would
+        // recompute them byte-for-byte at the cost of ~4 process launches.
+        //
+        // This gate is the fix for the regression that started this work. The
+        // calls underneath are each fast and each defensible; what was not
+        // defensible was running them on a timer whether or not anything had
+        // happened. Measured 1.9 git launches per SECOND on an idle desktop.
+        //
+        // The signature deliberately folds in everything the results depend on,
+        // not just the repo: baseline and the agent-touched set move
+        // independently of .git, and a stale read of either shows the wrong
+        // number in the footer. Untracked-file edits are covered by the
+        // git.touched IPC, which calls GitProc.InvalidateCache.
+        _repoWatchers?.Ensure(cwd);
+        var sig = GitProc.RefreshSignature(cwd)
+                  + "|b=" + baseline
+                  + "|t=" + touched.Count
+                  + "|f=" + (pathFilter?.Count ?? -1)
+                  + "|w=" + _worktreeEpoch.GetValueOrDefault(cwd, 0);
+        if (_lastGitSig.TryGetValue(pane.Id, out var prevSig) && prevSig == sig) return;
+        _lastGitSig[pane.Id] = sig;
+
         // Run the git queries concurrently off the UI thread — they're
         // independent and each is a fast plumbing command. The commit count and
         // the loc size come from one walk (SessionStatsAsync) so they can't
@@ -3648,8 +3706,15 @@ public partial class MainWindow : FluentWindow
                     {
                         id = n.Id,
                         kind = n.Kind,
-                        // Repo-relative, exactly as it appears in board.md.
-                        @ref = n.Ref,
+                        // Repo-relative, exactly as it appears in board.md —
+                        // falling back to the absolute path for a node the user
+                        // deliberately staged from outside the project, so the
+                        // card renders either way.
+                        @ref = n.Ref ?? n.ExtRef,
+                        // Lets the card mark external refs. Derived here rather
+                        // than re-tested in the page: the page has no repo root
+                        // and cannot answer "is this inside the project".
+                        external = n.ExtRef != null,
                         text = n.Text,
                         source = n.Source,
                         fetchedUtc = n.FetchedUtc,

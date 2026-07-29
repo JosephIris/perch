@@ -243,7 +243,12 @@ internal sealed class BoardStore
                 sb.Append("- ").Append(caption.Length > 0 ? caption : "(empty note)").Append('\n');
                 continue;
             }
-            sb.Append("- `").Append(n.Ref ?? "?").Append('`');
+            // An external ref is written as its absolute path AND labelled, so
+            // the agent reading board.md can tell at a glance which entries are
+            // outside the project it was started in. Silently mixing them into
+            // the repo-relative list would hide exactly the fact that matters.
+            sb.Append("- `").Append(n.Ref ?? n.ExtRef ?? "?").Append('`');
+            if (n.Ref == null && n.ExtRef != null) sb.Append(" (outside this project)");
             if (caption.Length > 0) sb.Append(" - ").Append(caption);
             if (kind == BoardNodeKind.Url && !string.IsNullOrEmpty(n.Source))
             {
@@ -279,6 +284,7 @@ internal sealed class BoardStore
         var n = doc.Find(id);
         if (n == null) return null;
         if (!string.IsNullOrEmpty(n.Ref)) return "`" + n.Ref + "`";
+        if (!string.IsNullOrEmpty(n.ExtRef)) return "`" + n.ExtRef + "`";
         var t = OneLine(n.Text);
         if (t.Length == 0) return "a note";
         return "\"" + (t.Length > 48 ? t[..48].TrimEnd() + "…" : t) + "\"";

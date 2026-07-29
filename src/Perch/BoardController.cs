@@ -252,23 +252,58 @@ internal sealed class BoardController
                 // UI thread on someone else's server for fifteen seconds.
                 _ = FetchIntoAsync(msg.PaneId, node.Id, text);
             }
+            else if (!BoardPaths.LooksLikeAPath(text))
+            {
+                // Everything that isn't a note and isn't a URL used to be
+                // ASSUMED to be a path, so arbitrary text fell through to the
+                // containment check and came back wearing a message written for
+                // paths — a shell command staged as "That path is outside this
+                // project". Text that was never a path isn't a scope failure and
+                // must not be reported as one.
+                Failed?.Invoke(msg.PaneId,
+                    "That doesn't look like a file path or a URL. " +
+                    "Stage it as a note if you meant to keep the text.");
+                return false;
+            }
             else
             {
                 var rel = repoRoot == null ? null : BoardStore.ToRepoRelative(repoRoot, text);
-                if (rel == null || rel.Length == 0)
+                if (rel != null && rel.Length > 0)
                 {
-                    Failed?.Invoke(msg.PaneId,
-                        $"That path is outside this project, so the agent couldn't open it: {text}");
-                    return false;
+                    if (!System.IO.File.Exists(System.IO.Path.Combine(repoRoot!, rel)))
+                    {
+                        Failed?.Invoke(msg.PaneId, $"No such file: {rel}");
+                        return false;
+                    }
+                    node.Kind = "path";
+                    node.Ref = rel;
+                    node.Text = msg.Note ?? "";
                 }
-                if (!System.IO.File.Exists(System.IO.Path.Combine(repoRoot!, rel)))
+                else
                 {
-                    Failed?.Invoke(msg.PaneId, $"No such file: {rel}");
-                    return false;
+                    // Outside the project. Allowed only as a deliberate human
+                    // gesture: board.md is an agent's read list, so letting an
+                    // AGENT stage an external path would let it widen its own
+                    // read scope — the exact thing containment prevents. A
+                    // person referencing a file they already have open is a
+                    // different act, and refusing it was over-broad.
+                    if (!msg.IsUserStaged)
+                    {
+                        Failed?.Invoke(msg.PaneId,
+                            "That file is outside this project, so it can only be added by you, " +
+                            "not by an agent.");
+                        return false;
+                    }
+                    var full = BoardPaths.TryAbsolute(text, repoRoot);
+                    if (full == null || !System.IO.File.Exists(full))
+                    {
+                        Failed?.Invoke(msg.PaneId, $"No such file: {text}");
+                        return false;
+                    }
+                    node.Kind = "path";
+                    node.ExtRef = full;
+                    node.Text = msg.Note ?? "";
                 }
-                node.Kind = "path";
-                node.Ref = rel;
-                node.Text = msg.Note ?? "";
             }
             store.Doc.Nodes.Add(node);
             return true;
@@ -462,7 +497,16 @@ internal sealed class BoardController
 
         if (!string.IsNullOrWhiteSpace(text))
         {
-            OnAdd(new BoardAddMsg { PaneId = paneId, Kind = "auto", Text = text, X = x, Y = y });
+            // A paste is a person pressing Ctrl+V on a canvas they are looking
+            // at — the one gesture in this file that is unambiguously human. It
+            // is therefore the only path allowed to stage a file from outside
+            // the project; see BoardAddMsg.Origin for why that distinction is
+            // where the security boundary belongs.
+            OnAdd(new BoardAddMsg
+            {
+                PaneId = paneId, Kind = "auto", Text = text, X = x, Y = y,
+                Origin = "user",
+            });
             return;
         }
 

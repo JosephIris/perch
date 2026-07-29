@@ -111,7 +111,11 @@ export type OutMessage =
   /* Add something to a board. kind:"note" forces a typed note; kind:"auto" lets
    * the HOST classify the text (url / file path / note) — the page can't,
    * because deciding whether a path is inside the repo needs the repo root. */
-  | { type: "board.add"; paneId: string; kind: "note" | "auto"; text: string; note?: string; x: number; y: number }
+  /* `origin: "user"` marks a deliberate human gesture, and is the ONLY thing
+   * that lets a path outside the project be staged — board.md is an agent's
+   * read list, so an agent staging an external path would be widening its own
+   * read scope. Omitting the field is the safe default, on purpose. */
+  | { type: "board.add"; paneId: string; kind: "note" | "auto"; text: string; note?: string; x: number; y: number; origin?: "user" }
   /* A paste landed at (x, y). Deliberately carries NO payload: the host reads
    * the clipboard itself, because a multi-MB image as base64 over this bridge
    * is several transient copies of itself in a process that has already died of
@@ -337,6 +341,11 @@ export type BoardNodeView = {
    *  unknown kind from a newer host degrades to a plain card. */
   kind: string;
   ref?: string | null;
+  /** True when `ref` is an absolute path OUTSIDE the project, staged by a
+   *  deliberate human gesture. The host decides this — the page has no repo
+   *  root and so cannot answer "is this inside the project" itself. Used to
+   *  mark the card, so the board's read scope is legible at a glance. */
+  external?: boolean;
   text: string;
   /** Url nodes only: where the cached copy came from and when. A cached page
    *  with no provenance is one an agent shouldn't trust. */
@@ -585,6 +594,12 @@ export type InspectorDataMessage = {
   files: InspectorFileView[];
   added: number;
   deleted: number;
+  /** Page-side only — the host never sends this. Marks a payload the PAGE
+   *  synthesized because a request timed out, i.e. "not known yet" as opposed
+   *  to the host's "no agent here". Without the distinction a slow reply is
+   *  indistinguishable from an empty pane, and the rail flickers "No agent in
+   *  this pane" whenever the machine is busy. */
+  pending?: boolean;
 };
 
 /* Reply to settings.request. shells is the host's detected-shell list;
