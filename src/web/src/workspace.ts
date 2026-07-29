@@ -14,16 +14,17 @@
 // pane would float over the visible one — we tear those down on hide and let
 // them rebuild (page reload, no scrollback to lose) when the session returns.
 
-import type { PaneTreeView, SessionView } from "./bridge.js";
+import type { PaneTreeView, SessionView, BoardNodeView, BoardLinkView } from "./bridge.js";
 import { send } from "./bridge.js";
 import { Pane, DEFAULT_FONT_SIZE } from "./pane.js";
 import { openSettings } from "./settings.js";
 import { UrlPane } from "./url-pane.js";
+import { BoardPane } from "./board-pane.js";
 import { PANE_LEAVE_MS } from "./anim.js";
 import { showPaneChooser } from "./pane-chooser.js";
 import { treeSignature, computeEdge, type Edge } from "./layout.js";
 
-type LeafPane = Pane | UrlPane;
+type LeafPane = Pane | UrlPane | BoardPane;
 
 /** One mounted session: its container DIV (hidden when inactive), the panes
  *  keyed by id (reused across renders to preserve terminal state), and the
@@ -33,6 +34,10 @@ interface Stage {
   readonly container: HTMLElement;
   readonly panes: Map<string, LeafPane>;
   signature: string | null;
+  /** This session's board folder, "" when it has none. Kept on the stage
+   *  because a board leaf needs it and renderTree only sees leaves — the path
+   *  belongs to the session, not the leaf (see Session.BoardPath). */
+  boardPath: string;
 }
 
 export class Workspace {
@@ -189,7 +194,7 @@ export class Workspace {
       const container = document.createElement("div");
       container.className = "workspace__stage";
       this.root.appendChild(container);
-      stage = { sessionId: active.id, container, panes: new Map(), signature: null };
+      stage = { sessionId: active.id, container, panes: new Map(), signature: null, boardPath: "" };
       this.stages.set(active.id, stage);
     }
 
@@ -308,6 +313,11 @@ export class Workspace {
     activePaneId: string | null,
     forceFocus: boolean
   ) {
+    // The board path belongs to the session, so record it BEFORE anything
+    // reads it: renderTree needs it to construct a board leaf, and applyState
+    // pushes it into an existing one.
+    stage.boardPath = session.boardPath ?? "";
+
     // Cheap attribute/text updates to every existing pane — never re-mounts
     // DOM, so in-flight CSS transitions survive.
     this.applyState(stage, session.rootPane);
@@ -337,7 +347,11 @@ export class Workspace {
    *  instances of this stage. */
   private applyState(stage: Stage, node: PaneTreeView) {
     if (node.kind === "leaf") {
-      stage.panes.get(node.paneId)?.applyLeafView(node);
+      const pane = stage.panes.get(node.paneId);
+      pane?.applyLeafView(node);
+      // A board's path lives on the session, so it arrives here rather than in
+      // the leaf view. setBoardPath is a no-op when unchanged.
+      if (pane instanceof BoardPane) pane.setBoardPath(stage.boardPath);
       return;
     }
     for (const c of node.children) this.applyState(stage, c);
@@ -410,11 +424,14 @@ export class Workspace {
   /** Show the in-pane "new pane" chooser inside a freshly-split terminal
    *  pane, then ship the user's pick to the host (which has parked this pane's
    *  shell spawn until pane.chooser.choose answers). No-op if the pane is gone,
-   *  is a URL pane, or is already showing the chooser (a re-posted
+   *  isn't a terminal, or is already showing the chooser (a re-posted
    *  pane.chooser must not stack a second overlay). */
   showPaneChooser(opts: { paneId: string; cwd: string; agentType: string; defaultCwd: string }) {
     const pane = this.findPane(opts.paneId);
-    if (!pane || pane instanceof UrlPane) return;
+    // Test what this IS, not what it isn't. As an exclusion list ("not a
+    // UrlPane") every new leaf kind silently became eligible for the chooser
+    // and still compiled, because every kind has an .element.
+    if (!(pane instanceof Pane)) return;
     if (this.choosersOpen.has(opts.paneId)) return;
     this.choosersOpen.add(opts.paneId);
     void showPaneChooser(pane.element, opts).then((choice) => {
@@ -445,9 +462,57 @@ export class Workspace {
     }
   }
 
+  /** Host says this URL pane will never get a WebView2 — paint the reason into
+   *  its placeholder. Searches every stage: a rejected pane can live in a
+   *  session that isn't on screen right now. */
+  showUrlPaneError(paneId: string, message: string) {
+    for (const st of this.stages.values()) {
+      const pane = st.panes.get(paneId);
+      if (pane instanceof UrlPane) { pane.showError(message); return; }
+    }
+  }
+
+  /** Push a board's contents into its pane. Same all-stages search as above:
+   *  a board.state can land for a tab that isn't on screen. */
+  applyBoardState(paneId: string, nodes: BoardNodeView[], links: BoardLinkView[]) {
+    for (const st of this.stages.values()) {
+      const pane = st.panes.get(paneId);
+      if (pane instanceof BoardPane) { pane.applyBoardState(nodes, links); return; }
+    }
+  }
+
+  showBoardError(paneId: string, message: string) {
+    for (const st of this.stages.values()) {
+      const pane = st.panes.get(paneId);
+      if (pane instanceof BoardPane) { pane.showError(message); return; }
+    }
+  }
+
   getActivePane(): LeafPane | null {
     const st = this.activeSessionId ? this.stages.get(this.activeSessionId) : null;
     return this.activePaneId ? st?.panes.get(this.activePaneId) ?? null : null;
+  }
+
+  /** A paste happened somewhere in the page. Only a BOARD wants it — a
+   *  terminal's paste is xterm's, and taking it here would break Ctrl+V into a
+   *  shell. Returns true when a board consumed it.
+   *
+   *  Routed by ACTIVE PANE rather than by the event's target, because the
+   *  listener has to live on `document` (a non-focusable div never receives
+   *  `paste`) and so it sees every paste in the app. */
+  handlePaste(): boolean {
+    const pane = this.getActivePane();
+    if (!(pane instanceof BoardPane)) return false;
+    pane.handlePaste();
+    return true;
+  }
+
+  /** A board image preview arrived. */
+  applyBoardImage(paneId: string, nodeId: string, dataUrl: string) {
+    for (const st of this.stages.values()) {
+      const pane = st.panes.get(paneId);
+      if (pane instanceof BoardPane) { pane.applyImage(nodeId, dataUrl); return; }
+    }
   }
 
   private collectLeafIds(node: PaneTreeView, out: Set<string>) {
@@ -462,11 +527,15 @@ export class Workspace {
     if (node.kind === "leaf") {
       let pane = stage.panes.get(node.paneId);
       if (!pane) {
-        // URL leaves render as iframe-backed UrlPane; everything else is a
-        // terminal-backed Pane. The discriminator lives in the host's
-        // PaneTreeView (set when OnPaneSplit was passed a `url`).
+        // Three leaf kinds, discriminated by the host's PaneTreeView: a `url`
+        // makes a native-WebView2-backed UrlPane, `isBoard` makes a BoardPane
+        // onto the session's board, and everything else is a terminal. Both
+        // discriminators are part of treeSignature, so a leaf that changes kind
+        // remounts as the right class rather than keeping the old one.
         pane = node.url
           ? new UrlPane(node.paneId, node.name, node.url)
+          : node.isBoard
+          ? new BoardPane(node.paneId, node.name, stage.boardPath)
           : new Pane(node.paneId, node.name, this.defaultFontSize);
         stage.panes.set(node.paneId, pane);
         pane.attach(host);

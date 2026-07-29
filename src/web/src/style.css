@@ -1165,6 +1165,297 @@ button.pane__chip--ports:hover {
   overflow: hidden;
 }
 
+/* Board pane — the context staging surface (board-pane.ts). Same body geometry
+ * as the URL pane so the two read as siblings, but the surface is ours: an
+ * ordinary DOM canvas with absolutely-positioned cards, not a native child
+ * window. The dotted grid is the only decoration; it says "you can put things
+ * here" without drawing a single border. */
+.pane__boardslot {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  padding: var(--sp-4) var(--sp-8) var(--sp-8);
+  box-sizing: border-box;
+}
+.board {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border-radius: var(--r-card);
+  border: 1px solid var(--color-stroke);
+  background-color: var(--color-terminal-bg);
+  background-image: radial-gradient(
+    circle at 1px 1px, rgba(255, 255, 255, 0.055) 1px, transparent 0
+  );
+  background-size: 16px 16px;
+  overflow: hidden;
+}
+/* Empty / waiting / error states are centered — the one place the layout rules
+ * allow centering is an empty state. The grid is suppressed behind them so the
+ * message isn't competing with dots. */
+/* The zoom layer. Cards sit on this and are positioned in unscaled board
+ * coordinates; the transform is set inline. Origin top-left so board (0,0) is
+ * the surface's top-left at every scale. */
+.board__canvas {
+  position: absolute;
+  inset: 0;
+  transform-origin: 0 0;
+  /* No transition: zoom follows the wheel, and easing here reads as lag. */
+}
+
+/* Transient zoom readout. Zoom is otherwise invisible state — without this,
+ * "why is everything small" has nothing on screen to answer it. */
+.board__zoom {
+  position: absolute;
+  right: var(--sp-8);
+  bottom: var(--sp-8);
+  padding: 2px var(--sp-8);
+  border-radius: var(--r-input);
+  background: var(--color-layer-alt);
+  border: 1px solid var(--color-stroke);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 200ms cubic-bezier(0, 0, 0, 1);
+}
+.board__zoom--on { opacity: 1; }
+
+/* Drag empty space to pan. grab/grabbing is the universal signal for it. */
+.board { cursor: grab; }
+.board--panning { cursor: grabbing; }
+.board--message { cursor: default; }
+
+.board--message { background-image: none; }
+.board-message {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-8);
+  padding: var(--sp-24);
+  box-sizing: border-box;
+  text-align: center;
+}
+.board-message__title {
+  font-size: var(--type-body-size);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.board-message__body {
+  font-size: var(--type-caption-size);
+  color: var(--color-text-secondary);
+  max-width: 44ch;
+  line-height: var(--type-body-line);
+}
+.board-message__detail {
+  font-family: var(--font-mono);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;            /* keep the tail visible when it elides */
+  text-align: center;
+}
+.board-message__hint { display: flex; gap: var(--sp-4); margin-top: var(--sp-4); }
+.board-message__hint kbd {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  border: 1px solid var(--color-stroke-strong);
+  border-radius: var(--r-input);
+  padding: 1px 6px;
+}
+
+/* A thing on the board. Card, not chrome: hairline border, no shadow.
+ * Size comes from inline styles (the node's own w/h, or its kind default), so
+ * the only geometry here is the layout INSIDE the card. */
+.board-node {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  /* border-box so the inline width IS offsetWidth. There is no global
+   * box-sizing reset in this file, and without this the 1px border made every
+   * resize gesture creep the card 2px wider than the size it reported. */
+  box-sizing: border-box;
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--r-card);
+  background: var(--color-layer-alt);
+  overflow: hidden;
+  cursor: grab;
+  /* Text selection would fight the drag gesture on every card. */
+  user-select: none;
+}
+.board-node--dragging,
+.board-node--resizing {
+  cursor: grabbing;
+  border-color: var(--color-accent-soft);
+  /* No transition: a card must track the pointer exactly, and easing here
+   * reads as lag rather than polish. */
+}
+.board-node:hover { border-color: var(--color-stroke-strong); }
+.board-node__bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  padding: var(--sp-8) var(--sp-12) 0;
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  flex: 0 0 auto;
+}
+.board-node__spacer { flex: 1; }
+
+/* Remove. Hidden until the card is hovered, like the pane header's own
+ * actions — a board of ten cards should not wear ten ✕ marks at rest. */
+.board-node__remove {
+  border: 0;
+  background: transparent;
+  color: var(--color-text-tertiary);
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: var(--r-input);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 150ms cubic-bezier(0, 0, 0, 1);
+}
+.board-node:hover .board-node__remove { opacity: 1; }
+.board-node__remove:hover {
+  background: var(--color-subtle-tertiary);
+  color: var(--color-text-primary);
+}
+
+/* Resize grip, bottom-right. Two hairlines rather than a filled corner: the
+ * affordance should be findable without decorating every card. */
+.board-node__resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  opacity: 0;
+  transition: opacity 150ms cubic-bezier(0, 0, 0, 1);
+  background-image:
+    linear-gradient(135deg, transparent 46%, var(--color-text-tertiary) 46%, var(--color-text-tertiary) 54%, transparent 54%),
+    linear-gradient(135deg, transparent 70%, var(--color-text-tertiary) 70%, var(--color-text-tertiary) 78%, transparent 78%);
+}
+.board-node:hover .board-node__resize,
+.board-node--resizing .board-node__resize { opacity: 1; }
+
+/* The picture on an image card. It IS the content, so it gets the flexible
+ * space and everything else sits around it. object-fit: contain rather than
+ * cover — a screenshot cropped to a card's aspect ratio is usually the wrong
+ * part of the screenshot. */
+.board-node__shot {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: var(--sp-8) var(--sp-12) 0;
+  border-radius: var(--r-input);
+  border: 1px solid var(--color-stroke);
+  background: var(--color-terminal-bg);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.board-node__img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  display: block;
+}
+.board-node__shot--missing {
+  font-size: 11px;
+  color: var(--color-text-disabled);
+}
+.board-node__icon { flex: 0 0 12px; }
+.board-node__title {
+  padding: var(--sp-4) var(--sp-12) 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  word-break: break-word;
+  flex: 0 0 auto;
+}
+/* Body takes the slack on a text card and clips rather than overflowing, so a
+ * long note shrunk to a small card stays a card instead of spilling out. */
+.board-node__body {
+  padding: 2px var(--sp-12) var(--sp-8);
+  font-size: 11.5px;
+  color: var(--color-text-secondary);
+  line-height: var(--type-body-line);
+  word-break: break-word;
+  overflow: hidden;
+  min-height: 0;
+}
+.board-node--note .board-node__body,
+.board-node--path .board-node__body { flex: 1 1 auto; }
+/* The resolved artifact path. Monospace and quiet: it is the thing the agent
+ * will actually open, so it must be legible, but it is not the headline. */
+.board-node__ref {
+  flex: 0 0 auto;
+  margin: var(--sp-4) var(--sp-12) var(--sp-12);
+  padding: var(--sp-4) var(--sp-8);
+  border-radius: var(--r-input);
+  background: var(--color-subtle-secondary);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--color-text-tertiary);
+  word-break: break-all;
+}
+/* Per-kind tint on the icon only — one hue each, no filled cards. */
+.board-node--note  .board-node__icon { color: var(--color-caution); }
+.board-node--path  .board-node__icon { color: var(--color-accent); }
+.board-node--image .board-node__icon { color: var(--color-image); }
+.board-node--url   .board-node__icon { color: var(--color-cloud); }
+.board-node--note .board-node__body { color: var(--color-text-primary); font-size: 12px; }
+
+/* Refused-address state. The WebView2 that normally covers .pane__urlcontent
+ * was never created (WebUrlPolicy said no), so this is all the user would
+ * otherwise see — an empty dark rectangle. Centered because it IS an empty
+ * state, which is the one place the layout rules allow centering. */
+.urlpane-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-8);
+  width: 100%;
+  height: 100%;
+  padding: var(--sp-24);
+  box-sizing: border-box;
+  text-align: center;
+}
+.urlpane-error__title {
+  font-size: var(--type-body-size);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.urlpane-error__body {
+  font-size: var(--type-caption-size);
+  color: var(--color-text-secondary);
+  max-width: 42ch;
+  line-height: var(--type-body-line);
+}
+.urlpane-error__url {
+  font-family: var(--font-mono);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;      /* keep the tail (filename) visible when it elides */
+  text-align: center;
+}
+
 /* Pane footer — per-pane status bar (see pane-footer.ts). Bottom counterpart
  * to the header: liveness (what it's doing + work produced), not identity.
  * Status-bar discipline — transparent, a single 1px top hairline as the only

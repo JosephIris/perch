@@ -122,13 +122,11 @@ internal sealed class LocalLedger
     {
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
             var json = JsonSerializer.Serialize(
                 _byPort.Values.OrderBy(e => e.LastOwnedUnixMs).ToList(),
                 new JsonSerializerOptions { WriteIndented = true });
-            var tmp = _path + ".tmp";
-            File.WriteAllText(tmp, json);
-            File.Move(tmp, _path, overwrite: true);
+            // Write-then-replace; see AtomicFile.
+            AtomicFile.WriteAllText(_path, json);
         }
         catch (Exception ex) { Log.Error("LocalLedger.Save", ex); }
     }

@@ -120,7 +120,9 @@ internal static class StateProjection
                 {
                     id = s.Id.ToString("D"),
                     title = s.Title,
-                    paneCount = leaves.Length,
+                    // Boards excluded: this count answers "how much was running
+                    // in that tab", and a board is never running anything.
+                    paneCount = leaves.Count(p => !p.IsBoard),
                     resumableCount = leaves.Count(p => !string.IsNullOrEmpty(p.ClaudeSessionId)),
                     closedAtMs = s.ClosedAtUnixMs,
                 };
@@ -139,9 +141,12 @@ internal static class StateProjection
         var attentionPane = leaves.FirstOrDefault(p => p.AgentState == aggState)
                          ?? leaves.FirstOrDefault();
         var anyNotify = leaves.FirstOrDefault(p => p.HasNotification);
-        var paneCount = leaves.Length;
-        var waitingCount = leaves.Count(p => p.AgentState is AgentState.Waiting or AgentState.Permission);
-        var workingCount = leaves.Count(p => p.AgentState == AgentState.Working);
+        // "3 panes · 1 waiting" is a statement about work in flight, so a board
+        // — which never runs anything — is not one of the three.
+        var workLeaves = leaves.Where(p => !p.IsBoard).ToArray();
+        var paneCount = workLeaves.Length;
+        var waitingCount = workLeaves.Count(p => p.AgentState is AgentState.Waiting or AgentState.Permission);
+        var workingCount = workLeaves.Count(p => p.AgentState == AgentState.Working);
         // Panes sharing a cwd measure the SAME working tree (a split inside
         // one project), so summing their diff stats double-counted every
         // line. Within a cwd group keep the single largest measurement — a
@@ -175,6 +180,10 @@ internal static class StateProjection
              * it to offer "also delete the worktree folder" when closing — and
              * to say WHICH branch survives, since that's the reassuring part. */
             worktreeBranch = s.WorktreeBranch,
+            /* Absolute path to this tab's board folder, "" when it has none.
+             * The board leaf reads it from here rather than carrying its own
+             * copy, so there is exactly one place the path can be wrong. */
+            boardPath = s.BoardPath,
             rootPane = ProjectPane(s.Root),
             agentState = StateToString(aggState),
             activityDetail = attentionPane?.ActivityDetail ?? "",
@@ -240,6 +249,11 @@ internal static class StateProjection
                 // never auto-named from a prompt (placeholder / user-named).
                 nameFull = node.NamePrompt ?? "",
                 url = node.Url,
+                // Leaf kind, second discriminator after `url`. The board's PATH
+                // is not here — it belongs to the session (see Session.BoardPath)
+                // and is projected there, so a leaf only says "I am the window
+                // onto this tab's board".
+                isBoard = node.IsBoard,
                 colorIndex = node.ColorIndex,
                 // Per-pane state — shows up in the pane header so each
                 // pane's agent status is visible at a glance, no clicking

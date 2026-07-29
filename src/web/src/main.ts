@@ -260,6 +260,22 @@ onMessage((msg) => {
       // calls forceRefit on URL panes.
       workspace.nudgeUrlPanes();
       break;
+    case "ui.urlpane.error":
+      workspace.showUrlPaneError(msg.paneId, msg.message);
+      break;
+    case "board.state":
+      workspace.applyBoardState(msg.paneId, msg.nodes, msg.links);
+      break;
+    case "board.error":
+      workspace.showBoardError(msg.paneId, msg.message);
+      break;
+    case "board.image.data":
+      workspace.applyBoardImage(
+        msg.paneId,
+        msg.nodeId,
+        msg.data ? `data:${msg.mediaType};base64,${msg.data}` : ""
+      );
+      break;
     case "resume.prompt": {
       // One-time "reopen previous Claude sessions?" prompt. Until we answer,
       // the host holds the resumable panes' spawns, so a decision is required
@@ -431,6 +447,18 @@ send({ type: "ready" });
 
 // Hide native web panes while any full-viewport modal is up (airspace fix).
 initWebPaneSuppression();
+
+// Paste into a board. The listener has to be on `document` — a non-focusable
+// div never receives `paste` — so it sees every paste in the app and routes by
+// ACTIVE PANE. A terminal's paste stays xterm's; taking it here would break
+// Ctrl+V into a shell.
+//
+// Nothing suppresses Ctrl+V on the way here: AreBrowserAcceleratorKeysEnabled
+// = false explicitly does not affect clipboard keys, and the capture-phase
+// keydown handlers above all return before KeyV.
+document.addEventListener("paste", (ev) => {
+  if (workspace.handlePaste()) ev.preventDefault();
+});
 
 // ---- Font / cell diagnostic --------------------------------------------
 // Replaces the status sub-label with concrete, measurable values that

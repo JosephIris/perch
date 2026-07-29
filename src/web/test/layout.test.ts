@@ -76,6 +76,21 @@ test("treeSignature: url change on a leaf alters it (terminal pane ↔ URL pane 
   assert.notEqual(treeSignature(term), treeSignature(web));
 });
 
+test("treeSignature: a board leaf is distinct from a terminal and from a URL pane", () => {
+  // Each kind is a different class, so a leaf changing kind must remount.
+  const term = leaf("p1");
+  const web = leaf("p1", { url: "https://example.com" });
+  const board = leaf("p1", { isBoard: true });
+  const sigs = [term, web, board].map(treeSignature);
+  assert.equal(new Set(sigs).size, 3);
+});
+
+test("treeSignature: isBoard=false reads the same as a plain terminal leaf", () => {
+  // The host projects the flag on every leaf; an explicit false must not
+  // gratuitously differ from an absent one, or every state push would rebuild.
+  assert.equal(treeSignature(leaf("p1")), treeSignature(leaf("p1", { isBoard: false })));
+});
+
 test("computeEdge: centered box is 'center' (swap)", () => {
   assert.equal(computeEdge(0.5, 0.5), "center");
   assert.equal(computeEdge(0.3, 0.6), "center");   // still inside the ±0.22 box

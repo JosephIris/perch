@@ -59,6 +59,10 @@ export class Pane {
   private resizeFrame = 0;
   private lastCols = -1;
   private lastRows = -1;
+  /** Last cwd this pane's shell reported via OSC 7. "" until the first prompt
+   *  (or forever, in a shell that doesn't emit it) — the link provider treats
+   *  empty as "can't resolve relative paths" rather than guessing. */
+  private cwd = "";
   private observer?: ResizeObserver;
   private isActive = false;
   // Latest per-leaf view, kept so setActive() can re-evaluate focus-gated
@@ -184,7 +188,10 @@ export class Pane {
     // true) and routes clicks to our link-action menu instead of opening
     // a new window. Replaces @xterm/addon-web-links entirely.
     this.term.registerLinkProvider(
-      makeUrlLinkProvider(this.term, this.paneId)
+      // cwd is read lazily (a getter, not a snapshot) — the provider outlives
+      // any number of `cd`s, and a relative "out/report.html" must resolve
+      // against where the shell is NOW, not where it was at pane creation.
+      makeUrlLinkProvider(this.term, this.paneId, () => this.cwd)
     );
 
     // OSC 7 (cwd notification, file://hostname/path). PowerShell's prompt
@@ -193,7 +200,14 @@ export class Pane {
     // chip without the agent having to call `perch meta --branch`.
     this.term.parser.registerOscHandler(7, (data) => {
       const cwd = parseOsc7Cwd(data);
-      if (cwd) send({ type: "pane.cwd", paneId: this.paneId, cwd });
+      if (cwd) {
+        // Kept locally too: the link provider resolves relative .html paths in
+        // agent output ("design-loop/report.html") against it. Without a cwd
+        // those tokens stay un-linked rather than turning into a bogus
+        // absolute path.
+        this.cwd = cwd;
+        send({ type: "pane.cwd", paneId: this.paneId, cwd });
+      }
       return true;
     });
 
@@ -690,7 +704,11 @@ function injectUrlUnderlines(bytes: Uint8Array): Uint8Array {
 // dependency, and own decoration + activation behavior. Closures over the
 // pane's own Terminal so split panes each get their own provider.
 
-function makeUrlLinkProvider(term: Terminal, paneId: string): ILinkProvider {
+function makeUrlLinkProvider(
+  term: Terminal,
+  paneId: string,
+  getCwd: () => string
+): ILinkProvider {
   return {
     provideLinks(y: number, callback: (links: ILink[] | undefined) => void) {
       const buffer = term.buffer.active;
@@ -703,7 +721,11 @@ function makeUrlLinkProvider(term: Terminal, paneId: string): ILinkProvider {
         const end = start + lk.text.length;  // exclusive
         // Web URLs open as-is; a local HTML file token becomes a file:// URL
         // the host / webview can navigate to. Both flow through the same menu.
-        const menuUrl = lk.kind === "file" ? htmlFileToUrl(lk.text) : lk.text;
+        // A file token that can't be resolved to an absolute path (relative,
+        // and the pane never reported a cwd) yields null — skip it rather than
+        // underlining something that would open a blank pane.
+        const menuUrl = lk.kind === "file" ? htmlFileToUrl(lk.text, getCwd()) : lk.text;
+        if (!menuUrl) continue;
         out.push({
           range: { start: { x: start, y }, end: { x: end - 1, y } },
           text: lk.text,

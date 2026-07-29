@@ -268,6 +268,9 @@ public partial class MainWindow : FluentWindow
         _settings = Settings.Load();
         _store = SessionStore.Load();
         _projects = ProjectStore.Load();
+        // Before BuildRouter: the router registers a handler that reads it.
+        _boardCtrl = new BoardController(OwningSession, a => Dispatcher.BeginInvoke(a));
+        WireBoardController();
         _router = BuildRouter();
         _panes = new PaneManager(Dispatcher);
         _panes.Output += PostPaneOut;
@@ -326,9 +329,7 @@ public partial class MainWindow : FluentWindow
             // URL-pane controller owns the per-URL-pane WebView2 lifecycle.
             // Wired after WebView2 init so Web.TransformToAncestor returns
             // valid coords inside the controller.
-            _urlPaneCtrl = new UrlPaneController(this, Web);
-            _urlPaneCtrl.AutoTitleRequested += (paneId, title) =>
-                ApplyAutoTitle(paneId, title);
+            _urlPaneCtrl = NewUrlPaneController();
             // On every main-window size change (interactive drag,
             // maximize, restore, snap), tell the page to re-emit each URL
             // pane's rect. forceRefit() in url-pane.ts invalidates the
@@ -529,9 +530,48 @@ public partial class MainWindow : FluentWindow
         await InitWebViewAsync();
 
         // The controller captured the old control; rebind to the new one.
-        _urlPaneCtrl = new UrlPaneController(this, Web);
-        _urlPaneCtrl.AutoTitleRequested += (paneId, title) =>
-            ApplyAutoTitle(paneId, title);
+        _urlPaneCtrl = NewUrlPaneController();
+    }
+
+    /// Build a URL-pane controller bound to the current WebView2 and hook its
+    /// events. Called from Loaded and again after a browser-process crash
+    /// rebuilds the control — the wiring must match in both, so it lives here
+    /// rather than being copy-pasted at each site.
+    private UrlPaneController NewUrlPaneController()
+    {
+        var ctrl = new UrlPaneController(this, Web);
+        ctrl.AutoTitleRequested += (paneId, title) => ApplyAutoTitle(paneId, title);
+        ctrl.UrlPaneRejected += (paneId, url) => PostUrlPaneError(
+            paneId, "Perch can’t display this address. Only web pages and local .html files open in a pane.");
+        // Only file:// misses need this: for a web failure WebView2 renders its
+        // own (better) error page inside the pane, and overlaying ours on top of
+        // that would just hide it.
+        ctrl.UrlPaneFailed += (paneId, status) =>
+        {
+            if (ctrl.UrlOf(paneId)?.StartsWith("file:", StringComparison.OrdinalIgnoreCase) == true)
+                PostUrlPaneError(paneId, $"That file couldn’t be opened ({status}).");
+        };
+        return ctrl;
+    }
+
+    /// Tell the page a URL pane has no WebView2 behind it and why. Without this
+    /// the pane's placeholder just stays empty, which is indistinguishable from
+    /// a page that never finished loading.
+    private void PostUrlPaneError(Guid paneId, string message)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            try
+            {
+                Web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(new
+                {
+                    type = "ui.urlpane.error",
+                    paneId = paneId.ToString("D"),
+                    message,
+                }));
+            }
+            catch (Exception ex) { Log.Error("PostUrlPaneError", ex); }
+        });
     }
 
     /// The app URL, optionally telling the page to skip the WebGL renderer.
@@ -659,6 +699,14 @@ public partial class MainWindow : FluentWindow
         .Add<PaneProbeMsg>("pane.probe", OnPaneProbe)
         .Add<UrlPaneLayoutMsg>("urlpane.layout", m => _urlPaneCtrl?.OnLayout(m))
         .Add<PaneRef>("urlpane.dispose", m => _urlPaneCtrl?.OnDispose(m))
+        .Add<PaneRef>("board.request", m => _boardCtrl.OnRequest(m))
+        .Add<PaneRef>("board.new", OnBoardNew)
+        .Add<BoardAddMsg>("board.add", m => _boardCtrl.OnAdd(m))
+        .Add<BoardPasteMsg>("board.paste", OnBoardPaste)
+        .Add<BoardMoveMsg>("board.move", m => _boardCtrl.OnMove(m))
+        .Add<BoardResizeMsg>("board.resize", m => _boardCtrl.OnResize(m))
+        .Add<BoardNodeRefMsg>("board.remove", m => _boardCtrl.OnRemove(m))
+        .Add<BoardNodeRefMsg>("board.image", m => _boardCtrl.OnImage(m))
         .Add<UrlPaneVisibleMsg>("urlpane.visible", m => _urlPaneCtrl?.SetVisible(m.PaneId, m.Visible))
         .Add<WebPanesSuppressMsg>("ui.webpanes.suppress", m => _urlPaneCtrl?.SetSuppressed(m.Suppress))
         .Add<SessionNewMsg>("session.new", OnSessionNew)
@@ -1097,6 +1145,11 @@ public partial class MainWindow : FluentWindow
             // been reaped from %TEMP%, or this is a restored/respawned pane
             // whose Model was persisted but whose file is gone). Empty clears it.
             ClaudeModelState.Write(pane.Id, pane.Model);
+            // Board marker for this pane, written BEFORE the shell starts so an
+            // agent's very first prompt already knows about the tab's board.
+            // Same %TEMP% mechanism as the model state above, for the same
+            // reason: the per-pane pipe only runs the other way.
+            _boardCtrl.PublishMarkers(sess);
             // Shell.BuildStartupCommandLine injects PERCH_PIPE / PERCH_PANE_ID
             // env vars per-pane so agents inside the shell can call back
             // into our IPC layer (stage 4 reactivates that pipe).
@@ -1448,7 +1501,7 @@ public partial class MainWindow : FluentWindow
     {
         var pane = FindPane(sess, paneId);
         if (pane == null) return;
-        if (pane.IsWebView) return;        // URL panes name from <title>
+        if (!pane.IsTerminal) return;      // URL panes name from <title>; boards from their slug
         if (pane.IsUserNamed) return;      // user committed a name — never touch
         if (!pane.AllowAutoName) return;   // already named this session
         var name = CleanPaneTitle(msg.Text);
@@ -1826,7 +1879,7 @@ public partial class MainWindow : FluentWindow
     {
         var pane = FindPane(sess, paneId);
         if (pane == null) return;
-        if (pane.IsWebView) return;
+        if (!pane.IsTerminal) return;
         if (pane.IsUserNamed) return;
         if (string.Equals(msg.Source, "resume", StringComparison.OrdinalIgnoreCase)) return;
         if (pane.AllowAutoName) return;    // already armed; nothing to do
@@ -3193,14 +3246,84 @@ public partial class MainWindow : FluentWindow
         // silently opening a default shell. Record the source context now;
         // OnPaneResize posts the chooser when the fresh pane first measures and
         // parks its spawn until pane.chooser.choose answers.
-        if (offerChooser && string.IsNullOrEmpty(url) && srcPane != null)
+        // The chooser is armed for TERMINAL leaves only. It has to be, twice
+        // over: a board leaf never sends pane.resize, so PostPaneChooser would
+        // never fire and the _pendingChoosers entry would sit there until the
+        // pane closed; and splitting FROM a board has no cwd to offer, so the
+        // fallback below covers that case rather than silently opening a shell
+        // in the default folder.
+        if (offerChooser && newPane.IsTerminal && srcPane != null)
         {
-            var srcCwd = FirstExistingDir(srcPane.Cwd);
+            // A board has no cwd of its own, so fall back to the session's when
+            // the split came from one.
+            var srcCwd = FirstExistingDir(srcPane.Cwd, sess.Cwd);
             if (srcCwd != null)
                 _pendingChoosers[newPane.Id] = (srcCwd, srcPane.AgentType);
         }
         AutoName(sess.Root);
         _activePaneId = newPane.Id;
+        _store.Save();
+        PushState();
+    }
+
+    /// Split `msg.PaneId` and make the new leaf a BOARD — the tab's context
+    /// staging surface. Creates the board folder on first use.
+    ///
+    /// Separate from OnPaneSplit rather than another optional field on it,
+    /// because the two do different things: a split makes a pane, this makes a
+    /// pane AND (maybe) a folder on disk, and it needs a repo to put it in.
+    ///
+    /// One board per tab. Asking for a second just opens another window onto
+    /// the same one, which is why the folder creation is conditional.
+    private void OnBoardNew(PaneRef msg)
+    {
+        var sess = OwningSession(msg.PaneId);
+        if (sess == null) return;
+
+        if (string.IsNullOrEmpty(sess.BoardPath))
+        {
+            // The board lives in the repo the tab is working in, so its paths
+            // are repo-relative and an agent can open them directly. Fall back
+            // through the same chain a pane spawn uses.
+            var srcPane = AllLeaves(sess.Root).FirstOrDefault(p => p.Id == msg.PaneId);
+            var root = FirstExistingDir(srcPane?.Cwd, sess.Cwd) ?? _settings.ResolveDefaultCwd();
+            if (string.IsNullOrEmpty(root))
+            {
+                PostToast("Couldn't work out where to put the board", "error", msg.PaneId);
+                return;
+            }
+            try
+            {
+                var store = BoardStore.Create(root, sess.Title);
+                sess.BoardPath = store.Dir;
+                Log.Info("Board.create", $"session={sess.Id:N} path={store.Dir}");
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Board.create", ex);
+                PostToast("Couldn't create the board folder", "error", msg.PaneId);
+                return;
+            }
+        }
+
+        var boardPane = new PaneNode
+        {
+            IsBoard = true,
+            // Named from the board, not AutoName's "pane-N" — a board's identity
+            // is its subject. IsAutoName stays true so it follows a retitle.
+            Name = System.IO.Path.GetFileName(sess.BoardPath),
+            ColorIndex = _store.PickUnusedColor(),
+        };
+        var replacement = SplitImpl(sess.Root, msg.PaneId, SplitOrientation.Vertical, boardPane);
+        if (replacement == null) return;
+        sess.Root = replacement;
+        AutoName(sess.Root);
+        _activePaneId = boardPane.Id;
+        // Tell every agent pane in this tab where the board is. Written now
+        // rather than at spawn so an ALREADY-RUNNING claude picks it up on its
+        // next prompt — which is the whole reason the hook is UserPromptSubmit
+        // and not SessionStart.
+        _boardCtrl.PublishMarkers(sess);
         _store.Save();
         PushState();
     }
@@ -3296,13 +3419,22 @@ public partial class MainWindow : FluentWindow
         if (string.IsNullOrEmpty(url)) return;
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return;
 
-        var isWeb = uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps;
-        var isHtmlFile = uri.Scheme == Uri.UriSchemeFile
-            && (uri.LocalPath.EndsWith(".html", StringComparison.OrdinalIgnoreCase)
-                || uri.LocalPath.EndsWith(".htm", StringComparison.OrdinalIgnoreCase));
-        if (!isWeb && !isHtmlFile)
+        // Same rule as the browser pane — see WebUrlPolicy.
+        var kind = WebUrlPolicy.Classify(url);
+        var isHtmlFile = kind == WebUrlKind.HtmlFile;
+        if (kind == WebUrlKind.Rejected)
         {
             Log.Info("url.open.rejected", $"scheme={uri.Scheme}");
+            PostToast("Can't open that address", "error", Guid.Empty);
+            return;
+        }
+        // A local file that isn't there any more (or was never resolvable) fails
+        // inside Process.Start with a Win32Exception the user never sees. Check
+        // first so the failure is a toast, not a log line.
+        if (isHtmlFile && !System.IO.File.Exists(uri.LocalPath))
+        {
+            Log.Info("url.open.missing", $"path={uri.LocalPath}");
+            PostToast($"File not found: {System.IO.Path.GetFileName(uri.LocalPath)}", "error", Guid.Empty);
             return;
         }
         try
@@ -3318,6 +3450,7 @@ public partial class MainWindow : FluentWindow
         catch (Exception ex)
         {
             Log.Error("url.open", ex);
+            PostToast("Couldn't open that link", "error", Guid.Empty);
         }
     }
 
@@ -3486,6 +3619,125 @@ public partial class MainWindow : FluentWindow
 
     // Git helpers moved to GitProc.cs — pure static, no MainWindow state.
 
+    /// Boards (the context staging surface). Constructed eagerly, unlike
+    /// _urlPaneCtrl, because it needs no WebView2 environment — it only reads
+    /// and writes files.
+    private readonly BoardController _boardCtrl;
+
+    /// Wire the board controller's outbound events to the page. Called from the
+    /// constructor; kept separate so the field initializer stays a one-liner.
+    private void WireBoardController()
+    {
+        _boardCtrl.StateReady += (paneId, doc) => PostBoardState(paneId, doc);
+        _boardCtrl.Failed += (paneId, message) => PostBoardError(paneId, message);
+        _boardCtrl.ImageReady += (paneId, nodeId, data) => PostBoardImage(paneId, nodeId, data);
+    }
+
+    private void PostBoardState(Guid paneId, BoardDoc doc)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            try
+            {
+                Web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(new
+                {
+                    type = "board.state",
+                    paneId = paneId.ToString("D"),
+                    title = doc.Title,
+                    nodes = doc.Nodes.Select(n => new
+                    {
+                        id = n.Id,
+                        kind = n.Kind,
+                        // Repo-relative, exactly as it appears in board.md.
+                        @ref = n.Ref,
+                        text = n.Text,
+                        source = n.Source,
+                        fetchedUtc = n.FetchedUtc,
+                        x = n.X,
+                        y = n.Y,
+                        // 0 means "use the kind's default size" — an un-resized
+                        // node stores nothing, so defaults stay retunable.
+                        w = n.W,
+                        h = n.H,
+                    }).ToArray(),
+                    links = doc.Links.Select(l => new { from = l.From, to = l.To, label = l.Label }).ToArray(),
+                }));
+            }
+            catch (Exception ex) { Log.Error("PostBoardState", ex); }
+        });
+    }
+
+    /// A paste landed on a board. Reading the clipboard has to happen HERE:
+    /// it's STA-only and this is the UI thread, which is the same place and for
+    /// the same reason SyncClipboardToWeb reads clipboard text. The controller
+    /// takes the already-read bytes so it stays free of thread affinity.
+    ///
+    /// An image beats text when both are present — copying a screenshot often
+    /// leaves a path or some HTML on the clipboard too, and the picture is what
+    /// the user meant.
+    private void OnBoardPaste(BoardPasteMsg msg)
+    {
+        byte[]? png = null;
+        string? text = null;
+        try
+        {
+            if (System.Windows.Clipboard.ContainsImage())
+            {
+                var src = System.Windows.Clipboard.GetImage();
+                if (src != null) png = ImageThumb.EncodePng(src);
+            }
+            if (png == null && System.Windows.Clipboard.ContainsText())
+                text = System.Windows.Clipboard.GetText();
+        }
+        catch (Exception ex)
+        {
+            // The clipboard can be locked by another app mid-read. That's a
+            // "try again", not a crash.
+            Log.Error("Board.paste.clipboard", ex);
+            PostBoardError(msg.PaneId, "Couldn't read the clipboard just then. Try again.");
+            return;
+        }
+        _boardCtrl.OnPaste(msg.PaneId, png, text, msg.X, msg.Y);
+    }
+
+    private void PostBoardImage(Guid paneId, string nodeId, string? data)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            try
+            {
+                Web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(new
+                {
+                    type = "board.image.data",
+                    paneId = paneId.ToString("D"),
+                    nodeId,
+                    // JPEG preview, capped long edge — see ImageThumb. Null when
+                    // the file is gone, so the card can say so.
+                    mediaType = data == null ? "" : "image/jpeg",
+                    data = data ?? "",
+                }));
+            }
+            catch (Exception ex) { Log.Error("PostBoardImage", ex); }
+        });
+    }
+
+    private void PostBoardError(Guid paneId, string message)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            try
+            {
+                Web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(new
+                {
+                    type = "board.error",
+                    paneId = paneId.ToString("D"),
+                    message,
+                }));
+            }
+            catch (Exception ex) { Log.Error("PostBoardError", ex); }
+        });
+    }
+
     private UrlPaneController? _urlPaneCtrl;
 
     // Win32 message constants kept here for future use. We previously
@@ -3541,6 +3793,9 @@ public partial class MainWindow : FluentWindow
         // still showing the chooser doesn't leak into the dicts.
         _pendingChoosers.Remove(id);
         _deferredSpawns.Remove(id);
+        // And its board marker, so a temp file left behind can't point a future
+        // pane at a board that was never its own.
+        BoardController.ClearMarker(id);
         var sess = OwningSession(id);
         if (sess == null) return;
         // Closing the only leaf in a session = close the session. The worktree is
@@ -3852,6 +4107,12 @@ public partial class MainWindow : FluentWindow
                     var url = root.TryGetProperty("url", out var uu) ? uu.GetString() : null;
                     OnPaneSplit(new PaneSplitMsg { PaneId = ap, Dir = dir, Url = url }, offerChooser: false);
                 }
+                break;
+            case "board.new-active":
+                // Board equivalent of pane.split-active, so the harness can
+                // exercise the board lifecycle without a click. Same handler
+                // the header button reaches, targeting the active pane.
+                if (_activePaneId is Guid bap) OnBoardNew(new PaneRef { PaneId = bap });
                 break;
             case "pane.close-active":
                 if (_activePaneId is Guid acp)

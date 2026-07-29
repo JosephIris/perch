@@ -122,15 +122,12 @@ internal sealed class CloudLedger
     {
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
             var json = JsonSerializer.Serialize(
                 _bySession.Values.OrderBy(e => e.FirstSeenUnixMs).ToList(),
                 new JsonSerializerOptions { WriteIndented = true });
             // Write-then-replace, so a crash mid-write can't leave a truncated
-            // file that fails to parse on next launch.
-            var tmp = _path + ".tmp";
-            File.WriteAllText(tmp, json);
-            File.Move(tmp, _path, overwrite: true);
+            // file that fails to parse on next launch. See AtomicFile.
+            AtomicFile.WriteAllText(_path, json);
         }
         catch (Exception ex) { Log.Error("CloudLedger.Save", ex); }
     }

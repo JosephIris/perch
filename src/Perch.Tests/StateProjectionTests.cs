@@ -196,6 +196,59 @@ public class StateProjectionTests
         Assert.Equal(3, el.GetProperty("colorIndex").GetInt32());
     }
 
+    /// The leaf-kind discriminators. Nothing else pins the host→page direction —
+    /// the C# side is an anonymous object and the TS side is a hand-maintained
+    /// type — so drift here is otherwise silent, and a missing discriminator
+    /// means the page builds the wrong pane class.
+    [Fact]
+    public void ProjectPane_LeafCarriesItsKindDiscriminators()
+    {
+        var term = JsonSerializer.SerializeToElement(StateProjection.ProjectPane(new PaneNode()));
+        Assert.True(term.TryGetProperty("url", out var u) && u.ValueKind == JsonValueKind.Null);
+        Assert.False(term.GetProperty("isBoard").GetBoolean());
+
+        var web = JsonSerializer.SerializeToElement(
+            StateProjection.ProjectPane(new PaneNode { Url = "https://example.com" }));
+        Assert.Equal("https://example.com", web.GetProperty("url").GetString());
+        Assert.False(web.GetProperty("isBoard").GetBoolean());
+
+        var board = JsonSerializer.SerializeToElement(
+            StateProjection.ProjectPane(new PaneNode { IsBoard = true }));
+        Assert.True(board.GetProperty("isBoard").GetBoolean());
+        // The board's PATH is a session field, never a leaf one — one place to
+        // be wrong instead of two.
+        Assert.False(board.TryGetProperty("boardPath", out _));
+    }
+
+    [Fact]
+    public void ProjectSession_CarriesTheBoardPathAndBoardsDoNotCountAsPanes()
+    {
+        var sess = new Session { Title = "login bug", BoardPath = @"C:\dev\perch\.perch\boards\login-bug" };
+        sess.Root = new PaneNode
+        {
+            Split = SplitOrientation.Vertical,
+            Children =
+            {
+                new PaneNode { Name = "auth-refactor" },
+                new PaneNode { Name = "tests" },
+                new PaneNode { Name = "login-bug", IsBoard = true },
+            },
+        };
+        var el = JsonSerializer.SerializeToElement(StateProjection.ProjectSession(sess));
+
+        Assert.Equal(@"C:\dev\perch\.perch\boards\login-bug", el.GetProperty("boardPath").GetString());
+        // "3 panes · 1 waiting" is a claim about work in flight; a board runs
+        // nothing, so two terminals plus a board is two panes.
+        Assert.Equal(2, el.GetProperty("paneCount").GetInt32());
+    }
+
+    [Fact]
+    public void ProjectSession_NoBoardProjectsAnEmptyPathNotNull()
+    {
+        var el = JsonSerializer.SerializeToElement(StateProjection.ProjectSession(new Session()));
+        Assert.Equal("", el.GetProperty("boardPath").GetString());
+    }
+
     [Fact]
     public void ProjectPane_SplitCarriesOrientationAndChildren()
     {

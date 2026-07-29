@@ -31,6 +31,12 @@ internal sealed class UrlPaneHost
 
     public event Action<string>? DocumentTitleChanged;
 
+    /// Navigation finished unsuccessfully (DNS failure, connection refused, a
+    /// file:// path that isn't there). WebView2 paints its own error page for
+    /// most of these, but a file:// miss renders as an empty document — the
+    /// blank pane again — so the controller forwards this to the page.
+    public event Action<string>? NavigationFailed;
+
     public UrlPaneHost(CoreWebView2Environment env, IntPtr parentHwnd, string url, Rectangle bounds)
     {
         _parentHwnd = parentHwnd;
@@ -58,6 +64,20 @@ internal sealed class UrlPaneHost
             {
                 var t = Controller.CoreWebView2.DocumentTitle;
                 if (!string.IsNullOrWhiteSpace(t)) DocumentTitleChanged?.Invoke(t);
+            };
+            // Navigation OUTCOME. Without this a pane that loaded and a pane
+            // that showed nothing logged exactly the same thing, so "it opened
+            // blank" was undiagnosable after the fact and untestable from a
+            // script (screenshots can't see a WebView2 — see CLAUDE.md's
+            // capture caveats). scripts/test-urlpane-open.ps1 asserts on it.
+            Controller.CoreWebView2.NavigationCompleted += (_, e) =>
+            {
+                if (e.IsSuccess) Log.Info("UrlPaneHost.nav.ok", CurrentUrl);
+                else
+                {
+                    Log.Info("UrlPaneHost.nav.fail", $"status={e.WebErrorStatus} url={CurrentUrl}");
+                    NavigationFailed?.Invoke(e.WebErrorStatus.ToString());
+                }
             };
             Controller.CoreWebView2.Navigate(url);
 

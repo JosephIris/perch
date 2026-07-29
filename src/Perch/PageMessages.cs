@@ -170,6 +170,61 @@ internal sealed record UrlPaneVisibleMsg
     public required bool Visible { get; init; }
 }
 
+/// Add something to a board. `Kind` is "note" to force a typed note, or "auto"
+/// to let the host classify the text (a URL, a file path, or a note) — the page
+/// can't classify it itself, because deciding whether a path is inside the repo
+/// needs the repo root.
+internal sealed record BoardAddMsg
+{
+    public required Guid PaneId { get; init; }
+    public required string Kind { get; init; }
+    public required string Text { get; init; }
+    /// Optional caption to sit under a file/reference card.
+    public string? Note { get; init; }
+    public double X { get; init; }
+    public double Y { get; init; }
+}
+
+/// A paste landed on a board at (X, Y). Carries NO payload — the host reads the
+/// clipboard itself, because a multi-megabyte image as base64 over the page
+/// bridge is several transient copies of itself.
+internal sealed record BoardPasteMsg
+{
+    public required Guid PaneId { get; init; }
+    public double X { get; init; }
+    public double Y { get; init; }
+}
+
+/// A node identity: used by board.remove and board.image.
+internal sealed record BoardNodeRefMsg
+{
+    public required Guid PaneId { get; init; }
+    public required string NodeId { get; init; }
+}
+
+/// Drag a card. `Final` false is the continuous part of the gesture: the host
+/// updates its model but does NOT write board.md or echo state back. Same
+/// distinction the split-gutter drag makes, for the same reason — otherwise one
+/// drag rewrites the file hundreds of times.
+internal sealed record BoardMoveMsg
+{
+    public required Guid PaneId { get; init; }
+    public required string NodeId { get; init; }
+    public double X { get; init; }
+    public double Y { get; init; }
+    public bool Final { get; init; } = true;
+}
+
+/// Resize a card. Same Final semantics as BoardMoveMsg.
+internal sealed record BoardResizeMsg
+{
+    public required Guid PaneId { get; init; }
+    public required string NodeId { get; init; }
+    public double W { get; init; }
+    public double H { get; init; }
+    public bool Final { get; init; } = true;
+}
+
 internal sealed record SessionNewMsg
 {
     public string? Shell { get; init; }

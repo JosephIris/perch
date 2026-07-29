@@ -2,16 +2,27 @@
 // UrlPane is a fixed-URL WebView2 (no address bar), so the address is supplied
 // at creation time — here. `normalizeUrl` is exported and pure for testing.
 
-/** Normalize a user-typed address into a navigable URL, or null if it isn't
- *  one. Rules:
+import { canOpenInPane } from "./web-url.js";
+
+/** Normalize a user-typed address into a URL a browser pane can actually
+ *  display, or null if it isn't one. Rules:
  *    - Windows drive path (C:\…) → file:///C:/…, UNC (\\host\…) → file://host/…
- *    - a real scheme (http/https/file/about/ftp, or any `scheme://…`) passes
- *      through untouched
+ *    - a real scheme passes through untouched
  *    - a bare host/path gets a scheme: http:// for localhost / loopback IPs
  *      (dev servers are http), https:// otherwise
  *    - internal whitespace, or a bare word with no dot and no :port, → null so
- *      we never open a webview pointed at garbage. */
+ *      we never open a webview pointed at garbage
+ *    - FINALLY, whatever survives is checked against canOpenInPane. Every
+ *      caller of this function creates a URL pane, and a pane the host refuses
+ *      renders as an empty rectangle — so "about:blank", "ftp://…", or a
+ *      C:\tools\setup.exe must fail HERE, where the field can shake, rather
+ *      than opening a pane that silently never paints. */
 export function normalizeUrl(input: string): string | null {
+  const url = normalizeRaw(input);
+  return url && canOpenInPane(url) ? url : null;
+}
+
+function normalizeRaw(input: string): string | null {
   const s = input.trim();
   if (!s) return null;
 
@@ -20,10 +31,14 @@ export function normalizeUrl(input: string): string | null {
   // Windows drive path C:\Users\… → file:///C:/Users/…
   if (/^[a-zA-Z]:[\\/]/.test(s)) return "file:///" + s.replace(/\\/g, "/");
 
-  // Already a real scheme.
-  if (/^(https?|file|about|ftp):/i.test(s) || /^[a-z][a-z0-9+.-]*:\/\//i.test(s)) {
-    return s;
-  }
+  // Already carries a scheme — hand it back verbatim and let canOpenInPane
+  // rule on it. The negative lookahead keeps "localhost:3000" (and any
+  // "host:port") from reading as a scheme, since a port is always digits.
+  // Without this branch catching schemeless-authority forms like
+  // "mailto:someone@example.com", the bare-host path below prefixed it into
+  // "https://mailto:someone@example.com" — a URL that parses fine (mailto:… as
+  // userinfo) and opens a pane on the wrong host entirely.
+  if (/^[a-z][a-z0-9+.-]*:(?![0-9])/i.test(s)) return s;
 
   // Bare host/path from here — no internal whitespace.
   if (/\s/.test(s)) return null;

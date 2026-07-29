@@ -53,6 +53,20 @@ internal sealed class Session : INotifyPropertyChanged
     public string WorktreeRepo { get; set; } = "";
     public string WorktreeBranch { get; set; } = "";
 
+    /// Absolute path to this tab's board folder (&lt;repo&gt;/.perch/boards/&lt;slug&gt;),
+    /// or empty when the tab has no board. One board per tab.
+    ///
+    /// Scoped to the SESSION rather than to a pane pairing because pane
+    /// adjacency is not stable (see PaneNode.IsBoard), and because the agent
+    /// handoff has to be keyed by each TERMINAL pane's id — PERCH_PANE_ID is
+    /// the terminal's, not the board's — so ownership could never have lived on
+    /// the board leaf. Every agent pane in the tab sees the same board.
+    ///
+    /// Persisted, and absolute: a tab's worktree can move, and the board is
+    /// reopened by path on restore. A path that no longer exists is surfaced in
+    /// the pane rather than silently rendering an empty grid.
+    public string BoardPath { get; set; } = "";
+
     /// Unix-ms when the session was closed and moved to the store's
     /// "Recently closed" list. 0 for a live session. Persisted so the list
     /// (and its "closed 5m ago" ordering) survives a full app restart.
@@ -249,6 +263,19 @@ internal sealed class PaneNode
     /// webview panes across restarts.
     public string? Url { get; set; }
 
+    /// When true on a leaf, the pane renders the session's BOARD — the context
+    /// staging surface — instead of a terminal or a webview.
+    ///
+    /// Deliberately a bare flag with no path on it. The board itself belongs to
+    /// the SESSION (Session.BoardPath), not to this leaf, because pane
+    /// adjacency is not stable: SplitImpl flattens same-orientation splits,
+    /// MoveWithinParent walks a pane past its neighbour, a header drag can
+    /// relocate either leaf, and CloseAndCollapse reparents survivors. A board
+    /// bound to "the pane next to me" would come unstuck on the first
+    /// restructure. This flag says only "this leaf is the window onto the
+    /// session's board".
+    public bool IsBoard { get; set; }
+
     /// Last working directory this leaf's shell reported via OSC 7. PERSISTED
     /// (not [JsonIgnore]) so a restored/respawned pane reopens in the same
     /// directory the user had cd'd to — previously cwd lived only at the
@@ -422,6 +449,12 @@ internal sealed class PaneNode
 
     [JsonIgnore] public bool IsLeaf => Split == null;
     [JsonIgnore] public bool IsWebView => IsLeaf && !string.IsNullOrEmpty(Url);
+    [JsonIgnore] public bool IsBoardPane => IsLeaf && IsBoard;
+    /// A leaf that runs a shell. The two non-terminal kinds are the exclusions,
+    /// so anything that spawns, resumes, names-from-agent-output, or counts as
+    /// "a pane doing work" should ask for this rather than testing !IsWebView
+    /// and forgetting boards exist.
+    [JsonIgnore] public bool IsTerminal => IsLeaf && !IsWebView && !IsBoard;
     [JsonIgnore] public bool HasNotification => !string.IsNullOrEmpty(NotificationText);
 }
 

@@ -19,6 +19,14 @@ import { join } from "node:path";
 
 // Keep sorted. Must match MainWindow.BuildRouter's registrations 1:1.
 const EXPECTED_TYPES = [
+  "board.add",
+  "board.image",
+  "board.move",
+  "board.new",
+  "board.paste",
+  "board.remove",
+  "board.request",
+  "board.resize",
   "cloud.delete",
   "cloud.deleteOrphans",
   "cloud.panel",

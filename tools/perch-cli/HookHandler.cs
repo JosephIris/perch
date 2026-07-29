@@ -107,6 +107,8 @@ internal static class HookHandler
                 var promptText = StringFrom(root, "prompt", maxLen: 400);
                 if (!string.IsNullOrWhiteSpace(promptText))
                     Send(pipeName, new { type = "title", text = promptText });
+                // If this pane's tab has a board, point the agent at it.
+                EmitBoardContext();
                 break;
 
             case "notification":
@@ -314,6 +316,68 @@ internal static class HookHandler
             Console.Error.WriteLine($"perch hooks: gcloud stamp failed: {ex.Message}");
         }
         return 0;
+    }
+
+    /// Tell the agent its tab has a reference board, by printing Claude Code's
+    /// `additionalContext` on stdout.
+    ///
+    /// ## Why UserPromptSubmit and not SessionStart
+    ///
+    /// SessionStart fires once. A board created (or first filled in) AFTER
+    /// `claude` started would never reach the agent until /clear — the same
+    /// limitation ClaudeModelState has, which the app works around by typing
+    /// into the PTY behind the setup overlay. Per-turn injection is what makes
+    /// "keep throwing things on the board while it works" actually true, which
+    /// is the entire point of the feature.
+    ///
+    /// ## Why only the PATH, never the contents
+    ///
+    /// One short line, so the per-turn token cost is negligible, and nothing
+    /// can go stale: the board behind the path is always current, whereas
+    /// injected contents would be a snapshot of whenever the turn started.
+    ///
+    /// ## The rules this code lives under
+    ///
+    /// It runs inside EVERY Claude pane, synchronously, on the agent's critical
+    /// path, under a timeout, and its stderr goes to the PTY rather than to
+    /// errors.log. So: catch everything, never throw, print nothing at all when
+    /// there is no board, and keep every diagnostic on stderr — stray stdout
+    /// from this hook becomes context.
+    private static void EmitBoardContext()
+    {
+        try
+        {
+            var paneId = Environment.GetEnvironmentVariable("PERCH_PANE_ID");
+            if (string.IsNullOrWhiteSpace(paneId)) return;
+
+            var marker = Path.Combine(Path.GetTempPath(), $"perch-board-{paneId}.txt");
+            if (!File.Exists(marker)) return;
+
+            var dir = File.ReadAllText(marker).Trim();
+            if (dir.Length == 0 || !Directory.Exists(dir)) return;
+
+            var index = Path.Combine(dir, "board.md");
+            if (!File.Exists(index)) return;
+
+            Console.Out.Write(JsonSerializer.Serialize(new
+            {
+                hookSpecificOutput = new
+                {
+                    hookEventName = "UserPromptSubmit",
+                    additionalContext =
+                        $"This tab has a reference board at {index} — context the user collected for this task "
+                        + "(files, screenshots, cached pages, notes). Read it when you need background, and "
+                        + "re-read it later if you need to: the user adds to it while you work. "
+                        + "Paths inside it are relative to the repository root.",
+                },
+            }, JsonOpts));
+            Console.Out.Flush();
+        }
+        catch (Exception ex)
+        {
+            // Never cost the user a turn over a board hint.
+            Console.Error.WriteLine($"perch hooks: board context failed: {ex.Message}");
+        }
     }
 
     /// Re-materialize a JsonElement as something JsonSerializer will round-trip

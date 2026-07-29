@@ -361,34 +361,14 @@ internal sealed class TranscriptReader
         }
     }
 
-    /// Downscale to ≤320px long edge and re-encode as JPEG (q80). 320 covers
-    /// the rail's ~250px content width at 125% DPI; JPEG because thumbnails of
-    /// screenshots compress ~10x better than PNG and the quality loss is
-    /// invisible at that size. Null on any decode failure → caller falls back
-    /// to shipping the original bytes rather than no image.
+    /// Downscale to <=320px long edge and re-encode as JPEG (q80). 320 covers
+    /// the rail's ~250px content width at 125% DPI. Null on any decode failure
+    /// -> the caller falls back to shipping the original bytes rather than no
+    /// image. Shares its encoder with board node previews (see ImageThumb) so
+    /// the two can't drift on sizing, quality, or failure behaviour.
     private static string? ThumbBase64(string base64)
     {
-        try
-        {
-            var bytes = Convert.FromBase64String(base64);
-            using var ms = new MemoryStream(bytes);
-            var frame = BitmapFrame.Create(ms, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
-            BitmapSource src = frame;
-
-            var scale = 320.0 / Math.Max(frame.PixelWidth, frame.PixelHeight);
-            if (scale < 1.0)
-            {
-                var tb = new TransformedBitmap(frame, new ScaleTransform(scale, scale));
-                tb.Freeze();
-                src = tb;
-            }
-
-            var enc = new JpegBitmapEncoder { QualityLevel = 80 };
-            enc.Frames.Add(BitmapFrame.Create(src));
-            using var outMs = new MemoryStream();
-            enc.Save(outMs);
-            return Convert.ToBase64String(outMs.ToArray());
-        }
+        try { return ImageThumb.JpegBase64(Convert.FromBase64String(base64), 320); }
         catch { return null; }
     }
 

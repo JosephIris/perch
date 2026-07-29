@@ -10,7 +10,7 @@
 import { send, type OutMessage } from "./bridge.js";
 import { showBrowserPrompt } from "./browser-prompt.js";
 
-export type PaneAction = "split-right" | "split-down" | "browser";
+export type PaneAction = "split-right" | "split-down" | "browser" | "board";
 
 /** Pure action→message mapping so the wiring is unit-testable without a DOM.
  *  "browser" needs a url (from the prompt); returns null when it's absent so
@@ -24,6 +24,10 @@ export function paneActionMessage(
     case "split-right": return { type: "pane.split", paneId, dir: "right" };
     case "split-down":  return { type: "pane.split", paneId, dir: "down" };
     case "browser":     return url ? { type: "pane.split", paneId, dir: "right", url } : null;
+    // Its own verb rather than a flag on pane.split: opening a board can also
+    // CREATE a folder on disk, and the protocol tripwires only pin the set of
+    // message types, so a new field would have slipped past both of them.
+    case "board":       return { type: "board.new", paneId };
   }
 }
 
@@ -40,6 +44,9 @@ const ACTIONS: ActionDef[] = [
   { action: "split-down", label: "Split down (new terminal)", icon: "M3 5h18v14H3z M3 14h18" },
   // globe: circle + equator + two meridians.
   { action: "browser", label: "Open browser pane", icon: "M12 3a9 9 0 100 18 9 9 0 000-18z M3 12h18 M12 3a14 14 0 010 18 M12 3a14 14 0 000 18" },
+  // board: a surface with two cards on it — the staging metaphor, not a
+  // clipboard or a pin, both of which read as "saved" rather than "gathering".
+  { action: "board", label: "Open board", icon: "M3 5h18v14H3z M6 8h5v4H6z M14 8h4v8h-4z" },
 ];
 
 function actionIcon(d: string): SVGSVGElement {

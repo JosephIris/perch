@@ -21,7 +21,15 @@ export type Edge = "left" | "right" | "top" | "bottom" | "center";
  *  no-op renders (pure focus changes). Does NOT include the active-pane
  *  marker or any other state that toggles via setActive. */
 export function treeSignature(node: PaneTreeView): string {
-  if (node.kind === "leaf") return `L:${node.paneId}:${node.url ?? ""}`;
+  if (node.kind === "leaf") {
+    // Leaf KIND is part of the shape: a leaf that changes kind needs a remount,
+    // because each kind is a different class. Board contributes a one-character
+    // discriminator, deliberately NOT the board's path — a path would inject
+    // `:` and `\` into this `:`-delimited string, and would force a full-stage
+    // rebuild (and so kill every sibling xterm's transitions) every time a
+    // board moved on disk, which is not a shape change at all.
+    return `L:${node.paneId}:${node.url ?? ""}:${node.isBoard ? "B" : ""}`;
+  }
   return `S(${node.orientation}:${node.children.map(treeSignature).join(",")})`;
 }
 

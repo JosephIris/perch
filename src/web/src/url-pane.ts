@@ -97,6 +97,27 @@ export class UrlPane {
     send({ type: "urlpane.dispose", paneId: this.paneId });
   }
 
+  /** Host refused to create a WebView2 for this pane's URL (see
+   *  WebUrlPolicy.cs). The placeholder is otherwise an empty dark rectangle —
+   *  identical to a page that never loaded — so say what happened instead. */
+  showError(message: string) {
+    this.content.replaceChildren();
+    const box = document.createElement("div");
+    box.className = "urlpane-error";
+    const title = document.createElement("div");
+    title.className = "urlpane-error__title";
+    title.textContent = "Can’t open this page";
+    const body = document.createElement("div");
+    body.className = "urlpane-error__body";
+    body.textContent = message;
+    const addr = document.createElement("div");
+    addr.className = "urlpane-error__url";
+    addr.textContent = this.url;
+    addr.title = this.url;
+    box.append(title, body, addr);
+    this.content.appendChild(box);
+  }
+
   setName(name: string) { this.nameEl.textContent = name; }
   setActive(active: boolean) {
     this.element.classList.toggle("pane--active", active);

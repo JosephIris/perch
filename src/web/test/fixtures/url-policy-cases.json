@@ -1,0 +1,48 @@
+{
+  "_comment": [
+    "Shared truth table for what a browser (URL) pane may be pointed at.",
+    "READ BY BOTH SIDES: src/web/test/web-url.test.ts (paneUrlKind) and",
+    "src/Perch.Tests/WebUrlPolicyTests.cs (WebUrlPolicy.Classify). The two",
+    "implementations disagreed once already — the page sent file:// pane URLs",
+    "the host silently refused, so the pane rendered as an empty rectangle with",
+    "no WebView2 behind it. This file makes that class of drift a red test.",
+    "",
+    "kind: 'web' | 'html-file' | null (null = must be refused).",
+    "Add a case here, not to one language's test."
+  ],
+  "cases": [
+    { "url": "https://github.com/anthropics/claude-code", "kind": "web" },
+    { "url": "http://localhost:5173/", "kind": "web" },
+    { "url": "http://127.0.0.1:8080/preview?x=1#frag", "kind": "web" },
+    { "url": "HTTPS://EXAMPLE.COM/", "kind": "web" },
+
+    { "url": "file:///C:/Users/me/out/report.html", "kind": "html-file" },
+    { "url": "file:///C:/Users/me/out/report.htm", "kind": "html-file" },
+    { "url": "file:///C:/Users/me/out/REPORT.HTML", "kind": "html-file" },
+    { "url": "file:///home/me/design-loop/tree-spinner-mockup.html", "kind": "html-file" },
+    { "url": "file://nas/share/report.html", "kind": "html-file" },
+    { "url": "file:///C:/a%20b/my%20report.html", "kind": "html-file" },
+
+    { "url": "file:///C:/tools/setup.exe", "kind": null },
+    { "url": "file:///C:/tools/payload.ps1", "kind": null },
+    { "url": "file:///C:/tools/evil.lnk", "kind": null },
+    { "url": "file:///C:/Users/me/", "kind": null },
+    { "url": "file:///C:/Users/me/report.htmlx", "kind": null },
+    { "url": "file:///C:/Users/me/report.html.exe", "kind": null },
+
+    { "url": "javascript:alert(1)", "kind": null },
+    { "url": "data:text/html,<h1>hi</h1>", "kind": null },
+    { "url": "about:blank", "kind": null },
+    { "url": "ftp://ftp.example.com/pub/", "kind": null },
+    { "url": "mailto:hello@buildwithperch.com", "kind": null },
+    { "url": "ms-settings:privacy", "kind": null },
+    { "url": "vbscript:msgbox", "kind": null },
+
+    { "url": "example.com", "kind": null },
+    { "url": "/report.html", "kind": null },
+    { "url": "C:\\Users\\me\\report.html", "kind": null },
+    { "url": "", "kind": null },
+    { "url": "   ", "kind": null },
+    { "url": "not a url at all", "kind": null }
+  ]
+}

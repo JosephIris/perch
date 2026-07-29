@@ -47,9 +47,10 @@ test("htmlFileToUrl expands ~ against the pushed home dir", () => {
     htmlFileToUrl("~\\AppData\\Local\\Temp\\report.html"),
     "file:///C:/Users/josep/AppData/Local/Temp/report.html"
   );
-  // No home dir known yet → left unresolved rather than mangled.
+  // No home dir known yet → null, so the caller drops the link rather than
+  // offering "file://~/x/a.html", which resolves to nothing and opens blank.
   setHomeDir("");
-  assert.equal(htmlFileToUrl("~\\x\\a.html"), "file://~/x/a.html");
+  assert.equal(htmlFileToUrl("~\\x\\a.html"), null);
   setHomeDir("C:\\Users\\josep"); // restore for any later tests
 });
 
@@ -99,4 +100,92 @@ test("HTML_FILE_RE only matches .html / .htm extensions", () => {
   assert.ok(re.test("C:\\x\\a.htm"));
   assert.ok(!re.test("C:\\x\\a.txt"));
   assert.ok(!re.test("C:\\x\\a.htmlx")); // extension must end there
+});
+
+// ---- a match may not START mid-token ---------------------------------------
+//
+// The bug this pins: the unix-absolute branch (/…\.html?) is unanchored on the
+// left, so "design-loop/tree-spinner-mockup.html" matched as the SUBSTRING
+// "/tree-spinner-mockup.html". htmlFileToUrl turned that into
+// file:///tree-spinner-mockup.html and ShellExecute failed with
+//   "An error occurred trying to start process '/tree-spinner-mockup.html'"
+// — a real line from errors.log. Clicking the link did nothing at all.
+
+test("a relative path is matched WHOLE, not from its first slash", () => {
+  const links = findLinksInLine("wrote design-loop/tree-spinner-mockup.html ok");
+  assert.equal(links.length, 1);
+  assert.equal(links[0].text, "design-loop/tree-spinner-mockup.html");
+  assert.notEqual(links[0].text, "/tree-spinner-mockup.html");
+});
+
+test("a match can only begin at a real token boundary", () => {
+  // Mid-word slashes must not start a match on either branch.
+  assert.equal(findLinksInLine("see src/web/src/index.html")[0]?.text, "src/web/src/index.html");
+  assert.equal(findLinksInLine("nested a/b/c/deep.html")[0]?.text, "a/b/c/deep.html");
+  // Quotes and parens count as boundaries — agents print paths inside both.
+  assert.equal(findLinksInLine('opened "out/report.html" fine')[0]?.text, "out/report.html");
+  assert.equal(findLinksInLine("(see out/report.html)")[0]?.text, "out/report.html");
+});
+
+test("a URL's .html tail never becomes a separate file link", () => {
+  const links = findLinksInLine("open https://site.com/docs/guide/intro.html now");
+  assert.equal(links.length, 1);
+  assert.equal(links[0].kind, "url");
+  // Belt and braces: the mid-token guard should make this impossible before
+  // the overlap filter even runs.
+  assert.ok(!links.some((l) => l.kind === "file"));
+});
+
+// ---- relative paths resolve against the pane's cwd -------------------------
+
+test("a relative html path resolves against the pane cwd", () => {
+  assert.equal(
+    htmlFileToUrl("design-loop/mockup.html", "C:\\Users\\me\\dev-projects\\perch"),
+    "file:///C:/Users/me/dev-projects/perch/design-loop/mockup.html"
+  );
+  assert.equal(
+    htmlFileToUrl(".\\out\\report.html", "C:\\proj"),
+    "file:///C:/proj/out/report.html"
+  );
+  // A trailing separator on the cwd must not double up.
+  assert.equal(
+    htmlFileToUrl("out/r.html", "C:\\proj\\"),
+    "file:///C:/proj/out/r.html"
+  );
+});
+
+test("a relative path with no known cwd yields null, never a bogus absolute", () => {
+  // This is the exact shape that produced file:///tree-spinner-mockup.html.
+  assert.equal(htmlFileToUrl("design-loop/tree-spinner-mockup.html"), null);
+  assert.equal(htmlFileToUrl("out/report.html", ""), null);
+});
+
+test("an absolute token ignores cwd entirely", () => {
+  assert.equal(
+    htmlFileToUrl("C:\\abs\\a.html", "D:\\somewhere\\else"),
+    "file:///C:/abs/a.html"
+  );
+  assert.equal(
+    htmlFileToUrl("/home/me/a.html", "D:\\somewhere\\else"),
+    "file:///home/me/a.html"
+  );
+});
+
+// ---- every detected link must produce an openable address ------------------
+
+test("with a cwd known, every link on a realistic agent line is openable", () => {
+  setHomeDir("C:\\Users\\josep");
+  const line =
+    "preview http://localhost:3000/ · wrote design-loop/mockup.html and " +
+    "C:\\out\\report.html and ~\\AppData\\Local\\Temp\\t.html";
+  const links = findLinksInLine(line);
+  assert.equal(links.length, 4);
+  for (const lk of links) {
+    const url = lk.kind === "file" ? htmlFileToUrl(lk.text, "C:\\proj") : lk.text;
+    assert.ok(url, `${lk.text} produced no URL`);
+    assert.ok(
+      /^(https?|file):/.test(url!),
+      `${lk.text} → ${url} is not a navigable address`
+    );
+  }
 });

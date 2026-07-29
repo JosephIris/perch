@@ -1,0 +1,692 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Canvas pane concept</title>
+<style>
+  /* Token values mirrored from src/web/src/tokens.css so the mockup reads at
+     the same weight as the shipping chrome. Same rules: 8px grid, hairline
+     borders instead of shadows, no gradients, sentence case. */
+  :root{
+    --sp-4:4px; --sp-8:8px; --sp-12:12px; --sp-16:16px; --sp-24:24px; --sp-32:32px;
+    --r-input:4px; --r-pill:6px; --r-card:8px; --r-window:12px;
+
+    --font-text:"Inter Variable","Segoe UI Variable Text","Segoe UI",sans-serif;
+    --font-mono:"Geist Mono Variable","Cascadia Mono",Consolas,ui-monospace,monospace;
+    --type-caption:12px; --type-body:14px; --type-subtitle:16px; --type-title:20px;
+    --weight-body:410;
+
+    --color-app-bg:#101010;
+    --color-sidebar-surface:#181818;
+    --color-workspace:#1f1f1f;
+    --color-terminal-bg:#161616;
+    --color-subtle-secondary:rgba(255,255,255,0.04);
+    --color-subtle-tertiary:rgba(255,255,255,0.08);
+    --color-stroke:rgba(255,255,255,0.08);
+    --color-stroke-strong:rgba(255,255,255,0.14);
+
+    --color-text-primary:rgba(255,255,255,0.92);
+    --color-text-secondary:rgba(255,255,255,0.72);
+    --color-text-tertiary:rgba(255,255,255,0.5);
+    --color-text-disabled:rgba(255,255,255,0.34);
+
+    --color-accent:#76B9ED;
+    --color-accent-strong:#4cc2ff;
+    --color-accent-soft:rgba(118,185,237,0.4);
+    --color-accent-faint:rgba(118,185,237,0.14);
+    --color-success:#6CCB5F;
+    --color-caution:#FCE100;
+    --color-error:#FF99A4;
+    --color-image:#E993B8;
+    --color-skill:#C792EA;
+    --color-cloud:#5BC8AF;
+
+    --tag-0:#76B9ED; --tag-1:#6CCB5F; --tag-3:#FF9E5E; --tag-5:#C792EA;
+  }
+
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--color-app-bg);
+    color:var(--color-text-primary);
+    font-family:var(--font-text);
+    font-size:var(--type-body);
+    font-weight:var(--weight-body);
+    line-height:1.4;
+    -webkit-font-smoothing:antialiased;
+    padding:var(--sp-32) var(--sp-32) 64px;
+  }
+  .wrap{max-width:1240px;margin:0 auto}
+
+  h1{font-size:var(--type-title);font-weight:600;line-height:1.2;margin:0 0 var(--sp-8)}
+  h2{font-size:var(--type-subtitle);font-weight:600;line-height:1.2;margin:var(--sp-32) 0 var(--sp-8)}
+  h3{font-size:13px;font-weight:600;margin:0 0 var(--sp-8);color:var(--color-text-primary)}
+  .lede{color:var(--color-text-secondary);margin:0 0 var(--sp-24);max-width:78ch}
+  p{margin:0 0 var(--sp-12);max-width:78ch;color:var(--color-text-secondary)}
+  p strong{color:var(--color-text-primary);font-weight:600}
+  .muted{color:var(--color-text-tertiary)}
+  code{font-family:var(--font-mono);font-size:.92em;color:var(--color-text-primary)}
+
+  /* ---- window frame ---------------------------------------------------- */
+  .win{
+    border:1px solid var(--color-stroke);
+    border-radius:var(--r-window);
+    background:var(--color-workspace);
+    overflow:hidden;display:flex;height:592px;
+  }
+  .side{
+    width:200px;flex:0 0 200px;
+    background:var(--color-sidebar-surface);
+    border-right:1px solid var(--color-stroke);
+    padding:var(--sp-12) var(--sp-8);
+    display:flex;flex-direction:column;gap:var(--sp-4);
+  }
+  .side .grp{
+    font-size:11px;font-weight:600;color:var(--color-text-tertiary);
+    padding:var(--sp-4) var(--sp-8);margin-top:var(--sp-8);
+  }
+  .row{padding:var(--sp-8) var(--sp-12);border-radius:var(--r-pill);display:flex;flex-direction:column;gap:2px}
+  .row--sel{background:var(--color-subtle-tertiary)}
+  .row .t{font-size:var(--type-body);font-weight:500;color:var(--color-text-primary)}
+  .row .s{font-size:var(--type-caption);color:var(--color-text-tertiary)}
+  .row .t .dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:var(--sp-8);vertical-align:1px}
+
+  .work{flex:1;display:flex;min-width:0}
+  .pane{flex:1;min-width:0;display:flex;flex-direction:column;padding:var(--sp-4) var(--sp-8) var(--sp-8)}
+  .pane__head{
+    display:flex;align-items:center;gap:var(--sp-8);
+    height:30px;flex:0 0 30px;font-size:var(--type-caption);color:var(--color-text-tertiary);
+  }
+  .pane__head .cdot{width:8px;height:8px;border-radius:50%;flex:0 0 8px}
+  .pane__head .nm{color:var(--color-text-primary);font-weight:500;font-size:13px}
+  .pane__head .sp{flex:1}
+  .attached{
+    display:inline-flex;align-items:center;gap:var(--sp-4);
+    font-size:11px;padding:1px 6px;border-radius:var(--r-input);
+    background:var(--color-accent-faint);color:var(--color-accent-strong);
+  }
+  .pane__body{
+    flex:1;min-height:0;border-radius:var(--r-card);overflow:hidden;
+    background:var(--color-terminal-bg);border:1px solid var(--color-stroke);
+  }
+  .pane--active .pane__body{border-color:var(--color-accent-soft)}
+
+  .term{
+    font-family:var(--font-mono);font-size:11.5px;line-height:1.6;
+    padding:var(--sp-12);color:var(--color-text-secondary);white-space:pre-wrap;
+    height:100%;overflow:auto;
+  }
+  .term .dim{color:var(--color-text-disabled)}
+  .term .ok{color:var(--color-success)}
+  .term .ac{color:var(--color-accent)}
+
+  /* ---- canvas ---------------------------------------------------------- */
+  .canvas{
+    position:relative;height:100%;overflow:hidden;
+    background-color:#1a1a1a;
+    background-image:radial-gradient(circle at 1px 1px, rgba(255,255,255,0.055) 1px, transparent 0);
+    background-size:16px 16px;
+  }
+  .cv-hint{
+    position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+    text-align:center;color:var(--color-text-disabled);font-size:var(--type-caption);
+    pointer-events:none;transition:opacity .15s;
+  }
+  .cv-hint kbd{
+    font-family:var(--font-mono);font-size:11px;
+    border:1px solid var(--color-stroke-strong);border-radius:3px;
+    padding:1px 5px;color:var(--color-text-tertiary);
+  }
+
+  svg.edges{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:1}
+  .edge{fill:none;stroke:var(--color-stroke-strong);stroke-width:1.4;stroke-dasharray:3 3}
+
+  .node{
+    position:absolute;z-index:2;width:196px;
+    border:1px solid var(--color-stroke);border-radius:var(--r-card);
+    background:#212121;overflow:hidden;
+    animation:pop .18s cubic-bezier(0,0,0,1);
+  }
+  @keyframes pop{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  .node__bar{
+    display:flex;align-items:center;gap:var(--sp-8);
+    padding:var(--sp-8) var(--sp-12) 0;font-size:11px;color:var(--color-text-tertiary);
+  }
+  .node__bar .ic{width:12px;height:12px;flex:0 0 12px}
+  .node__bar .sp{flex:1}
+  .node__title{
+    padding:var(--sp-4) var(--sp-12) 0;font-size:12.5px;font-weight:600;
+    color:var(--color-text-primary);word-break:break-word;
+  }
+  .node__body{
+    padding:2px var(--sp-12) var(--sp-12);font-size:11.5px;
+    color:var(--color-text-tertiary);line-height:1.45;word-break:break-word;
+  }
+  .node__body .path{font-family:var(--font-mono);font-size:11px;color:var(--color-text-secondary)}
+  .resolved{
+    display:flex;align-items:center;gap:var(--sp-4);
+    margin:var(--sp-8) var(--sp-12) var(--sp-12);padding:var(--sp-4) var(--sp-8);
+    border-radius:var(--r-input);background:var(--color-subtle-secondary);
+    font-family:var(--font-mono);font-size:10.5px;color:var(--color-text-tertiary);
+    word-break:break-all;
+  }
+  .resolved .tick{color:var(--color-success);flex:0 0 auto}
+
+  .node--img .shot{
+    margin:var(--sp-8) var(--sp-12) 0;height:82px;border-radius:var(--r-input);
+    border:1px solid var(--color-stroke);overflow:hidden;background:#141414;position:relative;
+  }
+  .shot .bar{height:13px;background:#1e1e1e;border-bottom:1px solid var(--color-stroke)}
+  .shot .fld{position:absolute;left:13px;right:13px;top:28px;height:15px;border:1px solid rgba(255,153,164,.5);border-radius:3px}
+  .shot .fld.two{top:50px}
+  .shot .err{position:absolute;left:13px;top:70px;width:88px;height:5px;border-radius:3px;background:rgba(255,153,164,.5)}
+
+  .node--note{background:#20201c;border-color:rgba(252,225,0,.18)}
+  .node--err{background:#221c1d;border-color:rgba(255,153,164,.2)}
+  .node--err .node__body{font-family:var(--font-mono);font-size:10.5px;color:var(--color-error)}
+
+  /* ---- controls --------------------------------------------------------- */
+  .paster{
+    margin-top:var(--sp-16);border:1px solid var(--color-stroke);
+    border-radius:var(--r-card);background:#181818;padding:var(--sp-16);
+  }
+  .paster .lbl{font-size:var(--type-caption);color:var(--color-text-tertiary);margin-bottom:var(--sp-12)}
+  .paster .btns{display:flex;gap:var(--sp-8);flex-wrap:wrap}
+  .pbtn{
+    display:inline-flex;align-items:center;gap:var(--sp-8);
+    border:1px solid var(--color-stroke);border-radius:var(--r-card);
+    background:transparent;color:var(--color-text-secondary);
+    font-family:inherit;font-size:12.5px;padding:var(--sp-8) var(--sp-12);cursor:pointer;
+    transition:background .15s cubic-bezier(0,0,0,1);
+  }
+  .pbtn:hover:not(:disabled){background:var(--color-subtle-secondary);color:var(--color-text-primary)}
+  .pbtn:disabled{opacity:.35;cursor:default}
+  .pbtn .k{font-family:var(--font-mono);font-size:10.5px;color:var(--color-text-disabled)}
+  .pbtn--ghost{border-style:dashed}
+
+  /* ---- file panel ------------------------------------------------------- */
+  .split{display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-24);align-items:start;margin-top:var(--sp-24)}
+  @media (max-width:1040px){.split{grid-template-columns:1fr}}
+  .card{border:1px solid var(--color-stroke);border-radius:var(--r-card);background:#181818;overflow:hidden}
+  .card__head{
+    display:flex;align-items:center;gap:var(--sp-8);padding:var(--sp-12) var(--sp-16);
+    border-bottom:1px solid var(--color-stroke);font-size:var(--type-caption);color:var(--color-text-tertiary);
+  }
+  .card__head .nm{color:var(--color-text-primary);font-weight:600;font-size:13px;font-family:var(--font-mono)}
+  .card__head .sp{flex:1}
+  .card pre{
+    margin:0;padding:var(--sp-16);font-family:var(--font-mono);font-size:11.5px;line-height:1.65;
+    color:var(--color-text-secondary);white-space:pre-wrap;word-break:break-word;
+    min-height:300px;max-height:440px;overflow:auto;
+  }
+  pre .k{color:var(--color-accent)}
+  pre .g{color:var(--color-success)}
+  pre .c{color:var(--color-text-disabled)}
+  pre .y{color:var(--color-caution)}
+  pre .new{background:var(--color-accent-faint);border-radius:2px}
+
+  .why{display:grid;grid-template-columns:repeat(2,1fr);gap:var(--sp-16);margin-top:var(--sp-16)}
+  @media (max-width:900px){.why{grid-template-columns:1fr}}
+  .why .card{padding:var(--sp-16)}
+  .why p{margin:0;font-size:13px}
+
+  ul{margin:0 0 var(--sp-12);padding-left:18px;color:var(--color-text-secondary);max-width:78ch}
+  li{margin-bottom:var(--sp-8)}
+  li strong{color:var(--color-text-primary);font-weight:600}
+  .rule{height:1px;background:var(--color-stroke);margin:var(--sp-32) 0;border:0}
+
+  table{border-collapse:collapse;width:100%;max-width:78ch;font-size:13px;margin-bottom:var(--sp-12)}
+  th,td{text-align:left;padding:var(--sp-8) var(--sp-12);border-bottom:1px solid var(--color-stroke);vertical-align:top}
+  th{color:var(--color-text-tertiary);font-weight:600;font-size:var(--type-caption)}
+  td{color:var(--color-text-secondary)}
+  td:first-child{color:var(--color-text-primary);white-space:nowrap}
+  td code{font-size:11.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Canvas pane</h1>
+  <p class="lede">
+    A place to throw everything an agent will need before it starts, so you stop feeding context
+    into a prompt one paste at a time. The drawing surface is the least interesting part. The point
+    is that everything you drop gets resolved into a local, addressable artifact and indexed, so the
+    agent can open any of it on its own.
+  </p>
+
+  <!-- ================= the window ================= -->
+  <div class="win">
+    <div class="side">
+      <div class="grp">perch</div>
+      <div class="row row--sel">
+        <div class="t"><span class="dot" style="background:var(--tag-0)"></span>auth-refactor</div>
+        <div class="s">idle &middot; main</div>
+      </div>
+      <div class="row">
+        <div class="t"><span class="dot" style="background:var(--tag-3)"></span>store-pipeline</div>
+        <div class="s">idle &middot; 1h ago</div>
+      </div>
+      <div class="grp">boards</div>
+      <div class="row">
+        <div class="t"><span class="dot" style="background:var(--tag-5)"></span>login-bug</div>
+        <div class="s" id="sideCount">0 items</div>
+      </div>
+    </div>
+
+    <div class="work">
+      <!-- canvas pane -->
+      <div class="pane pane--active" style="flex:1.35">
+        <div class="pane__head">
+          <span class="cdot" style="background:var(--tag-5)"></span>
+          <span class="nm">login-bug</span>
+          <span class="sp"></span>
+          <span class="attached">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8V7a2 2 0 0 0-2-2h-5.8M3 11.2V17a2 2 0 0 0 2 2h5.8M8 3l-5 4 5 4M16 21l5-4-5-4"/></svg>
+            attached to auth-refactor
+          </span>
+        </div>
+        <div class="pane__body">
+          <div class="canvas" id="canvas">
+            <div class="cv-hint" id="cvHint">
+              Drop files, paste anything<br />
+              <span style="display:inline-block;margin-top:var(--sp-8)"><kbd>Ctrl</kbd> <kbd>V</kbd></span>
+            </div>
+            <svg class="edges" viewBox="0 0 520 520" preserveAspectRatio="none" id="edges"></svg>
+          </div>
+        </div>
+      </div>
+
+      <!-- terminal pane -->
+      <div class="pane" style="flex:1">
+        <div class="pane__head">
+          <span class="cdot" style="background:var(--tag-0)"></span>
+          <span class="nm">auth-refactor</span>
+          <span class="sp"></span>
+          <span>main</span>
+        </div>
+        <div class="pane__body">
+          <div class="term" id="term"><span class="dim">$ claude</span>
+<span class="dim">  board: .perch/boards/login-bug/</span>
+<span class="ac">&#9608;</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= the paster ================= -->
+  <div class="paster">
+    <div class="lbl">
+      Everything below is one <code>Ctrl+V</code> into the canvas. The clipboard type decides what
+      happens. Watch the file grow on the left.
+    </div>
+    <div class="btns" id="pasteBtns">
+      <button class="pbtn" data-kind="image">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--color-image)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M21 16l-5-5-7 7"/></svg>
+        A screenshot <span class="k">bitmap</span>
+      </button>
+      <button class="pbtn" data-kind="file">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--color-accent)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>
+        A file from Explorer <span class="k">drag</span>
+      </button>
+      <button class="pbtn" data-kind="url">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--color-cloud)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18"/></svg>
+        A link to a doc <span class="k">text/uri</span>
+      </button>
+      <button class="pbtn" data-kind="trace">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--color-error)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8v5M12 16.5v.5"/><circle cx="12" cy="12" r="9"/></svg>
+        A stack trace <span class="k">text</span>
+      </button>
+      <button class="pbtn" data-kind="note">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--color-caution)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6V4h14v2M12 4v16M9 20h6"/></svg>
+        A note you type <span class="k">typed</span>
+      </button>
+      <button class="pbtn pbtn--ghost" id="resetBtn">Reset</button>
+    </div>
+  </div>
+
+  <!-- ================= the two panels ================= -->
+  <div class="split">
+    <div class="card">
+      <div class="card__head">
+        <span class="nm">.perch/boards/login-bug/board.md</span>
+        <span class="sp"></span>
+        <span>the index the agent reads</span>
+      </div>
+      <pre id="fileOut"></pre>
+    </div>
+
+    <div class="card">
+      <div class="card__head">
+        <span class="nm">on disk beside it</span>
+        <span class="sp"></span>
+        <span id="diskCount">nothing yet</span>
+      </div>
+      <pre id="diskOut"></pre>
+    </div>
+  </div>
+
+  <hr class="rule" />
+
+  <!-- ================= explanation ================= -->
+  <h2>The resolver is the feature</h2>
+  <p>
+    A whiteboard stores what you dropped. This has to store something an agent can <em>open</em>.
+    Those are different jobs, and the second one is where all the value is.
+  </p>
+
+  <table>
+    <tr><th>You drop</th><th>Board stores</th><th>So the agent can</th></tr>
+    <tr>
+      <td>Screenshot</td>
+      <td><code>assets/login-broken.png</code></td>
+      <td>Read it. Claude Code reads images from a path.</td>
+    </tr>
+    <tr>
+      <td>File from Explorer</td>
+      <td>Repo-relative path, not a copy</td>
+      <td>Open the live file, and stay right when it changes.</td>
+    </tr>
+    <tr>
+      <td>Link to a doc</td>
+      <td>Fetched, converted, <code>refs/oauth-pkce.md</code></td>
+      <td>Read the spec with no network and no fetch tool.</td>
+    </tr>
+    <tr>
+      <td>Stack trace</td>
+      <td>Text plus parsed <code>file:line</code> refs</td>
+      <td>Jump straight to the frames instead of grepping.</td>
+    </tr>
+    <tr>
+      <td>Commit sha</td>
+      <td>Resolved subject and diffstat</td>
+      <td>Know what changed without shelling out.</td>
+    </tr>
+  </table>
+
+  <div class="why">
+    <div class="card">
+      <h3>It is attached, not fired</h3>
+      <p>
+        The board belongs to a pane, and the agent is told where it lives. That means you can keep
+        throwing things in after it has started. Paste another screenshot mid-task and it is simply
+        there the next time the agent looks, with no interruption and no re-prompting. A prompt is
+        a moment; a board is a place.
+      </p>
+    </div>
+    <div class="card">
+      <h3>Links are relevance, not dependency</h3>
+      <p>
+        Connecting the screenshot to the file it came from is worth one line in the index
+        (<span class="muted">login-broken.png shows session.ts</span>) and saves the agent a guess.
+        That is all an arrow needs to mean here. Proximity and grouping carry the rest, and nothing
+        breaks if you never draw one.
+      </p>
+    </div>
+    <div class="card">
+      <h3>Collecting is the slow part</h3>
+      <p>
+        The reason a first prompt takes ten minutes is not typing, it is gathering: find the file,
+        crop the screenshot, dig up the doc link, copy the trace. Those are all one paste each into
+        a board, done as you find them, in any order, without composing a sentence around any of it.
+      </p>
+    </div>
+    <div class="card">
+      <h3>It survives the session</h3>
+      <p>
+        The board is a folder in the repo. Come back tomorrow, or hand the task to a different
+        agent, or to a person, and the context is still assembled. Right now that context lives in a
+        scrollback buffer and dies with it.
+      </p>
+    </div>
+  </div>
+
+  <h2>Worth deciding early</h2>
+  <ul>
+    <li><strong>Whether fetched links are pinned or refreshed.</strong> A cached copy is reproducible and offline; a stale one quietly misleads. Probably cache with the fetch date in the index and a manual refresh.</li>
+    <li><strong>How the agent is told.</strong> A line appended to its first prompt is the cheap version. A file it is instructed to re-read is the version that makes mid-task additions work.</li>
+    <li><strong>Whether boards are per-task or per-pane.</strong> Per-task is truer to how you would use it, but then boards need their own place in the sidebar rather than riding along with a pane.</li>
+  </ul>
+
+</div>
+
+<script>
+  // Each paste kind resolves to a node on the board AND an entry in the index.
+  // The two panels are generated from one list so the mockup can't drift from
+  // its own claim: what you see on the canvas is exactly what is on disk.
+  const KINDS = {
+    image: {
+      section: "Images",
+      node: (n) => `
+        <div class="node node--img" style="left:${n.x}px;top:${n.y}px">
+          <div class="node__bar">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="var(--color-image)" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M21 16l-5-5-7 7"/></svg>
+            image<span class="sp"></span><span>pasted</span>
+          </div>
+          <div class="shot"><div class="bar"></div><div class="fld"></div><div class="fld two"></div><div class="err"></div></div>
+          <div class="resolved"><span class="tick">&#10003;</span> assets/login-broken.png</div>
+        </div>`,
+      md: ["- `assets/login-broken.png` - the failure state, second field shows the error"],
+      disk: ["assets/login-broken.png            41 KB"],
+    },
+    file: {
+      section: "Files",
+      node: (n) => `
+        <div class="node" style="left:${n.x}px;top:${n.y}px">
+          <div class="node__bar">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="var(--color-accent)" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>
+            file<span class="sp"></span><span>dragged</span>
+          </div>
+          <div class="node__title">session.ts</div>
+          <div class="node__body"><span class="path">src/auth/session.ts</span><br />where the cookie is set</div>
+          <div class="resolved"><span class="tick">&#10003;</span> repo-relative, not copied</div>
+        </div>`,
+      md: ["- `src/auth/session.ts` - where the cookie is set"],
+      disk: [],
+    },
+    url: {
+      section: "References",
+      node: (n) => `
+        <div class="node" style="left:${n.x}px;top:${n.y}px">
+          <div class="node__bar">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="var(--color-cloud)" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18"/></svg>
+            link<span class="sp"></span><span>fetched</span>
+          </div>
+          <div class="node__title">OAuth 2.0 for browser apps</div>
+          <div class="node__body">datatracker.ietf.org &middot; section 6.2</div>
+          <div class="resolved"><span class="tick">&#10003;</span> refs/oauth-browser-apps.md</div>
+        </div>`,
+      md: ['- `refs/oauth-browser-apps.md` - cached 2026-07-28 from datatracker.ietf.org, section 6.2'],
+      disk: ["refs/oauth-browser-apps.md         18 KB"],
+    },
+    trace: {
+      section: "Traces",
+      node: (n) => `
+        <div class="node node--err" style="left:${n.x}px;top:${n.y}px">
+          <div class="node__bar">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="var(--color-error)" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8v5M12 16.5v.5"/><circle cx="12" cy="12" r="9"/></svg>
+            trace<span class="sp"></span><span>parsed</span>
+          </div>
+          <div class="node__body">TypeError: cannot read 'token'
+  at refresh (session.ts:112)
+  at useAuth (useAuth.ts:12)</div>
+          <div class="resolved"><span class="tick">&#10003;</span> 2 frames -&gt; real paths</div>
+        </div>`,
+      md: [
+        "- `traces/refresh-typeerror.txt`",
+        "  - frames: `src/auth/session.ts:112`, `src/hooks/useAuth.ts:12`",
+      ],
+      disk: ["traces/refresh-typeerror.txt      1.2 KB"],
+    },
+    note: {
+      section: "Notes",
+      node: (n) => `
+        <div class="node node--note" style="left:${n.x}px;top:${n.y}px">
+          <div class="node__bar">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="var(--color-caution)" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6V4h14v2M12 4v16M9 20h6"/></svg>
+            note
+          </div>
+          <div class="node__body" style="color:var(--color-text-secondary);font-size:12px">
+            Session cookie stays HttpOnly. No token in localStorage, that is what we are undoing.
+          </div>
+        </div>`,
+      md: ["- Session cookie stays HttpOnly. No token in localStorage, that is what we are undoing."],
+      disk: [],
+    },
+  };
+
+  const SECTIONS = ["Files", "Images", "References", "Traces", "Notes"];
+  // Slot positions, filled in paste order. Two columns so the board stays legible.
+  const SLOTS = [
+    { x: 16,  y: 16  }, { x: 232, y: 16  },
+    { x: 16,  y: 190 }, { x: 232, y: 176 },
+    { x: 16,  y: 356 },
+  ];
+  // Drawn once both endpoints exist. Relevance, not dependency.
+  const LINKS = [
+    { a: "image", b: "file",  md: "`assets/login-broken.png` shows `src/auth/session.ts`" },
+    { a: "trace", b: "file",  md: "`traces/refresh-typeerror.txt` points into `src/auth/session.ts`" },
+  ];
+
+  const placed = [];          // paste order, one entry per node
+  const canvas = document.getElementById("canvas");
+  const edges = document.getElementById("edges");
+  const hint = document.getElementById("cvHint");
+
+  function slotOf(kind) {
+    const i = placed.findIndex((p) => p.kind === kind);
+    return i < 0 ? null : SLOTS[i];
+  }
+
+  function centerOf(kind) {
+    const s = slotOf(kind);
+    return s ? { x: s.x + 98, y: s.y + 60 } : null;
+  }
+
+  function render() {
+    // nodes
+    for (const el of canvas.querySelectorAll(".node")) el.remove();
+    for (const p of placed) {
+      canvas.insertAdjacentHTML("beforeend", KINDS[p.kind].node(p));
+    }
+    hint.style.opacity = placed.length ? 0 : 1;
+
+    // links, only when both ends are on the board
+    edges.innerHTML = "";
+    for (const l of LINKS) {
+      const a = centerOf(l.a), b = centerOf(l.b);
+      if (!a || !b) continue;
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      const mx = (a.x + b.x) / 2;
+      path.setAttribute("class", "edge");
+      path.setAttribute("d", `M${a.x},${a.y} C${mx},${a.y} ${mx},${b.y} ${b.x},${b.y}`);
+      edges.append(path);
+    }
+
+    const n = placed.length;
+    document.getElementById("sideCount").textContent =
+      n === 0 ? "empty" : n + (n === 1 ? " item" : " items");
+
+    renderFile();
+    renderDisk();
+    renderTerm();
+
+    for (const b of document.querySelectorAll("#pasteBtns .pbtn[data-kind]")) {
+      b.disabled = placed.some((p) => p.kind === b.dataset.kind);
+    }
+  }
+
+  function renderFile() {
+    const out = [];
+    out.push('<span class="c">&lt;!-- perch:board v1 --&gt;</span>');
+    out.push('<span class="k"># login-bug</span>');
+    out.push("");
+    if (placed.length === 0) {
+      out.push('<span class="c">Empty. Paste something into the canvas.</span>');
+      document.getElementById("fileOut").innerHTML = out.join("\n");
+      return;
+    }
+    const newest = placed.length ? placed[placed.length - 1].kind : null;
+    for (const sec of SECTIONS) {
+      const items = placed.filter((p) => KINDS[p.kind].section === sec);
+      if (!items.length) continue;
+      out.push(`<span class="k">## ${sec}</span>`);
+      for (const p of items) {
+        for (const line of KINDS[p.kind].md) {
+          out.push(p.kind === newest ? `<span class="new">${line}</span>` : line);
+        }
+      }
+      out.push("");
+    }
+    const links = LINKS.filter((l) => slotOf(l.a) && slotOf(l.b));
+    if (links.length) {
+      out.push('<span class="k">## Related</span>');
+      for (const l of links) out.push("- " + l.md);
+    }
+    document.getElementById("fileOut").innerHTML = out.join("\n");
+  }
+
+  function renderDisk() {
+    const files = ["board.md                          -"];
+    for (const p of placed) files.push(...KINDS[p.kind].disk);
+    const el = document.getElementById("diskOut");
+    const count = files.length - 1;
+    document.getElementById("diskCount").textContent =
+      count === 0 ? "just the index" : count + (count === 1 ? " artifact" : " artifacts");
+    el.innerHTML =
+      '<span class="c">.perch/boards/login-bug/</span>\n' +
+      files.map((f) => "  " + f).join("\n") +
+      (placed.length
+        ? '\n\n<span class="c">// nothing here needs the network, a fetch\n// tool, or a running Perch to be readable</span>'
+        : "");
+  }
+
+  function renderTerm() {
+    const n = placed.length;
+    const lines = [
+      '<span class="dim">$ claude</span>',
+      '<span class="dim">  board: .perch/boards/login-bug/</span>',
+    ];
+    if (n === 0) {
+      lines.push('<span class="ac">&#9608;</span>');
+    } else {
+      lines.push("");
+      lines.push('<span class="ok">&#8226;</span> Read board.md');
+      const secs = SECTIONS.filter((s) => placed.some((p) => KINDS[p.kind].section === s));
+      lines.push(`  <span class="dim">${n} item${n === 1 ? "" : "s"} across ${secs.length} section${secs.length === 1 ? "" : "s"}</span>`);
+      if (placed.some((p) => p.kind === "image")) {
+        lines.push('<span class="ok">&#8226;</span> Read assets/login-broken.png');
+      }
+      if (placed.some((p) => p.kind === "url")) {
+        lines.push('<span class="ok">&#8226;</span> Read refs/oauth-browser-apps.md');
+      }
+      if (placed.some((p) => p.kind === "file")) {
+        lines.push('<span class="ok">&#8226;</span> Read src/auth/session.ts');
+      }
+      lines.push("");
+      lines.push(
+        n >= 4
+          ? '<span class="dim">I have the failing screenshot, the trace</span>\n<span class="dim">frames, and the spec section. Starting on</span>\n<span class="dim">session.ts:112.</span>'
+          : '<span class="dim">Reading what is on the board.</span>'
+      );
+      lines.push('<span class="ac">&#9608;</span>');
+    }
+    document.getElementById("term").innerHTML = lines.join("\n");
+  }
+
+  document.getElementById("pasteBtns").addEventListener("click", (ev) => {
+    const btn = ev.target.closest("button");
+    if (!btn) return;
+    if (btn.id === "resetBtn") { placed.length = 0; render(); return; }
+    const kind = btn.dataset.kind;
+    if (!kind || placed.some((p) => p.kind === kind)) return;
+    const slot = SLOTS[placed.length];
+    if (!slot) return;
+    placed.push({ kind, x: slot.x, y: slot.y });
+    render();
+  });
+
+  render();
+</script>
+</body>
+</html>

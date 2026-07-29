@@ -38,6 +38,20 @@ internal sealed class UrlPaneController
 
     private readonly Dictionary<Guid, Entry> _panes = new();
 
+    /// Panes whose create is waiting on the main WebView2's environment. A pane
+    /// sits here between the first layout message and the moment the env shows
+    /// up, and layout messages keep arriving that whole time (ResizeObserver
+    /// fires on every reflow). Without this set, each of those messages started
+    /// its OWN DeferredCreateAsync, so a pane could end up with several stacked
+    /// WebView2s — and the last one to win _panes[id] orphaned the rest as
+    /// undisposable child HWNDs. It also records a dispose that lands mid-wait,
+    /// so the loop can bail instead of resurrecting a closed pane.
+    private readonly HashSet<Guid> _pending = new();
+
+    /// Panes we've already told the page about a policy rejection for. Keeps one
+    /// refused URL from re-firing on every layout message.
+    private readonly HashSet<Guid> _rejected = new();
+
     /// Set while a full-viewport DOM modal is up. A native web-pane HWND paints
     /// above the host's HTML, so a modal can't cover it — we hide every pane
     /// instead (airspace fix). Composes with per-pane DesiredVisible so closing
@@ -53,6 +67,16 @@ internal sealed class UrlPaneController
     /// Dispatcher.BeginInvoke is the caller's responsibility — we fire on
     /// the UI thread already.
     public event Action<Guid, string>? AutoTitleRequested;
+
+    /// Raised when a pane's URL fails WebUrlPolicy. The host forwards it to the
+    /// page so the pane renders "can't open this address" instead of the empty
+    /// placeholder that reads as a blank page.
+    public event Action<Guid, string>? UrlPaneRejected;
+
+    /// Raised when a pane's navigation completes unsuccessfully. WebView2 paints
+    /// its own error page for most web failures, but a missing file:// target
+    /// renders as an empty document, so the page needs to be able to say so.
+    public event Action<Guid, string>? UrlPaneFailed;
 
     public UrlPaneController(Window owner, Microsoft.Web.WebView2.Wpf.WebView2 mainWebView)
     {
@@ -84,6 +108,9 @@ internal sealed class UrlPaneController
 
     public bool HasPanes => _panes.Count > 0;
 
+    /// The URL a pane is currently pointed at, or null if we don't know it.
+    public string? UrlOf(Guid paneId) => _panes.TryGetValue(paneId, out var e) ? e.Url : null;
+
     /// Handle the page's urlpane.layout message. Creates a new UrlPaneWindow
     /// on first call for a paneId; subsequent calls reposition + resize.
     public void OnLayout(UrlPaneLayoutMsg msg)
@@ -91,16 +118,30 @@ internal sealed class UrlPaneController
         var id = msg.PaneId;
         var url = msg.Url;
         if (string.IsNullOrEmpty(url)) return;
-        // Defense in depth (audit issue #1, item 2): the page already filters to
-        // http/https, but the host must never create or re-navigate a native
-        // WebView2 pane to any other scheme (file:, javascript:, data:, ...)
-        // even if a malformed message slips through. Every layout message —
-        // first-sight create and subsequent re-navigate — funnels through here.
-        if (!IsAllowedUrl(url))
+        // Defense in depth (audit issue #1, item 2): the page filters with the
+        // same policy (web-url.ts), but the host must never create or
+        // re-navigate a native WebView2 pane to a scheme outside it
+        // (javascript:, data:, a file:// to an .exe, ...) even if a malformed
+        // message slips through. Every layout message — first-sight create and
+        // subsequent re-navigate — funnels through here.
+        //
+        // Rejection is REPORTED, not swallowed. A refused URL leaves the page's
+        // placeholder div with no WebView2 behind it, which looks exactly like a
+        // blank page; UrlPaneRejected lets the pane say why instead.
+        if (!WebUrlPolicy.IsAllowed(url))
         {
-            Log.Info("UrlPane.reject", $"pane={id:N} non-http(s) url rejected");
+            // Once per pane, not once per layout message: a rejected pane keeps
+            // reporting its rect (ResizeObserver fires on every reflow, and a
+            // window drag fires it continuously), and re-posting the same error
+            // on each would be a message storm for no added information.
+            if (_rejected.Add(id))
+            {
+                Log.Info("UrlPane.reject", $"pane={id:N} url rejected by policy");
+                UrlPaneRejected?.Invoke(id, url!);
+            }
             return;
         }
+        _rejected.Remove(id);   // a later message may carry a URL we do accept
         var (x, y, w, h) = (msg.X, msg.Y, msg.W, msg.H);
 
         var (px, py, pw, ph) = DipsToPixels(x, y, w, h);
@@ -109,20 +150,17 @@ internal sealed class UrlPaneController
 
         if (!_panes.TryGetValue(id, out var entry))
         {
+            if (_pending.Contains(id)) return;   // create already in flight
             Log.Info("UrlPane.create", $"pane={id:N} url={url} bounds={bounds}");
             _env ??= _mainWebView.CoreWebView2?.Environment;
             if (_env == null)
             {
                 Log.Info("UrlPane.create.deferred", "main WebView2 env not ready yet");
+                _pending.Add(id);
                 _ = DeferredCreateAsync(id, url!, bounds);
                 return;
             }
-            var mainHwnd = new WindowInteropHelper(_owner).Handle;
-            var host = new UrlPaneHost(_env, mainHwnd, url!, bounds);
-            var paneId = id;
-            host.DocumentTitleChanged += (title) =>
-                _owner.Dispatcher.BeginInvoke(() => AutoTitleRequested?.Invoke(paneId, title));
-            entry = new Entry { Host = host, Url = url!, X = x, Y = y, W = w, H = h };
+            entry = new Entry { Host = CreateHost(id, url!, bounds), Url = url!, X = x, Y = y, W = w, H = h };
             _panes[id] = entry;
             Apply(entry);   // respect an open modal at create time
         }
@@ -134,28 +172,51 @@ internal sealed class UrlPaneController
         }
     }
 
+    /// Build a UrlPaneHost for `id` and hook its events. Both create paths
+    /// (immediate and deferred) go through here so a pane created during
+    /// startup gets exactly the same wiring as one created later — the deferred
+    /// copy used to be a hand-maintained duplicate that quietly lacked whatever
+    /// the immediate path had gained since.
+    private UrlPaneHost CreateHost(Guid id, string url, Rectangle bounds)
+    {
+        var mainHwnd = new WindowInteropHelper(_owner).Handle;
+        var host = new UrlPaneHost(_env!, mainHwnd, url, bounds);
+        host.DocumentTitleChanged += (title) =>
+            _owner.Dispatcher.BeginInvoke(() => AutoTitleRequested?.Invoke(id, title));
+        host.NavigationFailed += (status) =>
+            _owner.Dispatcher.BeginInvoke(() => UrlPaneFailed?.Invoke(id, status));
+        return host;
+    }
+
     private async Task DeferredCreateAsync(Guid id, string url, Rectangle bounds)
     {
-        for (var i = 0; i < 30; i++)
+        try
         {
-            await Task.Delay(100);
-            _env ??= _mainWebView.CoreWebView2?.Environment;
-            if (_env == null) continue;
-            var mainHwnd = new WindowInteropHelper(_owner).Handle;
-            var host = new UrlPaneHost(_env, mainHwnd, url, bounds);
-            var paneId = id;
-            host.DocumentTitleChanged += (title) =>
-                _owner.Dispatcher.BeginInvoke(() => AutoTitleRequested?.Invoke(paneId, title));
-            var deferredEntry = new Entry { Host = host, Url = url };
-            _panes[id] = deferredEntry;
-            Apply(deferredEntry);   // respect an open modal at create time
-            return;
+            for (var i = 0; i < 30; i++)
+            {
+                await Task.Delay(100);
+                // The pane was closed while we waited — creating now would leave
+                // a WebView2 nobody has a handle to.
+                if (!_pending.Contains(id)) return;
+                _env ??= _mainWebView.CoreWebView2?.Environment;
+                if (_env == null) continue;
+                var deferredEntry = new Entry { Host = CreateHost(id, url, bounds), Url = url };
+                _panes[id] = deferredEntry;
+                Apply(deferredEntry);   // respect an open modal at create time
+                return;
+            }
+            Log.Info("UrlPane.create.timeout", $"pane={id:N} env never became ready");
         }
+        finally { _pending.Remove(id); }
     }
 
     /// Handle the page's urlpane.dispose message — close the child window.
     public void OnDispose(PaneRef msg)
     {
+        // Clearing _pending first cancels an in-flight deferred create; without
+        // it, a pane closed during startup came back as an orphan HWND.
+        _pending.Remove(msg.PaneId);
+        _rejected.Remove(msg.PaneId);
         if (!_panes.TryGetValue(msg.PaneId, out var entry)) return;
         try { entry.Host.Close(); } catch { }
         _panes.Remove(msg.PaneId);
@@ -168,6 +229,8 @@ internal sealed class UrlPaneController
     {
         foreach (var e in _panes.Values) { try { e.Host.Close(); } catch { } }
         _panes.Clear();
+        _pending.Clear();
+        _rejected.Clear();
         _env = null;
     }
 
@@ -197,10 +260,4 @@ internal sealed class UrlPaneController
         }
         catch { return 0; }
     }
-
-    /// True only for an absolute http/https URL. Host-side gate so a native
-    /// URL pane can never be pointed at file:, javascript:, data: and friends.
-    private static bool IsAllowedUrl(string url) =>
-        Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
-        (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
 }

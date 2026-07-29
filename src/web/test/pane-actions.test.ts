@@ -28,13 +28,25 @@ test("browser maps to a url-carrying split, or null without a url", () => {
   assert.equal(paneActionMessage("browser", "p1", ""), null);
 });
 
+test("board maps to its own verb, not a flag on pane.split", () => {
+  // Opening a board can create a folder on disk, and the protocol tripwires
+  // (protocol-sync.test.ts + ProtocolTests.cs) only pin the SET of message
+  // types — a new field on pane.split would have passed both untouched.
+  assert.deepEqual(paneActionMessage("board", "p1"), { type: "board.new", paneId: "p1" });
+  // Unlike browser, it needs no argument, so it can never map to null.
+  assert.notEqual(paneActionMessage("board", "p1"), null);
+});
+
 // ---- normalizeUrl (pure) ---------------------------------------------------
 
-test("normalizeUrl passes real schemes through untouched", () => {
+test("normalizeUrl passes pane-hostable schemes through untouched", () => {
   assert.equal(normalizeUrl("https://example.com"), "https://example.com");
   assert.equal(normalizeUrl("http://localhost:3000/x"), "http://localhost:3000/x");
   assert.equal(normalizeUrl("file:///C:/x.html"), "file:///C:/x.html");
-  assert.equal(normalizeUrl("about:blank"), "about:blank");
+  // about: used to pass through — and then the pane never painted, because the
+  // host refuses to create a WebView2 for it. Rejecting here shakes the field
+  // instead. See test/web-url.test.ts for the full policy.
+  assert.equal(normalizeUrl("about:blank"), null);
 });
 
 test("normalizeUrl adds http for localhost/loopback, https otherwise", () => {
@@ -91,12 +103,12 @@ class El {
   createElementNS: (_ns: string, tag: string) => new El(tag),
 };
 
-test("buildPaneActions renders three wired buttons in order", () => {
+test("buildPaneActions renders four wired buttons in order", () => {
   const group = buildPaneActions("p1") as unknown as El;
   assert.equal(group.className, "pane__actions");
   const btns = group.querySelectorAll(".pane__action");
-  assert.equal(btns.length, 3);
-  assert.deepEqual(btns.map((b) => b.dataset.action), ["split-right", "split-down", "browser"]);
+  assert.equal(btns.length, 4);
+  assert.deepEqual(btns.map((b) => b.dataset.action), ["split-right", "split-down", "browser", "board"]);
   // Each carries an accessible label and opts out of the header's HTML5 drag.
   for (const b of btns) {
     assert.equal(b.draggable, false);

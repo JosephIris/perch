@@ -100,6 +100,33 @@ export type OutMessage =
    * WebView2; subsequent layouts reposition/resize. */
   | { type: "urlpane.layout"; paneId: string; url: string; x: number; y: number; w: number; h: number }
   | { type: "urlpane.dispose"; paneId: string }
+  /* Board pane asking for its session's board contents. Sent on attach and
+   * whenever the session's board path changes; the host answers with
+   * board.state (or board.error when the folder can't be read). */
+  | { type: "board.request"; paneId: string }
+  /* Split this pane and open the tab's board beside it, creating the board
+   * folder on first use. One board per tab — asking twice just opens another
+   * window onto the same one. */
+  | { type: "board.new"; paneId: string }
+  /* Add something to a board. kind:"note" forces a typed note; kind:"auto" lets
+   * the HOST classify the text (url / file path / note) — the page can't,
+   * because deciding whether a path is inside the repo needs the repo root. */
+  | { type: "board.add"; paneId: string; kind: "note" | "auto"; text: string; note?: string; x: number; y: number }
+  /* A paste landed at (x, y). Deliberately carries NO payload: the host reads
+   * the clipboard itself, because a multi-MB image as base64 over this bridge
+   * is several transient copies of itself in a process that has already died of
+   * OOM once under a large burst. */
+  | { type: "board.paste"; paneId: string; x: number; y: number }
+  /* Drag / resize. `final` false is the continuous part of the gesture: the
+   * host updates its model but writes nothing and echoes nothing back, so one
+   * drag doesn't rewrite board.md hundreds of times. */
+  | { type: "board.move"; paneId: string; nodeId: string; x: number; y: number; final: boolean }
+  | { type: "board.resize"; paneId: string; nodeId: string; w: number; h: number; final: boolean }
+  | { type: "board.remove"; paneId: string; nodeId: string }
+  /* Ask for a card-sized preview of an image node. On demand, not in
+   * board.state, so adding a tenth screenshot doesn't make every state push ten
+   * images heavier. Mirrors the inspector's image flow. */
+  | { type: "board.image"; paneId: string; nodeId: string }
   /* Per-pane show/hide on stage switch. Hides the native WebView2 (not close),
    * so returning to the tab is instant and doesn't reload the page. */
   | { type: "urlpane.visible"; paneId: string; visible: boolean }
@@ -244,6 +271,10 @@ export type PaneTreeView =
        * header hover tooltip. Empty when the pane wasn't auto-named. */
       nameFull?: string;
       url?: string | null;
+      /* Leaf kind, second discriminator after `url`: true when this leaf is the
+       * window onto its session's board. Carries no path — that is on the
+       * session (SessionView.boardPath). */
+      isBoard?: boolean;
       /* Color tag (0–5) into the pane palette in style.css. */
       colorIndex: number;
       /* Per-pane agent state — pane header surfaces this directly so
@@ -295,6 +326,34 @@ export type PaneTreeView =
       weight?: number;
     };
 
+/** One thing on a board. Mirrors BoardNode in src/Perch/Board.cs.
+ *
+ *  `ref` is the artifact this node resolved to, ALWAYS repo-relative — that is
+ *  the property that makes board.md directly usable by an agent whose cwd is
+ *  the repo. Null only for notes, which have no artifact. */
+export type BoardNodeView = {
+  id: string;
+  /** "note" | "path" | "image" | "url". A string rather than a union so an
+   *  unknown kind from a newer host degrades to a plain card. */
+  kind: string;
+  ref?: string | null;
+  text: string;
+  /** Url nodes only: where the cached copy came from and when. A cached page
+   *  with no provenance is one an agent shouldn't trust. */
+  source?: string | null;
+  fetchedUtc?: string | null;
+  x: number;
+  y: number;
+  /** Card size. 0 means "use the default for this kind" — an un-resized node
+   *  stores nothing, so defaults stay retunable and older boards still open. */
+  w?: number;
+  h?: number;
+};
+
+/** A "these go together" annotation between two nodes. Deliberately weak —
+ *  relevance, not dependency. */
+export type BoardLinkView = { from: string; to: string; label: string };
+
 export type SessionView = {
   id: string;
   title: string;
@@ -305,6 +364,11 @@ export type SessionView = {
   /* Branch of this tab's git worktree; "" when it has no worktree. Drives the
    * "also delete its worktree folder" option on close. */
   worktreeBranch: string;
+  /* Absolute path to this tab's board folder (the context staging surface), ""
+   * when it has none. The board LEAF carries only an `isBoard` flag — the path
+   * lives here because the board belongs to the tab, not to a pane pairing.
+   * See Session.BoardPath for why. */
+  boardPath: string;
   rootPane: PaneTreeView;
   /* Session-level fields are aggregations of the panes' per-pane state.
    * agentState = most-urgent across panes
@@ -604,7 +668,20 @@ export type InMessage =
   | { type: "ui.sidebar.toggle" }
   /* Triggered on main-window move/resize so URL panes re-emit their
    * placeholder rect and the host can reposition the child Windows. */
+  /* The whole board after any change. Full state, not a diff: a board is tens
+   * of nodes, and a full replace can't drift from the file on disk. */
+  | { type: "board.state"; paneId: string; title: string; nodes: BoardNodeView[]; links: BoardLinkView[] }
+  /* The board could not be read (folder gone, index unparseable). The pane
+   * shows the reason — an empty grid reads as "nothing here yet". */
+  | { type: "board.error"; paneId: string; message: string }
+  /* A card-sized JPEG preview for one image node. `data` empty means the file
+   * is gone or undecodable — the card says so rather than showing an empty
+   * frame. */
+  | { type: "board.image.data"; paneId: string; nodeId: string; mediaType: string; data: string }
   | { type: "ui.urlpane.relayout" }
+  /* Host refused to back this URL pane with a WebView2 (WebUrlPolicy). Without
+   * it the pane's placeholder stays empty and reads as a blank page. */
+  | { type: "ui.urlpane.error"; paneId: string; message: string }
   /* Test-only: host asks the page to round-trip a marker through its main
    * thread so the host can time renderer responsiveness under load. */
   | { type: "render.ping"; id: number }

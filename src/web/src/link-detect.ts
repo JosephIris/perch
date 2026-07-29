@@ -14,19 +14,36 @@
 export const URL_RE =
   /(https?|HTTPS?):[/]{2}[^\s\x00-\x1f"'!*(){}|\\\^<>`]*[^\s\x00-\x1f"':,.!?{}|\\\^~\[\]`()<>]/;
 
-// A reference to a LOCAL HTML file, ending in .html/.htm. Only absolute /
-// openable forms — file:// URLs, Windows drive paths, UNC, unix-absolute — so
-// we never underline a bare "index.html" mentioned in prose, or a relative
-// path we couldn't resolve without the pane's cwd.
+// A reference to a LOCAL HTML file, ending in .html/.htm. Absolute forms
+// (file:// URLs, Windows drive paths, UNC, unix-absolute, ~-abbreviated) plus
+// relative forms carrying at least one separator ("design-loop/report.html",
+// ".\out\x.html") which resolve against the pane's cwd. A bare "index.html"
+// mentioned in prose still never matches — without a separator there's nothing
+// to distinguish a path from a filename in a sentence.
+//
+// LEFT BOUNDARY — (?<![^\s"'`([<]) — the match must start at the beginning of
+// the line or right after whitespace / an opening quote-bracket. Without it the
+// unix-absolute branch happily started mid-token: "design-loop/report.html"
+// matched as "/report.html", which htmlFileToUrl then turned into
+// file:///report.html and ShellExecute failed with "cannot find the file"
+// (observed in errors.log). It also keeps a URL's path tail
+// ("http://x.com/a.html" → "/a.html") from ever matching in the first place.
+//
 // The trailing (?![A-Za-z0-9]) pins the extension to a real boundary, so
 // "report.htmlx" doesn't match as "report.html".
+//
+// SEG = one path segment: no whitespace, no quotes, and no ":" or separator
+// (":" is excluded so a drive letter or scheme can never be swallowed into a
+// relative match).
+const SEG = "[^\\s\"'`<>|:\\\\/]";
 export const HTML_FILE_RE = new RegExp(
-  "(?:" +
+  "(?<![^\\s\"'`([<])(?:" +
     "file://[^\\s\"'`<>|]+\\.html?" + //     file:///C:/x.html
     "|~[\\\\/][^\\s\"'`<>|]*\\.html?" + //   ~\AppData\…\x.html (home-abbreviated)
     "|[A-Za-z]:[\\\\/][^\\s\"'`<>|]*\\.html?" + // C:\x\y.html or C:/x/y.html
     "|\\\\\\\\[^\\s\"'`<>|]*\\.html?" + //   \\host\share\x.html (UNC)
     "|/[^\\s\"'`<>|]*\\.html?" + //          /home/me/x.html (unix-absolute)
+    `|(?:${SEG}+[\\\\/])+${SEG}*\\.html?` + // design-loop/x.html (relative)
   ")(?![A-Za-z0-9])",
   "i"
 );
@@ -72,18 +89,26 @@ export function findLinksInLine(text: string): DetectedLink[] {
   return [...urls, ...files].sort((a, b) => a.start - b.start);
 }
 
-/** Convert a detected local-file token to a navigable file:// URL. A token that
- *  is already a file:// (or http) URL passes through. A leading "~" is expanded
- *  to the home dir from the last state push (left as-is if none is known yet —
- *  the link still shows, it just can't resolve). */
-export function htmlFileToUrl(token: string): string {
+/** Convert a detected local-file token to a navigable file:// URL, or null when
+ *  the token can't be resolved to an absolute path (a relative token with no
+ *  known cwd, or a "~\…" token before the first state push). Callers drop the
+ *  link entirely on null rather than offering an address that leads nowhere.
+ *
+ *  `cwd` is the pane's last-known working directory (from its OSC 7 handler);
+ *  a relative token like "design-loop/report.html" is joined onto it. */
+export function htmlFileToUrl(token: string, cwd = ""): string | null {
   let s = token.trim();
   if (/^(file|https?):\/\//i.test(s)) return s;
-  if (s[0] === "~" && homeDir) {
+  if (s[0] === "~") {
+    if (!homeDir) return null;
     // "~\AppData\x.html" → "<home>\AppData\x.html"; normalize the join slash.
     s = homeDir.replace(/[\\/]+$/, "") + "\\" + s.slice(1).replace(/^[\\/]+/, "");
+  } else if (!/^([A-Za-z]:[\\/]|\\\\|\/)/.test(s)) {
+    // Relative — needs the pane's cwd to mean anything.
+    if (!cwd) return null;
+    s = cwd.replace(/[\\/]+$/, "") + "/" + s.replace(/^\.[\\/]/, "");
   }
   if (/^[A-Za-z]:[\\/]/.test(s)) return "file:///" + s.replace(/\\/g, "/"); // drive
   if (s.startsWith("\\\\")) return "file:" + s.replace(/\\/g, "/"); //          UNC
-  return "file://" + s.replace(/\\/g, "/"); //          unix-absolute / unresolved ~
+  return "file://" + s.replace(/\\/g, "/"); //                       unix-absolute
 }

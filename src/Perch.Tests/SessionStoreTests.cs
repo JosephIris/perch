@@ -1,4 +1,6 @@
+using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using Xunit;
 
 namespace Perch.Tests;
@@ -132,5 +134,65 @@ public class SessionStoreTests
         Assert.NotNull(back);
         Assert.Equal("brought back", back!.Title);
         Assert.Single(store.Sessions);
+    }
+
+    // ---- persisted shape ---------------------------------------------------
+    //
+    // Nothing else pins what sessions.json actually contains, and both board
+    // fields are load-bearing across a restart: without them a restored tab
+    // forgets it had a board and its board leaf renders as a terminal, which
+    // would then spawn a shell. Serializing through the real source-gen context
+    // rather than SessionStore.Save so the test never touches the user's store.
+
+    [Fact]
+    public void PaneNode_IsBoardSurvivesTheJsonRoundTrip()
+    {
+        var json = JsonSerializer.Serialize(
+            new PaneNode { Name = "login-bug", IsBoard = true },
+            SessionStoreJsonContext.Default.PaneNode);
+        Assert.Contains("\"IsBoard\": true", json);
+
+        var back = JsonSerializer.Deserialize(json, SessionStoreJsonContext.Default.PaneNode)!;
+        Assert.True(back.IsBoard);
+        Assert.True(back.IsBoardPane);
+        Assert.False(back.IsTerminal);
+    }
+
+    [Fact]
+    public void Session_BoardPathSurvivesTheJsonRoundTrip()
+    {
+        var dto = new SessionStoreDto
+        {
+            Version = 3,
+            Sessions = new List<Session>
+            {
+                new() { Title = "login bug", BoardPath = @"C:\dev\perch\.perch\boards\login-bug" },
+            },
+        };
+        var json = JsonSerializer.Serialize(dto, SessionStoreJsonContext.Default.SessionStoreDto);
+        var back = JsonSerializer.Deserialize(json, SessionStoreJsonContext.Default.SessionStoreDto)!;
+        Assert.Equal(@"C:\dev\perch\.perch\boards\login-bug", back.Sessions![0].BoardPath);
+    }
+
+    [Fact]
+    public void OlderStoreWithoutTheBoardFields_LoadsWithSaneDefaults()
+    {
+        // Exactly what a v3 file written before boards existed looks like. The
+        // additive-field contract is that this needs no migration.
+        const string legacy = """
+        {
+          "Version": 3,
+          "Sessions": [
+            { "Id": "11111111-2222-3333-4444-555555555555", "Title": "main",
+              "Root": { "Id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "Split": null,
+                        "Children": [], "Url": null, "Name": "pane-1", "ColorIndex": 3, "Weight": 1 } }
+          ]
+        }
+        """;
+        var back = JsonSerializer.Deserialize(legacy, SessionStoreJsonContext.Default.SessionStoreDto)!;
+        var sess = back.Sessions![0];
+        Assert.Equal("", sess.BoardPath);          // not null — the page reads it as a string
+        Assert.False(sess.Root.IsBoard);
+        Assert.True(sess.Root.IsTerminal);         // still a terminal, still spawns
     }
 }

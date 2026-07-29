@@ -136,6 +136,68 @@ public class ProtocolTests
     }
 
     [Fact]
+    public void BoardRequest()
+    {
+        // Reuses PaneRef: a board.request carries nothing but the pane asking,
+        // because WHICH board it means is a fact about the pane's session, not
+        // something the page is allowed to assert.
+        var m = Round<PaneRef>($"{{\"type\":\"board.request\",\"paneId\":\"{G1}\"}}");
+        Assert.Equal(Guid.Parse(G1), m.PaneId);
+    }
+
+    [Fact]
+    public void BoardNew()
+    {
+        var m = Round<PaneRef>($"{{\"type\":\"board.new\",\"paneId\":\"{G2}\"}}");
+        Assert.Equal(Guid.Parse(G2), m.PaneId);
+    }
+
+    [Fact]
+    public void BoardAdd()
+    {
+        var m = Round<BoardAddMsg>(
+            $"{{\"type\":\"board.add\",\"paneId\":\"{G1}\",\"kind\":\"auto\",\"text\":\"src/a.ts\",\"x\":16,\"y\":32}}");
+        Assert.Equal(("auto", "src/a.ts", 16d, 32d), (m.Kind, m.Text, m.X, m.Y));
+        Assert.Null(m.Note);
+    }
+
+    [Fact]
+    public void BoardPaste_CarriesNoPayload()
+    {
+        // The absence of image bytes here is the design: the host reads the
+        // clipboard itself rather than taking megabytes over the bridge.
+        var m = Round<BoardPasteMsg>($"{{\"type\":\"board.paste\",\"paneId\":\"{G1}\",\"x\":8,\"y\":8}}");
+        Assert.Equal((Guid.Parse(G1), 8d, 8d), (m.PaneId, m.X, m.Y));
+    }
+
+    [Fact]
+    public void BoardMoveAndResize_FinalDefaultsTrue()
+    {
+        var mv = Round<BoardMoveMsg>(
+            $"{{\"type\":\"board.move\",\"paneId\":\"{G1}\",\"nodeId\":\"n3\",\"x\":40,\"y\":80,\"final\":false}}");
+        Assert.Equal(("n3", 40d, 80d, false), (mv.NodeId, mv.X, mv.Y, mv.Final));
+
+        var rz = Round<BoardResizeMsg>(
+            $"{{\"type\":\"board.resize\",\"paneId\":\"{G1}\",\"nodeId\":\"n3\",\"w\":300,\"h\":220,\"final\":true}}");
+        Assert.Equal(("n3", 300d, 220d, true), (rz.NodeId, rz.W, rz.H, rz.Final));
+
+        // Omitted `final` must default to TRUE, so a caller that forgets it
+        // still persists rather than silently dropping the change.
+        var noFinal = Round<BoardMoveMsg>(
+            $"{{\"type\":\"board.move\",\"paneId\":\"{G1}\",\"nodeId\":\"n3\",\"x\":1,\"y\":2}}");
+        Assert.True(noFinal.Final);
+    }
+
+    [Fact]
+    public void BoardRemoveAndImage_ShareTheNodeRefShape()
+    {
+        var rm = Round<BoardNodeRefMsg>($"{{\"type\":\"board.remove\",\"paneId\":\"{G1}\",\"nodeId\":\"n2\"}}");
+        Assert.Equal("n2", rm.NodeId);
+        var im = Round<BoardNodeRefMsg>($"{{\"type\":\"board.image\",\"paneId\":\"{G2}\",\"nodeId\":\"n9\"}}");
+        Assert.Equal((Guid.Parse(G2), "n9"), (im.PaneId, im.NodeId));
+    }
+
+    [Fact]
     public void UrlPaneVisible()
     {
         var m = Round<UrlPaneVisibleMsg>($"{{\"type\":\"urlpane.visible\",\"paneId\":\"{G1}\",\"visible\":false}}");
