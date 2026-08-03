@@ -66,6 +66,9 @@ export type OutMessage =
    * close permanent (a restore would otherwise reopen into a directory that no
    * longer exists). The branch survives regardless. */
   | { type: "session.close"; id: string; removeWorktree?: boolean }
+  /* Put a tab to sleep: the host stops its panes and files it under the
+   * project's Idle group. There is no inverse — selecting the row wakes it. */
+  | { type: "session.dormant"; id: string }
   /* Bring a closed session back from "Recently closed" (restores layout +
    * cwd, and resumes its Claude panes when enabled). */
   | { type: "session.restore"; id: string }
@@ -379,6 +382,11 @@ export type SessionView = {
   /* The project (registered repo) this tab is filed under; "" when unfiled.
    * Project mode groups on this and puts the unfiled ones under "Other". */
   projectId: string;
+  /* Deliberately slept by the user (the moon button). Files the row under its
+   * project's collapsed "Idle" group instead of the active list. A persisted
+   * flag, NOT a reading of agentState — a woken bare shell reports idle the
+   * instant it spawns and would otherwise fall straight back in. */
+  dormant?: boolean;
   /* Branch of this tab's git worktree; "" when it has no worktree. Drives the
    * "also delete its worktree folder" option on close. */
   worktreeBranch: string;

@@ -731,6 +731,7 @@ public partial class MainWindow : FluentWindow
         .Add<SessionRef>("session.select", OnSessionSelect)
         .Add<SessionRenameMsg>("session.rename", OnSessionRename)
         .Add<SessionCloseMsg>("session.close", OnSessionClose)
+        .Add<SessionRef>("session.dormant", OnSessionDormant)
         .Add<SessionRef>("session.restore", OnSessionRestore)
         .Add<SessionRef>("session.purge", OnSessionPurge)
         .Add<ResumeDecisionMsg>("resume.decision", OnResumeDecision)
@@ -2375,10 +2376,69 @@ public partial class MainWindow : FluentWindow
         PushState();
     }
 
+    /// Put a tab to sleep: stop its panes, keep everything else. There is no
+    /// inverse message — selecting the row IS the wake (see OnSessionSelect),
+    /// which is what makes the sidebar's Idle group behave like a drawer rather
+    /// than a mode you have to leave.
+    private void OnSessionDormant(SessionRef msg)
+    {
+        var sess = _store.Sessions.FirstOrDefault(x => x.Id == msg.Id);
+        if (sess == null || sess.Dormant) return;
+        var leaves = AllLeaves(sess.Root).ToList();
+
+        // Pick the successor BEFORE the flag flips and the row moves — after
+        // that, `sess` is no longer a candidate and its index has changed.
+        var wasActive = _store.ActiveSessionId == sess.Id;
+        var next = wasActive ? _store.PickActiveAfter(sess) : null;
+
+        _store.SetDormant(sess, true);
+
+        if (wasActive)
+        {
+            // Same rule as closing: nearest live tab in this project, or the
+            // empty workspace. Never another dormant tab — waking one is the
+            // thing we're deliberately not doing.
+            _store.ActiveSessionId = next?.Id;
+            _activePaneId = next == null ? null : FirstLeaf(next.Root)?.Id;
+        }
+
+        _store.Save();
+        PushState();
+
+        // Teardown AFTER the UI has moved on, same as close: a Claude pane gets
+        // its polite /exit so the transcript is saved and `--resume` has
+        // something to come back to.
+        _ = CloseTeardownAsync(leaves, "", "");
+    }
+
+    /// Bring a slept tab back. Clearing the flag re-seats it at the top of its
+    /// project's active run; the PTYs respawn lazily on the page's first
+    /// pane.resize, exactly as they do for any tab you haven't opened yet.
+    private void WakeSession(Session sess)
+    {
+        _store.SetDormant(sess, false);
+        // A polite exit from the sleep may still be in flight, and Spawn refuses
+        // a pane id that still owns a live PTY — cut the grace short or the
+        // woken tab comes up dead.
+        foreach (var p in AllLeaves(sess.Root)) CancelPendingShutdown(p.Id);
+
+        if (!_settings.ResumeAgentsOnLaunch) return;
+        // Only panes whose transcript actually exists — a saved id with no
+        // on-disk conversation would just error "No conversation found".
+        var resumable = AllLeaves(sess.Root)
+            .Where(p => !string.IsNullOrEmpty(p.ClaudeSessionId)
+                        && ClaudeTranscripts.Exists(p.ClaudeSessionId!, ResolvePaneCwd(sess, p)))
+            .ToList();
+        if (resumable.Count == 0) return;
+        foreach (var p in resumable) _armedResumePanes.Add(p.Id);
+        BeginRestoreProgress(resumable.Select(p => p.Id).ToList());
+    }
+
     private void OnSessionSelect(SessionRef msg)
     {
         var sess = _store.Sessions.FirstOrDefault(s => s.Id == msg.Id);
         if (sess == null) return;
+        if (sess.Dormant) WakeSession(sess);
         _store.ActiveSessionId = msg.Id;
         // PTYs for the selected session's panes spawn lazily on first
         // pane.resize. Just point _activePaneId at a real leaf.

@@ -175,6 +175,10 @@ internal static class StateProjection
             /* The project (registered repo) this tab belongs to, or "" when it
              * isn't filed under one — project mode puts those under "Other". */
             projectId = s.ProjectId?.ToString("D") ?? "",
+            /* Deliberately slept by the user: the sidebar files it under its
+             * project's collapsed "Idle" group instead of the active list.
+             * A flag, not a reading of agentState — see Session.Dormant. */
+            dormant = s.Dormant,
             /* The branch this tab's worktree was cut on; "" when it has no
              * worktree (a plain tab, or any non-project session). The page uses
              * it to offer "also delete the worktree folder" when closing — and

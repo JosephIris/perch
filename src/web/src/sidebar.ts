@@ -192,6 +192,29 @@ export class Sidebar {
    *  you actually clicked. */
   private justToggled: string | null = null;
 
+  /** Projects whose "Idle" sub-group is open. NOT persisted, unlike `collapsed`:
+   *  the group is a drawer for tabs you put away, and it should be shut every
+   *  time you come back — a drawer you left open is just the active list again,
+   *  one launch later. */
+  private readonly idleOpen = new Set<string>();
+
+  /** Same one-render opt-in as `justToggled`, for the Idle chevron. */
+  private justToggledIdle: string | null = null;
+
+  /** Idle count per project as of the LAST render, so a slept tab can bump the
+   *  count on a CLOSED group — where the count is the only signal that anything
+   *  happened. Cleared per render like the toggles above. */
+  private readonly lastIdleCount = new Map<string, number>();
+
+  /** Sessions whose `dormant` flag changed since the last render. They animate
+   *  in at their new home for exactly one render. The sidebar rebuilds from
+   *  scratch every push, so entry motion has to be opt-in or it re-fires ~1Hz
+   *  while an agent works. (Only the ARRIVAL animates: animating the departure
+   *  would mean keeping a node alive past its own state — the same call the
+   *  project fold makes.) */
+  private readonly lastDormant = new Map<string, boolean>();
+  private regrouped = new Set<string>();
+
   /** In-flight sidebar drag (a project header or a tab row), or null. */
   private drag: { kind: "project" | "tab"; id: string; el: HTMLElement } | null = null;
 
@@ -315,6 +338,7 @@ export class Sidebar {
     mode: SidebarMode = "sessions"
   ) {
     this.renderClosed(closed);
+    this.markRegrouped(sessions);
     const modeChanged = this.lastMode !== null && mode !== this.lastMode;
     this.lastMode = mode;
     if (mode === "projects") {
@@ -370,6 +394,24 @@ export class Sidebar {
 
   /** Soft cross-fade when the Sessions ⇄ Projects mode flips. Restarts the
    *  keyframe by removing + reflowing before re-adding. */
+  /** Diff this push's dormant flags against the last one. A tab that just
+   *  changed sides animates in at its new home for this render only; a tab we
+   *  have never seen doesn't (a fresh launch would otherwise animate the whole
+   *  list at once). */
+  private markRegrouped(sessions: SessionView[]) {
+    this.regrouped = new Set();
+    const seen = new Set<string>();
+    for (const s of sessions) {
+      seen.add(s.id);
+      const now = s.dormant === true;
+      const before = this.lastDormant.get(s.id);
+      if (before !== undefined && before !== now) this.regrouped.add(s.id);
+      this.lastDormant.set(s.id, now);
+    }
+    for (const id of [...this.lastDormant.keys()])
+      if (!seen.has(id)) this.lastDormant.delete(id);
+  }
+
   private playModeSwap(changed: boolean) {
     if (!changed) return;
     const el = this.listEl;
@@ -524,15 +566,30 @@ export class Sidebar {
       // still name the session — and an agent that needs you can't hide, because
       // the header wears its group's state as a dot.
       if (!collapsed && tabs.length) {
-        const list = this.sessionList(tabs, activeId, true);
-        // Only the just-unfolded group animates in. (Folding shut is immediate:
-        // animating a removal means keeping the node alive past its state, and a
-        // fold that lingers reads as lag, not polish.)
-        if (animate) list.classList.add("session-list--enter");
-        frag.appendChild(list);
+        // Tabs you deliberately slept live in their own drawer at the foot of
+        // the branch, so the active list only ever shows work in progress.
+        // Both partitions are stable, so each keeps the host's order — which
+        // for these two runs already means newest-first (see PlaceAtProjectTop
+        // / PlaceAtDormantTop).
+        const live = tabs.filter((t) => !t.dormant);
+        const idle = tabs.filter((t) => t.dormant);
+
+        if (live.length) {
+          const list = this.sessionList(live, activeId, true);
+          // A drawer below means the branch keeps going — don't close the elbow.
+          if (idle.length) list.classList.add("session-list--continues");
+          // Only the just-unfolded group animates in. (Folding shut is immediate:
+          // animating a removal means keeping the node alive past its state, and a
+          // fold that lingers reads as lag, not polish.)
+          if (animate) list.classList.add("session-list--enter");
+          frag.appendChild(list);
+        }
+        if (idle.length) frag.appendChild(this.idleGroup(project.id, idle, activeId));
+        this.lastIdleCount.set(project.id, idle.length);
       }
     }
     this.justToggled = null;   // one render only
+    this.justToggledIdle = null;
 
     // A PERMANENT way to add another project. This used to live only in the
     // empty state — which vanishes the moment you register your first repo, so
@@ -680,6 +737,73 @@ export class Sidebar {
   }
 
   /** "Add project" — always present in project mode, under the last group. */
+  /** A project's "Idle" drawer: the tabs you put to sleep, folded away by
+   *  default. It sits at the foot of the branch and continues the same tree
+   *  connectors, so it reads as part of the project rather than a second list.
+   *
+   *  Shut, the count is the ONLY thing that can tell you a tab landed in here —
+   *  so it bumps when it grows. */
+  private idleGroup(
+    projectId: string,
+    idle: SessionView[],
+    activeId: string
+  ): HTMLElement {
+    const open = this.idleOpen.has(projectId);
+    const wrap = document.createElement("div");
+    wrap.className = "idle-group";
+
+    const head = document.createElement("button");
+    head.type = "button";
+    head.className = "idle-group__head";
+    head.setAttribute("aria-expanded", String(open));
+
+    const chev = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    chev.setAttribute("class", "idle-group__chev");
+    chev.setAttribute("viewBox", "0 0 12 12");
+    chev.setAttribute("fill", "none");
+    chev.setAttribute("aria-hidden", "true");
+    chev.dataset.open = String(open);
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", "M4.5 2.5 L8 6 L4.5 9.5");
+    path.setAttribute("stroke", "currentColor");
+    path.setAttribute("stroke-width", "1.4");
+    path.setAttribute("stroke-linecap", "round");
+    path.setAttribute("stroke-linejoin", "round");
+    chev.appendChild(path);
+    if (this.justToggledIdle === projectId) chev.classList.add("idle-group__chev--turning");
+    head.appendChild(chev);
+
+    const label = document.createElement("span");
+    label.textContent = "Idle";
+    head.appendChild(label);
+
+    const count = document.createElement("span");
+    count.className = "idle-group__count";
+    count.textContent = String(idle.length);
+    // Bump only when it GREW while shut — open, you can see the row arrive, and
+    // a count that jumps as well is two answers to one question.
+    const was = this.lastIdleCount.get(projectId);
+    if (!open && was !== undefined && idle.length > was)
+      count.classList.add("idle-group__count--bumped");
+    head.appendChild(count);
+
+    head.addEventListener("click", () => {
+      if (open) this.idleOpen.delete(projectId);
+      else this.idleOpen.add(projectId);
+      this.justToggledIdle = projectId;
+      this.rerender?.();
+    });
+    wrap.appendChild(head);
+
+    if (open) {
+      const list = this.sessionList(idle, activeId, true);
+      list.classList.add("session-list--idle");
+      if (this.justToggledIdle === projectId) list.classList.add("session-list--enter");
+      wrap.appendChild(list);
+    }
+    return wrap;
+  }
+
   private renderAddProject(): HTMLElement {
     const btn = document.createElement("button");
     btn.type = "button";
@@ -786,6 +910,8 @@ export class Sidebar {
     const item = document.createElement("button");
     item.type = "button";
     item.className = "session-item" + (active ? " session-item--active" : "");
+    // Just changed sides (slept or woken) → animate in at its new home, once.
+    if (this.regrouped.has(s.id)) item.classList.add("session-item--regrouped");
     item.dataset.sessionId = s.id;
 
     // Status column. At rest it's the state dot (CSS colors it via
@@ -949,6 +1075,51 @@ export class Sidebar {
       txt.textContent = text;
       note.appendChild(txt);
       item.appendChild(note);
+    }
+
+    // Sleep — stop this tab's panes and file it under its project's Idle
+    // drawer. Sits left of the ✕ and shares its hover reveal. A tab that's
+    // already asleep doesn't offer it: selecting the row is how you wake one,
+    // so the pair would be a button and its own undo in the same slot.
+    if (!s.dormant) {
+      const sleep = document.createElement("button");
+      sleep.type = "button";
+      sleep.className = "session-item__sleep";
+      sleep.title = "Make idle — stops this tab's agent, keeps its panes";
+      sleep.setAttribute("aria-label", `Make ${s.title} idle`);
+      sleep.innerHTML =
+        '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true">' +
+        '<path d="M13.4 9.6A5.6 5.6 0 0 1 6.4 2.6a5.6 5.6 0 1 0 7 7Z" ' +
+        'stroke="currentColor" stroke-width="1.3" stroke-linecap="round" ' +
+        'stroke-linejoin="round"/></svg>';
+      sleep.addEventListener("click", async (ev) => {
+        ev.stopPropagation();
+        // No confirm for a tab at rest: sleeping is reversible in one click
+        // (select the row), nothing is archived or deleted, and a prompt in
+        // front of a reversible action is what trains people to click through
+        // prompts.
+        //
+        // It IS reversible-with-loss in two states, so those ask. The polite
+        // shutdown sends ESC ESC /exit — to a generating agent that's an
+        // interrupt, and the turn it was mid-way through doesn't come back when
+        // you reopen the tab. A blocked agent is holding a question for you,
+        // and sleeping it throws the question away.
+        const working = s.agentState === "working" || s.workingCount > 0;
+        const blocked = s.agentState === "permission" || s.agentState === "waiting";
+        if (working || blocked) {
+          const ok = await confirmDialog({
+            title: `Make ${s.title} idle?`,
+            body: working
+              ? "This agent is mid-turn. Stopping it now ends that turn — reopening the tab resumes the conversation, but not the work in flight."
+              : "This agent is waiting on you. Stopping it now discards what it was asking.",
+            confirmLabel: "Make idle",
+            cancelLabel: "Leave it running",
+          });
+          if (!ok) return;
+        }
+        send({ type: "session.dormant", id: s.id });
+      });
+      item.appendChild(sleep);
     }
 
     const close = document.createElement("button");

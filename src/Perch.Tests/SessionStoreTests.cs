@@ -148,6 +148,96 @@ public class SessionStoreTests
         Assert.Equal(new[] { existing.Id, fresh.Id }, store.Sessions.Select(s => s.Id).ToArray());
     }
 
+    // ── Dormant tabs ──────────────────────────────────────────────────────
+    // Dormant is an EXPLICIT persisted flag, never derived from AgentState: a
+    // woken bare shell reports Idle the instant it spawns, so a derived flag
+    // would drop the tab back into the Idle drawer the moment you opened it.
+
+    [Fact]
+    public void Sleeping_SeatsTheTabAtTheTopOfItsProjectsDormantRun()
+    {
+        var store = new SessionStore();
+        var pid = Guid.NewGuid();
+        var a = store.AddNew(); a.ProjectId = pid;
+        var b = store.AddNew(); b.ProjectId = pid;
+        var c = store.AddNew(); c.ProjectId = pid;
+
+        store.SetDormant(a, true);      // first sleeper: no dormant sibling to sit above
+        store.SetDormant(c, true);      // newest sleeper must land ABOVE a
+
+        // Array order IS render order, and the page partitions live-then-dormant:
+        // live = [b], dormant = [c, a] — newest-slept first, no timestamp needed.
+        Assert.Equal(
+            new[] { c.Id, a.Id, b.Id },
+            store.Sessions.Select(s => s.Id).ToArray());
+        Assert.Equal(
+            new[] { c.Id, a.Id },
+            store.Sessions.Where(s => s.Dormant).Select(s => s.Id).ToArray());
+    }
+
+    [Fact]
+    public void Waking_SeatsTheTabBackAtTheTopOfTheActiveRun()
+    {
+        var store = new SessionStore();
+        var pid = Guid.NewGuid();
+        var a = store.AddNew(); a.ProjectId = pid;
+        var b = store.AddNew(); b.ProjectId = pid;
+        var c = store.AddNew(); c.ProjectId = pid;
+        store.SetDormant(c, true);
+
+        store.SetDormant(c, false);
+
+        Assert.False(c.Dormant);
+        Assert.Equal(
+            new[] { c.Id, a.Id, b.Id },
+            store.Sessions.Select(s => s.Id).ToArray());
+    }
+
+    // A dormant tab is never a landing place — waking one is exactly the thing
+    // closing (or sleeping) another tab must not do. It's skipped even though
+    // its panes would otherwise look live.
+    [Fact]
+    public void ClosingASession_SkipsADormantTab_EvenWhenItsPanesLookBusy()
+    {
+        var store = new SessionStore();
+        var pid = Guid.NewGuid();
+        var asleep = store.AddNew(); asleep.ProjectId = pid;
+        asleep.Root.AgentState = AgentState.Working;   // stale state on a slept tab
+        store.SetDormant(asleep, true);
+        var closing = store.AddNew(); closing.ProjectId = pid;
+
+        var next = store.Remove(closing);
+
+        Assert.Null(next);
+        Assert.Null(store.ActiveSessionId);
+    }
+
+    [Fact]
+    public void PickActiveAfter_IgnoresTheTabBeingSlept_AndFindsALiveSibling()
+    {
+        var store = new SessionStore();
+        var pid = Guid.NewGuid();
+        var live = store.AddNew(); live.ProjectId = pid;
+        live.Root.AgentState = AgentState.Done;
+        var sleeping = store.AddNew(); sleeping.ProjectId = pid;
+        sleeping.Root.AgentState = AgentState.Working;
+
+        Assert.Equal(live.Id, store.PickActiveAfter(sleeping)?.Id);
+    }
+
+    [Fact]
+    public void PickActiveAfter_ReturnsNull_WhenTheProjectHasNothingElseLive()
+    {
+        var store = new SessionStore();
+        var pid = Guid.NewGuid();
+        var dormant = store.AddNew(); dormant.ProjectId = pid;
+        store.SetDormant(dormant, true);
+        var sleeping = store.AddNew(); sleeping.ProjectId = pid;
+        sleeping.Root.AgentState = AgentState.Working;
+
+        Assert.Null(store.PickActiveAfter(sleeping));
+    }
+
     // Load() must tell a FRESH INSTALL (no file) from "I closed everything" (a
     // file that says zero sessions). It couldn't, and seeded a "main" shell in
     // both cases — so closing the last session and restarting handed you a new

@@ -511,6 +511,9 @@ ul { list-style: none; padding: 0; margin: 0; }
   grid-column: 3 / 4;
   grid-row: 1;
   align-self: start;
+  /* end, not the default stretch: column 3 now sizes to hold TWO controls
+   * (sleep + close), and a stretched X would centre itself across both. */
+  justify-self: end;
   width: 22px;
   height: 22px;
   display: flex;
@@ -533,6 +536,56 @@ ul { list-style: none; padding: 0; margin: 0; }
 .session-item__close:hover {
   background: var(--color-subtle-tertiary);
   color: var(--color-text-primary);
+}
+
+/* "Make idle" — stops the tab's agent and files it under its project's Idle
+ * drawer. Shares the close button's cell and its hover reveal, sitting one
+ * button-width to its left.
+ *
+ * That offset is a TRANSFORM, not a margin. A margin would widen the auto
+ * column to 44px — permanently, since an opacity:0 button still takes its
+ * space — and every nested tab title would lose 22px to a control that is
+ * invisible 99% of the time. A transform is paint-only: the column stays 22px
+ * wide and the moon simply renders to the left of the ✕. Nothing to collide
+ * with there — the elapsed chip that shares the cell fades out on hover. */
+.session-item__sleep {
+  grid-column: 3 / 4;
+  grid-row: 1;
+  align-self: start;
+  justify-self: end;
+  transform: translateX(-22px);
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-input);
+  color: var(--color-text-tertiary);
+  opacity: 0;
+  transition:
+    opacity var(--dur-fast) var(--ease-entry),
+    background var(--dur-fast) var(--ease-entry),
+    color var(--dur-fast) var(--ease-entry);
+}
+.session-item__sleep svg { width: 13px; height: 13px; }
+/* Revealed on hover only — NOT on the active row like the ✕. Close is the one
+ * you reach for on the tab you're looking at; sleep is the one you reach for on
+ * the ones you aren't, and a permanently-lit moon on the active row reads as a
+ * suggestion to put your own work away. */
+/* --peek is the harness's stand-in for a pointer: a headless capture can't
+ * hover, and a control that only exists on hover is exactly the one worth
+ * looking at. Same aid the hover-meta uses. */
+.session-item:hover .session-item__sleep,
+.session-item--peek .session-item__sleep,
+.session-item--peek .session-item__close { opacity: 1; }
+.session-item__sleep:hover {
+  background: var(--color-subtle-tertiary);
+  color: var(--color-text-primary);
+}
+.session-item__sleep:focus-visible {
+  opacity: 1;
+  outline: 1px solid var(--color-accent);
+  outline-offset: -1px;
 }
 
 /* --- Workspace / pane tree -----------------------------------------------
@@ -2646,6 +2699,114 @@ button.pane__chip--ports:hover {
   font-size: 13px;
 }
 .session-item--nested:hover { background: var(--color-subtle-secondary); }
+
+/* ── The Idle drawer ───────────────────────────────────────────────────────
+ * A project's slept tabs, folded away at the foot of its branch. It continues
+ * the same tree connectors rather than starting a new list: these are still
+ * that project's tabs, just put away. */
+.idle-group { position: relative; margin: 0 0 var(--sp-4) 0; }
+/* The live list above stops closing its branch when a drawer follows it —
+ * otherwise the last active row draws the └ elbow and the drawer reads as a
+ * detached stub hanging below a finished tree. */
+.session-list--nested.session-list--continues > .session-item--nested:last-child::before {
+  bottom: 0;
+}
+.idle-group__head {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px var(--sp-8) 4px 24px;
+  border: 0;
+  border-radius: var(--r-input);
+  background: transparent;
+  font-family: var(--font-small);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+  text-align: left;
+  cursor: pointer;
+}
+.idle-group__head:hover {
+  background: var(--color-subtle-secondary);
+  color: var(--color-text-secondary);
+}
+.idle-group__head[aria-expanded="true"] { color: var(--color-text-secondary); }
+.idle-group__head:focus-visible {
+  outline: 1px solid var(--color-accent);
+  outline-offset: -1px;
+}
+/* Closes the branch: trunk down to this row's middle, then the tick in. */
+.idle-group__head::before {
+  content: "";
+  position: absolute;
+  left: 13px;
+  top: 0;
+  height: 50%;
+  width: 1px;
+  background: var(--color-stroke);
+}
+.idle-group__head::after {
+  content: "";
+  position: absolute;
+  left: 13px;
+  top: 50%;
+  width: 12px;
+  height: 1px;
+  background: var(--color-stroke);
+}
+/* Same SVG-not-glyph reasoning as the project chevron: a "›" pivots about a
+ * point that isn't its own middle and visibly lurches when it turns. */
+.idle-group__chev {
+  flex: none;
+  width: 11px;
+  height: 11px;
+  margin-left: -2px;
+  transform: rotate(0deg);
+  transform-origin: 50% 50%;
+}
+.idle-group__chev[data-open="true"] { transform: rotate(90deg); }
+.idle-group__chev--turning[data-open="true"] {
+  animation: chev-open var(--dur-normal) var(--ease-entry);
+}
+.idle-group__chev--turning[data-open="false"] {
+  animation: chev-close var(--dur-normal) var(--ease-entry);
+}
+.idle-group__count {
+  font-variant-numeric: tabular-nums;
+  display: inline-block;
+}
+/* Shut, this number is the only thing that can tell you a tab landed in here. */
+.idle-group__count--bumped { animation: idle-count-bump 200ms var(--ease-entry); }
+@keyframes idle-count-bump {
+  0%   { transform: scale(1); }
+  40%  { transform: scale(1.28); color: var(--color-text-primary); }
+  100% { transform: scale(1); }
+}
+
+/* The drawer's rows: one step further in, and a step quieter — they're the
+ * tabs you decided you weren't looking at. */
+.session-list--idle > .session-item--nested { padding-left: 40px; }
+.session-list--idle > .session-item--nested::before,
+.session-list--idle > .session-item--nested::after { left: 29px; }
+.session-list--idle .session-item__title { color: var(--color-text-secondary); }
+
+/* A tab that just changed sides arrives at its new home. One render only (see
+ * Sidebar.regrouped) — the sidebar rebuilds every push, so an unconditional
+ * entry animation would flicker the whole list once a second while an agent
+ * works. Only the arrival animates: animating the departure would mean holding
+ * a node alive past its own state, the same call the project fold makes. */
+.session-item--regrouped { animation: item-regroup var(--dur-normal) var(--ease-entry); }
+@keyframes item-regroup {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .session-item--regrouped,
+  .idle-group__count--bumped,
+  .idle-group__chev--turning[data-open="true"],
+  .idle-group__chev--turning[data-open="false"] { animation-duration: 1ms; }
+}
 /* Working tab's braille spinner — cc's own glyphs, in the dot's 10px slot.
  * Mono font so every frame has identical advance (no title jitter). Sized a
  * step up from the resting dot (13px vs an 8px dot) so it reads as the branch's
@@ -2684,7 +2845,8 @@ button.pane__chip--ports:hover {
   color: var(--color-text-tertiary);
   transition: opacity var(--dur-fast) var(--ease-entry);
 }
-.session-item:hover .session-item__chip { opacity: 0; }
+.session-item:hover .session-item__chip,
+.session-item--peek .session-item__chip { opacity: 0; }
 
 /* Nested permission row's tag — the one-line replacement for the two-line
  * "Claude needs your permission" note. The dot stays red (state palette);

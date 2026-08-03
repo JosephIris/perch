@@ -268,6 +268,20 @@ const projectSessions: SessionView[] = [
     rootPane: leaf({ name: "etl backfill", agentState: "done", branch: "dag-fixes", colorIndex: 3 }),
     branch: "dag-fixes", doneAtMs: FOUR_MIN_AGO, linesAdded: 52, linesDeleted: 18, filesChanged: 3,
   }),
+  // Two SLEPT tabs (the moon button) — they file into the project's collapsed
+  // "Idle" drawer instead of the active list, newest-slept first. Both wear the
+  // hollow ring, because sleeping a tab stops its agent. Two of them (not one)
+  // so the drawer's own tree connectors are visible: a trunk with an elbow.
+  projectTab({
+    id: "s-tab-sleep1", title: "cleanup ds2 gcs", dormant: true,
+    rootPane: leaf({ name: "cleanup ds2 gcs", agentState: "idle", branch: "main" }),
+    agentState: "idle", doneAtMs: 0, lastActivity: "3d ago",
+  }),
+  projectTab({
+    id: "s-tab-sleep2", title: "non_att_today", dormant: true,
+    rootPane: leaf({ name: "non_att_today", agentState: "idle", branch: "main" }),
+    agentState: "idle", doneAtMs: 0, lastActivity: "4d ago",
+  }),
 ];
 
 // #warmth — the age ramp on "your turn" rows. A `done` tab means the agent
@@ -333,10 +347,16 @@ if (view === "warmth") {
   const sb = new Sidebar(list, newBtn, closedEl);
   sb.rerender = () => sb.render(warmthSessions, "s-w-hot", [], projectsList, "projects");
   sb.rerender();
-} else if (view === "projects" || view === "projects-tip") {
+} else if (view === "projects" || view === "projects-tip" || view === "projects-idle") {
   const sb = new Sidebar(list, newBtn, closedEl);
   sb.rerender = () => sb.render(projectSessions, "s-tab1", [], projectsList, "projects");
   sb.rerender();
+  // #projects-idle: unfold the Idle drawer by CLICKING its head, not by poking
+  // at Sidebar internals — a capture that bypasses the real toggle can't tell
+  // you the toggle works. The drawer is shut on every launch by design, which
+  // is exactly why a headless shot needs this.
+  if (view === "projects-idle")
+    setTimeout(() => document.querySelector<HTMLElement>(".idle-group__head")?.click(), 80);
   // #projects-tip: force the first inactive tab's hover-meta open (via the
   // --peek class) so the revealed metrics line shows in a headless capture,
   // where a real pointer can't hover.

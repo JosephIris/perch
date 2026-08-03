@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Dormant tabs — sleep, group, wake</title>
+<style>
+  :root{
+    --font-text:"Inter Variable","Segoe UI Variable Text","Segoe UI",sans-serif;
+    --font-mono:"Cascadia Mono","Consolas",monospace;
+    --sidebar:#181818; --page:#0e0e0e;
+    --t1:rgba(255,255,255,.92); --t2:rgba(255,255,255,.72); --t3:rgba(255,255,255,.5);
+    --t4:rgba(255,255,255,.34);
+    --subtle2:rgba(255,255,255,.04); --subtle3:rgba(255,255,255,.08);
+    --line:rgba(255,255,255,.11);
+    --success:#6CCB5F; --accent:#4cc2ff; --caution:#E8C34C; --perm:#ff5c6c;
+    --ease-entry:cubic-bezier(0,0,0,1);
+    --dur-fast:120ms; --dur-normal:180ms;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--page);color:var(--t1);font-family:var(--font-text);
+       font-size:14px;line-height:1.4;padding:28px 32px}
+  h1{font-size:20px;font-weight:600;line-height:1.2;margin:0 0 4px}
+  .sub{color:var(--t3);font-size:13px;margin:0 0 24px;max-width:64ch}
+  .wrap{display:flex;gap:32px;align-items:flex-start;flex-wrap:wrap}
+  .panel{min-width:0}
+  h2{font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--t3);
+     margin:0 0 10px;font-weight:600}
+
+  /* ── the sidebar ──────────────────────────────────────────────────────── */
+  .side{width:280px;background:var(--sidebar);border-radius:10px;padding:8px 8px 12px}
+
+  .phead{display:flex;align-items:center;gap:4px;padding:4px 8px;margin-top:8px;
+         border-radius:4px;font-weight:500;font-size:14px;color:var(--t1);cursor:default}
+  .phead:first-child{margin-top:0}
+  .pchev{width:12px;height:12px;color:var(--t3);flex:none;transform:rotate(90deg)}
+  .pcount{flex:none;font-size:12px;color:var(--t3)}
+
+  .nested{position:relative;margin:2px 0 4px;display:flex;flex-direction:column;gap:0}
+
+  .row{position:relative;display:grid;grid-template-columns:10px minmax(0,1fr) auto;
+       align-items:center;column-gap:8px;padding:4px 8px 4px 24px;border-radius:4px;
+       cursor:pointer;overflow:hidden}
+  .row:hover{background:var(--subtle2)}
+  .row.sel{background:var(--subtle3)}
+  .row::before{content:"";position:absolute;left:13px;top:0;bottom:0;width:1px;background:var(--line)}
+  .row:last-child::before{bottom:50%}
+  .row::after{content:"";position:absolute;left:13px;top:50%;width:12px;height:1px;background:var(--line)}
+  .dot{width:8px;height:8px;border-radius:50%;grid-column:1;grid-row:1;background:transparent;
+       box-shadow:inset 0 0 0 1px var(--t3)}
+  .dot.done{background:var(--success);box-shadow:none}
+  .dot.work{background:var(--accent);box-shadow:none}
+  .dot.perm{background:var(--perm);box-shadow:none}
+  .ttl{grid-column:2;grid-row:1;font-size:13px;font-weight:410;color:var(--t1);
+       overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* Age and the hover actions SHARE one cell — same contract as the real
+   * .session-item__chip. Give them separate implicit rows and every row goes
+   * double-height, which breaks the tree connectors along with it. */
+  .age{grid-column:3;grid-row:1;justify-self:end;font-size:11px;color:var(--t3);
+       transition:opacity var(--dur-fast) var(--ease-entry)}
+  .acts{grid-column:3;grid-row:1;justify-self:end;display:flex;gap:2px;align-items:center;
+        opacity:0;transition:opacity var(--dur-fast) var(--ease-entry)}
+  .row:hover .age{opacity:0}
+  .row:hover .acts{opacity:1}
+  /* Capture aid: #hover in the URL pins the hover state so a headless shot can
+   * actually show the Sleep button. :hover never fires in a --screenshot run. */
+  body.forcehover .age{opacity:0}
+  body.forcehover .acts{opacity:1}
+  .iconbtn{width:20px;height:20px;display:flex;align-items:center;justify-content:center;
+           border:0;background:transparent;border-radius:4px;color:var(--t3);cursor:pointer;padding:0}
+  .iconbtn:hover{background:var(--subtle3);color:var(--t1)}
+  .iconbtn svg{width:13px;height:13px}
+
+  /* ── the Idle sub-group ───────────────────────────────────────────────── */
+  .idlehead{position:relative;display:flex;align-items:center;gap:6px;
+            padding:4px 8px 4px 24px;border-radius:4px;cursor:pointer;
+            font-size:12px;color:var(--t3);border:0;background:transparent;
+            font-family:var(--font-text);width:100%;text-align:left}
+  .idlehead:hover{background:var(--subtle2);color:var(--t2)}
+  .idlehead::before{content:"";position:absolute;left:13px;top:0;height:50%;width:1px;background:var(--line)}
+  .idlehead::after{content:"";position:absolute;left:13px;top:50%;width:12px;height:1px;background:var(--line)}
+  .ichev{width:11px;height:11px;flex:none;transform:rotate(0deg);transform-origin:50% 50%;
+         margin-left:-2px}
+  .idlehead[aria-expanded="true"] .ichev{transform:rotate(90deg)}
+  .idlehead[aria-expanded="true"]{color:var(--t2)}
+  .ichev.turn-open{animation:chev-open var(--dur-normal) var(--ease-entry)}
+  .ichev.turn-close{animation:chev-close var(--dur-normal) var(--ease-entry)}
+  @keyframes chev-open{from{transform:rotate(0)}to{transform:rotate(90deg)}}
+  @keyframes chev-close{from{transform:rotate(90deg)}to{transform:rotate(0)}}
+  .icount{font-variant-numeric:tabular-nums;display:inline-block}
+  .icount.bump{animation:count-bump 200ms var(--ease-entry)}
+  @keyframes count-bump{0%{transform:scale(1)}40%{transform:scale(1.28);color:var(--t1)}100%{transform:scale(1)}}
+
+  .idlelist{display:flex;flex-direction:column;gap:0;overflow:hidden}
+  .idlelist.unfold{animation:group-unfold var(--dur-normal) var(--ease-entry)}
+  @keyframes group-unfold{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
+  .idlelist .row{padding-left:40px}
+  .idlelist .row::before{left:29px}
+  .idlelist .row::after{left:29px}
+  .idlelist .ttl{color:var(--t2)}
+
+  /* ── motion for a row changing groups ─────────────────────────────────── */
+  .row.leaving{animation:row-leave 160ms var(--ease-entry) forwards;pointer-events:none}
+  @keyframes row-leave{
+    from{opacity:1;max-height:28px;transform:translateX(0)}
+    to  {opacity:0;max-height:0;padding-top:0;padding-bottom:0;transform:translateX(6px)}
+  }
+  .row.arriving{animation:row-arrive var(--dur-normal) var(--ease-entry)}
+  @keyframes row-arrive{
+    from{opacity:0;max-height:0;padding-top:0;padding-bottom:0;transform:translateY(-4px)}
+    to  {opacity:1;max-height:28px;transform:translateY(0)}
+  }
+  @media (prefers-reduced-motion:reduce){
+    .row.leaving,.row.arriving,.idlelist.unfold,.ichev.turn-open,.ichev.turn-close,.icount.bump
+      {animation-duration:1ms}
+  }
+
+  /* ── right-hand explainer ─────────────────────────────────────────────── */
+  .col{width:400px}
+  .steps{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px}
+  .steps button{font-family:var(--font-text);font-size:12px;padding:5px 10px;border-radius:4px;
+                border:1px solid var(--line);background:transparent;color:var(--t2);cursor:pointer}
+  .steps button:hover{background:var(--subtle2);color:var(--t1)}
+  .steps button.primary{border-color:rgba(76,194,255,.5);color:var(--accent)}
+
+  .log{background:var(--sidebar);border-radius:8px;padding:12px 14px;height:268px;overflow:auto;
+       font-family:var(--font-mono);font-size:11.5px;line-height:1.55;color:var(--t2)}
+  .log div{padding:1px 0;animation:group-unfold 140ms var(--ease-entry)}
+  .log .k{color:var(--accent)}
+  .log .m{color:var(--t4)}
+  .log .g{color:var(--success)}
+  .log .w{color:var(--caution)}
+
+  table{border-collapse:collapse;width:100%;font-size:12.5px;margin-top:18px}
+  th{text-align:left;font-weight:600;color:var(--t3);font-size:11px;letter-spacing:.4px;
+     text-transform:uppercase;padding:0 10px 6px 0}
+  td{padding:6px 10px 6px 0;vertical-align:top;border-top:1px solid var(--line);color:var(--t2)}
+  td:first-child{color:var(--t1);white-space:nowrap}
+  code{font-family:var(--font-mono);font-size:11.5px;color:var(--t1);background:var(--subtle2);
+       padding:1px 4px;border-radius:3px}
+  .note{font-size:12.5px;color:var(--t3);margin-top:18px;max-width:60ch}
+  .note b{color:var(--t2);font-weight:600}
+</style></head>
+<body>
+
+<h1>Dormant tabs — sleep, group, wake</h1>
+<p class="sub">Click <b style="color:var(--t2)">Sleep</b> on any active row (hover it), open the
+<b style="color:var(--t2)">Idle</b> chevron, and click a dormant row to wake it. Every state change
+is logged on the right. Nothing here is wired to the app — it's the flow, at real sizes and real motion.</p>
+
+<div class="wrap">
+  <div class="panel">
+    <h2>Sidebar — projects mode</h2>
+    <div class="side" id="side"></div>
+  </div>
+
+  <div class="panel col">
+    <h2>Flow</h2>
+    <div class="steps">
+      <button class="primary" id="play">▶ Play the whole flow</button>
+      <button id="reset">Reset</button>
+    </div>
+    <div class="log" id="log"></div>
+
+    <table>
+      <tr><th>Concept</th><th>What it is</th></tr>
+      <tr><td>Hollow ring</td><td><code>AgentState.Idle</code> — transient, per pane. A bare shell, or an agent that exited. Already exists.</td></tr>
+      <tr><td><code>Dormant</code></td><td><b>New, persisted, per session.</b> Set by the Sleep button, cleared on activation. Drives the Idle group — <i>not</i> the dot.</td></tr>
+      <tr><td><code>DormantAt</code></td><td>Stamp used to order the Idle group, newest at top.</td></tr>
+      <tr><td><code>WokeAt</code></td><td>Stamp used to seat a woken tab at the top of the active list.</td></tr>
+    </table>
+
+    <p class="note">Why a persisted flag and not just the dot: a woken <b>bare shell</b> reports
+    <code>Idle</code> the moment it spawns. If the group were derived from the dot, that tab would
+    fall straight back into Idle the instant you woke it. The flag is what you set; the dot is what
+    the agent reports.</p>
+  </div>
+</div>
+
+<script>
+const ICON_SLEEP = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M13.4 9.6A5.6 5.6 0 0 1 6.4 2.6a5.6 5.6 0 1 0 7 7Z"/></svg>';
+const ICON_X = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>';
+const CHEV = '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 2.5 8 6l-3.5 3.5"/></svg>';
+
+let clock = 0;
+const state = {
+  projects: [
+    { id:'p1', name:'product-tools-prod', open:true, idleOpen:false, tabs:[
+      { id:'t1', title:'optimizer',            dot:'work', age:'21s', dormant:false, seq:6 },
+      { id:'t2', title:'leaky event lift',     dot:'done', age:'30m', dormant:false, seq:5 },
+      { id:'t3', title:'gcp cost monitor',     dot:'perm', age:'11m', dormant:false, seq:4 },
+      { id:'t4', title:'king creatives',       dot:'done', age:'2h',  dormant:false, seq:3, sel:true },
+      { id:'t5', title:'cleanup ds2 gcs',      dot:'idle', age:'3d',  dormant:true,  seq:2 },
+      { id:'t6', title:'non_att_today',        dot:'idle', age:'4d',  dormant:true,  seq:1 },
+    ]},
+    { id:'p2', name:'cmux-win', open:true, idleOpen:false, tabs:[
+      { id:'t7', title:'dormant grouping',     dot:'work', age:'2m',  dormant:false, seq:2 },
+      { id:'t8', title:'store fixes',          dot:'idle', age:'6d',  dormant:true,  seq:1 },
+    ]},
+  ],
+};
+
+const side = document.getElementById('side');
+const logEl = document.getElementById('log');
+// Rows that must animate on THIS render only — the sidebar rebuilds wholesale,
+// so entry motion is opt-in per node (same contract as the real sidebar's
+// justToggled chevron).
+let entering = new Set(), unfolding = new Set(), bumping = new Set(), turning = new Map();
+
+function log(html){
+  const d = document.createElement('div');
+  d.innerHTML = html;
+  logEl.appendChild(d);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function render(){
+  side.replaceChildren();
+  for (const p of state.projects){
+    const active  = p.tabs.filter(t => !t.dormant).sort((a,b) => b.seq - a.seq);
+    const dormant = p.tabs.filter(t =>  t.dormant).sort((a,b) => b.seq - a.seq);
+
+    const head = document.createElement('div');
+    head.className = 'phead';
+    head.innerHTML = `<span class="pchev">${CHEV}</span><span>${p.name}</span>
+                      <span class="pcount">${p.tabs.length}</span>`;
+    side.appendChild(head);
+
+    const list = document.createElement('div');
+    list.className = 'nested';
+    for (const t of active) list.appendChild(rowEl(p, t, false));
+
+    if (dormant.length){
+      const ih = document.createElement('button');
+      ih.className = 'idlehead';
+      ih.setAttribute('aria-expanded', String(p.idleOpen));
+      const turn = turning.get(p.id);
+      ih.innerHTML = `<span class="ichev ${turn ? 'turn-' + turn : ''}">${CHEV}</span>
+                      <span>Idle</span>
+                      <span class="icount ${bumping.has(p.id) ? 'bump' : ''}">${dormant.length}</span>`;
+      ih.onclick = () => {
+        p.idleOpen = !p.idleOpen;
+        turning.set(p.id, p.idleOpen ? 'open' : 'close');
+        if (p.idleOpen) unfolding.add(p.id);
+        log(`<span class="m">${++clock}</span> idle group <span class="k">${p.idleOpen ? 'expanded' : 'collapsed'}</span> · ${p.name}`);
+        render();
+      };
+      list.appendChild(ih);
+
+      if (p.idleOpen){
+        const il = document.createElement('div');
+        il.className = 'idlelist' + (unfolding.has(p.id) ? ' unfold' : '');
+        for (const t of dormant) il.appendChild(rowEl(p, t, true));
+        list.appendChild(il);
+      }
+    }
+    side.appendChild(list);
+  }
+  entering = new Set(); unfolding = new Set(); bumping = new Set(); turning = new Map();
+}
+
+function rowEl(p, t, inIdle){
+  const el = document.createElement('div');
+  el.className = 'row' + (t.sel ? ' sel' : '') + (entering.has(t.id) ? ' arriving' : '');
+  el.innerHTML = `<span class="dot ${t.dot === 'idle' ? '' : t.dot}"></span>
+                  <span class="ttl">${t.title}</span>
+                  <span class="age">${t.age}</span>`;
+  const acts = document.createElement('span');
+  acts.className = 'acts';
+  if (!inIdle){
+    const sleep = document.createElement('button');
+    sleep.className = 'iconbtn';
+    sleep.title = 'Make idle — stops this tab’s agent';
+    sleep.innerHTML = ICON_SLEEP;
+    sleep.onclick = (e) => { e.stopPropagation(); doSleep(p, t, el); };
+    acts.appendChild(sleep);
+  }
+  const x = document.createElement('button');
+  x.className = 'iconbtn'; x.title = 'Close'; x.innerHTML = ICON_X;
+  x.onclick = (e) => e.stopPropagation();
+  acts.appendChild(x);
+  el.appendChild(acts);
+  if (inIdle) el.onclick = () => doWake(p, t, el);
+  return el;
+}
+
+function doSleep(p, t, el){
+  log(`<span class="m">${++clock}</span> <span class="k">sleep</span> “${t.title}” · agent stops, layout + session id kept`);
+  el.classList.add('leaving');
+  setTimeout(() => {
+    t.dormant = true; t.dot = 'idle'; t.sel = false;
+    t.seq = ++seqTop;                       // newest-dormant sits at the top
+    if (!p.idleOpen) bumping.add(p.id);     // collapsed → the count is the only signal
+    log(`<span class="m">${clock}</span>   <span class="w">dot → idle</span> · <code>Dormant=true</code> · filed at the top of Idle (${p.tabs.filter(x=>x.dormant).length})`);
+    render();
+  }, 160);
+}
+
+function doWake(p, t, el){
+  log(`<span class="m">${++clock}</span> <span class="k">wake</span> “${t.title}” · selecting it spawns its panes`);
+  el.classList.add('leaving');
+  setTimeout(() => {
+    t.dormant = false; t.dot = 'work'; t.age = 'now';
+    t.seq = ++seqTop;                       // newest-woken sits at the top
+    for (const o of p.tabs) o.sel = false;
+    t.sel = true;
+    entering.add(t.id);
+    log(`<span class="m">${clock}</span>   <span class="g">dot → working</span> · <code>Dormant=false</code> · back at the top of the active list, selected`);
+    render();
+  }, 160);
+}
+
+let seqTop = 100;
+
+document.getElementById('reset').onclick = () => location.reload();
+document.getElementById('play').onclick = async () => {
+  const p = state.projects[0];
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  const rowFor = id => [...side.querySelectorAll('.row')]
+    .find(r => r.querySelector('.ttl').textContent === id);
+
+  log('<span class="m">──</span> <span class="k">flow</span> — sleep one, open the group, wake another');
+  await wait(400);
+  const t = p.tabs.find(x => x.id === 't2');
+  doSleep(p, t, rowFor(t.title)); await wait(900);
+  p.idleOpen = true; turning.set(p.id,'open'); unfolding.add(p.id);
+  log(`<span class="m">${++clock}</span> idle group <span class="k">expanded</span> · ${p.name}`);
+  render(); await wait(900);
+  const w = p.tabs.find(x => x.id === 't6');
+  doWake(p, w, rowFor(w.title)); await wait(700);
+  log('<span class="m">──</span> done. Idle keeps its own order; the active list keeps yours.');
+};
+
+if (location.hash === '#hover') document.body.classList.add('forcehover');
+if (location.hash === '#open') { state.projects.forEach(p => p.idleOpen = true); }
+
+render();
+log('<span class="m">──</span> resting state · 2 projects · Idle collapsed by default');
+</script>
+</body></html>

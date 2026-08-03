@@ -165,6 +165,45 @@ internal sealed class SessionStore
         Sessions.Insert(first, s);
     }
 
+    /// Seats a just-slept session at the top of its project's DORMANT run —
+    /// immediately before its first already-dormant sibling. Order is array
+    /// position, so "newest-slept first" needs no timestamp and survives a
+    /// restart for free. The first tab you sleep in a project has no dormant
+    /// sibling to sit above and simply stays where it is.
+    public void PlaceAtDormantTop(Session s)
+    {
+        var idx = Sessions.IndexOf(s);
+        if (idx < 0) return;
+        var first = -1;
+        for (int i = 0; i < Sessions.Count; i++)
+        {
+            if (i == idx) continue;
+            if (Sessions[i].ProjectId == s.ProjectId && Sessions[i].Dormant) { first = i; break; }
+        }
+        if (first < 0 || first >= idx) return;
+        Sessions.RemoveAt(idx);
+        Sessions.Insert(first, s);
+    }
+
+    /// Put a session to sleep, or wake it, and re-seat it accordingly: newest
+    /// at the top of whichever run it just joined. Caller owns the PTY
+    /// teardown (sleep) and the resume arming (wake) — this is only the model.
+    public void SetDormant(Session s, bool dormant)
+    {
+        if (s.Dormant == dormant) return;
+        s.Dormant = dormant;
+        if (dormant) PlaceAtDormantTop(s); else PlaceAtProjectTop(s);
+    }
+
+    /// Who should take focus when `s` stops being usable but STAYS in the list
+    /// — i.e. you slept the tab you were looking at. Same rule as closing one:
+    /// nearest live tab of the same project, or null for the empty state.
+    public Session? PickActiveAfter(Session s)
+    {
+        var idx = Sessions.IndexOf(s);
+        return idx < 0 ? null : NearestLiveSibling(idx, s.ProjectId, s);
+    }
+
     /// Picks a color (0..5) not currently used by ANY leaf in ANY session.
     /// Falls back to round-robin once all six are taken. Both new-session
     /// roots and pane splits go through this so no two panes ever share a
@@ -247,15 +286,17 @@ internal sealed class SessionStore
     ///
     /// No live sibling → null, and the workspace shows its empty state rather
     /// than picking an arbitrary tab for you.
-    private Session? NearestLiveSibling(int idx, Guid? projectId)
+    private Session? NearestLiveSibling(int idx, Guid? projectId, Session? exclude = null)
     {
         for (int d = 0; d < Sessions.Count; d++)
         {
             var below = idx + d;
-            if (below < Sessions.Count && IsLiveSibling(Sessions[below], projectId))
+            if (below < Sessions.Count && Sessions[below] != exclude
+                && IsLiveSibling(Sessions[below], projectId))
                 return Sessions[below];
             var above = idx - 1 - d;
-            if (above >= 0 && IsLiveSibling(Sessions[above], projectId))
+            if (above >= 0 && Sessions[above] != exclude
+                && IsLiveSibling(Sessions[above], projectId))
                 return Sessions[above];
         }
         return null;
@@ -263,6 +304,7 @@ internal sealed class SessionStore
 
     private static bool IsLiveSibling(Session s, Guid? projectId) =>
         s.ProjectId == projectId &&
+        !s.Dormant &&
         StateProjection.AggregateState(AllLeavesOf(s.Root)) != AgentState.Idle;
 
     /// Pushes a closed session onto the front of the Recently-closed list,

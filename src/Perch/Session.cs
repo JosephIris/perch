@@ -72,6 +72,21 @@ internal sealed class Session : INotifyPropertyChanged
     /// (and its "closed 5m ago" ordering) survives a full app restart.
     public long ClosedAtUnixMs { get; set; }
 
+    /// True when the user deliberately put this tab to sleep (the moon button
+    /// on its sidebar row). Its PTYs are torn down, but the pane tree, the
+    /// per-pane cwds and the saved Claude session ids all survive, so selecting
+    /// the row brings the work back — selecting IS the wake, there is no
+    /// separate un-sleep.
+    ///
+    /// Persisted: a tab you put away stays away across a restart.
+    ///
+    /// Deliberately NOT derived from AgentState. A woken bare shell reports
+    /// Idle the instant it spawns, so a derived flag would drop the tab back
+    /// into the Idle group the moment you opened it. Nothing sets this except
+    /// the user — an agent that exits on its own leaves the tab exactly where
+    /// it is, wearing a hollow-ring dot.
+    public bool Dormant { get; set; }
+
     public PaneNode Root { get; set; } = new();
 
     // Notification text emitted by an agent or shell script via OSC 9

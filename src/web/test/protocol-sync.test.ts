@@ -68,6 +68,7 @@ const EXPECTED_TYPES = [
   "render.pong",
   "resume.decision",
   "session.close",
+  "session.dormant",
   "session.new",
   "session.purge",
   "session.rename",
