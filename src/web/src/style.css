@@ -391,6 +391,24 @@ ul { list-style: none; padding: 0; margin: 0; }
   min-width: 0;     /* allow ellipsis */
   overflow: hidden;
 }
+/* Room for the moon, while the moon is up.
+ *
+ * .session-item__sleep is drawn with a transform so it costs the row no width
+ * at rest (see the note there) — but a transform paints outside its own grid
+ * cell, and what it paints over is the END of this line: a long title's tail,
+ * and on the ACTIVE row the age / permission tag that the permanent ✕ pushed
+ * onto the title line (those two never fade, unlike the trailing chip that
+ * shares the ✕'s cell). Yielding the moon's own width here is what keeps the
+ * transform honest: the title ellipsizes a character earlier and the tag slides
+ * clear, instead of the moon being drawn on top of either.
+ *
+ * Hover-scoped, so nothing is spent at rest — which is the whole point of the
+ * transform — and only on rows that HAVE a moon (a dormant row doesn't offer
+ * sleep, so it keeps the full width). */
+.session-item--sleepable:hover .session-item__primary,
+.session-item--sleepable.session-item--peek .session-item__primary {
+  padding-right: 22px;   /* == the sleep button's width, and its translateX */
+}
 .session-item__title {
   /* Chrome body weight (var(--weight-body)) — a touch above Regular so Inter's
    * unhinted strokes stay crisp on low-DPI Windows. The variable-font axis goes
@@ -546,8 +564,12 @@ ul { list-style: none; padding: 0; margin: 0; }
  * column to 44px — permanently, since an opacity:0 button still takes its
  * space — and every nested tab title would lose 22px to a control that is
  * invisible 99% of the time. A transform is paint-only: the column stays 22px
- * wide and the moon simply renders to the left of the ✕. Nothing to collide
- * with there — the elapsed chip that shares the cell fades out on hover. */
+ * wide and the moon simply renders to the left of the ✕.
+ *
+ * The chip that shares the ✕'s cell fades out on hover, so it isn't what the
+ * moon lands on. What it lands on is the title LINE one column over, which the
+ * transform reaches into — see .session-item--sleepable:hover above, which
+ * yields it these 22px for exactly as long as the moon is up. */
 .session-item__sleep {
   grid-column: 3 / 4;
   grid-row: 1;

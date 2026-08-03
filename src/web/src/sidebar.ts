@@ -1120,6 +1120,11 @@ export class Sidebar {
         send({ type: "session.dormant", id: s.id });
       });
       item.appendChild(sleep);
+      // Tells CSS this row's title line has to yield 22px while the pair is up
+      // — the moon is drawn by transform and owns no column of its own, so
+      // without it it paints over the end of that line. A dormant row has no
+      // moon and keeps the full width.
+      item.classList.add("session-item--sleepable");
     }
 
     const close = document.createElement("button");
