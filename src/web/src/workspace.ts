@@ -178,8 +178,11 @@ export class Workspace {
       // No active session — hide every stage but keep them mounted.
       for (const st of this.stages.values()) st.container.style.display = "none";
       this.activeSessionId = null;
-      // Genuinely nothing open (as opposed to a momentary switch) → say so.
-      this.emptyState.hidden = sessions.length > 0;
+      // No active session is always a real state now, not a momentary switch:
+      // closing a tab with no LIVE sibling left in its project deliberately
+      // lands here rather than waking a dormant shell. Sessions may still
+      // exist (dormant ones, other projects) — say so anyway.
+      this.emptyState.hidden = false;
       return;
     }
     this.emptyState.hidden = true;
@@ -329,7 +332,14 @@ export class Workspace {
     const rebuilt = signature !== stage.signature;
     if (rebuilt) {
       stage.container.replaceChildren();
-      this.renderTree(stage, session.rootPane, stage.container);
+      const rootEl = this.renderTree(stage, session.rootPane, stage.container);
+      // Only a split's children get an inline flex-grow (their weight). Pane
+      // elements are reused across rebuilds, so a pane that WAS a resized
+      // split child and is now the whole stage still carries e.g.
+      // `flex-grow: 0.95` — and a lone flex item whose grow sums to under 1
+      // takes only that fraction of the free space, leaving a dead strip on
+      // the right. Clear it so the stylesheet's `flex: 1 1 0` wins.
+      rootEl.style.flexGrow = "";
       stage.signature = signature;
     }
 

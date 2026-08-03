@@ -387,6 +387,8 @@ internal sealed record SettingsSaveMsg
     public string? DefaultCwd { get; init; }
     public int? FontSize { get; init; }
     public bool? ResumeAgentsOnLaunch { get; init; }
+    /// Where a new tab lands in its project: "top" or "bottom".
+    public string? NewTabPosition { get; init; }
     /// Parent folders scanned one level deep for repos to offer as projects.
     /// Null = key absent (leave as-is); an empty array explicitly clears them.
     public List<string>? ProjectScanRoots { get; init; }

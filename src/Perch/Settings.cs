@@ -33,6 +33,12 @@ public sealed class Settings
     /// perch's "Reopen Previous Session" toggle.
     public bool ResumeAgentsOnLaunch { get; set; } = true;
 
+    /// Where a newly-created tab lands inside its project's run of tabs:
+    /// "top" (default) or "bottom". Top is the default because a tab you just
+    /// made is the one you're about to use — burying it under a dozen older
+    /// siblings means scrolling to find the thing you just asked for.
+    public string NewTabPosition { get; set; } = "top";
+
     /// Which sidebar mode is showing: "sessions" (the flat, state-partitioned
     /// list) or "projects" (repos as headers, their tabs nested beneath).
     /// Persisted so the sidebar comes back the way you left it.

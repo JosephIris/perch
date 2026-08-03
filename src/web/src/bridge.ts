@@ -182,6 +182,7 @@ export type OutMessage =
       defaultCwd?: string;
       fontSize?: number;
       resumeAgentsOnLaunch?: boolean;
+      newTabPosition?: NewTabPosition;
       projectScanRoots?: string[];
       worktreeRoot?: string;
       worktreeSeedPaths?: string[];
@@ -485,6 +486,9 @@ export type StateMessage = {
 
 export type SidebarMode = "sessions" | "projects";
 
+/* Where a newly-created tab lands inside its project's run of tabs. */
+export type NewTabPosition = "top" | "bottom";
+
 /* Reply to projects.scan: repos worth registering. `source` says where each
  * came from — "inUse" (already open in a pane) reads very differently from
  * "scanned" (found under a configured root), and the dialog groups on it. */
@@ -624,6 +628,9 @@ export type SettingsDataMessage = {
   /* Whether the launch prompt to reopen previous Claude sessions is enabled
    * (Settings → "Resume Claude sessions on launch"). */
   resumeAgentsOnLaunch?: boolean;
+  /* Where a new tab is inserted in its project (Settings → "New tab position").
+   * Absent → "top", matching the host's Settings.NewTabPosition default. */
+  newTabPosition?: NewTabPosition;
   /* Parent folders scanned (one level deep) for repos to offer as projects. */
   projectScanRoots?: string[];
   /* Where project tabs' worktrees are created ("" = the built-in default, which

@@ -13,7 +13,7 @@
 // only (lazy spawn reads them) — the dialog says so inline.
 
 import { send } from "./bridge.js";
-import type { SettingsDataMessage, InMessage } from "./bridge.js";
+import type { SettingsDataMessage, InMessage, NewTabPosition } from "./bridge.js";
 import { MIN_FONT_SIZE, MAX_FONT_SIZE, DEFAULT_FONT_SIZE } from "./pane.js";
 import { Dropdown } from "./dropdown.js";
 import { showOnboarding } from "./onboarding.js";
@@ -29,6 +29,7 @@ let seedsInput: HTMLTextAreaElement | null = null;
 let projectListEl: HTMLElement | null = null;
 let fontInput: HTMLInputElement | null = null;
 let resumeToggle: HTMLButtonElement | null = null;
+let newTabDropdown: Dropdown | null = null;
 let updateCheckBtn: HTMLButtonElement | null = null;
 let updateStatusEl: HTMLElement | null = null;
 // Default Updates-row blurb; restated after a check resets the row. Mirrors the
@@ -57,6 +58,8 @@ export function closeSettings(): void {
   projectListEl = null;
   fontInput = null;
   resumeToggle = null;
+  newTabDropdown?.dispose();
+  newTabDropdown = null;
   updateCheckBtn = null;
   updateStatusEl = null;
   document.removeEventListener("keydown", onKeyDown, true);
@@ -98,6 +101,15 @@ export function applySettingsData(msg: SettingsDataMessage): void {
   // Default the toggle ON when the host omits the flag — matches the
   // Settings.ResumeAgentsOnLaunch code default (resume is opt-out).
   setToggle(resumeToggle, msg.resumeAgentsOnLaunch ?? true);
+
+  // Absent → "top", matching the host's Settings.NewTabPosition default.
+  newTabDropdown?.setOptions(
+    [
+      { value: "top", label: "Top of the project" },
+      { value: "bottom", label: "Bottom of the project" },
+    ],
+    msg.newTabPosition ?? "top",
+  );
 
   // Updates row: show the running version + cadence, and disable "Check now"
   // on a copy that can't self-update (dev `dotnet run` / portable unzip).
@@ -250,6 +262,9 @@ function save(): void {
     defaultCwd: cwdInput.value.trim(),
     fontSize,
     resumeAgentsOnLaunch: resumeToggle ? getToggle(resumeToggle) : undefined,
+    newTabPosition: newTabDropdown
+      ? (newTabDropdown.value as NewTabPosition)
+      : undefined,
     // Split on newlines, drop blanks — so a trailing newline or an accidental
     // empty line doesn't register "" as a scan root.
     projectScanRoots: scanRootsInput
@@ -516,6 +531,17 @@ function buildSkeleton(): void {
       "Resume Claude sessions on launch",
       "When Perch starts, offer to reopen the Claude conversations that were running.",
       resumeToggle,
+    ),
+  );
+
+  // Where a new tab lands among its project's existing tabs. Top by default —
+  // the tab you just made is the one you're about to use.
+  newTabDropdown = new Dropdown();
+  sessions.appendChild(
+    makeRow(
+      "New tab position",
+      "Whether a new tab appears above or below its project's existing tabs.",
+      newTabDropdown.element,
     ),
   );
 

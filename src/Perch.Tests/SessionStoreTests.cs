@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
@@ -43,19 +44,108 @@ public class SessionStoreTests
     }
 
     [Fact]
-    public void ClosingAMiddleSession_ActivatesANeighbour()
+    public void ClosingAMiddleSession_ActivatesTheNearestLiveNeighbour()
     {
         var store = new SessionStore();
         var a = store.AddNew();
         var b = store.AddNew();
         var c = store.AddNew();
+        a.Root.AgentState = AgentState.Working;
+        c.Root.AgentState = AgentState.Done;
 
         var next = store.Remove(b);
 
+        // c is the row that slid up into b's index — downward wins the tie.
         Assert.NotNull(next);
-        Assert.Equal(next!.Id, store.ActiveSessionId);
-        Assert.Contains(next.Id, new[] { a.Id, c.Id });
+        Assert.Equal(c.Id, next!.Id);
+        Assert.Equal(c.Id, store.ActiveSessionId);
         Assert.Equal(2, store.Sessions.Count);
+    }
+
+    // The rule the user asked for: closing a tab must not WAKE one. A dormant
+    // sibling (bare shell, or an agent that already exited — every pane Idle)
+    // is skipped, and "nothing live left in this project" is a legitimate
+    // landing place: the workspace shows its empty state.
+    [Fact]
+    public void ClosingASession_SkipsDormantNeighbours_AndGoesEmptyWhenAllAreDormant()
+    {
+        var store = new SessionStore();
+        store.AddNew();                       // dormant
+        var b = store.AddNew();
+        store.AddNew();                       // dormant
+
+        var next = store.Remove(b);
+
+        Assert.Null(next);
+        Assert.Null(store.ActiveSessionId);
+        Assert.Equal(2, store.Sessions.Count);   // still open, just not activated
+    }
+
+    [Fact]
+    public void ClosingASession_ReachesPastADormantTabForALiveOne()
+    {
+        var store = new SessionStore();
+        var live = store.AddNew();
+        live.Root.AgentState = AgentState.Working;
+        store.AddNew();                       // dormant, sits between
+        var closing = store.AddNew();
+
+        var next = store.Remove(closing);
+
+        Assert.Equal(live.Id, next?.Id);
+    }
+
+    // Selection is project-scoped. A live tab in ANOTHER project is not a
+    // neighbour — the old index clamp happily jumped across the boundary when
+    // you closed the last tab of a project.
+    [Fact]
+    public void ClosingASession_NeverJumpsToAnotherProject()
+    {
+        var store = new SessionStore();
+        var mine = store.AddNew();
+        mine.ProjectId = Guid.NewGuid();
+        var theirs = store.AddNew();
+        theirs.ProjectId = Guid.NewGuid();
+        theirs.Root.AgentState = AgentState.Working;
+
+        var next = store.Remove(mine);
+
+        Assert.Null(next);
+        Assert.Null(store.ActiveSessionId);
+    }
+
+    // New tabs land at the top of their OWN project's run, not index 0 — the
+    // sidebar groups by a stable partition of this array, so jumping the whole
+    // list would shuffle unrelated rows.
+    [Fact]
+    public void PlaceAtProjectTop_SeatsTheNewTabAboveItsSiblingsOnly()
+    {
+        var store = new SessionStore();
+        var pid = Guid.NewGuid();
+        var other = store.AddNew();                       // unfiled, stays put
+        var first = store.AddNew(); first.ProjectId = pid;
+        var second = store.AddNew(); second.ProjectId = pid;
+        var fresh = store.AddNew(); fresh.ProjectId = pid;
+
+        store.PlaceAtProjectTop(fresh);
+
+        Assert.Equal(
+            new[] { other.Id, fresh.Id, first.Id, second.Id },
+            store.Sessions.Select(s => s.Id).ToArray());
+    }
+
+    [Fact]
+    public void PlaceAtProjectTop_LeavesTheFirstTabOfAProjectWhereItIs()
+    {
+        var store = new SessionStore();
+        var existing = store.AddNew();
+        existing.ProjectId = Guid.NewGuid();
+        var fresh = store.AddNew();
+        fresh.ProjectId = Guid.NewGuid();       // different project — no siblings
+
+        store.PlaceAtProjectTop(fresh);
+
+        Assert.Equal(new[] { existing.Id, fresh.Id }, store.Sessions.Select(s => s.Id).ToArray());
     }
 
     // Load() must tell a FRESH INSTALL (no file) from "I closed everything" (a

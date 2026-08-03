@@ -1093,6 +1093,14 @@ public partial class MainWindow : FluentWindow
         catch (Exception ex) { Log.Error("Clipboard.Push", ex); }
     }
 
+    /// Seat a just-created tab per the "new tab position" preference. Call it
+    /// AFTER ProjectId is stamped — placement is relative to the tab's project
+    /// siblings, so it can't be decided inside AddNew.
+    private void PlaceNewTab(Session s)
+    {
+        if (_settings.NewTabPosition == "top") _store.PlaceAtProjectTop(s);
+    }
+
     /// Keep _activePaneId pointing at a real leaf in the active session.
     /// Doesn't spawn PTYs.
     private void EnsureActivePane()
@@ -2358,6 +2366,7 @@ public partial class MainWindow : FluentWindow
             s.Title = proj.Name;   // auto-title; OSC 7 keeps it in sync
         }
         AutoName(s.Root);
+        PlaceNewTab(s);
         _store.ActiveSessionId = s.Id;
         // The new session's root leaf is the active pane. PTY spawns
         // lazily on first pane.resize from the page (sized correctly).
@@ -2399,6 +2408,10 @@ public partial class MainWindow : FluentWindow
         // Null = that was the last session. Legitimate: the page then shows an
         // empty workspace instead of us conjuring a replacement shell the same
         // instant the user closed one.
+        // Null = no live tab left in this project to move to (every sibling is
+        // dormant, or that was the last session). Legitimate: the page then
+        // shows an empty workspace instead of us waking a shell you weren't
+        // using the same instant you closed one.
         var next = _store.Remove(sess);   // archives to Recently closed (not deleted)
         if (next == null) _activePaneId = null;
 
@@ -2410,7 +2423,11 @@ public partial class MainWindow : FluentWindow
         var purgeWorktree = msg.RemoveWorktree == true && wtPath.Length > 0 && wtRepo.Length > 0;
         if (purgeWorktree) _store.Purge(sess.Id);
 
-        EnsureActivePane();
+        // Only when something is actually becoming active. EnsureActivePane
+        // falls back to Sessions.First() when ActiveSessionId is null, which
+        // would quietly point _activePaneId back into a tab we just decided
+        // NOT to activate.
+        if (next != null) EnsureActivePane();
         _store.Save();
         PushState();
 
@@ -3029,6 +3046,7 @@ public partial class MainWindow : FluentWindow
                 // auto so the webview's <title> can replace it once it loads.
                 bs.Root.IsUserNamed = typed.Length > 0;
                 bs.Root.IsAutoName = typed.Length == 0;
+                PlaceNewTab(bs);
                 _store.ActiveSessionId = bs.Id;
                 _activePaneId = bs.Root.Id;
                 _store.Save();
@@ -3110,6 +3128,7 @@ public partial class MainWindow : FluentWindow
                 _pendingInitialCommand[s.Root.Id] = "codex";
             }
 
+            PlaceNewTab(s);
             _store.ActiveSessionId = s.Id;
             _activePaneId = s.Root.Id;
             _store.Save();
@@ -3180,6 +3199,7 @@ public partial class MainWindow : FluentWindow
                 defaultCwdResolved = _settings.ResolveDefaultCwd(),
                 fontSize = _settings.FontSize,
                 resumeAgentsOnLaunch = _settings.ResumeAgentsOnLaunch,
+                newTabPosition = _settings.NewTabPosition,
                 projectScanRoots = _settings.ProjectScanRoots.ToArray(),
                 worktreeRoot = _settings.WorktreeRoot,
                 worktreeRootResolved = Worktree.Root(_settings),
@@ -3231,6 +3251,14 @@ public partial class MainWindow : FluentWindow
         {
             _settings.ResumeAgentsOnLaunch = b;
             dirty = true;
+        }
+        // Clamped like every other string enum here: an unknown value is
+        // dropped rather than persisted, so a stale page can't wedge new tabs
+        // into a placement nothing implements.
+        if (msg.NewTabPosition is string np)
+        {
+            var pos = np == "top" ? "top" : "bottom";
+            if (_settings.NewTabPosition != pos) { _settings.NewTabPosition = pos; dirty = true; }
         }
         // Absent key → leave as-is; an empty list is a deliberate "clear them".
         if (msg.ProjectScanRoots is List<string> roots)

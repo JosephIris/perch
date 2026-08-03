@@ -140,6 +140,31 @@ internal sealed class SessionStore
         return s;
     }
 
+    /// Re-seats a freshly-created session at the TOP of its project's run of
+    /// tabs. AddNew has to append — order IS array position, and the caller
+    /// only files the tab under a project (sets ProjectId) afterwards, so
+    /// placement can't be decided until now.
+    ///
+    /// "Top of the project" means immediately before the first sibling sharing
+    /// its ProjectId, not index 0: the sidebar groups by a stable partition of
+    /// this array, so jumping the whole list would reorder nothing visible in
+    /// projects mode and shuffle unrelated rows in sessions mode. A tab with no
+    /// siblings yet stays where it is — it's the group's only row either way.
+    public void PlaceAtProjectTop(Session s)
+    {
+        var idx = Sessions.IndexOf(s);
+        if (idx < 0) return;
+        var first = -1;
+        for (int i = 0; i < Sessions.Count; i++)
+        {
+            if (i == idx) continue;
+            if (Sessions[i].ProjectId == s.ProjectId) { first = i; break; }
+        }
+        if (first < 0 || first >= idx) return;   // no siblings, or already first
+        Sessions.RemoveAt(idx);
+        Sessions.Insert(first, s);
+    }
+
     /// Picks a color (0..5) not currently used by ANY leaf in ANY session.
     /// Falls back to round-robin once all six are taken. Both new-session
     /// roots and pane splits go through this so no two panes ever share a
@@ -204,10 +229,41 @@ internal sealed class SessionStore
             return null;
         }
 
-        var next = Sessions[Math.Max(0, Math.Min(idx, Sessions.Count - 1))];
-        ActiveSessionId = next.Id;
+        var next = NearestLiveSibling(idx, s.ProjectId);
+        ActiveSessionId = next?.Id;
         return next;
     }
+
+    /// The tab that should take focus after the one at `idx` was closed: the
+    /// NEAREST tab of the SAME project that still has a live agent — searching
+    /// downward first (the row that slid up into the gap), then upward, then
+    /// one further out each way.
+    ///
+    /// Dormant tabs are skipped on purpose. A tab whose every pane is Idle is a
+    /// bare shell or an agent that already exited; jumping to one on close
+    /// "reactivates" something you weren't using and, worse, re-mounts its
+    /// terminal. It used to be a plain index clamp, which also happily crossed
+    /// into a DIFFERENT project when you closed the last tab of this one.
+    ///
+    /// No live sibling → null, and the workspace shows its empty state rather
+    /// than picking an arbitrary tab for you.
+    private Session? NearestLiveSibling(int idx, Guid? projectId)
+    {
+        for (int d = 0; d < Sessions.Count; d++)
+        {
+            var below = idx + d;
+            if (below < Sessions.Count && IsLiveSibling(Sessions[below], projectId))
+                return Sessions[below];
+            var above = idx - 1 - d;
+            if (above >= 0 && IsLiveSibling(Sessions[above], projectId))
+                return Sessions[above];
+        }
+        return null;
+    }
+
+    private static bool IsLiveSibling(Session s, Guid? projectId) =>
+        s.ProjectId == projectId &&
+        StateProjection.AggregateState(AllLeavesOf(s.Root)) != AgentState.Idle;
 
     /// Pushes a closed session onto the front of the Recently-closed list,
     /// stamps the close time, and trims the list to MaxClosed (oldest off).
