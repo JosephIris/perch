@@ -63,12 +63,23 @@ internal static class ClaudeTranscripts
         catch { return null; }
     }
 
-    /// Claude's project-dir key: path separators and the drive colon become '-'
-    /// (e.g. C:\Users\josep\dev-projects\cmux-win → C--Users-josep-dev-projects-cmux-win).
+    /// Claude's project-dir key: EVERY non-alphanumeric character becomes '-',
+    /// not just the path separators and the drive colon
+    /// (C:\Users\josep\repos\global_dnn → c--Users-josep-repos-global-dnn —
+    /// note the underscore; a dotted segment like `.claude` goes the same way).
+    /// Getting this wrong didn't fail loudly: the scoped path simply missed and
+    /// Exists fell through to a recursive scan of the whole projects tree, which
+    /// is slow AND over-permissive — it happily matches a transcript filed under
+    /// a DIFFERENT project, and `claude --resume` scopes to the cwd it's run in,
+    /// so the resume we armed dies with "No conversation found".
     public static string SanitizeCwd(string cwd)
     {
+        // ASCII-only on purpose: this mirrors a /[^a-zA-Z0-9]/ replacement, so a
+        // non-ASCII letter is a separator here just as it is for Claude.
+        static bool Keep(char c) =>
+            c is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9';
         var sb = new System.Text.StringBuilder(cwd.Length);
-        foreach (var ch in cwd) sb.Append(ch is '\\' or '/' or ':' ? '-' : ch);
+        foreach (var ch in cwd) sb.Append(Keep(ch) ? ch : '-');
         return sb.ToString();
     }
 }

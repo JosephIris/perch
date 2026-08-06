@@ -33,6 +33,25 @@ export function treeSignature(node: PaneTreeView): string {
   return `S(${node.orientation}:${node.children.map(treeSignature).join(",")})`;
 }
 
+/** Is showing `nextId` an ENTRY into that stage — i.e. it wasn't the one on
+ *  screen a moment ago?
+ *
+ *  Entry is what drives the refit: a stage's panes stay mounted while hidden,
+ *  so their xterms still report the same cols/rows and the dedupe in
+ *  Pane.reportResize swallows the report. Only a forced refit (which resets
+ *  that dedupe) makes the host hear a `pane.resize` — and `pane.resize` is the
+ *  ONLY thing that respawns a pane's PTY.
+ *
+ *  This used to read `prev !== null && prev !== next`, which quietly excluded
+ *  the empty workspace. Sleeping the last live tab in a project lands there
+ *  (prev = null), so waking that tab from the Idle drawer was not an "entry":
+ *  no refit, no `pane.resize`, no spawn. The tab came back showing its old
+ *  scrollback — a dead shell prompt in the right directory — and the armed
+ *  `claude --resume` never ran. Coming back from nothing IS coming back. */
+export function isStageEntry(prevId: string | null, nextId: string): boolean {
+  return prevId !== nextId;
+}
+
 /** Which drop zone the pointer is in, given its position normalized to the
  *  target pane's box (0..1 on each axis): a centered box is "center" (swap),
  *  otherwise the nearest edge. */

@@ -6,7 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { treeSignature, computeEdge } from "../src/layout.js";
+import { treeSignature, computeEdge, isStageEntry } from "../src/layout.js";
 import type { PaneTreeView } from "../src/bridge.js";
 
 // Minimal tree builders. Only the fields treeSignature reads are meaningful;
@@ -106,4 +106,34 @@ test("computeEdge: nearest edge wins outside the center box", () => {
 test("computeEdge: corner goes to the strictly closest edge", () => {
   assert.equal(computeEdge(0.1, 0.2), "left");     // 0.1 < 0.2 → left beats top
   assert.equal(computeEdge(0.2, 0.1), "top");      // 0.1 < 0.2 → top beats left
+});
+
+// ---- isStageEntry: the sleep → wake respawn -------------------------------
+// A stage's panes stay mounted while hidden, so nothing re-reports their size
+// on its own. Only an "entry" forces the refit, and only a pane.resize spawns
+// a PTY — so getting this predicate wrong is precisely "the woken tab shows a
+// dead prompt in the right folder and never resumes its agent".
+//
+// `legacyEntry` is the shipped-and-broken rule, kept here so the case it
+// missed can't quietly come back.
+const legacyEntry = (prev: string | null, next: string) =>
+  prev !== null && prev !== next;
+
+test("isStageEntry: waking a tab from the EMPTY workspace is an entry", () => {
+  // Sleeping the last live tab in a project deactivates everything (prev =
+  // null). Selecting the slept tab in the Idle drawer must refit → resize →
+  // spawn → `claude --resume`.
+  assert.equal(isStageEntry(null, "s1"), true);
+  assert.equal(legacyEntry(null, "s1"), false);   // the bug, pinned
+});
+
+test("isStageEntry: waking a tab while another is on screen is an entry", () => {
+  assert.equal(isStageEntry("s2", "s1"), true);
+});
+
+test("isStageEntry: a state push for the session already on screen is NOT an entry", () => {
+  // This fires several times a second while agents work. Treating it as an
+  // entry would refit + re-focus every push — stealing the caret and wiping
+  // selections.
+  assert.equal(isStageEntry("s1", "s1"), false);
 });

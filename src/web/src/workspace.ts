@@ -22,7 +22,7 @@ import { UrlPane } from "./url-pane.js";
 import { BoardPane } from "./board-pane.js";
 import { PANE_LEAVE_MS } from "./anim.js";
 import { showPaneChooser } from "./pane-chooser.js";
-import { treeSignature, computeEdge, type Edge } from "./layout.js";
+import { treeSignature, computeEdge, isStageEntry, type Edge } from "./layout.js";
 
 type LeafPane = Pane | UrlPane | BoardPane;
 
@@ -187,8 +187,11 @@ export class Workspace {
     }
     this.emptyState.hidden = true;
 
-    const switching =
-      this.activeSessionId !== null && this.activeSessionId !== active.id;
+    // Entering this stage from anywhere else — including from the empty
+    // workspace, which is where sleeping the last live tab in a project leaves
+    // you. See isStageEntry: this is what forces the refit that respawns a
+    // woken tab's PTYs.
+    const switching = isStageEntry(this.activeSessionId, active.id);
 
     // 2. Get or create the active session's stage.
     let stage = this.stages.get(active.id);
