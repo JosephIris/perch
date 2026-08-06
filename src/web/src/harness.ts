@@ -347,7 +347,8 @@ if (view === "warmth") {
   const sb = new Sidebar(list, newBtn, closedEl);
   sb.rerender = () => sb.render(warmthSessions, "s-w-hot", [], projectsList, "projects");
   sb.rerender();
-} else if (view === "projects" || view === "projects-tip" || view === "projects-idle") {
+} else if (view === "projects" || view === "projects-tip" || view === "projects-idle" ||
+           view === "projects-sleep") {
   const sb = new Sidebar(list, newBtn, closedEl);
   sb.rerender = () => sb.render(projectSessions, "s-tab1", [], projectsList, "projects");
   sb.rerender();
@@ -366,6 +367,15 @@ if (view === "warmth") {
       for (const r of rows) {
         if (!r.classList.contains("session-item--active")) { r.classList.add("session-item--peek"); break; }
       }
+    }, 80);
+  // #projects-sleep: peek the ACTIVE row. Its ✕ is permanent, so its age/tag
+  // can't use the chip cell and rides the end of the title line instead —
+  // right where the hovered moon paints itself. This is the one row where the
+  // sleep button has something to collide with, and only a hover shows it.
+  if (view === "projects-sleep")
+    setTimeout(() => {
+      document.querySelector<HTMLElement>(".session-item--active")
+        ?.classList.add("session-item--peek");
     }, 80);
 } else if (view === "hero") {
   // #hero — the README / marketing 16:9 shot, staged by design-loop/hero.html.

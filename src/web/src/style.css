@@ -2848,6 +2848,18 @@ button.pane__chip--ports:hover {
 .session-item:hover .session-item__chip,
 .session-item--peek .session-item__chip { opacity: 0; }
 
+/* The same contract for the INLINE trailing labels — the age pill and the
+ * permission tag that the ACTIVE row routes to the end of its title line
+ * (column 3 is spoken for by its permanent ✕). The moon is drawn by a
+ * transform, so it reserves no width and simply paints over whatever sits to
+ * the ✕'s left: on a fresh done row that was the crescent landing on the last
+ * character of the green "50s" pill. Everything trailing bows out when the
+ * hover controls arrive — that rule just never reached these two, the only
+ * variants the moon can actually hit. */
+.session-item:hover .session-item__age--inline,
+.session-item--peek .session-item__age--inline { opacity: 0; }
+.session-item__age--inline { transition: opacity var(--dur-fast) var(--ease-entry); }
+
 /* Nested permission row's tag — the one-line replacement for the two-line
  * "Claude needs your permission" note. The dot stays red (state palette);
  * the tag is caution-tinted because it's the ASK, not the alarm. Same cell
@@ -2865,9 +2877,10 @@ button.pane__chip--ports:hover {
   background: color-mix(in srgb, var(--color-caution) 14%, transparent);
   transition: opacity var(--dur-fast) var(--ease-entry);
 }
-.session-item:hover .session-item__perm-tag:not(.session-item__perm-tag--inline) {
-  opacity: 0;
-}
+/* Inline included: the active row's tag rides its title line, which is exactly
+ * where the hovered moon paints (see the age pill above). */
+.session-item:hover .session-item__perm-tag,
+.session-item--peek .session-item__perm-tag { opacity: 0; }
 /* Active row variant: rides the end of the title line (the ✕ owns the chip
  * cell), forming the same right-edge column the inactive tags sit in. */
 .session-item__perm-tag--inline {
