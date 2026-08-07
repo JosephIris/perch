@@ -69,6 +69,11 @@ export type OutMessage =
   /* Put a tab to sleep: the host stops its panes and files it under the
    * project's Idle group. There is no inverse — selecting the row wakes it. */
   | { type: "session.dormant"; id: string }
+  /* Pair two tabs for cross-session messaging: the host introduces each
+   * agent to the other, once, and from then on the agents decide when to
+   * message. Symmetric; a tab has at most one partner. */
+  | { type: "session.pair"; id: string; partnerId: string }
+  | { type: "session.unpair"; id: string }
   /* Bring a closed session back from "Recently closed" (restores layout +
    * cwd, and resumes its Claude panes when enabled). */
   | { type: "session.restore"; id: string }
@@ -404,6 +409,15 @@ export type SessionView = {
   branch: string;
   ports: number[];
   notification: { text: string; level: NotificationLevel } | null;
+  /* Cross-session pairing: the partner tab's id ("" when unpaired). Paired
+   * rows pull adjacent within their project and wear the gutter bracket.
+   * Optional so harness fixtures need not carry it; the host always sends it. */
+  pairedWith?: string;
+  /* The last peer message that ARRIVED at this tab ("from user-profiles ·
+   * ..."), or — warn level — this tab's last delivery failure. Ambient info,
+   * never an attention state; the host clears it on select and ages it out
+   * after ~10 minutes (the page also hides stale ones between pushes). */
+  pairNote?: { from: string; text: string; level: NotificationLevel; atMs: number } | null;
   /* Pane-count breakdown so the sidebar can render "3 panes · 1 waiting". */
   paneCount: number;
   waitingCount: number;

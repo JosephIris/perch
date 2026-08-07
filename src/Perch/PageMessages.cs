@@ -355,6 +355,15 @@ internal sealed record SessionRenameMsg
     public required string Title { get; init; }
 }
 
+/// Pair two tabs for cross-session messaging (sidebar row context menu). The
+/// host sets the symmetric PairedWithId on both and introduces each agent to
+/// the other; "session.unpair" (a plain SessionRef) breaks it from either side.
+internal sealed record SessionPairMsg
+{
+    public required Guid Id { get; init; }
+    public required Guid PartnerId { get; init; }
+}
+
 internal sealed record ResumeDecisionMsg
 {
     /// Deliberately optional: a malformed/absent accept must degrade to

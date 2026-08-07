@@ -1929,6 +1929,69 @@ button.pane__chip--ports:hover {
   padding-left: var(--sp-12);
 }
 
+/* --- Pair menu (sidebar row right-click) --------------------------------
+ * Same surface recipe as the model menu; its own class because the contents
+ * differ (section label, per-tab candidates, hints). */
+.pair-menu {
+  position: fixed;
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+  max-width: 280px;
+  padding: var(--sp-4);
+  border-radius: var(--r-card);
+  background: rgba(28, 28, 28, 0.96);
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  border: 1px solid var(--color-stroke);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  z-index: 30;
+  font-family: var(--font-text);
+  color: var(--color-text-primary);
+}
+.pair-menu__section {
+  padding: 4px var(--sp-8) 2px;
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+}
+.pair-menu__item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  width: 100%;
+  padding: 6px var(--sp-8);
+  border-radius: var(--r-input);
+  color: var(--color-text-primary);
+  font-weight: var(--weight-body);
+  font-size: 13px;
+  text-align: left;
+  transition: background var(--dur-fast) var(--ease-entry);
+}
+.pair-menu__item:hover,
+.pair-menu__item:focus-visible {
+  background: var(--color-subtle-secondary);
+  outline: none;
+}
+.pair-menu__label {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pair-menu__hint {
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  flex: 0 0 auto;
+  padding-left: var(--sp-12);
+}
+.pair-menu__empty {
+  padding: 6px var(--sp-8);
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+}
+
 /* --- Toast --------------------------------------------------------------
  * Brief acrylic banner near the bottom-center of the workspace when an
  * agent fires `perch notify`. Click-through, auto-dismiss. */
@@ -2721,6 +2784,82 @@ button.pane__chip--ports:hover {
   font-size: 13px;
 }
 .session-item--nested:hover { background: var(--color-subtle-secondary); }
+
+/* ── Paired tabs ───────────────────────────────────────────────────────────
+ * Two tabs wired together for cross-session messaging sit adjacent and share
+ * a slim bracket in the far-left gutter (x=4px, clear of the tree trunk at
+ * 13px): each row draws its own rail segment tree-connector style — first row
+ * runs tick→bottom, last row top→tick — so the bracket spans dot-to-dot no
+ * matter how tall a note line makes either row. The rows' own ::before/::after
+ * belong to the tree connector, so the rail rides an injected span.
+ * Live traffic (a send in flight, a note just landed) warms it to accent;
+ * that is the ONLY motion this feature gets — no pulse, no flash. */
+.pair-wrap { position: relative; }
+.session-item__pair-rail {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.session-item__pair-rail::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  width: 1px;
+  background: var(--color-stroke-strong);
+  transition: background var(--dur-fast) var(--ease-entry);
+}
+/* 14px = the title line's vertical center (4px row padding + half the 13px
+ * title's ~20px line box) — where the status dot sits, whatever grows below. */
+.session-item__pair-rail--first::before { top: 14px; bottom: 0; }
+.session-item__pair-rail--last::before  { top: 0; height: 14px; }
+.session-item__pair-rail::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 14px;
+  width: 5px;
+  height: 1px;
+  background: var(--color-stroke-strong);
+  transition: background var(--dur-fast) var(--ease-entry);
+}
+.pair-wrap--hot .session-item__pair-rail::before,
+.pair-wrap--hot .session-item__pair-rail::after { background: var(--color-accent); }
+
+/* The wrapper breaks the tree's :last-child accounting: a pair's second row is
+ * last-child of the WRAP, not of the list, and would close the └ elbow
+ * mid-branch. Re-open it, and close it again only when the wrap itself ends
+ * the list (with the usual continues-into-the-Idle-drawer exception). */
+.session-list--nested .pair-wrap .session-item--nested:last-child::before { bottom: 0; }
+.session-list--nested > .pair-wrap:last-child .session-item--nested:last-child::before { bottom: 50%; }
+.session-list--nested.session-list--continues > .pair-wrap:last-child .session-item--nested:last-child::before { bottom: 0; }
+
+/* Incoming peer note: the base accent dot (info) or caution (delivery
+ * failure) — never the alarm palette. The "from X ·" lead sits a step
+ * quieter than the message text. */
+.session-item__note--pair .session-item__note-from { color: var(--color-text-tertiary); }
+
+/* Paired-but-not-adjacent (cross-project, or the flat session list): a quiet
+ * chain tag naming the partner at the end of the title line. */
+.session-item__linktag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 1px 6px;
+  max-width: 45%;
+  border-radius: var(--r-input);
+  background: var(--color-subtle-secondary);
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+.session-item__linktag svg { flex: 0 0 auto; opacity: 0.7; }
+.session-item__linktag span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 /* ── The Idle drawer ───────────────────────────────────────────────────────
  * A project's slept tabs, folded away at the foot of its branch. It continues

@@ -343,10 +343,71 @@ if (!closedEl) {
   list.parentElement?.insertBefore(closedEl, list.nextSibling);
 }
 const NOW = Date.now();
+
+// #pair — cross-session pairing: two paired working tabs (bracket in the far-
+// left gutter), one with an incoming "from …" note; a second scenario pairs
+// across projects (no adjacency possible → link tags). #pair-hot forces the
+// warm bracket the way live traffic would.
+const pairSessions: SessionView[] = [
+  projectTab({
+    id: "s-pair-a", title: "user-profiles",
+    rootPane: leaf({ name: "user-profiles", agentState: "working", activityDetail: "display-name migration", branch: "main" }),
+    agentState: "working", activityDetail: "display-name migration",
+    workingCount: 1, turnStartMs: NOW - 12 * 60_000, doneAtMs: 0,
+    pairedWith: "s-pair-b",
+  }),
+  projectTab({
+    id: "s-pair-b", title: "weekly-digest",
+    rootPane: leaf({ name: "weekly-digest", agentState: "working", activityDetail: "writing weeklyDigest.ts", branch: "main" }),
+    agentState: "working", activityDetail: "writing weeklyDigest.ts",
+    workingCount: 1, turnStartMs: NOW - 4 * 60_000, doneAtMs: 0,
+    pairedWith: "s-pair-a",
+    pairNote: {
+      from: "user-profiles",
+      text: "users.name is now users.display_name, update the digest query",
+      level: "info",
+      atMs: NOW - 30_000,
+    },
+  }),
+  projectTab({
+    id: "s-pair-c", title: "docs sweep",
+    doneAtMs: NOW - 2 * 3_600_000, linesAdded: 12, linesDeleted: 4, filesChanged: 2,
+  }),
+  // Cross-project pair: adjacency impossible, each row wears the link tag.
+  projectTab({
+    id: "s-pair-d", title: "landing copy", projectId: "p-gm",
+    rootPane: leaf({ name: "landing copy", agentState: "working", activityDetail: "rewriting hero", branch: "site" }),
+    agentState: "working", activityDetail: "rewriting hero", branch: "site",
+    workingCount: 1, turnStartMs: NOW - 60_000, doneAtMs: 0,
+    pairedWith: "s-pair-c",
+  }),
+];
+// Make the cross-project pair mutual (c ↔ d) without re-declaring c.
+pairSessions[2].pairedWith = "s-pair-d";
+
 if (view === "warmth") {
   const sb = new Sidebar(list, newBtn, closedEl);
   sb.rerender = () => sb.render(warmthSessions, "s-w-hot", [], projectsList, "projects");
   sb.rerender();
+} else if (view === "pair" || view === "pair-hot" || view === "pair-menu") {
+  const sb = new Sidebar(list, newBtn, closedEl);
+  sb.rerender = () => sb.render(pairSessions, "s-pair-a", [], projectsList, "projects");
+  sb.rerender();
+  // #pair-hot: live traffic — sender mid-send. Swap the activity detail to
+  // the "messaging …" form the hook pushes; pairHot() then warms the bracket
+  // on the NEXT render, exactly as a real push would.
+  if (view === "pair-hot") {
+    pairSessions[0].activityDetail = "messaging weekly-digest";
+    const l = pairSessions[0].rootPane as Extract<PaneTreeView, { kind: "leaf" }>;
+    l.activityDetail = "messaging weekly-digest";
+    sb.rerender();
+  }
+  // #pair-menu: the right-click menu, opened the way a pointer would.
+  if (view === "pair-menu")
+    setTimeout(() => {
+      document.querySelector<HTMLElement>(".session-item--nested")?.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 140, clientY: 120 }));
+    }, 80);
 } else if (view === "projects" || view === "projects-tip" || view === "projects-idle" ||
            view === "projects-sleep") {
   const sb = new Sidebar(list, newBtn, closedEl);

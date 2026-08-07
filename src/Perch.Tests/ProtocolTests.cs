@@ -234,6 +234,52 @@ public class ProtocolTests
     }
 
     [Fact]
+    public void SessionPair_CarriesBothIds()
+    {
+        var m = Round<SessionPairMsg>(
+            $"{{\"type\":\"session.pair\",\"id\":\"{G1}\",\"partnerId\":\"{G2}\"}}");
+        Assert.Equal(Guid.Parse(G1), m.Id);
+        Assert.Equal(Guid.Parse(G2), m.PartnerId);
+        // Unpair rides the plain SessionRef shape.
+        Assert.Equal(Guid.Parse(G1), Round<SessionRef>($"{{\"type\":\"session.unpair\",\"id\":\"{G1}\"}}").Id);
+    }
+
+    // ---- The hook → host pipe side of cross-session messaging -------------
+
+    [Fact]
+    public void PeerMsg_PipeShapes()
+    {
+        // phase "sending" (PreToolUse): no verdict yet — Ok stays null.
+        var sending = JsonSerializer.Deserialize<PeerMsgMessage>(
+            "{\"type\":\"peer.msg\",\"phase\":\"sending\",\"target\":\"weekly-digest\",\"text\":\"users.name is now users.display_name\"}",
+            IpcJson.Options)!;
+        Assert.Equal("sending", sending.Phase);
+        Assert.Equal("weekly-digest", sending.Target);
+        Assert.Null(sending.Ok);
+
+        // phase "sent" (PostToolUse): carries the delivered/failed verdict.
+        var sent = JsonSerializer.Deserialize<PeerMsgMessage>(
+            "{\"type\":\"peer.msg\",\"phase\":\"sent\",\"target\":\"weekly-digest\",\"text\":\"t\",\"ok\":false}",
+            IpcJson.Options)!;
+        Assert.False(sent.Ok);
+    }
+
+    [Fact]
+    public void SessionMessage_NameOptionalForOlderHooks()
+    {
+        // A hook binary predating peer names sends only the id — Name must
+        // default null, not fail the parse.
+        var old = JsonSerializer.Deserialize<SessionMessage>(
+            "{\"type\":\"session\",\"id\":\"abc\"}", IpcJson.Options)!;
+        Assert.Equal("abc", old.Id);
+        Assert.Null(old.Name);
+
+        var named = JsonSerializer.Deserialize<SessionMessage>(
+            "{\"type\":\"session\",\"id\":\"abc\",\"name\":\"user-profiles\"}", IpcJson.Options)!;
+        Assert.Equal("user-profiles", named.Name);
+    }
+
+    [Fact]
     public void ProjectMessages()
     {
         // session.new carries an optional projectId — absent on the plain "New

@@ -70,7 +70,14 @@ internal static class HookHandler
                 // re-capture is idempotent. Empty/absent → nothing persisted.
                 var sessionId = StringFrom(root, "session_id");
                 if (!string.IsNullOrWhiteSpace(sessionId))
-                    Send(pipeName, new { type = "session", id = sessionId });
+                    // `name` is the peer name this launch went out under (the
+                    // wrapper read the same file moments ago and passed it as
+                    // --name) — the address other sessions use in SendMessage.
+                    // The host stores it per pane so it can route an observed
+                    // send's target back to a sidebar row. Null when the file
+                    // is absent (a pre-pairing pane): cc then auto-names from
+                    // the cwd and the host falls back to the tab title.
+                    Send(pipeName, new { type = "session", id = sessionId, name = ReadOwnPeerName() });
                 // Re-arm pane auto-naming so the next first prompt re-titles
                 // the pane to the new task — that's what makes a fresh launch
                 // (ctrl+c twice → relaunch) or `/clear` pick up a new name.
@@ -189,6 +196,23 @@ internal static class HookHandler
                     Send(pipeName, new { type = "status", state = "working", detail = PrettyAction(root, tool!) });
                 break;
 
+            case "pre-send":
+                // PreToolUse, matcher "SendMessage" — the agent is messaging
+                // another Claude Code session (cross-session messaging). Report
+                // it as it happens: a transient "messaging <target>" activity
+                // detail for the sender's row, and a structured peer.msg so the
+                // host can warm the pair bracket while the note is in flight.
+                // Async hook: nothing printed, nothing rewritten, never blocks.
+                {
+                    var sendTarget = PeerTarget(root);
+                    if (sendTarget.Length > 0)
+                    {
+                        Send(pipeName, new { type = "peer.msg", phase = "sending", target = sendTarget, text = PeerText(root) });
+                        Send(pipeName, new { type = "status", state = "working", detail = $"messaging {sendTarget}" });
+                    }
+                }
+                break;
+
             case "pre-bash":
                 // Registered with a "Bash" matcher (NOT the "" matcher that
                 // pre-tool-use would need) purely to stamp agent-attribution
@@ -230,6 +254,23 @@ internal static class HookHandler
                     if (bashCmd.IndexOf("git commit", StringComparison.OrdinalIgnoreCase) >= 0)
                         foreach (var sha in CommitShaMarkers(RawToolResponse(root)))
                             Send(pipeName, new { type = "git.commit", sha });
+                }
+                // A cross-session SendMessage just completed. This is the
+                // delivered/failed verdict the pre-send phase can't know: the
+                // host turns success into a "from <sender>" note on the
+                // RECEIVING tab's row, and failure into a warn on the sender's.
+                else if (editTool is "SendMessage")
+                {
+                    var sentTarget = PeerTarget(root);
+                    if (sentTarget.Length > 0)
+                        Send(pipeName, new
+                        {
+                            type = "peer.msg",
+                            phase = "sent",
+                            target = sentTarget,
+                            text = PeerText(root),
+                            ok = PeerSendOk(root),
+                        });
                 }
                 break;
 
@@ -455,6 +496,65 @@ internal static class HookHandler
             if (shas.Count >= 4) break;
         }
         return shas;
+    }
+
+    /// The target session name of a SendMessage tool call. cc has shipped the
+    /// field under more than one name across versions, so probe the plausible
+    /// spellings; "" when none is present (caller then stays silent).
+    private static string PeerTarget(JsonElement? root)
+    {
+        foreach (var f in new[] { "to", "target", "session", "recipient", "session_name" })
+        {
+            var v = ToolInputString(root, f);
+            if (!string.IsNullOrWhiteSpace(v)) return v!.Trim();
+        }
+        return "";
+    }
+
+    /// The message body of a SendMessage tool call, cut to a note-sized line.
+    /// Same multi-spelling probe as PeerTarget; "" when absent.
+    private static string PeerText(JsonElement? root)
+    {
+        foreach (var f in new[] { "summary", "message", "content", "prompt", "text" })
+        {
+            var v = ToolInputString(root, f);
+            if (!string.IsNullOrWhiteSpace(v))
+            {
+                var s = v!.Trim().Replace('\n', ' ').Replace('\r', ' ');
+                return s.Length > 140 ? s.Substring(0, 140) + "…" : s;
+            }
+        }
+        return "";
+    }
+
+    /// Did the send actually deliver? The response shape is a plain prose
+    /// string, so this is a marker sniff, biased toward true: a false "sent"
+    /// just means no warn note, while a false "failed" would put a scary note
+    /// on a healthy pair. cc ≥2.1.224 reports failures properly.
+    private static bool PeerSendOk(JsonElement? root)
+    {
+        var raw = RawToolResponse(root);
+        if (raw.Length == 0) return true;
+        var lower = raw.ToLowerInvariant();
+        return !(lower.Contains("failed") || lower.Contains("not found")
+                 || lower.Contains("no session") || lower.Contains("unable to")
+                 || lower.Contains("\"is_error\":true"));
+    }
+
+    /// This pane's own peer name — the same host-written file the wrapper
+    /// passed as --name at launch. Null when the host hasn't assigned one.
+    private static string? ReadOwnPeerName()
+    {
+        try
+        {
+            var paneId = Environment.GetEnvironmentVariable("PERCH_PANE_ID");
+            if (string.IsNullOrEmpty(paneId)) return null;
+            var path = Path.Combine(Path.GetTempPath(), $"perch-claude-name-{paneId}.txt");
+            if (!File.Exists(path)) return null;
+            var name = File.ReadAllText(path).Trim();
+            return name.Length is 0 or > 60 ? null : name;
+        }
+        catch { return null; }
     }
 
     /// Pull a string field out of the hook's `tool_input` object (Edit's

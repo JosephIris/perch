@@ -200,6 +200,19 @@ internal static class StateProjection
                 text  = anyNotify.NotificationText,
                 level = LevelToString(anyNotify.NotificationLevel),
             },
+            /* Cross-session pairing: the partner tab's id ("" when unpaired) and
+             * the last peer message that arrived here (null when none). The
+             * sidebar pulls paired rows adjacent, joins them with a gutter
+             * bracket, and renders the note as a quiet info line — never an
+             * attention state. */
+            pairedWith = s.PairedWithId?.ToString("D") ?? "",
+            pairNote = string.IsNullOrEmpty(s.PairNoteText) ? null : new
+            {
+                from  = s.PairNoteFrom,
+                text  = s.PairNoteText,
+                level = LevelToString(s.PairNoteLevel),
+                atMs  = s.PairNoteAtMs,
+            },
             // Pane breakdown so the sidebar can say "3 panes · 1 waiting".
             paneCount,
             waitingCount,

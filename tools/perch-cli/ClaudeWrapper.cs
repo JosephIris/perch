@@ -61,6 +61,21 @@ internal static class ClaudeWrapper
                 psi.ArgumentList.Add("--model");
                 psi.ArgumentList.Add(model!);
             }
+
+            // Per-pane session name, same temp-file channel as the model alias.
+            // The host keeps it equal to the tab title (deduped across panes),
+            // so `/list-agents` inside ANY session shows the names the user
+            // already sees in the sidebar — that's what makes "tell weekly-digest
+            // about the rename" addressable without a lookup. Skipped when the
+            // user passed their own -n/--name.
+            var peerName = ReadPeerName();
+            if (!string.IsNullOrEmpty(peerName)
+                && Array.IndexOf(passthroughArgs, "--name") < 0
+                && Array.IndexOf(passthroughArgs, "-n") < 0)
+            {
+                psi.ArgumentList.Add("--name");
+                psi.ArgumentList.Add(peerName!);
+            }
         }
         foreach (var a in passthroughArgs) psi.ArgumentList.Add(a);
 
@@ -98,6 +113,27 @@ internal static class ClaudeWrapper
             foreach (var c in alias)
                 if (!(char.IsLetterOrDigit(c) || c is '-' or '_' or '.')) return null;
             return alias;
+        }
+        catch { return null; }
+    }
+
+    /// Read the host-written per-pane session name from
+    /// %TEMP%\perch-claude-name-&lt;PERCH_PANE_ID&gt;.txt. Returns null when unset.
+    /// The host sanitizes on write; the validation here is only the last line
+    /// of defense against a corrupt/stale file becoming a weird CLI arg.
+    private static string? ReadPeerName()
+    {
+        try
+        {
+            var paneId = Environment.GetEnvironmentVariable("PERCH_PANE_ID");
+            if (string.IsNullOrEmpty(paneId)) return null;
+            var path = Path.Combine(Path.GetTempPath(), $"perch-claude-name-{paneId}.txt");
+            if (!File.Exists(path)) return null;
+            var name = File.ReadAllText(path).Trim();
+            if (name.Length == 0 || name.Length > 60) return null;
+            foreach (var c in name)
+                if (char.IsControl(c) || c is '"' or '\'') return null;
+            return name;
         }
         catch { return null; }
     }
@@ -158,21 +194,29 @@ internal static class ClaudeWrapper
             ["PostToolUse"]       = new[] { Hook("post-tool-use", async: true) },
         };
 
-        // PreToolUse is registered ONLY when gcloud is actually installed, and
-        // only to stamp agent labels onto `gcloud ... create`.
+        // PreToolUse carries at most two NARROW matcher groups — the "" matcher
+        // that would fire on every Read/Grep/Edit (the old status-detail
+        // firehose) stays unregistered.
         //
-        // Why the gate: this hook has to be SYNCHRONOUS (an async hook's stdout
-        // isn't read, so it couldn't rewrite the command), which puts a
-        // short-lived process on the critical path of EVERY Bash call. For
-        // someone who drives GCP from an agent that's a fair trade. For everyone
-        // else it would be pure latency for a hook that can never fire — so they
-        // don't get it at all.
+        // "SendMessage" is cross-session messaging: it fires only when the agent
+        // messages another session, which is rare, and async keeps it entirely
+        // off the agent's critical path (we print nothing, so the unread-stdout
+        // limitation of async hooks costs nothing). It's what lets the sidebar
+        // show the send while it's happening, not after.
         //
-        // Note this is NOT the old `pre-tool-use` status reporter: that one needed
-        // the "" matcher, fired on every Read/Grep/Edit, and its cycling detail
-        // string was noise rather than signal. It stays unregistered.
+        // "Bash" is registered ONLY when gcloud is actually installed, purely to
+        // stamp agent-attribution labels onto `gcloud ... create`. It has to be
+        // SYNCHRONOUS (rewriting the command means its stdout must be read),
+        // which puts a short-lived process on the critical path of EVERY Bash
+        // call — a fair trade for someone driving GCP from an agent, pure
+        // latency for everyone else, so the gate stays.
+        var pre = new System.Collections.Generic.List<object>
+        {
+            Hook("pre-send", timeoutSec: 5, async: true, matcher: "SendMessage"),
+        };
         if (BinResolver.FindOnPathSkippingSelf("gcloud") != null)
-            hooks["PreToolUse"] = new[] { Hook("pre-bash", timeoutSec: 5, matcher: "Bash") };
+            pre.Add(Hook("pre-bash", timeoutSec: 5, matcher: "Bash"));
+        hooks["PreToolUse"] = pre.ToArray();
 
         var settings = new
         {

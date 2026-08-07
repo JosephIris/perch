@@ -300,6 +300,7 @@ public partial class MainWindow : FluentWindow
         _panes.AgentType += OnAgentType;
         _panes.AgentSession += OnAgentSession;
         _panes.CloudStamped += OnCloudStamped;
+        _panes.PeerMsg += OnPeerMsg;
         // Usage poller for the model picker. Subscribe once here; a new snapshot
         // marshals back to the UI thread and re-pushes state so the menu picks
         // up freshly-disabled models. PushState guards on the webview being up.
@@ -732,6 +733,8 @@ public partial class MainWindow : FluentWindow
         .Add<SessionRenameMsg>("session.rename", OnSessionRename)
         .Add<SessionCloseMsg>("session.close", OnSessionClose)
         .Add<SessionRef>("session.dormant", OnSessionDormant)
+        .Add<SessionPairMsg>("session.pair", OnSessionPair)
+        .Add<SessionRef>("session.unpair", OnSessionUnpair)
         .Add<SessionRef>("session.restore", OnSessionRestore)
         .Add<SessionRef>("session.purge", OnSessionPurge)
         .Add<ResumeDecisionMsg>("resume.decision", OnResumeDecision)
@@ -1577,6 +1580,36 @@ public partial class MainWindow : FluentWindow
             // (and bill its tokens to this one) until the pane closed.
             _transcripts.Forget(paneId);
             _store.Save();
+        }
+        // The peer name this launch actually went out under — authoritative
+        // for routing observed SendMessage targets back to this row.
+        if (!string.IsNullOrWhiteSpace(msg.Name) && pane.PeerName != msg.Name)
+        {
+            pane.PeerName = msg.Name;
+            _store.Save();
+        }
+        // A pairing made while this tab's Claude was down: deliver the parked
+        // introduction now. A few seconds' delay so the TUI has painted and
+        // the typed line lands in a real input box, not the boot noise.
+        if (sess.PairIntroPending && sess.PairedWithId != null)
+        {
+            var sid = sess.Id;
+            var timer = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = TimeSpan.FromSeconds(4),
+            };
+            timer.Tick += (_, __) =>
+            {
+                timer.Stop();
+                var s2 = _store.Sessions.FirstOrDefault(x => x.Id == sid);
+                if (s2 == null || !s2.PairIntroPending || s2.PairedWithId == null) return;
+                if (TryIntroduce(s2))
+                {
+                    s2.PairIntroPending = false;
+                    _store.Save();
+                }
+            };
+            timer.Start();
         }
         MarkRestorePaneReady(paneId);
         // cc is listening — but NOT yet painted. This only arms the boot cover's
@@ -2439,6 +2472,14 @@ public partial class MainWindow : FluentWindow
         var sess = _store.Sessions.FirstOrDefault(s => s.Id == msg.Id);
         if (sess == null) return;
         if (sess.Dormant) WakeSession(sess);
+        // Looking at the tab is the ack for its incoming peer note — same
+        // gesture that clears an unread marker anywhere else.
+        if (sess.PairNoteText.Length > 0)
+        {
+            sess.PairNoteText = "";
+            sess.PairNoteFrom = "";
+            sess.PairNoteAtMs = 0;
+        }
         _store.ActiveSessionId = msg.Id;
         // PTYs for the selected session's panes spawn lazily on first
         // pane.resize. Just point _activePaneId at a real leaf.
@@ -2457,10 +2498,229 @@ public partial class MainWindow : FluentWindow
         PushState();
     }
 
+    // ---- Cross-session pairing -------------------------------------------
+    //
+    // Pairing wires two tabs together for Claude Code's cross-session
+    // messaging. Perch's whole contribution is the INTRODUCTION — one typed
+    // line telling each agent who its partner is — plus the name plumbing
+    // (sessions launch under their tab titles, see SweepPeerNames) and the
+    // rendering of observed traffic. Perch never composes a message: deciding
+    // "does this change affect my partner?" is the agents' own judgment, which
+    // is the entire point.
+
+    private void OnSessionPair(SessionPairMsg msg)
+    {
+        var a = _store.Sessions.FirstOrDefault(x => x.Id == msg.Id);
+        var b = _store.Sessions.FirstOrDefault(x => x.Id == msg.PartnerId);
+        if (a == null || b == null || a.Id == b.Id) return;
+        if (a.PairedWithId == b.Id && b.PairedWithId == a.Id) return;   // already paired
+
+        // One partner per tab: pairing implicitly dissolves any existing pair
+        // on either side (telling the dropped partner, so its agent stops
+        // sending updates into the void).
+        BreakPair(a, notifySelf: true, notifyPartner: true);
+        BreakPair(b, notifySelf: true, notifyPartner: true);
+
+        a.PairedWithId = b.Id;
+        b.PairedWithId = a.Id;
+        a.PairIntroPending = !TryIntroduce(a);
+        b.PairIntroPending = !TryIntroduce(b);
+        _store.Save();
+        PushState();
+        Log.Info("Pair", $"paired {a.Id:N} <-> {b.Id:N} (introA={!a.PairIntroPending} introB={!b.PairIntroPending})");
+    }
+
+    private void OnSessionUnpair(SessionRef msg)
+    {
+        var sess = _store.Sessions.FirstOrDefault(x => x.Id == msg.Id);
+        if (sess?.PairedWithId == null) return;
+        BreakPair(sess, notifySelf: true, notifyPartner: true);
+        _store.Save();
+        PushState();
+    }
+
+    /// Dissolve `sess`'s pair (if any) symmetrically. `notifySelf` /
+    /// `notifyPartner` type a short "no longer paired" line into the running
+    /// agent(s) — a closing tab skips its own (the pane is being torn down).
+    private void BreakPair(Session sess, bool notifySelf, bool notifyPartner)
+    {
+        if (sess.PairedWithId is not Guid pid) return;
+        var partner = _store.Sessions.FirstOrDefault(x => x.Id == pid);
+        sess.PairedWithId = null;
+        sess.PairIntroPending = false;
+        if (partner != null && partner.PairedWithId == sess.Id)
+        {
+            partner.PairedWithId = null;
+            partner.PairIntroPending = false;
+            if (notifyPartner)
+                TypeToClaude(partner, $"[Perch] This tab is no longer paired with \"{PeerNameOf(sess)}\"; stop sending it updates.");
+        }
+        if (notifySelf && partner != null)
+            TypeToClaude(sess, $"[Perch] This tab is no longer paired with \"{PeerNameOf(partner)}\"; stop sending it updates.");
+    }
+
+    /// Type the pairing introduction into `sess`'s running Claude pane. False
+    /// when no Claude is up here — the caller then parks it on
+    /// PairIntroPending and OnAgentSession delivers it at the next launch.
+    private bool TryIntroduce(Session sess)
+    {
+        if (sess.PairedWithId is not Guid pid) return true;
+        var partner = _store.Sessions.FirstOrDefault(x => x.Id == pid);
+        if (partner == null) return true;   // nothing to introduce; don't park
+        var pname = PeerNameOf(partner);
+        return TypeToClaude(sess,
+            $"[Perch] This tab is now paired with the Claude Code session \"{pname}\" (it shows under that name in ListAgents). " +
+            "When you change or finish something that could affect its work, send it a brief update with your SendMessage tool; " +
+            "you may also ask it questions. It received the same note about you. No reply to this note is needed.");
+    }
+
+    /// The name another session should address this one by: the live peer name
+    /// its Claude actually launched under, falling back to the sanitized tab
+    /// title (the name its NEXT launch will use).
+    private string PeerNameOf(Session sess)
+        => AllLeaves(sess.Root).FirstOrDefault(p => p.IsTerminal && !string.IsNullOrEmpty(p.PeerName))?.PeerName
+           ?? ClaudePeerNames.Sanitize(sess.Title);
+
+    /// Type one line into the session's running Claude pane (the same PTY
+    /// mechanism as the /model live switch). False when no running Claude.
+    private bool TypeToClaude(Session sess, string line)
+    {
+        var pane = AllLeaves(sess.Root)
+            .FirstOrDefault(p => p.IsTerminal && p.AgentType == "claude" && _panes.Has(p.Id));
+        if (pane == null) return false;
+        try
+        {
+            _panes.Write(pane.Id, System.Text.Encoding.UTF8.GetBytes(line + "\r"));
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Log.Info("Pair", $"type into {pane.Id:N} failed: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// An observed cross-session SendMessage from `sess`'s agent. "sending"
+    /// already reaches the sidebar as a "messaging <target>" activity detail
+    /// (a plain status push); "sent" carries the verdict: success lands a
+    /// quiet "from <sender>" note on the RECEIVING tab's row, failure a warn
+    /// on the sender's. Never an attention state, never a taskbar flash —
+    /// this is agents coordinating, not agents needing the user.
+    private void OnPeerMsg(Session sess, Guid paneId, PeerMsgMessage msg)
+    {
+        if ((msg.Phase ?? "") != "sent") return;
+        var target = (msg.Target ?? "").Trim();
+        if (target.Length == 0) return;
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var tsess = FindSessionByPeerName(target);
+        if (msg.Ok == false)
+        {
+            sess.PairNoteFrom  = "";
+            sess.PairNoteText  = tsess?.Dormant == true
+                ? $"{target} is asleep, not delivered"
+                : $"Couldn't deliver to {target}";
+            sess.PairNoteLevel = NotificationLevel.Warn;
+            sess.PairNoteAtMs  = now;
+        }
+        else if (tsess != null && tsess.Id != sess.Id)
+        {
+            tsess.PairNoteFrom  = sess.Title;
+            tsess.PairNoteText  = string.IsNullOrWhiteSpace(msg.Text) ? "sent an update" : msg.Text!;
+            tsess.PairNoteLevel = NotificationLevel.Info;
+            tsess.PairNoteAtMs  = now;
+        }
+        else return;   // target isn't one of our tabs — nothing to render
+        PushState();
+    }
+
+    /// The live session whose Claude answers to `name` — matched against the
+    /// per-pane peer names first, then against sanitized tab titles (covers a
+    /// pane that never launched with --name, where the intro used the title).
+    private Session? FindSessionByPeerName(string name)
+    {
+        foreach (var s in _store.Sessions)
+            foreach (var p in AllLeaves(s.Root))
+                if (p.IsTerminal && string.Equals(p.PeerName, name, StringComparison.OrdinalIgnoreCase))
+                    return s;
+        return _store.Sessions.FirstOrDefault(
+            s => string.Equals(ClaudePeerNames.Sanitize(s.Title), name, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// Keep every live pane's --name file equal to its tab title (deduped
+    /// app-wide), and age out stale pair notes. Runs at the top of every
+    /// PushState: every title change already ends in a push, so this is the
+    /// one choke point that can't miss a rename. Writes only on change.
+    private void SweepPeerNames()
+    {
+        var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var dirty = false;
+        // Live names other panes already answer to — a NEW assignment must not
+        // collide with a name some running session still owns.
+        var liveNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var s in _store.Sessions)
+            foreach (var p in AllLeaves(s.Root))
+                if (p.IsTerminal && !string.IsNullOrEmpty(p.PeerName))
+                    liveNames.Add(p.PeerName!);
+
+        foreach (var s in _store.Sessions)
+        {
+            // Pair notes fade on their own after 10 minutes — they're ambient
+            // traffic, not an inbox.
+            if (s.PairNoteAtMs > 0 && now - s.PairNoteAtMs > 10 * 60_000)
+            {
+                s.PairNoteText = "";
+                s.PairNoteFrom = "";
+                s.PairNoteAtMs = 0;
+            }
+
+            var baseName = ClaudePeerNames.Sanitize(s.Title);
+            var ordinal = 0;
+            foreach (var p in AllLeaves(s.Root))
+            {
+                if (!p.IsTerminal) continue;
+                ordinal++;
+                var suffix = ordinal;
+                string candidate;
+                do
+                {
+                    candidate = suffix <= 1 ? baseName : $"{baseName} {suffix}";
+                    suffix++;
+                } while (used.Contains(candidate)
+                         || (liveNames.Contains(candidate)
+                             && !string.Equals(p.PeerName, candidate, StringComparison.OrdinalIgnoreCase)));
+                used.Add(candidate);
+
+                if (!string.Equals(_assignedPeerNames.GetValueOrDefault(p.Id), candidate, StringComparison.Ordinal))
+                {
+                    _assignedPeerNames[p.Id] = candidate;
+                    ClaudePeerNames.Write(p.Id, candidate);
+                }
+                // Seed the routing name for a pane that never launched with
+                // --name yet; a running session's live name is authoritative
+                // (set by the session-start hook) and is never overwritten here.
+                if (string.IsNullOrEmpty(p.PeerName))
+                {
+                    p.PeerName = candidate;
+                    dirty = true;
+                }
+            }
+        }
+        if (dirty) _store.Save();
+    }
+
+    /// Last --name file content written per pane, so the sweep only touches
+    /// disk on an actual change.
+    private readonly Dictionary<Guid, string> _assignedPeerNames = new();
+
     private void OnSessionClose(SessionCloseMsg msg)
     {
         var sess = _store.Sessions.FirstOrDefault(x => x.Id == msg.Id);
         if (sess == null) return;
+        // A closed tab can't keep a pair. The surviving partner is told (its
+        // agent stops messaging a ghost); the closing side skips its own note —
+        // that pane is about to get its polite /exit.
+        BreakPair(sess, notifySelf: false, notifyPartner: true);
         var leaves = AllLeaves(sess.Root).ToList();
 
         var wtPath = sess.WorktreePath;
@@ -4174,6 +4434,11 @@ public partial class MainWindow : FluentWindow
     {
         try
         {
+            // Names + note aging ride the push: every title change already ends
+            // in a PushState, so one sweep here keeps the per-pane --name files
+            // current without hooking each rename path separately. Cheap —
+            // string compares, a file write only on an actual change.
+            SweepPeerNames();
             var snap = StateProjection.BuildSnapshot(
                 _store, _activePaneId, _settings.FontSize, _settings.OnboardingSeen,
                 _projects, _settings.SidebarMode, _usage?.CurrentLimits(), _settings.InspectorOpen,

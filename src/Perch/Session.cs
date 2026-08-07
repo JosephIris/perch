@@ -87,6 +87,32 @@ internal sealed class Session : INotifyPropertyChanged
     /// it is, wearing a hollow-ring dot.
     public bool Dormant { get; set; }
 
+    /// The session this tab is PAIRED with for cross-session messaging, or null.
+    /// Symmetric (both sides point at each other) and at most one partner per
+    /// tab. Pairing tells each tab's agent who its partner is, once — after
+    /// that the agents themselves decide when something is worth a message.
+    /// Persisted so the relationship survives a restart; broken when either
+    /// side closes.
+    public Guid? PairedWithId { get; set; }
+
+    /// True when this tab was paired while its Claude session wasn't running:
+    /// the introduction couldn't be typed yet, so it goes in on the next
+    /// session-start instead. Persisted with the pairing it belongs to.
+    public bool PairIntroPending { get; set; }
+
+    // ----- Incoming pair note (transient, like NotificationText) -----------
+    // The last cross-session message that ARRIVED at this tab (or, warn level,
+    // the last delivery failure by this tab). Rendered as a quiet note line on
+    // the sidebar row; cleared when the user selects the row, and aged out by
+    // the host after ~10 minutes. Deliberately NOT the NotificationText
+    // channel: that one is tied to attention states (permission/waiting) and a
+    // peer note must never read as "needs you".
+
+    [JsonIgnore] public string PairNoteText { get; set; } = "";
+    [JsonIgnore] public string PairNoteFrom { get; set; } = "";
+    [JsonIgnore] public NotificationLevel PairNoteLevel { get; set; } = NotificationLevel.Info;
+    [JsonIgnore] public long PairNoteAtMs { get; set; }
+
     public PaneNode Root { get; set; } = new();
 
     // Notification text emitted by an agent or shell script via OSC 9
@@ -324,6 +350,15 @@ internal sealed class PaneNode
     /// across restarts. Only leaves carry names; the field is ignored on
     /// split nodes.
     public string? Name { get; set; }
+
+    /// The cross-session peer name this pane's Claude launches under (the
+    /// wrap-claude shim passes it as --name, read from a per-pane temp file
+    /// the host keeps equal to the TAB TITLE, deduped app-wide). It's the
+    /// address other sessions use in SendMessage, so the host can route an
+    /// observed send's target back to a sidebar row. PERSISTED: a resumed
+    /// session keeps its name, so the routing must too. Updated by the
+    /// host's name sweep; confirmed by the session-start hook.
+    public string? PeerName { get; set; }
 
     /// True while Name is the auto-assigned "pane-N" placeholder OR an
     /// auto-derived title (e.g. a URL pane's website <title>). User-typed

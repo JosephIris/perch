@@ -343,4 +343,35 @@ public class StateProjectionTests
         Assert.Equal("sessions", snap.GetProperty("prefs").GetProperty("sidebarMode").GetString());
         Assert.Empty(snap.GetProperty("projects").EnumerateArray());
     }
+
+    // ---- Cross-session pairing projection -----------------------------------
+
+    [Fact]
+    public void Pair_UnpairedProjectsEmptyIdAndNullNote()
+    {
+        var s = SessionWith(Pane(AgentState.Idle));
+        var row = Project(s);
+        Assert.Equal("", row.GetProperty("pairedWith").GetString());
+        Assert.Equal(JsonValueKind.Null, row.GetProperty("pairNote").ValueKind);
+    }
+
+    [Fact]
+    public void Pair_PartnerIdAndIncomingNoteProject()
+    {
+        var partnerId = Guid.NewGuid();
+        var s = SessionWith(Pane(AgentState.Working));
+        s.PairedWithId = partnerId;
+        s.PairNoteFrom = "user-profiles";
+        s.PairNoteText = "users.name is now users.display_name";
+        s.PairNoteLevel = NotificationLevel.Info;
+        s.PairNoteAtMs = 1234;
+
+        var row = Project(s);
+        Assert.Equal(partnerId.ToString("D"), row.GetProperty("pairedWith").GetString());
+        var note = row.GetProperty("pairNote");
+        Assert.Equal("user-profiles", note.GetProperty("from").GetString());
+        Assert.Equal("users.name is now users.display_name", note.GetProperty("text").GetString());
+        Assert.Equal("info", note.GetProperty("level").GetString());
+        Assert.Equal(1234, note.GetProperty("atMs").GetInt64());
+    }
 }

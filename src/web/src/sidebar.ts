@@ -26,6 +26,7 @@ import { showNewTabDialog } from "./new-tab-dialog.js";
 import { elapsedSpan, agoSpan, ageSpan } from "./elapsed.js";
 import { spinnerSpan } from "./spinner.js";
 import { attachCommitsHover, openCommitsLightbox } from "./commits-view.js";
+import { showPairMenu } from "./pair-menu.js";
 
 /** Flatten a pane tree to its leaves. */
 function leaves(node: PaneTreeView): Array<Extract<PaneTreeView, { kind: "leaf" }>> {
@@ -112,6 +113,39 @@ function aheadChip(ahead: number, paneId: string | null, extraClass = ""): HTMLE
 }
 
 export type ProjectGroup = { project: ProjectView; tabs: SessionView[] };
+
+/** Reorder so each PAIRED tab sits right after its mate (partner pulled up to
+ *  its earlier mate; everything else keeps host order). Only a mutual pair
+ *  moves — a dangling pairedWith (partner closed mid-push) changes nothing.
+ *  Adjacency is what lets the gutter bracket join the two rows. */
+export function pullPairsAdjacent(list: SessionView[]): SessionView[] {
+  const byId = new Map(list.map((s) => [s.id, s]));
+  const out: SessionView[] = [];
+  const placed = new Set<string>();
+  for (const s of list) {
+    if (placed.has(s.id)) continue;
+    out.push(s);
+    placed.add(s.id);
+    if (s.pairedWith && !placed.has(s.pairedWith)) {
+      const p = byId.get(s.pairedWith);
+      if (p && p.pairedWith === s.id) {
+        out.push(p);
+        placed.add(p.id);
+      }
+    }
+  }
+  return out;
+}
+
+/** Is this pair's bracket carrying live traffic right now? A send in flight
+ *  (the "messaging X" activity detail) or a note that landed in the last few
+ *  seconds warms the rail; the next pushes cool it back down. */
+function pairHot(a: SessionView, b: SessionView): boolean {
+  const now = Date.now();
+  const fresh = (s: SessionView) => s.pairNote != null && now - s.pairNote.atMs < 4000;
+  const sending = (s: SessionView) => s.activityDetail.startsWith("messaging ");
+  return fresh(a) || fresh(b) || sending(a) || sending(b);
+}
 
 /** Most-urgent state across a project's tabs — the same priority the host uses
  *  per session (permission > waiting > done > working > idle). Drives the dot on
@@ -221,6 +255,10 @@ export class Sidebar {
   /** Last mode rendered — a Sessions ⇄ Projects flip plays a soft cross-fade of
    *  the list (null until the first render, so launch doesn't animate). */
   private lastMode: SidebarMode | null = null;
+
+  /** The full session list of the current render — the pair menu needs every
+   *  live tab as a candidate, not just the sub-list its row rendered from. */
+  private allSessions: SessionView[] = [];
 
   constructor(listEl: HTMLElement, newSessionBtn: HTMLElement, closedEl: HTMLElement) {
     this.listEl = listEl;
@@ -337,6 +375,7 @@ export class Sidebar {
     projects: ProjectView[] = [],
     mode: SidebarMode = "sessions"
   ) {
+    this.allSessions = sessions;
     this.renderClosed(closed);
     this.markRegrouped(sessions);
     const modeChanged = this.lastMode !== null && mode !== this.lastMode;
@@ -610,18 +649,52 @@ export class Sidebar {
   ): HTMLElement {
     const list = document.createElement("div");
     list.className = "session-list" + (nested ? " session-list--nested" : "");
-    for (const s of sessions) {
-      const needsNote =
-        s.agentState === "waiting" || s.agentState === "permission";
-      const item = this.renderItem(s, s.id === activeId, needsNote, nested);
-      if (nested) {
-        item.classList.add("session-item--nested");
-        item.draggable = true;                          // drag-reorder within its project
-        item.dataset.projectId = s.projectId ?? "";     // constrains drops to same-project siblings
+    // Nested (project) lists pull each pair adjacent and join the two rows
+    // with a gutter bracket. The flat session-mode lists don't — their
+    // state-derived sections can split a pair anyway, so paired rows there
+    // wear the link tag instead (see renderItem).
+    const ordered = nested ? pullPairsAdjacent(sessions) : sessions;
+    for (let i = 0; i < ordered.length; i++) {
+      const s = ordered[i];
+      const partner =
+        nested && s.pairedWith && ordered[i + 1]?.id === s.pairedWith
+          ? ordered[i + 1]
+          : null;
+      if (partner) {
+        // Two bracketed rows in one wrapper. The wrapper exists purely so the
+        // rail spans survive variable row heights (each row draws its own
+        // segment, tree-connector style); CSS re-fixes the :last-child elbow
+        // the extra nesting level would otherwise break.
+        const wrap = document.createElement("div");
+        wrap.className = "pair-wrap";
+        if (pairHot(s, partner)) wrap.classList.add("pair-wrap--hot");
+        wrap.appendChild(this.buildRow(s, activeId, nested, "first"));
+        wrap.appendChild(this.buildRow(partner, activeId, nested, "last"));
+        list.appendChild(wrap);
+        i++;   // partner consumed
+      } else {
+        list.appendChild(this.buildRow(s, activeId, nested, null));
       }
-      list.appendChild(item);
     }
     return list;
+  }
+
+  /** One session row plus its nested-mode dressing (tree-connector class,
+   *  drag handles). `rail` marks a bracketed pair member. */
+  private buildRow(
+    s: SessionView,
+    activeId: string,
+    nested: boolean,
+    rail: "first" | "last" | null
+  ): HTMLElement {
+    const needsNote = s.agentState === "waiting" || s.agentState === "permission";
+    const item = this.renderItem(s, s.id === activeId, needsNote, nested, rail);
+    if (nested) {
+      item.classList.add("session-item--nested");
+      item.draggable = true;                          // drag-reorder within its project
+      item.dataset.projectId = s.projectId ?? "";     // constrains drops to same-project siblings
+    }
+    return item;
   }
 
   private projectHeader(
@@ -905,7 +978,8 @@ export class Sidebar {
     s: SessionView,
     active: boolean,
     showNote: boolean,
-    compact = false
+    compact = false,
+    rail: "first" | "last" | null = null
   ): HTMLElement {
     const item = document.createElement("button");
     item.type = "button";
@@ -913,6 +987,24 @@ export class Sidebar {
     // Just changed sides (slept or woken) → animate in at its new home, once.
     if (this.regrouped.has(s.id)) item.classList.add("session-item--regrouped");
     item.dataset.sessionId = s.id;
+
+    // Bracketed pair member: this row draws its half of the gutter rail (the
+    // row's own ::before/::after belong to the tree connector, so the rail
+    // rides an injected, non-interactive span).
+    if (rail) {
+      const r = document.createElement("span");
+      r.className = `session-item__pair-rail session-item__pair-rail--${rail}`;
+      r.setAttribute("aria-hidden", "true");
+      item.appendChild(r);
+    }
+
+    // Right-click: pair this tab with another (or unpair). The one row action
+    // that isn't a hover button — it needs a target list.
+    item.addEventListener("contextmenu", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      showPairMenu(ev.clientX, ev.clientY, s, this.allSessions);
+    });
 
     // Status column. At rest it's the state dot (CSS colors it via
     // [data-state]); a WORKING tab in compact mode animates instead — the same
@@ -1075,6 +1167,47 @@ export class Sidebar {
       txt.textContent = text;
       note.appendChild(txt);
       item.appendChild(note);
+    }
+
+    // Incoming peer note — "from user-profiles · users.name is now …" — the
+    // visible half of cross-session messaging. Ambient info, not an attention
+    // state: the base accent dot, no pulse, no section change. The host clears
+    // it when you select the row and ages it out at ~10 minutes; the age gate
+    // here just keeps a stale one from lingering between pushes.
+    const pn = s.pairNote;
+    if (pn && Date.now() - pn.atMs < 10 * 60_000) {
+      const note = document.createElement("span");
+      note.className =
+        "session-item__note session-item__note--pair" +
+        (pn.level === "warn" || pn.level === "error" ? " session-item__note--warn" : "");
+      const txt = document.createElement("span");
+      txt.className = "session-item__note-text";
+      if (pn.from) {
+        const from = document.createElement("span");
+        from.className = "session-item__note-from";
+        from.textContent = `from ${pn.from} · `;
+        txt.appendChild(from);
+      }
+      txt.appendChild(document.createTextNode(pn.text));
+      note.appendChild(txt);
+      item.appendChild(note);
+    }
+
+    // Paired but not bracketed (cross-project pair, or the flat session-mode
+    // list): a quiet link tag naming the partner, so the relationship stays
+    // visible where adjacency can't show it.
+    if (s.pairedWith && !rail) {
+      const partner = this.allSessions.find((t) => t.id === s.pairedWith);
+      if (partner) {
+        const tag = document.createElement("span");
+        tag.className = "session-item__linktag";
+        tag.title = `Paired with ${partner.title}`;
+        tag.appendChild(linkIcon());
+        const name = document.createElement("span");
+        name.textContent = partner.title;
+        tag.appendChild(name);
+        primary.appendChild(tag);
+      }
     }
 
     // Sleep — stop this tab's panes and file it under its project's Idle
@@ -1312,6 +1445,29 @@ export class Sidebar {
     }
     return meta;
   }
+}
+
+/** Single-stroke chain-link glyph (Fluent/Lucide family) — marks a paired row
+ *  whose partner can't sit adjacent (cross-project, or the flat list). */
+function linkIcon(): SVGElement {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("width", "10");
+  svg.setAttribute("height", "10");
+  svg.setAttribute("viewBox", "0 0 16 16");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "1.6");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS(ns, "path");
+  path.setAttribute(
+    "d",
+    "M6.5 9.5l3-3M5 7l-2 2a2.5 2.5 0 003.5 3.5l2-2M11 9l2-2A2.5 2.5 0 009.5 3.5l-2 2"
+  );
+  svg.appendChild(path);
+  return svg;
 }
 
 /** Single-stroke clock glyph (Fluent/Lucide family) — the compact rows'

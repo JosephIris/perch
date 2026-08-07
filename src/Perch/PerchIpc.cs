@@ -34,6 +34,7 @@ internal sealed class PerchIpcServer : IDisposable
     public event Action<AgentMessage>? OnAgent;
     public event Action<SessionMessage>? OnSession;
     public event Action<CloudStampedMessage>? OnCloudStamped;
+    public event Action<PeerMsgMessage>? OnPeerMsg;
 
     private readonly CancellationTokenSource _cts = new();
     private readonly Dispatcher _dispatcher;
@@ -166,6 +167,10 @@ internal sealed class PerchIpcServer : IDisposable
                     var cs = JsonSerializer.Deserialize<CloudStampedMessage>(json, IpcJson.Options);
                     if (cs != null) _dispatcher.BeginInvoke(() => OnCloudStamped?.Invoke(cs));
                     break;
+                case "peer.msg":
+                    var pm = JsonSerializer.Deserialize<PeerMsgMessage>(json, IpcJson.Options);
+                    if (pm != null) _dispatcher.BeginInvoke(() => OnPeerMsg?.Invoke(pm));
+                    break;
             }
         }
         catch (JsonException ex) { Log.Error("PerchIpc.Dispatch.Json", ex); }
@@ -266,8 +271,26 @@ internal sealed record AgentMessage(
 /// own session id (the SessionStart payload's `session_id`). The host persists
 /// it on the pane so a relaunch can `claude --resume <id>`. Idempotent: the
 /// resumed run re-emits session-start with the same id.
+///
+/// `name` is the cross-session peer name this launch went out under (the
+/// wrap-claude shim passed the host-written per-pane name file as --name).
+/// Null for launches predating the file. The host stores it on the pane so a
+/// SendMessage target observed in another pane can be routed back to a row.
 internal sealed record SessionMessage(
-    [property: JsonPropertyName("id")] string? Id);
+    [property: JsonPropertyName("id")] string? Id,
+    [property: JsonPropertyName("name")] string? Name = null);
+
+/// Sent by the cc HookHandler when the agent messages ANOTHER Claude Code
+/// session (the cross-session SendMessage tool). phase="sending" fires from
+/// PreToolUse — the note is in flight, warm the pair bracket; phase="sent"
+/// fires from PostToolUse with the delivered/failed verdict (`ok`). `target`
+/// is the peer NAME the sender addressed; the host resolves it to a pane via
+/// the names it assigned. `text` is a one-line cut of the message body.
+internal sealed record PeerMsgMessage(
+    [property: JsonPropertyName("phase")] string? Phase,
+    [property: JsonPropertyName("target")] string? Target,
+    [property: JsonPropertyName("text")] string? Text,
+    [property: JsonPropertyName("ok")] bool? Ok = null);
 
 /// Sent by the cc HookHandler (PreToolUse/Bash) the moment it stamps agent
 /// labels onto a `gcloud ... create`. The hook can only put JOIN KEYS on the
