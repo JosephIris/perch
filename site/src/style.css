@@ -1,15 +1,17 @@
 /* Pull in the REAL app chrome (tokens.css + every component class) so the
- * reused Sidebar / Dashboard / pane-header render pixel-exact and the hand-
- * built inspector journal matches. Must lead the file — @import has to precede
- * all other rules. The app stylesheet's only bare-element globals are
- * html/body/button/ul/scrollbars; the LP rules below re-declare the html/body
- * bits they need and win on cascade (equal specificity, later wins). */
+ * reused Sidebar / Dashboard / board / pane-header markup renders pixel-exact
+ * and the hand-built inspector journal matches. Must lead the file — @import
+ * has to precede all other rules. The app stylesheet's only bare-element
+ * globals are html/body/button/ul/scrollbars; the LP rules below re-declare
+ * the html/body bits they need and win on cascade (equal specificity, later
+ * wins). NOTE: the app owns generic class names (.card, .chip, .board…) — LP
+ * chrome uses its own vocabulary (.fcard, .gcell, …) to stay clear of them. */
 @import "../../src/web/src/style.css";
 
-/* perch landing page. Deliberately single-theme dark: the product is a dark
- * terminal workspace and the page commits to its world. Tokens mirror the
- * app's tokens.css values; type is the bundled Inter Variable with the same
- * Segoe fallback chain as the app chrome. */
+/* perch landing page — "The Windows command center for coding agents".
+ * Deliberately single-theme dark, Linear-school discipline: layered
+ * near-blacks, a 4-step text ramp, light+tight display type, hairline
+ * borders, one accent with a strict job, a light primary CTA. */
 
 @font-face {
   font-family: "Inter Variable";
@@ -19,216 +21,288 @@
 }
 
 :root {
-  --ground: #131316;
-  --card: #1b1d21;
-  --terminal: #1f1f1f;
-  --ink: #e9eef4;
-  --ink-dim: #a6aeb6;
-  --ink-faint: #7b838b;
-  --accent: #76B9ED;
-  --accent-ink: #15233b;
-  --line: rgba(255, 255, 255, 0.08);
+  --bg: #08090a;
+  --panel: #0f1011;
+  --raise: #141516;
+  --raise2: #191a1b;
+  --line: #1f2126;
+  --line-soft: rgba(255, 255, 255, 0.06);
+  --line-strong: rgba(255, 255, 255, 0.11);
+  --ink: #f7f8f8;
+  --ink2: #c9d1dc;
+  --ink3: #8a929c;
+  --ink4: #62666d;
+  --lp-accent: #7fb8e8;
+  --lp-caution: #d9ab55;
+  --lp-cloud: #5fc4c9;
   --font-text: "Inter Variable", "Segoe UI Variable Text", "Segoe UI", sans-serif;
-  --font-mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
+  --font-lp-mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
 }
 
 * { box-sizing: border-box; }
 
 /* Undo the app's `html, body { height:100% }` (it pins the shell to the
  * viewport); the landing page is a tall scrolling document. */
-html { background: var(--ground); height: auto; }
+html { background: var(--bg); height: auto; scroll-behavior: smooth; }
 body {
   margin: 0;
   min-height: 100vh;
   height: auto;
-  background:
-    radial-gradient(1200px 640px at 30% -12%, #1b2534 0%, transparent 60%),
-    var(--ground);
-  color: var(--ink);
+  background: var(--bg);
+  color: var(--ink2);
   font-family: var(--font-text);
-  font-size: 16px;
-  line-height: 1.55;
+  font-size: 15.5px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
 }
-
-a { color: var(--accent); text-decoration: none; }
+a { color: var(--lp-accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 a:focus-visible, button:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--lp-accent);
   outline-offset: 2px;
   border-radius: 4px;
 }
+::selection { background: rgba(127, 184, 232, 0.25); }
+h1, h2, h3 { color: var(--ink); }
 
 /* ---- nav ------------------------------------------------------------- */
 .nav {
-  max-width: 1100px;
-  margin: 0 auto;
-  padding: 20px 24px;
-  display: flex;
-  align-items: center;
-  gap: 16px;
+  position: sticky; top: 0; z-index: 50;
+  background: rgba(9, 10, 11, 0.78);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid var(--line-soft);
+}
+.nav__in {
+  max-width: 1200px; margin: 0 auto; padding: 0 24px;
+  height: 60px; display: flex; align-items: center; gap: 26px;
 }
 .nav__brand {
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
-  font-weight: 600;
-  font-size: 17px;
-  color: var(--ink);
+  display: inline-flex; align-items: center; gap: 9px;
+  font-weight: 590; font-size: 16.5px; color: var(--ink);
 }
 .nav__brand:hover { text-decoration: none; }
-.nav__links {
-  margin-left: auto;
-  display: flex;
-  gap: 22px;
-  font-size: 14px;
-}
-.nav__links a { color: var(--ink-dim); }
+.nav__links { display: flex; gap: 22px; font-size: 13.5px; }
+.nav__links a { color: var(--ink3); }
 .nav__links a:hover { color: var(--ink); text-decoration: none; }
+.nav__cta { margin-left: auto; display: flex; gap: 10px; align-items: center; }
+.nav__get {
+  padding: 6px 14px; border-radius: 7px;
+  background: #e8eaed; color: #0b0d0f !important; font-weight: 590; font-size: 13.5px;
+}
+.nav__get:hover { background: #f7f8fa; text-decoration: none; }
 
 /* ---- hero ------------------------------------------------------------ */
-/* Two columns: copy left, the live scene right, both left-aligned. Stacks
- * on narrow viewports with the scene after the copy. */
-.hero {
-  max-width: 780px;
-  margin: 0 auto;
-  padding: 64px 24px 0;
-  text-align: center;
+.hero { max-width: 900px; margin: 0 auto; padding: 76px 24px 0; text-align: center; }
+.hero__chip {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 5px 13px; border-radius: 20px;
+  border: 1px solid var(--line-strong);
+  font-size: 12.5px; color: var(--ink2);
 }
-.hero__title {
-  margin: 0;
-  font-family: var(--font-display);
-  font-size: clamp(46px, 6.6vw, 74px);
-  line-height: 0.98;
-  font-weight: 680;
+.hero__chip b { color: var(--lp-accent); font-weight: 590; }
+.hero__chip:hover { text-decoration: none; border-color: rgba(255, 255, 255, 0.2); }
+.hero h1 {
+  margin: 22px 0 0;
+  font-size: clamp(46px, 6vw, 72px);
+  font-weight: 510;
   letter-spacing: -0.035em;
+  line-height: 1.02;
   text-wrap: balance;
 }
-/* The mascot's wire runs directly under the headline — the monocle bird flies
- * in and perches on it (literally "perch"). Click replays the routine. The
- * rig's viewBox is cropped to the wire band in main.ts. */
-.hero__wire {
-  margin: 4px 0 0;
-  cursor: pointer;
+/* The mascot's wire runs directly under the headline — the rig flies in and
+ * perches on it (literally "perch"). Click replays. Second run: .cta__wire. */
+.hero__wire, .cta__wire {
+  margin: 2px auto 0; width: min(540px, 88%); cursor: pointer;
 }
-.hero__wire svg {
-  display: block;
-  width: 100%;
-  height: auto;
-  overflow: visible;
-  color: var(--ink);
-  --color-accent: var(--accent);
+.hero__wire svg, .cta__wire svg {
+  display: block; width: 100%; height: auto; overflow: visible;
+  color: var(--ink); --color-accent: var(--lp-accent);
 }
 .hero__sub {
-  margin: 20px auto 0;
-  max-width: 52ch;
-  font-size: 17px;
-  color: var(--ink-dim);
-  text-wrap: pretty;
+  margin: 14px auto 0; max-width: 58ch;
+  font-size: 17px; color: var(--ink3); text-wrap: pretty;
 }
-.hero__actions {
-  margin-top: 28px;
-  display: flex;
-  justify-content: center;
-  gap: 12px;
-  flex-wrap: wrap;
-}
+.hero__actions { margin-top: 28px; display: flex; justify-content: center; gap: 12px; flex-wrap: wrap; }
 .btn {
-  display: inline-block;
-  padding: 11px 22px;
-  border-radius: 8px;
-  border: 1px solid var(--line);
-  color: var(--ink);
-  font-weight: 550;
-  font-size: 15px;
+  display: inline-flex; align-items: center; gap: 9px;
+  padding: 11px 20px; border-radius: 8px;
+  border: 1px solid var(--line-strong);
+  color: var(--ink); font-weight: 550; font-size: 14.5px;
 }
-.btn:hover { text-decoration: none; border-color: rgba(255, 255, 255, 0.2); }
-.btn--primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--accent-ink);
+.btn:hover { text-decoration: none; border-color: rgba(255, 255, 255, 0.22); }
+.btn--primary { background: #e8eaed; border-color: #e8eaed; color: #0b0d0f; }
+.btn--primary:hover { background: #f7f8fa; border-color: #f7f8fa; }
+.hero__micro { margin: 15px 0 0; font-size: 13px; color: var(--ink4); }
+.hero__micro b { color: var(--ink3); font-weight: 550; }
+
+/* ---- hero product frame ---------------------------------------------- */
+.frame-wrap { max-width: 1200px; margin: 54px auto 0; padding: 0 24px; position: relative; text-align: center; }
+.frame-scroll { overflow-x: auto; border-radius: 12px; }
+/* The frame hosts the app's REAL workspace demo (workspace-demo.ts). Grain
+ * over the whole frame kills the sterile-mockup feel. */
+.frame-scroll .wsdemo { border-radius: 12px; }
+.frame-scroll .wsdemo::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 30;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='0.16'/%3E%3C/svg%3E");
+  mix-blend-mode: overlay; opacity: 0.55;
 }
-.btn--primary:hover { background: #8ac4f1; border-color: #8ac4f1; }
-.hero__micro {
-  margin: 14px 0 0;
-  font-size: 13px;
-  color: var(--ink-faint);
+/* the mascot cameo (the real app icon) perched on the frame */
+.frame-bird { position: absolute; top: -25px; right: 58px; z-index: 2; }
+.shot__caption { margin: 14px 0 0; font-size: 13.5px; color: var(--ink4); }
+
+/* ---- sections --------------------------------------------------------- */
+.sect { max-width: 1200px; margin: 150px auto 0; padding: 0 24px; }
+.sect__head { max-width: 640px; }
+.sect__eyebrow {
+  font: 500 12px var(--font-lp-mono); letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--lp-accent); margin: 0 0 12px;
+}
+.sect h2 {
+  margin: 0; font-size: clamp(32px, 4.2vw, 46px);
+  font-weight: 510; letter-spacing: -0.028em; line-height: 1.06; text-wrap: balance;
+}
+.sect__sub { margin: 16px 0 0; color: var(--ink3); font-size: 16px; max-width: 56ch; }
+.sect__sub b { color: var(--ink2); font-weight: 570; }
+.sect__cols {
+  margin-top: 36px; display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px;
+}
+/* feature cards ("fcard" — the app stylesheet owns the name .card) */
+.fcard {
+  background: var(--panel); border: 1px solid var(--line-soft);
+  border-radius: 10px; overflow: hidden;
+}
+.fcard__stage { border-bottom: 1px solid var(--line-soft); background: var(--raise); padding: 14px; min-height: 210px; position: relative; }
+.fcard__text { padding: 16px 18px 18px; }
+.fcard__text h3 { margin: 0 0 6px; font-size: 15.5px; font-weight: 590; }
+.fcard__text p { margin: 0; font-size: 13.5px; color: var(--ink3); }
+.fcard__text p b { color: var(--ink2); font-weight: 570; }
+/* stages that host REAL app components: the app surface under them */
+.fcard__stage--app { background: #141414; }
+.fcard__stage--flush { padding: 0; overflow: hidden; }
+
+kbd {
+  display: inline-block; min-width: 20px; padding: 2px 6px;
+  border-radius: 4px; border: 1px solid var(--line);
+  background: #24262b; color: var(--ink2);
+  font: 500 11.5px var(--font-lp-mono); text-align: center;
+  box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.45);
 }
 
-/* ---- workspace-demo caption (reused from the old product shot) -------- */
-.shot__caption {
-  margin: 14px 0 0;
-  font-size: 14px;
-  color: var(--ink-faint);
-  text-align: center;
+/* ---- receipts stages (stylized lists; the app has no small-card version
+ * of the commits recap / localhost panel, so these mimic their palette) --- */
+.smini { font-size: 11.5px; }
+.smini__commit {
+  display: flex; gap: 8px; align-items: center; padding: 6px 9px;
+  background: var(--raise2); border: 1px solid var(--line-soft); border-radius: 7px; margin-bottom: 6px;
+}
+.smini__hash { font: 400 10.5px var(--font-lp-mono); color: var(--lp-accent); }
+.smini__msg { color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.smini__stat { margin-left: auto; font: 400 10px var(--font-lp-mono); color: var(--ink4); flex: none; }
+.smini__push {
+  display: inline-flex; gap: 6px; align-items: center; margin-top: 6px;
+  font: 500 10.5px var(--font-lp-mono); color: var(--color-success);
+}
+.smini__panelrow { display: flex; gap: 7px; align-items: center; padding: 5px 9px; color: var(--ink3); }
+.smini__panelrow .mono { font: 400 10.5px var(--font-lp-mono); color: var(--lp-caution); }
+.smini__warn { margin-top: 6px; padding: 6px 9px; border-radius: 6px; background: rgba(217, 171, 85, 0.1); color: var(--ink3); font-size: 10.5px; }
+.smini__warn b { color: var(--lp-caution); }
+.smini__warn--cloud { background: rgba(95, 196, 201, 0.08); }
+.smini__warn--cloud b { color: var(--lp-cloud); }
+
+/* ---- "rest of the room" grid ------------------------------------------ */
+.grid { margin-top: 36px; display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px; }
+.gcell {
+  position: relative; overflow: hidden;
+  background: var(--panel); border: 1px solid var(--line-soft);
+  border-radius: 10px; padding: 18px;
+}
+.gcell::before {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(75% 60% at 50% 0%, var(--glow, transparent), transparent 72%);
+  opacity: 0.8;
+}
+.gcell h3 { position: relative; margin: 0 0 5px; font-size: 14px; font-weight: 590; }
+.gcell p { position: relative; margin: 0; font-size: 12.5px; color: var(--ink3); }
+.gcell .ic { position: relative; font-size: 15px; margin-bottom: 10px; display: block; color: var(--ink2); }
+
+/* ---- keyboard strip ---------------------------------------------------- */
+.keys { margin-top: 36px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+@media (max-width: 760px) { .keys { grid-template-columns: 1fr; } }
+.keys__row {
+  display: flex; align-items: center; gap: 8px;
+  border: 1px solid var(--line-soft); border-radius: 8px; padding: 11px 16px;
+  font-size: 13px; color: var(--ink3);
+}
+.keys__row .what { margin-left: auto; white-space: nowrap; }
+
+/* ---- changelog --------------------------------------------------------- */
+.log { margin-top: 36px; border-top: 1px solid var(--line-soft); }
+.log__row {
+  display: grid; grid-template-columns: 110px 1fr; gap: 18px;
+  padding: 16px 4px; border-bottom: 1px solid var(--line-soft);
+}
+.log__date { font: 400 12px var(--font-lp-mono); color: var(--ink4); padding-top: 2px; }
+.log__row h3 { margin: 0 0 3px; font-size: 14.5px; font-weight: 590; }
+.log__row p { margin: 0; font-size: 13.5px; color: var(--ink3); }
+
+/* ---- windows band ------------------------------------------------------ */
+.win { max-width: 1200px; margin: 150px auto 0; padding: 0 24px; }
+.win__band {
+  border: 1px solid var(--line-soft); border-radius: 14px;
+  background:
+    radial-gradient(70% 90% at 22% 0%, rgba(127, 184, 232, 0.07), transparent 60%),
+    var(--panel);
+  padding: 52px 48px; display: flex; gap: 40px; align-items: center; flex-wrap: wrap;
+}
+.win__copy { flex: 1 1 380px; }
+.win__band h2 { margin: 0; font-size: clamp(28px, 3.4vw, 38px); font-weight: 510; letter-spacing: -0.025em; line-height: 1.08; }
+.win__band p { margin: 14px 0 0; color: var(--ink3); max-width: 52ch; }
+.win__band p b { color: var(--ink2); font-weight: 570; }
+.win__mac { font-size: 13px; color: var(--ink4); margin-top: 18px; }
+/* apple-scene.ts is self-contained (fixed-aspect stage, scoped styles);
+ * this wrapper only bounds it and hands over the palette. */
+.win__stage {
+  flex: 1 1 300px; max-width: 440px; margin: 0 auto;
+  color: var(--ink); --color-accent: var(--lp-accent);
 }
 
-/* ---- moments --------------------------------------------------------- */
-.moments {
-  max-width: 1100px;
-  margin: 72px auto 0;
-  padding: 0 24px;
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 20px;
+/* ---- faq ---------------------------------------------------------------- */
+.faq { max-width: 680px; margin: 150px auto 0; padding: 0 24px; }
+.faq h2 { font-size: 26px; margin: 0 0 12px; font-weight: 510; letter-spacing: -0.02em; }
+.faq details { border-bottom: 1px solid var(--line-soft); padding: 4px 0; }
+.faq summary { cursor: pointer; padding: 11px 0; font-weight: 550; color: var(--ink); font-size: 14.5px; }
+.faq summary::marker { color: var(--ink4); }
+.faq details p { margin: 2px 0 14px; color: var(--ink3); font-size: 14px; }
+
+/* ---- cta / footer -------------------------------------------------------- */
+.cta { max-width: 1200px; margin: 150px auto 0; padding: 0 24px; }
+.cta__band {
+  border: 1px solid var(--line-soft); border-radius: 14px;
+  background: var(--panel); text-align: center; padding: 72px 24px;
 }
-@media (max-width: 760px) {
-  .moments { grid-template-columns: 1fr; }
+.cta__band h2 { margin: 0; font-size: clamp(34px, 4.4vw, 54px); font-weight: 510; letter-spacing: -0.03em; line-height: 1.02; }
+.cta__band p { margin: 14px auto 0; color: var(--ink3); max-width: 46ch; }
+.cta__band .hero__actions { margin-top: 28px; }
+.cta__band .cta__wire { width: min(440px, 80%); margin-bottom: 4px; }
+.footer {
+  max-width: 1200px; margin: 60px auto 0; padding: 26px 24px 40px;
+  border-top: 1px solid var(--line-soft);
+  display: flex; align-items: center; gap: 22px; flex-wrap: wrap;
+  font-size: 13.5px; color: var(--ink4);
 }
-.moment {
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-.moment__text { padding: 18px 24px 22px; }
-.moment h2 {
-  margin: 0 0 8px;
-  font-size: 17px;
-  font-weight: 600;
-}
-.moment p {
-  margin: 0;
-  font-size: 14.5px;
-  color: var(--ink-dim);
+.footer nav { display: flex; gap: 18px; }
+.footer a { color: var(--ink3); }
+.footer__credit { margin-left: auto; }
+@media (max-width: 640px) {
+  .footer__credit { margin-left: 0; }
 }
 
-/* Each card leads with a small live stage: real interactions, fixture data. */
-.moment__stage {
-  position: relative;
-  height: 208px;
-  background: var(--terminal);
-  border-bottom: 1px solid var(--line);
-  padding: 16px 18px;
-  overflow: hidden;
-}
-.stage-tag {
-  position: absolute;
-  right: 12px;
-  top: 10px;
-  font-size: 11px;
-  letter-spacing: 0.3px;
-  color: var(--ink-faint);
-  pointer-events: none;
-}
-.stage-tag--bottom { top: auto; bottom: 10px; }
+/* ======================================================================= */
+/* Demo shims: footing for the reused app components inside LP stages.     */
+/* ======================================================================= */
 
-/* --- REAL-component demo stages --------------------------------------- */
-/* These cards mount the app's actual chrome (Sidebar, inspector journal),
- * which brings its own #181818 surface and internal padding — so the stage
- * goes edge-to-edge, matches that surface, and clips the component to the
- * card. Taller than the default 208px stage to show a meaningful slice. */
-#demo-states,
-#demo-inspector {
-  padding: 0;
-  height: 300px;
-  background: var(--color-sidebar-surface);
-}
-
-/* Sidebar: fill the card; give the list the app's breathing room (the app's
- * sidebar chrome we don't render — New session / Dashboard — normally supplies
- * the top padding). */
 .demo-sidebar { height: 100%; width: 100%; overflow: hidden; }
 .demo-sidebar .sidebar__scroll {
   height: 100%;
@@ -236,8 +310,7 @@ a:focus-visible, button:focus-visible {
   padding: var(--sp-12) var(--sp-8) 0;
 }
 
-/* Inspector rail: fill the card (drop the fixed 336px + card radius so it sits
- * flush), let the stream clip. */
+/* Inspector rail: fill its host, let the stream clip. */
 .demo-inspector {
   width: 100%; height: 100%;
   border-radius: 0;
@@ -245,8 +318,7 @@ a:focus-visible, button:focus-visible {
   overflow: hidden;
 }
 .demo-inspector .inspector__stream { flex: 1 1 auto; overflow-y: auto; }
-/* Changes body follows the bar's aria-expanded (the feature card collapses it
- * to a one-line signal; the hero demo expands it). */
+/* Changes body follows the bar's aria-expanded. */
 .demo-inspector .changes__body { display: none; }
 .demo-inspector .changes__bar[aria-expanded="true"] + .changes__body { display: block; }
 
@@ -273,22 +345,7 @@ a:focus-visible, button:focus-visible {
 }
 .demo-inspector__cost { margin-right: auto; }
 
-/* Keep the boot card the same height as the two reused-component cards so the
- * feature row stays even; the bootpane grows to fill. */
-#demo-boot { height: 300px; display: flex; flex-direction: column; }
-#demo-boot .bootpane__head { flex: 0 0 auto; }
-#demo-boot .bootpane__body { flex: 1 1 auto; height: auto; }
-
-/* ==== Hero: the live workspace demo =================================== */
-.wsdemo-wrap {
-  max-width: 1240px;
-  margin: 34px auto 0;
-  padding: 0 24px;
-  text-align: center;
-}
-/* On narrow viewports the dense three-column workspace can't reflow, so it
- * scrolls horizontally inside its own frame; the page body never does. */
-.wsdemo-scroll { overflow-x: auto; overflow-y: hidden; border-radius: var(--r-window); }
+/* ==== The live workspace demo (workspace-demo.ts) ====================== */
 .wsdemo {
   position: relative;             /* anchor for the animated cursor */
   min-width: 1040px;
@@ -335,8 +392,6 @@ a:focus-visible, button:focus-visible {
   background: #141414;
   min-height: 0;
 }
-/* The reused .sidebar carries `grid-area: sidebar` (named for the app's own
- * grid); pin explicit columns so all three land where we want here. */
 .wsdemo__sidebar   { grid-area: auto; grid-column: 1; grid-row: 1; }
 .wsdemo__workspace { grid-column: 2; grid-row: 1; }
 .wsdemo__inspector { grid-column: 3; grid-row: 1; }
@@ -451,124 +506,3 @@ a:focus-visible, button:focus-visible {
   from { opacity: 0.7; transform: scale(0.4); }
   to   { opacity: 0; transform: scale(3.4); }
 }
-
-/* --- widget: boot cover ------------------------------------------------ */
-#demo-boot { padding: 0; cursor: pointer; }
-.bootpane__head {
-  display: flex; align-items: center; gap: 8px;
-  padding: 8px 12px;
-  font-size: 12.5px;
-  border-bottom: 1px solid var(--line);
-}
-.bootpane__tag { width: 8px; height: 8px; border-radius: 50%; background: #C792EA; flex: none; }
-.bootpane__badge {
-  font: 600 10px var(--font-text);
-  color: var(--ink-dim);
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  padding: 1px 5px;
-}
-.bootpane__body { position: relative; height: 156px; }
-.bootpane__term {
-  padding: 12px 14px;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--ink-dim);
-}
-.bootpane__cursor {
-  display: inline-block; width: 7px; height: 13px;
-  background: var(--accent); vertical-align: text-bottom;
-}
-.bootpane__cover {
-  position: absolute; inset: 0;
-  display: grid; place-items: center;
-  backdrop-filter: blur(9px) saturate(115%);
-  -webkit-backdrop-filter: blur(9px) saturate(115%);
-  transition: opacity 0.15s cubic-bezier(0.3, 0, 1, 1);
-}
-.bootpane__cover--off { opacity: 0; pointer-events: none; }
-.bootpane__stack { width: 100%; text-align: center; }
-.bootpane__stack svg {
-  display: block; width: min(230px, 80%); height: auto; margin: 0 auto;
-  overflow: hidden; color: var(--ink);
-  --color-accent: var(--accent);
-}
-.bootpane__caption { font-size: 12px; font-weight: 550; margin-top: 4px; }
-
-/* ---- faq -------------------------------------------------------------- */
-.faq {
-  max-width: 680px;
-  margin: 84px auto 0;
-  padding: 0 24px;
-}
-.faq h2 { font-size: 22px; margin: 0 0 14px; }
-.faq details {
-  border-bottom: 1px solid var(--line);
-  padding: 4px 0;
-}
-.faq summary {
-  cursor: pointer;
-  padding: 10px 0;
-  font-weight: 550;
-  list-style-position: outside;
-}
-.faq summary::marker { color: var(--ink-faint); }
-.faq details p {
-  margin: 2px 0 14px;
-  color: var(--ink-dim);
-  font-size: 15px;
-}
-
-/* ---- footer ---------------------------------------------------------- */
-.footer {
-  max-width: 1100px;
-  margin: 88px auto 0;
-  padding: 26px 24px 40px;
-  border-top: 1px solid var(--line);
-  display: flex;
-  align-items: center;
-  gap: 22px;
-  flex-wrap: wrap;
-  font-size: 14px;
-  color: var(--ink-faint);
-}
-.footer nav { display: flex; gap: 18px; }
-.footer a { color: var(--ink-dim); }
-.footer__credit { margin-left: auto; }
-@media (max-width: 640px) {
-  .footer__credit { margin-left: 0; }
-}
-
-/* ==== Section headers ================================================== */
-.section-head {
-  max-width: 720px;
-  margin: 88px auto 0;
-  padding: 0 24px;
-  text-align: center;
-}
-.section-head__title {
-  margin: 0;
-  font-family: var(--font-display);
-  font-size: clamp(26px, 3.4vw, 34px);
-  font-weight: 680;
-  letter-spacing: -0.02em;
-  line-height: 1.1;
-}
-.section-head__sub {
-  margin: 14px auto 0;
-  max-width: 60ch;
-  font-size: 16px;
-  color: var(--ink-dim);
-  text-wrap: pretty;
-}
-.section-head + .moments { margin-top: 32px; }
-
-/* ==== Windows-first wedge ============================================== */
-.wedge { max-width: 720px; margin: 0 auto; padding: 0 24px; }
-
-/* Monocle Guy saunters in whistling, meets an apple (a Mac stand-in), the
- * camera snaps into an extreme close-up of his glare, and he struts off. All
- * motion + the scene's own sizing live in apple-scene.ts (rig poses + a viewBox
- * camera; the scene is self-contained and injects its own scoped styles); this
- * wrapper only bounds and centers the stage. */
-.apple-scene-wrap { max-width: 660px; margin: 20px auto 0; display: flex; justify-content: center; }

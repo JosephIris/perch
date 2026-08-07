@@ -3,148 +3,402 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>perch: the native Windows workspace for coding agents</title>
-  <meta name="description" content="perch runs Claude Code and friends across your projects: live agent state in the sidebar, a journal of what changed, and a real terminal when you want your hands on it. Built Windows-first, native WPF + Win11 Mica. Free and open source." />
+  <title>perch: the Windows command center for coding agents</title>
+  <meta name="description" content="perch runs your coding agents (Claude Code first) across every project from one native Windows window: live state in the sidebar, a board for the brief, a journal of what changed, and a real terminal when you want your hands on it. Free and open source." />
   <link rel="canonical" href="https://buildwithperch.com/" />
-  <meta property="og:title" content="perch: the native Windows workspace for coding agents" />
-  <meta property="og:description" content="A power tool for non-power users. Watch every agent work, see what it changed, take over in a real terminal. Built Windows-first." />
+  <meta property="og:title" content="perch: the Windows command center for coding agents" />
+  <meta property="og:description" content="See who's working, answer who's blocked, read what changed, and ship it. Built Windows-first, native WPF + Win11 Mica." />
   <meta property="og:image" content="https://buildwithperch.com/media/workspace.png" />
   <meta property="og:url" content="https://buildwithperch.com/" />
   <meta property="og:type" content="website" />
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="perch: the native Windows workspace for coding agents" />
-  <meta name="twitter:description" content="Watch every agent work, see what it changed, take over in a real terminal. Built Windows-first." />
+  <meta name="twitter:title" content="perch: the Windows command center for coding agents" />
+  <meta name="twitter:description" content="See who's working, answer who's blocked, read what changed, and ship it. Built Windows-first." />
   <meta name="twitter:image" content="https://buildwithperch.com/media/workspace.png" />
   <link rel="icon" type="image/png" href="./perch-glyph.png" />
   <link rel="stylesheet" href="./app.css" />
 </head>
 <body>
-  <header class="nav">
+
+<header class="nav">
+  <div class="nav__in">
     <a class="nav__brand" href="./">
-      <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
-        <circle cx="12" cy="12" r="7.5" fill="none" stroke="#76B9ED" stroke-width="2.4"/>
-        <circle cx="12" cy="12" r="3.4" fill="#e9eef4"/>
+      <svg width="17" height="17" viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="12" cy="12" r="7.5" fill="none" stroke="#7fb8e8" stroke-width="2.4"/>
+        <circle cx="12" cy="12" r="3.4" fill="#f7f8f8"/>
       </svg>
       perch
     </a>
     <nav class="nav__links">
-      <a href="https://github.com/JosephIris/perch/releases">Releases</a>
+      <a href="#board">Features</a>
+      <a href="#shipped">Changelog</a>
       <a href="https://github.com/JosephIris/perch">GitHub</a>
     </nav>
-  </header>
+    <div class="nav__cta">
+      <a class="nav__get" href="#get">Download</a>
+    </div>
+  </div>
+</header>
 
-  <main>
-    <section class="hero">
-      <div class="hero__copy">
-        <h1 class="hero__title">A power tool for<br>non&#8209;power&nbsp;users.</h1>
-        <div class="hero__wire" id="hero-scene"
-             title="Replay the routine" role="img"
-             aria-label="Monocle Guy, the perch mascot, perched on a wire beneath the title"></div>
-        <p class="hero__sub">
-          perch is a native Windows workspace for running Claude Code and
-          friends across your projects. Watch every agent work, see what it
-          changed, and take over in a real terminal when you want to.
-        </p>
-        <div class="hero__actions">
-          <a class="btn btn--primary" href="https://github.com/JosephIris/perch/releases/latest">
-            Download for Windows
-          </a>
-          <a class="btn" href="https://github.com/JosephIris/perch">View on GitHub</a>
-        </div>
-        <p class="hero__micro">Free and open source &middot; Windows 10+</p>
-      </div>
-    </section>
+<main>
 
-    <section class="wsdemo-wrap" aria-label="A live view of the perch workspace">
-      <div class="wsdemo-scroll">
-        <div id="hero-demo"></div>
-      </div>
-      <p class="shot__caption">
-        A live slice of the workspace: real components, fixture data. Spinners
-        tick, the ages warm, the journal filters. Nothing here is a screenshot.
+  <!-- ================= hero ================= -->
+  <section class="hero">
+    <a class="hero__chip" href="#board"><b>New</b> The board: brief your agent with real context →</a>
+    <h1>The Windows command center for coding&nbsp;agents</h1>
+    <!-- the rig: walks in, perches, takes notes, nods off. Click replays. -->
+    <div class="hero__wire" id="rig-hero" title="Replay the routine"
+         aria-label="Monocle Guy, the perch mascot, perched on a wire beneath the title"></div>
+    <p class="hero__sub">
+      Run your agents across every project from one native window. Built
+      around Claude Code, happy with anything that lives in a terminal: see
+      who's working, answer who's blocked, read what changed, and ship it.
+    </p>
+    <div class="hero__actions" id="get">
+      <!-- TODO(store): when the Microsoft Store listing is live, make the
+           Store badge the primary button here and in the closing CTA
+           (apps.microsoft.com/detail/...), and demote this to secondary. -->
+      <a class="btn btn--primary" href="https://github.com/JosephIris/perch/releases/latest">
+        Download for Windows
+      </a>
+      <a class="btn" href="https://github.com/JosephIris/perch">View on GitHub</a>
+    </div>
+    <p class="hero__micro"><b>Free. Open source. MIT.</b> No account, no telemetry. Windows 10+. Microsoft Store soon.</p>
+  </section>
+
+  <!-- ================= hero product frame ================= -->
+  <div class="frame-wrap">
+    <!-- the bird (the real app icon) perches on the window like it's his -->
+    <img class="frame-bird" src="./perch-glyph.png" width="34" height="34" alt="">
+    <!-- the app's REAL workspace demo (auto-playing: cursor, typed prompt,
+         streaming agent pane, live console, inspector filling in) -->
+    <div class="frame-scroll"><div id="demo-workspace"></div></div>
+    <p class="shot__caption">
+      A live slice of the workspace: real components, fixture data. Nothing
+      here is a screenshot.
+    </p>
+  </div>
+
+  <!-- ================= 1: know ================= -->
+  <section class="sect">
+    <div class="sect__head">
+      <p class="sect__eyebrow">Oversight</p>
+      <h2>Know who needs you, without looking for them</h2>
+      <p class="sect__sub">
+        perch wires into the agent's own hooks (Claude Code first, tested on
+        it daily), so state is a fact, not a guess from scrollback. The
+        sidebar keeps score; the dashboard (<kbd>Ctrl</kbd> <kbd>Shift</kbd>
+        <kbd>A</kbd>) buckets everything by who is waiting on whom.
       </p>
-    </section>
+    </div>
+    <div class="sect__cols">
+      <div class="fcard">
+        <!-- the dashboard's REAL card markup, painted by the app stylesheet -->
+        <div class="fcard__stage fcard__stage--app">
+          <div class="dash__group-label">Needs you</div>
+          <div class="dash__grid" style="grid-template-columns: 1fr;">
+            <div class="card">
+              <div class="card__head">
+                <span class="card__dot" data-state="permission"></span>
+                <span class="card__title">invoice export</span>
+                <span class="card__open">Open →</span>
+              </div>
+              <div class="card__wait">
+                <div class="card__peek">
+                  <div class="card__peek-line">Claude wants to run: npm publish</div>
+                  <div class="card__peek-line card__peek-line--q">Proceed? (y/n)</div>
+                </div>
+                <div class="card__reply">
+                  <input class="card__reply-input" type="text" placeholder="Type your reply…">
+                  <button class="card__reply-send" aria-label="Send"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 8h9M8 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+                </div>
+              </div>
+              <div class="card__foot">
+                <span class="card__activity">Waiting · 6m</span>
+                <span class="chip">⎇ main</span>
+                <span class="chip chip--ahead">↑1</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="fcard__text">
+          <h3>Answer from the card</h3>
+          <p>The agent's actual question, with the reply box next to it. Long or code-heavy asks get <b>Open to reply</b> instead, so you never answer blind.</p>
+        </div>
+      </div>
+      <div class="fcard">
+        <!-- the app's REAL Sidebar (projects mode), fixtures with a warmth
+             spread, an Idle drawer, and the active row peeked so the moon
+             shows -->
+        <div class="fcard__stage fcard__stage--flush" style="height: 320px; background: var(--color-sidebar-surface);">
+          <div id="demo-sidebar" style="height: 100%;"></div>
+        </div>
+        <div class="fcard__text">
+          <h3>Ages that cool, tabs that sleep</h3>
+          <p>A finished agent wears its age, and the age fades from hot to cold as it sits: a triage order at a glance. Click the moon and a tab exits politely into its project's <b>Idle drawer</b>; click it later and it resumes.</p>
+        </div>
+      </div>
+    </div>
+  </section>
 
-    <header class="section-head">
-      <h2 class="section-head__title">Every agent, in one place</h2>
-      <p class="section-head__sub">
-        perch reads each Claude Code session through its hooks, not by scraping
-        the terminal, so the workspace always knows who's working, who's done,
-        and who needs you. These are the app's real components, live.
+  <!-- ================= 2: board ================= -->
+  <section class="sect" id="board">
+    <div class="sect__head">
+      <p class="sect__eyebrow">New · The board</p>
+      <h2>Hand the agent a brief, not a wall of text</h2>
+      <p class="sect__sub">
+        Every tab gets a board: throw a screenshot, a file, a link, and a
+        sentence onto it. perch turns each card into something the agent can
+        <b>actually open</b>: images land in the repo, links are fetched and
+        cached for offline reading, and the whole board becomes one markdown
+        file every agent pane in the tab is told about automatically.
       </p>
-    </header>
+    </div>
+    <div class="sect__cols">
+      <div class="fcard" style="grid-column: 1 / -1;">
+        <!-- the board's REAL surface + node markup, painted by the app stylesheet -->
+        <div class="fcard__stage fcard__stage--flush" style="height: 340px;">
+          <div class="board" style="border: none; border-radius: 0;">
+            <div class="board__canvas">
+              <div class="board-node board-node--image" style="left: 28px; top: 24px; width: 210px;">
+                <div class="board-node__bar"><span class="board-node__title">login-broken.png</span><span class="board-node__spacer"></span></div>
+                <div class="board-node__shot"><img class="board-node__img" alt=""
+                  src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='208' height='92'%3E%3Crect width='208' height='92' fill='%23232833'/%3E%3Crect x='14' y='12' width='180' height='12' rx='3' fill='%23de6871' opacity='0.55'/%3E%3Crect x='14' y='34' width='120' height='8' rx='2' fill='%23ffffff' opacity='0.10'/%3E%3Crect x='14' y='50' width='150' height='8' rx='2' fill='%23ffffff' opacity='0.08'/%3E%3Crect x='14' y='66' width='96' height='8' rx='2' fill='%23ffffff' opacity='0.08'/%3E%3C/svg%3E"></div>
+                <div class="board-node__body">the broken state after login</div>
+              </div>
+              <div class="board-node board-node--note" style="left: 266px; top: 40px; width: 196px;">
+                <div class="board-node__bar"><span class="board-node__spacer"></span></div>
+                <div class="board-node__body">Keep the header fixed. The wobble on scroll is the bug, not the layout.</div>
+              </div>
+              <div class="board-node board-node--ref" style="left: 76px; top: 186px; width: 230px;">
+                <div class="board-node__bar"><span class="board-node__title">stripe.com/docs/webhooks</span><span class="board-node__spacer"></span></div>
+                <div class="board-node__body">cached · the agent reads it offline</div>
+              </div>
+              <div class="board-node board-node--file" style="left: 336px; top: 168px; width: 196px;">
+                <div class="board-node__bar"><span class="board-node__title">src/checkout/cart.ts</span><span class="board-node__spacer"></span></div>
+              </div>
+              <div class="board-node board-node--note board-node--draft" style="left: 362px; top: 252px; width: 200px;">
+                <div class="board-node__bar"><span class="board-node__spacer"></span></div>
+                <div class="board-node__body">draft: nothing reaches the agent until there's text</div>
+              </div>
+            </div>
+            <div class="board__tools">
+              <button class="board__tool" title="Add note">✎</button>
+              <button class="board__tool" title="Add file">⊕</button>
+              <button class="board__tool" title="Add link">⧉</button>
+              <span class="board__tools-sep"></span>
+              <button class="board__pct" title="Reset view">100%</button>
+            </div>
+          </div>
+        </div>
+        <div class="fcard__text">
+          <h3>Paste anything. It never fails.</h3>
+          <p><kbd>Ctrl</kbd> <kbd>V</kbd> resolves url → path → note, in that order. Double-click any card to caption it: "the broken state after login" is what makes a screenshot mean something to an agent that reads text.</p>
+        </div>
+      </div>
+    </div>
+  </section>
 
-    <section class="moments">
-      <div class="moment">
-        <div class="moment__stage" id="demo-states"></div>
-        <div class="moment__text">
-          <h2>Sessions know their state</h2>
-          <p>Working, done, or waiting on you. The sidebar and the dashboard
-             keep score, so you stop babysitting terminals.</p>
+  <!-- ================= 3: ship ================= -->
+  <section class="sect">
+    <div class="sect__head">
+      <p class="sect__eyebrow">Receipts</p>
+      <h2>Trust what shipped, because you can check</h2>
+      <p class="sect__sub">
+        The inspector reads a session as a journal: what the agent said, what
+        it did, which files it touched with +/− per file. Each tab wears its
+        own agent's unpushed commits, and nothing stays running behind your
+        back.
+      </p>
+    </div>
+    <div class="sect__cols">
+      <div class="fcard">
+        <div class="fcard__stage smini">
+          <div class="smini__commit"><span class="smini__hash">4a60000</span><span class="smini__msg">feat(board): add notes, files and links</span><span class="smini__stat">+412 −60</span></div>
+          <div class="smini__commit"><span class="smini__hash">c458a51</span><span class="smini__msg">feat(sessions): new tabs open at the top</span><span class="smini__stat">+96 −22</span></div>
+          <div class="smini__commit"><span class="smini__hash">757bbfb</span><span class="smini__msg">feat(sidebar): sleep a tab, idle drawer</span><span class="smini__stat">+310 −41</span></div>
+          <div class="smini__push">↑3 ready to push · this session's, not the branch's</div>
+        </div>
+        <div class="fcard__text">
+          <h3>Commits with attribution</h3>
+          <p>The ↑N chip counts <b>this agent's</b> commits, not the branch's. Hover for the recap, click for per-file diffs.</p>
         </div>
       </div>
-      <div class="moment">
-        <div class="moment__stage" id="demo-inspector"></div>
-        <div class="moment__text">
-          <h2>See what it actually did</h2>
-          <p>The inspector turns an agent session into a journal: filters,
-             image previews, and the exact files it touched.</p>
+      <div class="fcard">
+        <div class="fcard__stage smini">
+          <div class="smini__panelrow"><span class="mono">⊙ :5173</span> vite · gift guide</div>
+          <div class="smini__panelrow"><span class="mono">⊙ :3001</span> api · invoice export</div>
+          <div class="smini__warn"><b>:8787 outlived its pane.</b> Kill it, and its whole process tree, in one click.</div>
+          <div class="smini__warn smini__warn--cloud"><b>Cloud:</b> a2-ultragpu · $20.28/hr · view-only</div>
+        </div>
+        <div class="fcard__text">
+          <h3>Nothing left running</h3>
+          <p>Every localhost dev server, with the pane that owns it, and a kill button for the one that outlived its pane. Cloud machines listed too, with live cost.</p>
         </div>
       </div>
-      <div class="moment">
-        <div class="moment__stage" id="demo-boot"></div>
-        <div class="moment__text">
-          <h2>Boots are covered</h2>
-          <p>While Claude Code starts, Monocle Guy holds the fort. The
-             frosted glass lifts the moment your pane is ready.</p>
-        </div>
-      </div>
-    </section>
+    </div>
+  </section>
 
-    <section class="wedge">
-      <header class="section-head">
-        <h2 class="section-head__title">Built Windows-first, and actually native</h2>
-        <p class="section-head__sub">
-          Most tools for running coding agents are Mac-first, or a
-          cross-platform port where Windows is an afterthought. perch is the
-          only agent workspace built on native Windows tech: WPF, WebView2, and
-          real Win11 Mica. It sits next to Windows Terminal and the Settings
-          app, not like a Mac app in a browser tab.
+  <!-- ================= what else ================= -->
+  <section class="sect">
+    <div class="sect__head">
+      <h2>And the rest of the room</h2>
+    </div>
+    <div class="grid">
+      <div class="gcell" style="--glow: rgba(76,125,196,0.24)">
+        <span class="ic">⌗</span><h3>Git worktree tabs</h3>
+        <p>Parallel agents in separate folders, so they can't overwrite each other.</p>
+      </div>
+      <div class="gcell" style="--glow: rgba(120,86,180,0.22)">
+        <span class="ic">◇</span><h3>Per-pane model picker</h3>
+        <p>Fable, Opus, Sonnet or Haiku per pane. A model at its cap says when it resets.</p>
+      </div>
+      <div class="gcell" style="--glow: rgba(70,160,150,0.2)">
+        <span class="ic">⊞</span><h3>Real terminal, real splits</h3>
+        <p>Your actual shell underneath, split and arranged from the keyboard. Nothing is simulated.</p>
+      </div>
+      <div class="gcell" style="--glow: rgba(90,150,90,0.2)">
+        <span class="ic">◫</span><h3>Browser panes</h3>
+        <p>A real WebView2 preview next to the server that serves it. No iframe refusals.</p>
+      </div>
+      <div class="gcell" style="--glow: rgba(180,140,80,0.18)">
+        <span class="ic">⟳</span><h3>Sessions that survive</h3>
+        <p>Crash-proof incremental save; Claude Code conversations resume across restarts.</p>
+      </div>
+      <div class="gcell" style="--glow: rgba(170,90,110,0.18)">
+        <span class="ic">▣</span><h3>Toasts when it matters</h3>
+        <p>A blocked agent can raise a real Windows toast, so you hear about it even when perch is behind other windows.</p>
+      </div>
+      <div class="gcell" style="--glow: rgba(76,125,196,0.18)">
+        <span class="ic">⊙</span><h3>Port chips</h3>
+        <p>A pane that starts a server wears its port. Click to open.</p>
+      </div>
+      <div class="gcell" style="--glow: rgba(120,86,180,0.16)">
+        <span class="ic">☾</span><h3>Boot cover</h3>
+        <p>The frosted glass while an agent starts is perch wiring the tab's context: hooks, shims, resume. Monocle Guy supervises.</p>
+      </div>
+      <div class="gcell" style="--glow: rgba(70,160,150,0.16)">
+        <span class="ic">≡</span><h3>Light on the machine</h3>
+        <p>Roughly zero idle background processes, enforced by a test ceiling.</p>
+      </div>
+      <div class="gcell" style="--glow: rgba(90,150,90,0.16)">
+        <span class="ic">⇱</span><h3>Links that open</h3>
+        <p>An agent that writes report.html gets a clickable link. Relative paths resolve.</p>
+      </div>
+      <div class="gcell" style="--glow: rgba(180,140,80,0.15)">
+        <span class="ic">↻</span><h3>Auto-update, quietly</h3>
+        <p>The Store channel updates itself; the GitHub build checks on launch and hourly.</p>
+      </div>
+      <div class="gcell" style="--glow: rgba(170,90,110,0.15)">
+        <span class="ic">⧉</span><h3>Copy and paste that behaves</h3>
+        <p>Right-click copies or pastes. Shift-drag selects even over a full-screen app like Claude Code.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= keyboard ================= -->
+  <section class="sect">
+    <div class="sect__head">
+      <h2>Your hands never leave the keyboard</h2>
+      <p class="sect__sub"><kbd>Ctrl</kbd> <kbd>D</kbd>, <kbd>Ctrl</kbd> <kbd>S</kbd> and <kbd>Ctrl</kbd> <kbd>W</kbd> stay with the shell, as they should. Everything perch owns takes <kbd>Ctrl</kbd> <kbd>Shift</kbd>.</p>
+    </div>
+    <div class="keys">
+      <div class="keys__row"><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>A</kbd><span class="what">Dashboard</span></div>
+      <div class="keys__row"><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>B</kbd><span class="what">Inspector rail</span></div>
+      <div class="keys__row"><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>T</kbd><span class="what">New session</span></div>
+      <div class="keys__row"><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>D</kbd><span class="what">Split right</span></div>
+      <div class="keys__row"><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>S</kbd><span class="what">Split down</span></div>
+      <div class="keys__row"><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>E</kbd><span class="what">Even out panes</span></div>
+    </div>
+  </section>
+
+  <!-- ================= changelog ================= -->
+  <section class="sect" id="shipped">
+    <div class="sect__head">
+      <h2>Recently shipped</h2>
+    </div>
+    <div class="log">
+      <div class="log__row">
+        <span class="log__date">Aug 2026</span>
+        <div><h3>The board</h3><p>Notes, files, links and pasted screenshots, staged per tab, readable by every agent in it.</p></div>
+      </div>
+      <div class="log__row">
+        <span class="log__date">Aug 2026</span>
+        <div><h3>Sleep a tab</h3><p>The moon button, the Idle drawer, and waking that resumes the conversation where it left off.</p></div>
+      </div>
+      <div class="log__row">
+        <span class="log__date">Jul 2026</span>
+        <div><h3>Store-ready packaging</h3><p>MSIX build for the Microsoft Store, and switching channels keeps every session.</p></div>
+      </div>
+      <div class="log__row">
+        <span class="log__date">Jul 2026</span>
+        <div><h3>A quieter idle</h3><p>From 2.4 background processes a second to roughly none, with a test ceiling so it stays that way.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= windows band ================= -->
+  <section class="win">
+    <div class="win__band">
+      <div class="win__copy">
+        <h2>Windows-first. Actually native.</h2>
+        <p>
+          Most agent workspaces are Mac-first, or a cross-platform port where
+          Windows came last. perch is <b>WPF, WebView2 and real Win11 Mica</b>:
+          it sits next to Windows Terminal and the Settings app like it grew
+          up there, because it did.
         </p>
-      </header>
-      <div class="apple-scene-wrap" id="apple-scene" aria-hidden="true"></div>
-    </section>
+        <p class="win__mac">On a Mac? <a href="https://cmux.com">cmux</a> is lovely. The bird sends his regards.</p>
+      </div>
+      <!-- the apple-scene rig: whistle, triple-take, blasted monocle,
+           crash zoom, trot-off. Loops at 9s. -->
+      <div class="win__stage" id="rig-apple" aria-hidden="true"></div>
+    </div>
+  </section>
 
-    <section class="faq">
-      <h2>Questions</h2>
-      <details>
-        <summary>Is it free?</summary>
-        <p>Yes. MIT licensed, source on GitHub, no account, no telemetry
-           decisions to agonize over.</p>
-      </details>
-      <details>
-        <summary>Does it need Claude Code?</summary>
-        <p>perch is built around Claude Code and speaks its hooks natively,
-           but any shell or agent runs happily in a pane.</p>
-      </details>
-      <details>
-        <summary>Windows only?</summary>
-        <p>Yes, Windows 10 and up, with proper Win11 polish. On a Mac,
-           <a href="https://cmux.com">cmux</a> has you covered.</p>
-      </details>
-      <details>
-        <summary>How does it know what agents are doing?</summary>
-        <p>A bundled perch CLI plus Claude Code hooks: the agent tells its
-           pane what's happening. Nothing scrapes terminal output.</p>
-      </details>
-    </section>
-  </main>
+  <!-- ================= faq ================= -->
+  <section class="faq">
+    <h2>Questions</h2>
+    <details>
+      <summary>Is it free?</summary>
+      <p>Yes. MIT licensed, source on GitHub, no account, no telemetry decisions to agonize over.</p>
+    </details>
+    <details>
+      <summary>Does it need Claude Code?</summary>
+      <p>No. perch is designed around Claude Code and tested on it daily, so that's where it shines brightest, but any terminal agent runs happily in a pane. Codex ships with the same wrapper, and a plain shell is always a pane away.</p>
+    </details>
+    <details>
+      <summary>How does it know what agents are doing?</summary>
+      <p>A bundled perch CLI plus Claude Code hooks: the agent tells its pane what's happening. Nothing scrapes terminal output, and nothing leaves your machine.</p>
+    </details>
+    <details>
+      <summary>Windows only?</summary>
+      <p>Yes, Windows 10 and up, with proper Win11 polish. On a Mac, <a href="https://cmux.com">cmux</a> has you covered.</p>
+    </details>
+  </section>
+
+  <!-- ================= cta ================= -->
+  <section class="cta">
+    <div class="cta__band">
+      <!-- second run of the wire routine, bookending the page -->
+      <div class="cta__wire" id="rig-cta" title="Replay the routine" aria-hidden="true"></div>
+      <h2>Give every agent a perch</h2>
+      <p>Free, open source, and native to the OS you actually use.</p>
+      <div class="hero__actions">
+        <a class="btn btn--primary" href="https://github.com/JosephIris/perch/releases/latest">
+          Download for Windows
+        </a>
+        <a class="btn" href="https://github.com/JosephIris/perch">View on GitHub</a>
+      </div>
+    </div>
+  </section>
 
   <footer class="footer">
     <span>perch</span>
     <nav>
       <a href="https://github.com/JosephIris/perch">GitHub</a>
       <a href="https://github.com/JosephIris/perch/releases">Releases</a>
+      <a href="./privacy">Privacy</a>
     </nav>
     <span class="footer__credit">
       Standing on the shoulders of
@@ -153,6 +407,7 @@
     </span>
   </footer>
 
-  <script src="./app.js"></script>
+</main>
+<script src="./app.js"></script>
 </body>
 </html>
