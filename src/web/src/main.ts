@@ -21,7 +21,7 @@ import { RestoreProgress } from "./restore-progress.js";
 import { invalidateCommits } from "./commits.js";
 import { initCloud } from "./cloud-panel.js";
 import { initLocal } from "./local-panel.js";
-import { initInspector, toggleInspector } from "./inspector.js";
+import { initInspector, toggleInspector, openInspectorSearch } from "./inspector.js";
 import { setModelLimits } from "./model-menu.js";
 import { initWebPaneSuppression } from "./webpane-suppress.js";
 import type { PaneTreeView } from "./bridge.js";
@@ -422,6 +422,12 @@ window.addEventListener("keydown", (ev) => {
       // Ctrl+Shift+I — Chromium binds that to DevTools at the browser level, so
       // preventDefault here wouldn't stop it and both would fire.
       toggleInspector();
+      ev.preventDefault(); ev.stopPropagation();
+      break;
+    case "KeyF":
+      // Search the journal. Lives on the inspector because that's where the
+      // transcript is; opens the rail first if it's collapsed.
+      openInspectorSearch();
       ev.preventDefault(); ev.stopPropagation();
       break;
     // Ctrl+Shift+arrows: move the active pane within its split. The host

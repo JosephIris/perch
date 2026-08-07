@@ -415,6 +415,7 @@ function renderEvent(e: InspectorEventView, i: number): HTMLElement {
     // The brackets on "[Request interrupted …]" are dropped now that the badge
     // carries the meaning.
     const it = el("div", "turn-interrupt");
+    it.appendChild(elText("span", "turn-interrupt__time", hhmm(e.ts)));
     it.appendChild(elText("span", "turn-interrupt__mark", "!"));
     it.appendChild(elText("span", "turn-interrupt__text", e.text.replace(/^\[|\]$/g, "")));
     return it;
@@ -428,6 +429,7 @@ function renderEvent(e: InspectorEventView, i: number): HTMLElement {
     // (the event list is append-only) so it survives the poll re-render.
     const p = el("div", expanded.has(i) ? "turn-prompt turn-prompt--open" : "turn-prompt");
     p.dataset.i = String(i);
+    p.appendChild(elText("span", "turn-prompt__time", hhmm(e.ts)));
     p.appendChild(elText("span", "turn-prompt__caret", ">"));
     p.appendChild(elText("span", "turn-prompt__text", e.text));
     p.appendChild(el("span", "turn-prompt__chev"));
@@ -689,6 +691,10 @@ let changesEl: HTMLElement;
 let streamEl: HTMLElement;
 let vitalsEl: HTMLElement;
 let jumpEl: HTMLButtonElement;
+let searchEl: HTMLElement;
+let searchInput: HTMLInputElement;
+let searchCount: HTMLElement;
+let searchBtn: HTMLButtonElement;
 let allBtn: HTMLButtonElement;
 const filterBtns: HTMLButtonElement[] = [];
 const filterCounts: Record<string, HTMLElement> = {};
@@ -699,13 +705,16 @@ const isNearBottom = (e: HTMLElement) =>
 function apply(data: InspectorDataMessage): void {
   // Stick to latest — but only if we were ALREADY at the bottom. New rows
   // arriving while the user is reading history must never yank the viewport;
-  // that's the difference between "live" and "unusable".
-  const pinned = isNearBottom(streamEl);
+  // that's the difference between "live" and "unusable". An active search
+  // suppresses the pin entirely: you're reading matches somewhere up the
+  // list, and a poll appending rows below must not move you.
+  const pinned = !query && isNearBottom(streamEl);
   const prevTop = streamEl.scrollTop;
 
   renderChanges(changesEl, data, changesOpen);
   renderStream(streamEl, data);
   updateFilterCounts();
+  applySearch();
   renderVitals(vitalsEl, data);
 
   if (pinned) streamEl.scrollTop = streamEl.scrollHeight;
@@ -759,6 +768,7 @@ function setPane(id: string | null, name: string, color: number, live: boolean):
       changesEl.replaceChildren();
       renderStream(streamEl, empty(""));
       updateFilterCounts();
+      applySearch();
       vitalsEl.hidden = true;
     } else {
       load(id, /* swap */ true);
@@ -829,6 +839,71 @@ export function toggleInspector(): void {
   setOpen(!open, /* persist */ true);
 }
 
+// ---- Search ----------------------------------------------------------------
+// A find-over-the-journal, riding the same machinery as the kind filters: match
+// rows get to stay, misses wear .row-searchmiss and the CSS hides them. Pure
+// class toggling on the existing rows — no re-render, no refetch — which is
+// what keeps it instant AND makes it trivially re-appliable after each poll
+// re-render (apply() calls applySearch() the same way it re-runs the
+// expandability pass). Matching uses copySource — the same raw text a
+// double-click copies — so a clamped 40-line beat matches on all 40 lines,
+// not the 4 you can see.
+
+/** Live query, lowercased at match time. "" means search is inactive. */
+let query = "";
+
+/** Everything the stream renders as a discrete row. Image rows carry no text
+ *  (copySource "" falls back to their timestamp), so they surface under a
+ *  time query and stay out of the way otherwise. */
+const SEARCHABLE = ".beat, .turn-prompt, .turn-interrupt, .skill, .work, .imgrow";
+
+function applySearch(): void {
+  const q = query.trim().toLowerCase();
+  const rows = streamEl.querySelectorAll<HTMLElement>(SEARCHABLE);
+  if (!q) {
+    for (const r of rows) r.classList.remove("row-searchmiss");
+    streamEl.classList.remove("inspector__stream--empty-search");
+    searchCount.textContent = "";
+    return;
+  }
+  let hits = 0;
+  for (const r of rows) {
+    const hit = (copySource.get(r) || r.textContent || "").toLowerCase().includes(q);
+    r.classList.toggle("row-searchmiss", !hit);
+    if (hit) hits++;
+  }
+  searchCount.textContent = hits === 1 ? "1 match" : `${hits} matches`;
+  // The "No matches" note only makes sense when there were rows to search;
+  // an empty pane already has its own empty state.
+  streamEl.classList.toggle("inspector__stream--empty-search", hits === 0 && rows.length > 0);
+}
+
+function openSearch(): void {
+  searchEl.hidden = false;
+  searchBtn.setAttribute("aria-expanded", "true");
+  searchInput.focus();
+  searchInput.select();
+}
+
+/** Closing clears: a hidden filter still silently eating the stream would be
+ *  indistinguishable from the journal losing rows. */
+function closeSearch(): void {
+  searchEl.hidden = true;
+  searchBtn.setAttribute("aria-expanded", "false");
+  if (query) {
+    query = "";
+    searchInput.value = "";
+    applySearch();
+  }
+}
+
+/** Ctrl+Shift+F (main.ts). Opens the rail first if it's collapsed — focusing
+ *  an input inside a hidden column would type into nothing. */
+export function openInspectorSearch(): void {
+  if (!open) setOpen(true, /* persist */ true);
+  openSearch();
+}
+
 // ---- Filters ---------------------------------------------------------------
 
 /** Reflect `shown` onto the stream: the hide classes drive the CSS, chip
@@ -881,8 +956,29 @@ export function initInspector(): void {
   streamEl = $("inspector-stream");
   vitalsEl = $("inspector-vitals");
   jumpEl = $<HTMLButtonElement>("inspector-jump");
+  searchEl = $("inspector-search");
+  searchInput = $<HTMLInputElement>("inspector-search-input");
+  searchCount = $("inspector-search-count");
+  searchBtn = $<HTMLButtonElement>("inspector-search-btn");
 
   $("inspector-close").addEventListener("click", () => toggleInspector());
+
+  searchBtn.addEventListener("click", () => {
+    if (searchEl.hidden) openSearch(); else closeSearch();
+  });
+  searchInput.addEventListener("input", () => {
+    query = searchInput.value;
+    applySearch();
+  });
+  searchInput.addEventListener("keydown", (ev) => {
+    // Stop everything: plain keys must not fall through to the terminal, and
+    // Escape must close the search, not whatever dialog handler is listening.
+    ev.stopPropagation();
+    if (ev.key === "Escape") {
+      ev.preventDefault();
+      closeSearch();
+    }
+  });
 
   // Delegated on the rail, so it covers the stream AND the Changes strip and
   // survives every poll re-render without rebinding per row. Bound once here

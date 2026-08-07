@@ -210,6 +210,15 @@
             <span id="inspector-tag" class="inspector__tag" aria-hidden="true"></span>
             <span id="inspector-name" class="inspector__name"></span>
           </div>
+          <button id="inspector-search-btn" class="inspector__btn" type="button"
+                  title="Search the journal (Ctrl+Shift+F)" aria-expanded="false">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"
+                 stroke="currentColor" stroke-width="1.4"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="7" cy="7" r="4.5"/>
+              <line x1="10.6" y1="10.6" x2="13.5" y2="13.5"/>
+            </svg>
+          </button>
           <button id="inspector-close" class="inspector__btn" type="button"
                   title="Hide inspector (Ctrl+Shift+B)">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none"
@@ -218,6 +227,11 @@
               <polyline points="6.5,4 10.5,8 6.5,12"/>
             </svg>
           </button>
+        </div>
+        <div id="inspector-search" class="inspector__search" hidden>
+          <input id="inspector-search-input" class="inspector__search-input" type="text"
+                 placeholder="Search the journal" spellcheck="false" autocomplete="off" />
+          <span id="inspector-search-count" class="inspector__search-count" aria-live="polite"></span>
         </div>
         <div id="inspector-changes" class="inspector__changes"></div>
         <div class="inspector__body">

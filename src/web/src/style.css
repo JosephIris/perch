@@ -5631,6 +5631,36 @@ body.show-dashboard .dashboard { display: flex; }
   background: var(--color-accent-faint);
 }
 
+/* --- Journal search (Ctrl+Shift+F, or the magnifier in the head) --- */
+
+.inspector__search {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  padding: 0 var(--sp-12) var(--sp-8);
+}
+.inspector__search-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--color-subtle-secondary);
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--r-input);
+  color: var(--color-text-primary);
+  font: 400 12px var(--font-small);
+  padding: 4px var(--sp-8);
+  outline: none;
+}
+.inspector__search-input:focus { border-color: var(--color-accent); }
+.inspector__search-input::placeholder { color: var(--color-text-tertiary); }
+.inspector__search-count {
+  flex: none;
+  font-family: var(--font-small);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+
 /* --- Changes strip (collapsed by default) --- */
 
 .inspector__changes { flex: none; }
@@ -5735,6 +5765,18 @@ body.show-dashboard .dashboard { display: flex; }
   border-radius: var(--r-pill);
 }
 .inspector__stream > .turn-prompt:first-child { margin-top: 0; }
+/* Same 40px gutter as .beat__time, so the times read as one column down the
+ * rail whether the row is yours or the agent's. */
+.turn-prompt__time,
+.turn-interrupt__time {
+  flex: none;
+  width: 40px;
+  font-family: var(--font-small);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-disabled);
+}
+.turn-prompt__time { padding-top: 2px; }   /* optically top-align with the 12px text */
 .turn-prompt__caret { flex: none; color: var(--color-text-disabled); }
 /* Clamped to 4 lines like a beat — a pasted spec can be dozens of lines and,
  * unclamped, the prompt header becomes a wall that buries its own turn. Click to
@@ -6065,6 +6107,20 @@ body.show-dashboard .dashboard { display: flex; }
  * leave a blank rail that reads as a bug. */
 .inspector__stream--empty-filter::after {
   content: "All filters off";
+  display: block;
+  padding: var(--sp-24) var(--sp-16);
+  text-align: center;
+  font-family: var(--font-small);
+  font-size: 12px;
+  color: var(--color-text-disabled);
+}
+
+/* Search misses. Scoped under the stream for the same specificity reason as
+ * the --hide-* rules above: one bare class would lose to the rows' own
+ * display: flex/grid. */
+.inspector__stream .row-searchmiss { display: none; }
+.inspector__stream--empty-search::after {
+  content: "No matches";
   display: block;
   padding: var(--sp-24) var(--sp-16);
   text-align: center;
