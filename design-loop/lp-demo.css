@@ -1,0 +1,192 @@
+/* The app's REAL stylesheet (tokens.css + every component class), so the LP
+ * mockup's stages render the actual chrome: session items, dashboard cards,
+ * board nodes, pane headers. Same move the shipped site makes. */
+@import "../src/web/src/style.css";
+
+/* Demo shims copied from site/src/style.css — footing for the reused app
+ * components inside LP stages (see that file for the whys). */
+
+.demo-sidebar { height: 100%; width: 100%; overflow: hidden; }
+.demo-sidebar .sidebar__scroll {
+  height: 100%;
+  overflow: hidden;
+  padding: var(--sp-12) var(--sp-8) 0;
+}
+
+.demo-inspector {
+  width: 100%; height: 100%;
+  border-radius: 0;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+.demo-inspector .inspector__stream { flex: 1 1 auto; overflow-y: auto; }
+.demo-inspector .changes__body { display: none; }
+.demo-inspector .changes__bar[aria-expanded="true"] + .changes__body { display: block; }
+.demo-inspector__head {
+  display: flex; align-items: center; gap: var(--sp-8);
+  padding: var(--sp-8) var(--sp-12);
+  flex: 0 0 auto;
+}
+.demo-inspector__dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+.demo-inspector__dot[data-state="working"] { background: var(--color-state-working); }
+.demo-inspector__title {
+  font-size: var(--type-caption-size); font-weight: 500;
+  color: var(--color-text-primary);
+}
+.demo-inspector__vitals {
+  display: flex; align-items: center; gap: var(--sp-8);
+  padding: var(--sp-8) var(--sp-12);
+  border-top: 1px solid var(--color-sidebar-stroke);
+  font-family: var(--font-small); font-size: 11px;
+  color: var(--color-text-tertiary);
+  flex: 0 0 auto;
+}
+.demo-inspector__cost { margin-right: auto; }
+
+/* ==== the live workspace demo (site/src/workspace-demo.ts chrome) ======= */
+.wsdemo {
+  position: relative;
+  min-width: 1040px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--r-window);
+  overflow: hidden;
+  background: #141414;
+  box-shadow: 0 24px 60px -30px rgba(0, 0, 0, 0.7);
+  text-align: left;
+}
+.wsdemo__titlebar {
+  display: flex; align-items: center;
+  height: 34px; padding: 0 12px;
+  border-bottom: 1px solid var(--color-sidebar-stroke);
+  background: #1a1a1a;
+  flex: 0 0 auto;
+}
+.wsdemo__brand {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: 12px; font-weight: 600; color: var(--color-text-secondary);
+}
+.wsdemo__glyph {
+  width: 13px; height: 13px; border-radius: 50%;
+  background: radial-gradient(circle at 50% 50%, #e9eef4 0 34%, transparent 36%),
+              var(--color-accent);
+  box-shadow: inset 0 0 0 1.5px var(--color-accent);
+}
+.wsdemo__winbtns { margin-left: auto; display: inline-flex; gap: 18px; }
+.wsdemo__winbtns i { width: 11px; height: 1px; background: var(--color-text-tertiary); display: block; align-self: center; }
+.wsdemo__winbtns i:nth-child(2) { width: 9px; height: 9px; border: 1px solid var(--color-text-tertiary); background: none; }
+.wsdemo__winbtns .wsdemo__x { transform: rotate(45deg); position: relative; }
+.wsdemo__body {
+  display: grid;
+  grid-template-columns: 244px 1fr 326px;
+  column-gap: var(--sp-8);
+  height: 664px;
+  padding: 0 var(--sp-8) var(--sp-8);
+  background: #141414;
+  min-height: 0;
+}
+.wsdemo__sidebar   { grid-area: auto; grid-column: 1; grid-row: 1; }
+.wsdemo__workspace { grid-column: 2; grid-row: 1; }
+.wsdemo__inspector { grid-column: 3; grid-row: 1; }
+.wsdemo__sidebar {
+  display: flex; flex-direction: column; min-height: 0;
+  background: var(--color-sidebar-surface);
+  border-radius: 0 0 var(--r-card) var(--r-card);
+  padding: var(--sp-8) var(--sp-8) var(--sp-12);
+  overflow: hidden;
+}
+.wsdemo__sidebar .sidebar__scroll {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
+  margin: 0 calc(-1 * var(--sp-4));
+  padding: 0 var(--sp-4);
+}
+.wsside__top { flex: 0 0 auto; display: flex; flex-direction: column; gap: 2px; margin-bottom: var(--sp-8); }
+.wsside__seg {
+  display: flex; gap: 2px; padding: 3px; margin-bottom: var(--sp-4);
+  background: var(--color-subtle-secondary); border-radius: var(--r-input);
+}
+.wsside__seg-btn {
+  flex: 1; padding: 4px 0; border-radius: 3px; font-size: 11.5px;
+  color: var(--color-text-tertiary); text-align: center;
+}
+.wsside__seg-btn--on { background: var(--color-subtle-tertiary); color: var(--color-text-primary); }
+.wsside__action {
+  display: flex; align-items: center; gap: var(--sp-8);
+  padding: 6px var(--sp-8); border-radius: var(--r-input);
+  font-size: 13px; color: var(--color-text-secondary);
+}
+.wsside__plus { color: var(--color-text-tertiary); font-size: 14px; }
+.wsside__grid { width: 12px; height: 12px; border-radius: 2px; box-shadow: inset 0 0 0 1px var(--color-text-tertiary); }
+.wsside__badge {
+  margin-left: auto; font-size: 10px; font-weight: 600; color: #fff;
+  background: #e5484d; border-radius: 8px; padding: 0 6px; line-height: 15px;
+}
+.wsside__res { flex: 0 0 auto; margin-top: var(--sp-8); }
+.wsside__reslabel {
+  font-family: var(--font-small); font-size: 10px; letter-spacing: 0.6px;
+  text-transform: uppercase; color: var(--color-text-tertiary);
+  margin: var(--sp-8) 0 var(--sp-4); padding: 0 var(--sp-4);
+}
+.wscard {
+  position: relative; display: grid;
+  grid-template-columns: auto 1fr auto; align-items: center; gap: 6px;
+  padding: var(--sp-8); border-radius: var(--r-card); font-size: 12px;
+}
+.wscard__sub { grid-column: 1 / -1; font-size: 11px; color: var(--color-text-tertiary); }
+.wscard__dot { width: 7px; height: 7px; border-radius: 50%; }
+.wscard__meta { font-family: var(--font-mono); font-size: 11px; }
+.wscard--cloud { background: var(--color-cloud-faint); }
+.wscard--cloud .wscard__dot { background: var(--color-cloud); }
+.wscard--cloud .wscard__meta { color: var(--color-cloud); }
+.wscard--local { background: var(--color-local-faint); box-shadow: inset 0 0 0 1px var(--color-local-frame); }
+.wscard--local .wscard__dot { background: var(--color-local); }
+.wscard--local .wscard__meta { color: var(--color-local); }
+.wsdemo__workspace { display: flex; flex-direction: column; gap: var(--sp-8); min-width: 0; min-height: 0; }
+.wspane {
+  display: flex; flex-direction: column; min-height: 0; min-width: 0;
+  background: var(--color-terminal-bg);
+  border-radius: var(--r-card);
+  overflow: hidden;
+}
+.wspane--agent   { flex: 1.75 1 0; }
+.wspane--console { flex: 1 1 0; }
+.wspane__body { flex: 1 1 auto; min-height: 0; overflow: hidden; padding: var(--sp-8) var(--sp-12); }
+.wst { font-family: var(--font-mono); font-size: 11.5px; line-height: 1.6; color: var(--color-text-secondary); }
+.wst__l { white-space: pre-wrap; word-break: break-word; }
+.wst__sub { color: var(--color-text-disabled); }
+.wst b { color: var(--color-text-primary); font-weight: 600; }
+.wst-user { color: var(--color-text-primary); }
+.wst-b { color: var(--color-success); }
+.wst-work { color: var(--color-accent); }
+.wst-add { color: var(--color-success); }
+.wst-del { color: var(--color-error); }
+.wst-vite { color: var(--color-success); font-weight: 600; }
+.wst-arrow { color: var(--color-success); }
+.wst-link { color: var(--color-accent); }
+.wsdemo__inspector {
+  min-height: 0; overflow: hidden;
+  border-radius: 0 0 var(--r-card) var(--r-card);
+}
+.wsdemo__inspector .demo-inspector { height: 100%; border-radius: 0; }
+.wscursor {
+  position: absolute; left: 50%; top: 90%; z-index: 20;
+  width: 22px; height: 22px; margin: -2px 0 0 -2px;
+  pointer-events: none; opacity: 0;
+  transition: left 0.62s cubic-bezier(0.4, 0, 0.2, 1),
+              top 0.62s cubic-bezier(0.4, 0, 0.2, 1),
+              opacity 0.3s ease, transform 0.12s ease;
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.5));
+}
+.wscursor svg { display: block; }
+.wscursor--down { transform: scale(0.8); }
+.wscursor__ring {
+  position: absolute; z-index: 19;
+  width: 8px; height: 8px; margin: -4px 0 0 -4px;
+  border-radius: 50%; border: 2px solid var(--color-accent);
+  pointer-events: none; animation: wscursor-ring 0.5s ease-out forwards;
+}
+@keyframes wscursor-ring {
+  from { opacity: 0.7; transform: scale(0.4); }
+  to   { opacity: 0; transform: scale(3.4); }
+}

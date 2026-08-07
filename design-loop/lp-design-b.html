@@ -1,0 +1,696 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design B: "The Windows command center" (product-first)</title>
+<!--
+  LP redesign, Design B of two: "Command center".
+  Dense, product-first, Linear-school discipline: layered near-blacks, 4-step
+  text ramp, light+tight display type, hairline borders, one accent with a
+  strict job, light primary CTA, grain over the product frame, changelog strip
+  as proof of velocity. Mascot restrained: nav glyph, one perched cameo on the
+  hero frame, one dry line in the Windows section.
+
+  Placeholders to resolve before shipping:
+  - Store CTA href: real apps.microsoft.com/detail/... URL once listing is live.
+  - Hero frame: in the real build, mount the live workspace demo (site/src/workspace-demo.ts).
+-->
+<!-- The app's real stylesheet (bundled by lp-mascot-build.mjs) — the stages
+     below reuse the app's actual components and class vocabulary. -->
+<link rel="stylesheet" href="./lp-app.css">
+<style>
+  :root {
+    --bg: #08090a;
+    --panel: #0f1011;
+    --raise: #141516;
+    --raise2: #191a1b;
+    --line: #1f2126;
+    --line-soft: rgba(255,255,255,0.06);
+    --line-strong: rgba(255,255,255,0.11);
+    --ink: #f7f8f8;
+    --ink2: #c9d1dc;
+    --ink3: #8a929c;
+    --ink4: #62666d;
+    --accent: #7fb8e8;
+    --success: #5fbe84;
+    --caution: #d9ab55;
+    --error: #de6871;
+    --cloud: #5fc4c9;
+    --font-text: "Inter Variable", "Segoe UI Variable Text", "Segoe UI", sans-serif;
+    --font-mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
+  }
+  @font-face {
+    font-family: "Inter Variable";
+    src: url("../site/dist/fonts/InterVariable.woff2") format("woff2-variations");
+    font-weight: 100 900;
+    font-display: swap;
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--bg); scroll-behavior: smooth; }
+  /* undo the app shell's viewport pinning; this is a scrolling document */
+  html, body { height: auto; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink2);
+    font-family: var(--font-text); font-size: 15.5px; line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  ::selection { background: rgba(127,184,232,0.25); }
+  h1, h2, h3 { color: var(--ink); }
+
+  /* ============ nav ============ */
+  .nav {
+    position: sticky; top: 0; z-index: 50;
+    background: rgba(9,10,11,0.78);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .nav__in {
+    max-width: 1200px; margin: 0 auto; padding: 0 24px;
+    height: 60px; display: flex; align-items: center; gap: 26px;
+  }
+  .nav__brand {
+    display: inline-flex; align-items: center; gap: 9px;
+    font-weight: 590; font-size: 16.5px; color: var(--ink);
+  }
+  .nav__brand:hover { text-decoration: none; }
+  .nav__links { display: flex; gap: 22px; font-size: 13.5px; }
+  .nav__links a { color: var(--ink3); }
+  .nav__links a:hover { color: var(--ink); text-decoration: none; }
+  .nav__cta { margin-left: auto; display: flex; gap: 10px; align-items: center; }
+  .nav__get {
+    padding: 6px 14px; border-radius: 7px;
+    background: #e8eaed; color: #0b0d0f !important; font-weight: 590; font-size: 13.5px;
+  }
+  .nav__get:hover { background: #f7f8fa; text-decoration: none; }
+
+  /* ============ hero ============ */
+  .hero { max-width: 900px; margin: 0 auto; padding: 76px 24px 0; text-align: center; }
+  .hero__chip {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 5px 13px; border-radius: 20px;
+    border: 1px solid var(--line-strong);
+    font-size: 12.5px; color: var(--ink2);
+  }
+  .hero__chip b { color: var(--accent); font-weight: 590; }
+  .hero__chip:hover { text-decoration: none; border-color: rgba(255,255,255,0.2); }
+  .hero h1 {
+    margin: 22px 0 0;
+    font-size: clamp(46px, 6vw, 72px);
+    font-weight: 510;
+    letter-spacing: -0.035em;
+    line-height: 1.02;
+    text-wrap: balance;
+  }
+  .hero__wire, .cta__wire {
+    margin: 2px auto 0; width: min(540px, 88%); cursor: pointer;
+  }
+  .hero__wire svg, .cta__wire svg, .faq__mascot svg {
+    display: block; width: 100%; height: auto; overflow: visible;
+    color: var(--ink); --color-accent: var(--accent);
+  }
+  .hero__sub {
+    margin: 14px auto 0; max-width: 58ch;
+    font-size: 17px; color: var(--ink3); text-wrap: pretty;
+  }
+  .hero__actions { margin-top: 28px; display: flex; justify-content: center; gap: 12px; flex-wrap: wrap; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 9px;
+    padding: 11px 20px; border-radius: 8px;
+    border: 1px solid var(--line-strong);
+    color: var(--ink); font-weight: 550; font-size: 14.5px;
+  }
+  .btn:hover { text-decoration: none; border-color: rgba(255,255,255,0.22); }
+  .btn--store { background: #e8eaed; border-color: #e8eaed; color: #0b0d0f; }
+  .btn--store:hover { background: #f7f8fa; border-color: #f7f8fa; }
+  .hero__micro { margin: 15px 0 0; font-size: 13px; color: var(--ink4); }
+  .hero__micro b { color: var(--ink3); font-weight: 550; }
+
+  /* ============ hero product frame ============ */
+  .frame-wrap { max-width: 1200px; margin: 54px auto 0; padding: 0 24px; position: relative; }
+  .frame-scroll { overflow-x: auto; border-radius: 12px; }
+  /* The hero frame hosts the app's REAL workspace demo (site/src/workspace-demo.ts,
+   * mounted by lp-mascot.js) — no recreated chrome. Grain over the whole frame
+   * kills the sterile-mockup feel. */
+  .frame-scroll .wsdemo { border-radius: 12px; }
+  .frame-scroll .wsdemo::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 30;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='0.16'/%3E%3C/svg%3E");
+    mix-blend-mode: overlay; opacity: 0.55;
+  }
+
+  /* the mascot cameo perched on the frame */
+  .frame-bird {
+    position: absolute; top: -25px; right: 58px; z-index: 2;
+  }
+
+  /* ============ sections ============ */
+  .sect { max-width: 1200px; margin: 150px auto 0; padding: 0 24px; }
+  .sect__head { max-width: 640px; }
+  .sect__eyebrow {
+    font: 500 12px var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--accent); margin: 0 0 12px;
+  }
+  .sect h2 {
+    margin: 0; font-size: clamp(32px, 4.2vw, 46px);
+    font-weight: 510; letter-spacing: -0.028em; line-height: 1.06; text-wrap: balance;
+  }
+  .sect__sub { margin: 16px 0 0; color: var(--ink3); font-size: 16px; max-width: 56ch; }
+  .sect__sub b { color: var(--ink2); font-weight: 570; }
+  .sect__cols {
+    margin-top: 36px; display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px;
+  }
+  /* feature cards ("fcard" — the app stylesheet owns the name .card) */
+  .fcard {
+    background: var(--panel); border: 1px solid var(--line-soft);
+    border-radius: 10px; overflow: hidden;
+  }
+  .fcard__stage { border-bottom: 1px solid var(--line-soft); background: var(--raise); padding: 14px; min-height: 210px; position: relative; }
+  .fcard__text { padding: 16px 18px 18px; }
+  .fcard__text h3 { margin: 0 0 6px; font-size: 15.5px; font-weight: 590; }
+  .fcard__text p { margin: 0; font-size: 13.5px; color: var(--ink3); }
+  .fcard__text p b { color: var(--ink2); font-weight: 570; }
+
+  kbd {
+    display: inline-block; min-width: 20px; padding: 2px 6px;
+    border-radius: 4px; border: 1px solid var(--line);
+    background: #24262b; color: var(--ink2);
+    font: 500 11.5px var(--font-mono); text-align: center;
+    box-shadow: inset 0 -1px 0 rgba(0,0,0,0.45);
+  }
+
+  /* Stages that host REAL app components (dashboard cards, sidebar, board):
+   * the app surface color under them, edge-to-edge. */
+  .fcard__stage--app { background: #141414; }
+  .fcard__stage--flush { padding: 0; overflow: hidden; }
+
+  /* ship mini (journal + receipts) */
+  .smini { font-size: 11.5px; }
+  .smini__commit {
+    display: flex; gap: 8px; align-items: center; padding: 6px 9px;
+    background: var(--raise2); border: 1px solid var(--line-soft); border-radius: 7px; margin-bottom: 6px;
+  }
+  .smini__hash { font: 400 10.5px var(--font-mono); color: var(--accent); }
+  .smini__msg { color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .smini__stat { margin-left: auto; font: 400 10px var(--font-mono); color: var(--ink4); flex: none; }
+  .smini__push {
+    display: inline-flex; gap: 6px; align-items: center; margin-top: 6px;
+    font: 500 10.5px var(--font-mono); color: var(--success);
+  }
+  .smini__panelrow { display: flex; gap: 7px; align-items: center; padding: 5px 9px; color: var(--ink3); }
+  .smini__panelrow .mono { font: 400 10.5px var(--font-mono); color: var(--caution); }
+  .smini__warn { margin-top: 6px; padding: 6px 9px; border-radius: 6px; background: rgba(217,171,85,0.1); color: var(--ink3); font-size: 10.5px; }
+  .smini__warn b { color: var(--caution); }
+
+  /* ============ what else grid ============ */
+  .grid { margin-top: 36px; display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px; }
+  .gcell {
+    position: relative; overflow: hidden;
+    background: var(--panel); border: 1px solid var(--line-soft);
+    border-radius: 10px; padding: 18px;
+  }
+  .gcell::before {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: radial-gradient(75% 60% at 50% 0%, var(--glow, transparent), transparent 72%);
+    opacity: 0.8;
+  }
+  .gcell h3 { position: relative; margin: 0 0 5px; font-size: 14px; font-weight: 590; }
+  .gcell p { position: relative; margin: 0; font-size: 12.5px; color: var(--ink3); }
+  .gcell .ic { position: relative; font-size: 15px; margin-bottom: 10px; display: block; color: var(--ink2); }
+
+  /* ============ keyboard strip ============ */
+  .keys { margin-top: 36px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+  @media (max-width: 760px) { .keys { grid-template-columns: 1fr; } }
+  .keys__row {
+    display: flex; align-items: center; gap: 8px;
+    border: 1px solid var(--line-soft); border-radius: 8px; padding: 11px 16px;
+    font-size: 13px; color: var(--ink3);
+  }
+  .keys__row .what { margin-left: auto; white-space: nowrap; }
+
+  /* ============ changelog ============ */
+  .log { margin-top: 36px; border-top: 1px solid var(--line-soft); }
+  .log__row {
+    display: grid; grid-template-columns: 110px 1fr; gap: 18px;
+    padding: 16px 4px; border-bottom: 1px solid var(--line-soft);
+  }
+  .log__date { font: 400 12px var(--font-mono); color: var(--ink4); padding-top: 2px; }
+  .log__row h3 { margin: 0 0 3px; font-size: 14.5px; font-weight: 590; }
+  .log__row p { margin: 0; font-size: 13.5px; color: var(--ink3); }
+
+  /* ============ windows band ============ */
+  .win { max-width: 1200px; margin: 150px auto 0; padding: 0 24px; }
+  .win__band {
+    border: 1px solid var(--line-soft); border-radius: 14px;
+    background:
+      radial-gradient(70% 90% at 22% 0%, rgba(127,184,232,0.07), transparent 60%),
+      var(--panel);
+    padding: 52px 48px; display: flex; gap: 40px; align-items: center; flex-wrap: wrap;
+  }
+  .win__copy { flex: 1 1 380px; }
+  .win__band h2 { margin: 0; font-size: clamp(28px, 3.4vw, 38px); font-weight: 510; letter-spacing: -0.025em; line-height: 1.08; }
+  .win__band p { margin: 14px 0 0; color: var(--ink3); max-width: 52ch; }
+  .win__band p b { color: var(--ink2); font-weight: 570; }
+  .win__mac { font-size: 13px; color: var(--ink4); margin-top: 18px; }
+  .win__stage {
+    flex: 1 1 300px; max-width: 440px; margin: 0 auto;
+    color: var(--ink); --color-accent: var(--accent);
+  }
+
+  /* ============ faq ============ */
+  .faq { max-width: 680px; margin: 150px auto 0; padding: 0 24px; }
+  .faq h2 { font-size: 26px; margin: 0 0 12px; font-weight: 510; letter-spacing: -0.02em; }
+  .faq details { border-bottom: 1px solid var(--line-soft); padding: 4px 0; }
+  .faq summary { cursor: pointer; padding: 11px 0; font-weight: 550; color: var(--ink); font-size: 14.5px; }
+  .faq summary::marker { color: var(--ink4); }
+  .faq details p { margin: 2px 0 14px; color: var(--ink3); font-size: 14px; }
+
+  /* ============ cta / footer ============ */
+  .cta {
+    max-width: 1200px; margin: 150px auto 0; padding: 0 24px;
+  }
+  .cta__band {
+    border: 1px solid var(--line-soft); border-radius: 14px;
+    background: var(--panel); text-align: center; padding: 72px 24px;
+  }
+  .cta__band h2 { margin: 0; font-size: clamp(34px, 4.4vw, 54px); font-weight: 510; letter-spacing: -0.03em; line-height: 1.02; }
+  .cta__band p { margin: 14px auto 0; color: var(--ink3); max-width: 46ch; }
+  .cta__band .hero__actions { margin-top: 28px; }
+  .cta__band .cta__wire { width: min(440px, 80%); margin-bottom: 4px; }
+  .footer {
+    max-width: 1200px; margin: 60px auto 0; padding: 26px 24px 40px;
+    border-top: 1px solid var(--line-soft);
+    display: flex; align-items: center; gap: 22px; flex-wrap: wrap;
+    font-size: 13.5px; color: var(--ink4);
+  }
+  .footer nav { display: flex; gap: 18px; }
+  .footer a { color: var(--ink3); }
+  .footer__credit { margin-left: auto; }
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <div class="nav__in">
+    <a class="nav__brand" href="#">
+      <svg width="17" height="17" viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="12" cy="12" r="7.5" fill="none" stroke="#7fb8e8" stroke-width="2.4"/>
+        <circle cx="12" cy="12" r="3.4" fill="#f7f8f8"/>
+      </svg>
+      perch
+    </a>
+    <nav class="nav__links">
+      <a href="#board">Features</a>
+      <a href="#shipped">Changelog</a>
+      <a href="https://github.com/JosephIris/perch">GitHub</a>
+    </nav>
+    <div class="nav__cta">
+      <a class="nav__get" href="#get">Download</a>
+    </div>
+  </div>
+</header>
+
+<main>
+
+  <!-- ================= hero ================= -->
+  <section class="hero">
+    <a class="hero__chip" href="#board"><b>New</b> The board: brief your agent with real context →</a>
+    <h1>The Windows command center for coding&nbsp;agents</h1>
+    <!-- the REAL rig: walks in, perches, takes notes, nods off. Click replays. -->
+    <div class="hero__wire" id="rig-hero" title="Replay the routine"
+         aria-label="Monocle Guy, the perch mascot, perched on a wire beneath the title"></div>
+    <p class="hero__sub">
+      Run your agents across every project from one native window. Built
+      around Claude Code, happy with anything that lives in a terminal: see
+      who's working, answer who's blocked, read what changed, and ship it.
+    </p>
+    <div class="hero__actions" id="get">
+      <!-- TODO: real Store URL when the listing is live -->
+      <a class="btn btn--store" href="https://apps.microsoft.com/">
+        <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+          <rect x="0" y="0" width="7.4" height="7.4" fill="#0b0d0f"/>
+          <rect x="8.6" y="0" width="7.4" height="7.4" fill="#0b0d0f"/>
+          <rect x="0" y="8.6" width="7.4" height="7.4" fill="#0b0d0f"/>
+          <rect x="8.6" y="8.6" width="7.4" height="7.4" fill="#0b0d0f"/>
+        </svg>
+        Get it from the Microsoft Store
+      </a>
+      <a class="btn" href="https://github.com/JosephIris/perch/releases/latest">Download from GitHub</a>
+    </div>
+    <p class="hero__micro"><b>Free. Open source. MIT.</b> No account, no telemetry. Windows 10+.</p>
+  </section>
+
+  <!-- ================= hero product frame ================= -->
+  <div class="frame-wrap">
+    <!-- the bird (the real app icon) perches on the window like it's his -->
+    <img class="frame-bird" src="../src/web/perch-glyph.png" width="34" height="34" alt="">
+    <!-- the app's REAL workspace demo (auto-playing: cursor, typed prompt,
+         streaming agent pane, live console, inspector filling in) -->
+    <div class="frame-scroll"><div id="demo-workspace"></div></div>
+  </div>
+
+  <!-- ================= 1: know ================= -->
+  <section class="sect">
+    <div class="sect__head">
+      <p class="sect__eyebrow">Oversight</p>
+      <h2>Know who needs you, without looking for them</h2>
+      <p class="sect__sub">
+        perch wires into the agent's own hooks (Claude Code first, tested on
+        it daily), so state is a fact, not a guess from scrollback. The
+        sidebar keeps score; the dashboard (<kbd>Ctrl</kbd> <kbd>Shift</kbd>
+        <kbd>A</kbd>) buckets everything by who is waiting on whom.
+      </p>
+    </div>
+    <div class="sect__cols">
+      <div class="fcard">
+        <!-- the dashboard's REAL card markup, painted by the app stylesheet -->
+        <div class="fcard__stage fcard__stage--app">
+          <div class="dash__group-label">Needs you</div>
+          <div class="dash__grid" style="grid-template-columns: 1fr;">
+            <div class="card">
+              <div class="card__head">
+                <span class="card__dot" data-state="permission"></span>
+                <span class="card__title">invoice export</span>
+                <span class="card__open">Open →</span>
+              </div>
+              <div class="card__wait">
+                <div class="card__peek">
+                  <div class="card__peek-line">Claude wants to run: npm publish</div>
+                  <div class="card__peek-line card__peek-line--q">Proceed? (y/n)</div>
+                </div>
+                <div class="card__reply">
+                  <input class="card__reply-input" type="text" placeholder="Type your reply…">
+                  <button class="card__reply-send" aria-label="Send"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 8h9M8 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+                </div>
+              </div>
+              <div class="card__foot">
+                <span class="card__activity">Waiting · 6m</span>
+                <span class="chip">⎇ main</span>
+                <span class="chip chip--ahead">↑1</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="fcard__text">
+          <h3>Answer from the card</h3>
+          <p>The agent's actual question, with the reply box next to it. Long or code-heavy asks get <b>Open to reply</b> instead, so you never answer blind.</p>
+        </div>
+      </div>
+      <div class="fcard">
+        <!-- the app's REAL Sidebar (projects mode), fixtures with a warmth
+             spread, an Idle drawer, and the active row peeked so the moon
+             shows -->
+        <div class="fcard__stage fcard__stage--flush" style="height: 320px; background: var(--color-sidebar-surface);">
+          <div id="demo-sidebar" style="height: 100%;"></div>
+        </div>
+        <div class="fcard__text">
+          <h3>Ages that cool, tabs that sleep</h3>
+          <p>A finished agent wears its age, and the age fades from hot to cold as it sits: a triage order at a glance. Click the moon and a tab exits politely into its project's <b>Idle drawer</b>; click it later and it resumes.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 2: board ================= -->
+  <section class="sect" id="board">
+    <div class="sect__head">
+      <p class="sect__eyebrow">New · The board</p>
+      <h2>Hand the agent a brief, not a wall of text</h2>
+      <p class="sect__sub">
+        Every tab gets a board: throw a screenshot, a file, a link, and a
+        sentence onto it. perch turns each card into something the agent can
+        <b>actually open</b>: images land in the repo, links are fetched and
+        cached for offline reading, and the whole board becomes one markdown
+        file every agent pane in the tab is told about automatically.
+      </p>
+    </div>
+    <div class="sect__cols">
+      <div class="fcard" style="grid-column: 1 / -1;">
+        <!-- the board's REAL surface + node markup, painted by the app stylesheet -->
+        <div class="fcard__stage fcard__stage--flush" style="height: 340px;">
+          <div class="board" style="border: none; border-radius: 0;">
+            <div class="board__canvas">
+              <div class="board-node board-node--image" style="left: 28px; top: 24px; width: 210px;">
+                <div class="board-node__bar"><span class="board-node__title">login-broken.png</span><span class="board-node__spacer"></span></div>
+                <div class="board-node__shot"><img class="board-node__img" alt=""
+                  src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='208' height='92'%3E%3Crect width='208' height='92' fill='%23232833'/%3E%3Crect x='14' y='12' width='180' height='12' rx='3' fill='%23de6871' opacity='0.55'/%3E%3Crect x='14' y='34' width='120' height='8' rx='2' fill='%23ffffff' opacity='0.10'/%3E%3Crect x='14' y='50' width='150' height='8' rx='2' fill='%23ffffff' opacity='0.08'/%3E%3Crect x='14' y='66' width='96' height='8' rx='2' fill='%23ffffff' opacity='0.08'/%3E%3C/svg%3E"></div>
+                <div class="board-node__body">the broken state after login</div>
+              </div>
+              <div class="board-node board-node--note" style="left: 266px; top: 40px; width: 196px;">
+                <div class="board-node__bar"><span class="board-node__spacer"></span></div>
+                <div class="board-node__body">Keep the header fixed. The wobble on scroll is the bug, not the layout.</div>
+              </div>
+              <div class="board-node board-node--ref" style="left: 76px; top: 186px; width: 230px;">
+                <div class="board-node__bar"><span class="board-node__title">stripe.com/docs/webhooks</span><span class="board-node__spacer"></span></div>
+                <div class="board-node__body">cached · the agent reads it offline</div>
+              </div>
+              <div class="board-node board-node--file" style="left: 336px; top: 168px; width: 196px;">
+                <div class="board-node__bar"><span class="board-node__title">src/checkout/cart.ts</span><span class="board-node__spacer"></span></div>
+              </div>
+              <div class="board-node board-node--note board-node--draft" style="left: 362px; top: 252px; width: 200px;">
+                <div class="board-node__bar"><span class="board-node__spacer"></span></div>
+                <div class="board-node__body">draft: nothing reaches the agent until there's text</div>
+              </div>
+            </div>
+            <div class="board__tools">
+              <button class="board__tool" title="Add note">✎</button>
+              <button class="board__tool" title="Add file">⊕</button>
+              <button class="board__tool" title="Add link">⧉</button>
+              <span class="board__tools-sep"></span>
+              <button class="board__pct" title="Reset view">100%</button>
+            </div>
+          </div>
+        </div>
+        <div class="fcard__text">
+          <h3>Paste anything. It never fails.</h3>
+          <p><kbd>Ctrl</kbd> <kbd>V</kbd> resolves url → path → note, in that order. Double-click any card to caption it: "the broken state after login" is what makes a screenshot mean something to an agent that reads text.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 3: ship ================= -->
+  <section class="sect">
+    <div class="sect__head">
+      <p class="sect__eyebrow">Receipts</p>
+      <h2>Trust what shipped, because you can check</h2>
+      <p class="sect__sub">
+        The inspector reads a session as a journal: what the agent said, what
+        it did, which files it touched with +/− per file. Each tab wears its
+        own agent's unpushed commits, and nothing stays running behind your
+        back.
+      </p>
+    </div>
+    <div class="sect__cols">
+      <div class="fcard">
+        <div class="fcard__stage smini">
+          <div class="smini__commit"><span class="smini__hash">4a60000</span><span class="smini__msg">feat(board): add notes, files and links</span><span class="smini__stat">+412 −60</span></div>
+          <div class="smini__commit"><span class="smini__hash">c458a51</span><span class="smini__msg">feat(sessions): new tabs open at the top</span><span class="smini__stat">+96 −22</span></div>
+          <div class="smini__commit"><span class="smini__hash">757bbfb</span><span class="smini__msg">feat(sidebar): sleep a tab, idle drawer</span><span class="smini__stat">+310 −41</span></div>
+          <div class="smini__push">↑3 ready to push · this session's, not the branch's</div>
+        </div>
+        <div class="fcard__text">
+          <h3>Commits with attribution</h3>
+          <p>The ↑N chip counts <b>this agent's</b> commits, not the branch's. Hover for the recap, click for per-file diffs.</p>
+        </div>
+      </div>
+      <div class="fcard">
+        <div class="fcard__stage smini">
+          <div class="smini__panelrow"><span class="mono">⊙ :5173</span> vite · gift guide</div>
+          <div class="smini__panelrow"><span class="mono">⊙ :3001</span> api · invoice export</div>
+          <div class="smini__warn"><b>:8787 outlived its pane.</b> Kill it, and its whole process tree, in one click.</div>
+          <div class="smini__warn" style="background:rgba(95,196,201,0.08)"><b style="color:var(--cloud)">Cloud:</b> a2-ultragpu · $20.28/hr · view-only</div>
+        </div>
+        <div class="fcard__text">
+          <h3>Nothing left running</h3>
+          <p>Every localhost dev server, with the pane that owns it, and a kill button for the one that outlived its pane. Cloud machines listed too, with live cost.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= what else ================= -->
+  <section class="sect">
+    <div class="sect__head">
+      <h2>And the rest of the room</h2>
+    </div>
+    <div class="grid">
+      <div class="gcell" style="--glow: rgba(76,125,196,0.24)">
+        <span class="ic">⌗</span><h3>Git worktree tabs</h3>
+        <p>Parallel agents in separate folders, so they can't overwrite each other.</p>
+      </div>
+      <div class="gcell" style="--glow: rgba(120,86,180,0.22)">
+        <span class="ic">◇</span><h3>Per-pane model picker</h3>
+        <p>Fable, Opus, Sonnet or Haiku per pane. A model at its cap says when it resets.</p>
+      </div>
+      <div class="gcell" style="--glow: rgba(70,160,150,0.2)">
+        <span class="ic">⊞</span><h3>Real terminal, real splits</h3>
+        <p>Your actual shell underneath, split and arranged from the keyboard. Nothing is simulated.</p>
+      </div>
+      <div class="gcell" style="--glow: rgba(90,150,90,0.2)">
+        <span class="ic">◫</span><h3>Browser panes</h3>
+        <p>A real WebView2 preview next to the server that serves it. No iframe refusals.</p>
+      </div>
+      <div class="gcell" style="--glow: rgba(180,140,80,0.18)">
+        <span class="ic">⟳</span><h3>Sessions that survive</h3>
+        <p>Crash-proof incremental save; Claude Code conversations resume across restarts.</p>
+      </div>
+      <div class="gcell" style="--glow: rgba(170,90,110,0.18)">
+        <span class="ic">▣</span><h3>Toasts when it matters</h3>
+        <p>A blocked agent can raise a real Windows toast, so you hear about it even when perch is behind other windows.</p>
+      </div>
+      <div class="gcell" style="--glow: rgba(76,125,196,0.18)">
+        <span class="ic">⊙</span><h3>Port chips</h3>
+        <p>A pane that starts a server wears its port. Click to open.</p>
+      </div>
+      <div class="gcell" style="--glow: rgba(120,86,180,0.16)">
+        <span class="ic">☾</span><h3>Boot cover</h3>
+        <p>The frosted glass while an agent starts is perch wiring the tab's context: hooks, shims, resume. Monocle Guy supervises.</p>
+      </div>
+      <div class="gcell" style="--glow: rgba(70,160,150,0.16)">
+        <span class="ic">≡</span><h3>Light on the machine</h3>
+        <p>Roughly zero idle background processes, enforced by a test ceiling.</p>
+      </div>
+      <div class="gcell" style="--glow: rgba(90,150,90,0.16)">
+        <span class="ic">⇱</span><h3>Links that open</h3>
+        <p>An agent that writes report.html gets a clickable link. Relative paths resolve.</p>
+      </div>
+      <div class="gcell" style="--glow: rgba(180,140,80,0.15)">
+        <span class="ic">↻</span><h3>Auto-update, quietly</h3>
+        <p>The Store channel updates itself; the GitHub build checks on launch and hourly.</p>
+      </div>
+      <div class="gcell" style="--glow: rgba(170,90,110,0.15)">
+        <span class="ic">⧉</span><h3>Copy and paste that behaves</h3>
+        <p>Right-click copies or pastes. Shift-drag selects even over a full-screen app like Claude Code.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= keyboard ================= -->
+  <section class="sect">
+    <div class="sect__head">
+      <h2>Your hands never leave the keyboard</h2>
+      <p class="sect__sub"><kbd>Ctrl</kbd> <kbd>D</kbd>, <kbd>Ctrl</kbd> <kbd>S</kbd> and <kbd>Ctrl</kbd> <kbd>W</kbd> stay with the shell, as they should. Everything perch owns takes <kbd>Ctrl</kbd> <kbd>Shift</kbd>.</p>
+    </div>
+    <div class="keys">
+      <div class="keys__row"><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>A</kbd><span class="what">Dashboard</span></div>
+      <div class="keys__row"><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>B</kbd><span class="what">Inspector rail</span></div>
+      <div class="keys__row"><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>T</kbd><span class="what">New session</span></div>
+      <div class="keys__row"><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>D</kbd><span class="what">Split right</span></div>
+      <div class="keys__row"><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>S</kbd><span class="what">Split down</span></div>
+      <div class="keys__row"><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>E</kbd><span class="what">Even out panes</span></div>
+    </div>
+  </section>
+
+  <!-- ================= changelog ================= -->
+  <section class="sect" id="shipped">
+    <div class="sect__head">
+      <h2>Recently shipped</h2>
+    </div>
+    <div class="log">
+      <div class="log__row">
+        <span class="log__date">Aug 2026</span>
+        <div><h3>The board</h3><p>Notes, files, links and pasted screenshots, staged per tab, readable by every agent in it.</p></div>
+      </div>
+      <div class="log__row">
+        <span class="log__date">Aug 2026</span>
+        <div><h3>Sleep a tab</h3><p>The moon button, the Idle drawer, and waking that resumes the conversation where it left off.</p></div>
+      </div>
+      <div class="log__row">
+        <span class="log__date">Jul 2026</span>
+        <div><h3>Microsoft Store</h3><p>One-click install, Store-managed updates, and switching channels keeps every session.</p></div>
+      </div>
+      <div class="log__row">
+        <span class="log__date">Jul 2026</span>
+        <div><h3>A quieter idle</h3><p>From 2.4 background processes a second to roughly none, with a test ceiling so it stays that way.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= windows band ================= -->
+  <section class="win">
+    <div class="win__band">
+      <div class="win__copy">
+        <h2>Windows-first. Actually native.</h2>
+        <p>
+          Most agent workspaces are Mac-first, or a cross-platform port where
+          Windows came last. perch is <b>WPF, WebView2 and real Win11 Mica</b>:
+          it sits next to Windows Terminal and the Settings app like it grew
+          up there, because it did.
+        </p>
+        <p class="win__mac">On a Mac? <a href="https://cmux.com">cmux</a> is lovely. The bird sends his regards.</p>
+      </div>
+      <!-- the REAL apple-scene rig: whistle, triple-take, blasted monocle,
+           crash zoom, trot-off. Loops at 9s. -->
+      <div class="win__stage" id="rig-apple" aria-hidden="true"></div>
+    </div>
+  </section>
+
+  <!-- ================= faq ================= -->
+  <section class="faq">
+    <h2>Questions</h2>
+    <details>
+      <summary>Is it free?</summary>
+      <p>Yes. MIT licensed, source on GitHub, no account, no telemetry decisions to agonize over.</p>
+    </details>
+    <details>
+      <summary>Does it need Claude Code?</summary>
+      <p>No. perch is designed around Claude Code and tested on it daily, so that's where it shines brightest, but any terminal agent runs happily in a pane. Codex ships with the same wrapper, and a plain shell is always a pane away.</p>
+    </details>
+    <details>
+      <summary>Microsoft Store or GitHub download?</summary>
+      <p>Same app. The Store manages updates for you; the GitHub build updates itself. Switch whenever, your sessions and settings carry over.</p>
+    </details>
+    <details>
+      <summary>How does it know what agents are doing?</summary>
+      <p>A bundled perch CLI plus Claude Code hooks: the agent tells its pane what's happening. Nothing scrapes terminal output, and nothing leaves your machine.</p>
+    </details>
+    <details>
+      <summary>Windows only?</summary>
+      <p>Yes, Windows 10 and up, with proper Win11 polish. On a Mac, <a href="https://cmux.com">cmux</a> has you covered.</p>
+    </details>
+  </section>
+
+  <!-- ================= cta ================= -->
+  <section class="cta">
+    <div class="cta__band">
+      <!-- second run of the wire routine, bookending the page -->
+      <div class="cta__wire" id="rig-cta" title="Replay the routine" aria-hidden="true"></div>
+      <h2>Give every agent a perch</h2>
+      <p>Free, open source, and native to the OS you actually use.</p>
+      <div class="hero__actions">
+        <a class="btn btn--store" href="https://apps.microsoft.com/">
+          <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+            <rect x="0" y="0" width="7.4" height="7.4" fill="#0b0d0f"/>
+            <rect x="8.6" y="0" width="7.4" height="7.4" fill="#0b0d0f"/>
+            <rect x="0" y="8.6" width="7.4" height="7.4" fill="#0b0d0f"/>
+            <rect x="8.6" y="8.6" width="7.4" height="7.4" fill="#0b0d0f"/>
+          </svg>
+          Get it from the Microsoft Store
+        </a>
+        <a class="btn" href="https://github.com/JosephIris/perch/releases/latest">Download from GitHub</a>
+      </div>
+    </div>
+  </section>
+
+  <footer class="footer">
+    <span>perch</span>
+    <nav>
+      <a href="https://github.com/JosephIris/perch">GitHub</a>
+      <a href="https://github.com/JosephIris/perch/releases">Releases</a>
+      <a href="./privacy.html">Privacy</a>
+    </nav>
+    <span class="footer__credit">
+      Standing on the shoulders of <a href="https://github.com/manaflow-ai/cmux">cmux</a>
+      and <a href="https://github.com/simion/termic">Termic</a>.
+    </span>
+  </footer>
+
+</main>
+<script src="./lp-mascot.js"></script>
+</body>
+</html>
