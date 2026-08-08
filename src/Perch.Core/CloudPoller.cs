@@ -407,15 +407,19 @@ internal sealed class CloudPoller
             ? dto.ToUnixTimeMilliseconds()
             : 0;
 
-    /// Run gcloud off the UI thread. gcloud on Windows is a .cmd shim, so it has
-    /// to go through the shell.
+    /// Run gcloud off the UI thread. gcloud on Windows is a .cmd shim, so it
+    /// has to go through the shell there; elsewhere sh resolves it from PATH.
     internal static async Task<(int Code, string Stdout, string Stderr)> RunAsync(
         string args, int timeoutMs, CancellationToken ct)
     {
         var verb = args.Split(' ', StringSplitOptions.RemoveEmptyEntries) is { Length: > 0 } p
             ? p[0] : "?";
-        return await ProcRunner.RunAsync(
-            "cmd.exe", $"/c gcloud {args}", site: $"gcloud.{verb}",
-            timeoutMs: timeoutMs, ct: ct);
+        return OperatingSystem.IsWindows()
+            ? await ProcRunner.RunAsync(
+                "cmd.exe", $"/c gcloud {args}", site: $"gcloud.{verb}",
+                timeoutMs: timeoutMs, ct: ct)
+            : await ProcRunner.RunAsync(
+                "/bin/sh", $"-c \"gcloud {args.Replace("\"", "\\\"")}\"", site: $"gcloud.{verb}",
+                timeoutMs: timeoutMs, ct: ct);
     }
 }

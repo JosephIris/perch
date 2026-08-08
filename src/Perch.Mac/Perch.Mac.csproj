@@ -1,0 +1,50 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Perch</RootNamespace>
+    <AssemblyName>Perch</AssemblyName>
+    <RuntimeIdentifiers>osx-arm64;osx-x64</RuntimeIdentifiers>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Photino.NET" Version="4.0.16" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Perch.Core\Perch.Core.csproj" />
+  </ItemGroup>
+
+  <!-- Stage the built web bundle next to the exe, mirroring Perch.csproj. -->
+  <ItemGroup>
+    <Content Include="..\Perch\wwwroot\**\*.*"
+             Link="wwwroot\%(RecursiveDir)%(Filename)%(Extension)"
+             Condition="Exists('$(MSBuildThisFileDirectory)..\Perch\wwwroot')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup>
+    <WebSource Include="$(MSBuildThisFileDirectory)..\web\src\**\*.*" />
+    <WebSource Include="$(MSBuildThisFileDirectory)..\web\index.html" />
+    <WebSource Include="$(MSBuildThisFileDirectory)..\web\esbuild.config.mjs" />
+  </ItemGroup>
+  <Target Name="BundleWeb" BeforeTargets="BeforeBuild"
+          Inputs="@(WebSource)"
+          Outputs="$(MSBuildThisFileDirectory)..\Perch\wwwroot\app.js">
+    <Exec Command="npm --prefix &quot;$(MSBuildThisFileDirectory)..\web&quot; run build"
+          ConsoleToMSBuild="true"
+          IgnoreStandardErrorWarningFormat="true" />
+  </Target>
+
+  <!-- perch CLI + claude/codex shims, published for the host's RID. -->
+  <Target Name="BuildPerchCli" AfterTargets="Build">
+    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\..\tools\perch-cli\perch-cli.csproj&quot; -c $(Configuration) -r osx-arm64 --self-contained true -p:PublishSingleFile=true -p:InvariantGlobalization=true -o &quot;$(OutDir)tools&quot; --nologo -v q" />
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)..\..\tools\perch-cli\claude;$(MSBuildThisFileDirectory)..\..\tools\perch-cli\codex" DestinationFolder="$(OutDir)tools" SkipUnchangedFiles="true" />
+    <Exec Command="chmod +x &quot;$(OutDir)tools/claude&quot; &quot;$(OutDir)tools/codex&quot; &quot;$(OutDir)tools/perch&quot;" />
+  </Target>
+
+</Project>

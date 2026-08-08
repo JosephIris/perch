@@ -635,9 +635,9 @@ function parseOsc7Cwd(data: string): string | null {
   if (slash < 0) return null;
   let path = data.slice(slash);
   try { path = decodeURIComponent(path); } catch { /* malformed */ }
-  // Windows: "/C:/foo" → "C:/foo" → "C:\foo".
-  if (/^\/[A-Za-z]:\//.test(path)) path = path.slice(1);
-  path = path.replace(/\//g, "\\");
+  // Windows: "/C:/foo" → "C:/foo" → "C:\foo". A POSIX path (mac host) has
+  // no drive letter and keeps its forward slashes.
+  if (/^\/[A-Za-z]:\//.test(path)) path = path.slice(1).replace(/\//g, "\\");
   return path;
 }
 

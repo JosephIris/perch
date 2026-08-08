@@ -17,7 +17,7 @@ internal static class BinResolver
         try { selfDir = Path.GetFullPath(selfDir); } catch { }
 
         var path = Environment.GetEnvironmentVariable("PATH") ?? "";
-        foreach (var raw in path.Split(';', StringSplitOptions.RemoveEmptyEntries))
+        foreach (var raw in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
         {
             string dir;
             try { dir = Path.GetFullPath(raw.Trim()); } catch { continue; }
@@ -30,9 +30,17 @@ internal static class BinResolver
             // hop prepending another --settings until cmd.exe rejects the line
             // ("The command line is too long"). Skipping all perch dirs guarantees
             // we land on the genuine target.
-            try { if (File.Exists(Path.Combine(dir, "perch.exe"))) continue; } catch { }
+            try
+            {
+                if (File.Exists(Path.Combine(dir, "perch.exe")) ||
+                    File.Exists(Path.Combine(dir, "perch"))) continue;
+            }
+            catch { }
 
-            foreach (var ext in new[] { ".exe", ".cmd", ".bat", "" })
+            var exts = OperatingSystem.IsWindows()
+                ? new[] { ".exe", ".cmd", ".bat", "" }
+                : new[] { "" };
+            foreach (var ext in exts)
             {
                 var candidate = Path.Combine(dir, baseName + ext);
                 if (File.Exists(candidate)) return candidate;

@@ -1,0 +1,4 @@
+#!/bin/sh
+# Shim: see `claude` next door; codex has no hook system so the wrapper
+# brackets the run with agent-name IPC instead.
+exec "$(dirname "$0")/perch" wrap-codex "$@"

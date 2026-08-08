@@ -859,10 +859,26 @@ const listeners: Listener[] = [];
 const hostWebView =
   typeof window !== "undefined" ? window.chrome?.webview : undefined;
 
+// The Photino host bridge (the mac build: WKWebView behind Photino.NET).
+// Photino injects window.external.sendMessage/receiveMessage; string
+// payloads both ways, same wire format as WebView2.
+type PhotinoExternal = {
+  sendMessage(message: string): void;
+  receiveMessage(callback: (message: string) => void): void;
+};
+const hostPhotino: PhotinoExternal | undefined =
+  typeof window !== "undefined" &&
+  typeof (window.external as unknown as PhotinoExternal)?.sendMessage === "function" &&
+  typeof (window.external as unknown as PhotinoExternal)?.receiveMessage === "function"
+    ? (window.external as unknown as PhotinoExternal)
+    : undefined;
+
 export function send(msg: OutMessage): void {
   const wire = JSON.stringify(msg);
   if (hostWebView) {
     hostWebView.postMessage(wire);
+  } else if (hostPhotino) {
+    hostPhotino.sendMessage(wire);
   } else {
     console.log("[bridge.no-host]", wire);
   }
@@ -892,6 +908,8 @@ if (hostWebView) {
   hostWebView.addEventListener("message", (e: MessageEvent) => {
     dispatch(e.data);
   });
+} else if (hostPhotino) {
+  hostPhotino.receiveMessage((raw) => dispatch(raw));
 } else if (typeof window !== "undefined") {
   console.warn("[bridge] no chrome.webview -- running in plain browser");
 }

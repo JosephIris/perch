@@ -14,7 +14,8 @@ internal static class Shell
     {
         if (!string.IsNullOrWhiteSpace(userOverride)) return userOverride;
         var first = DetectedShells();
-        return first.Count > 0 ? first[0].CommandLine : "powershell.exe";
+        if (first.Count > 0) return first[0].CommandLine;
+        return OperatingSystem.IsWindows() ? "powershell.exe" : "/bin/zsh";
     }
 
     /// Wraps a shell command line with shell-specific syntax to launch it
@@ -54,11 +55,41 @@ internal static class Shell
         var quotedExe = exe.Contains(' ') ? $"\"{exe}\"" : exe;
         var quotedCwd = hasCwd && cwd!.Contains(' ') ? $"\"{cwd}\"" : cwd ?? "";
 
-        var pipePath = paneId is Guid pid ? $@"\\.\pipe\perch\{pid:N}" : null;
+        // Windows ships the full \\.\pipe\ path; on Unix the same name is a
+        // domain socket that NamedPipeClientStream resolves from the bare
+        // name, so PERCH_PIPE carries the name verbatim (perch-cli's
+        // ExtractPipeName forgives both forms).
+        var pipePath = paneId is Guid pid
+            ? (OperatingSystem.IsWindows() ? $@"\\.\pipe\perch\{pid:N}" : $@"perch\{pid:N}")
+            : null;
         var paneIdStr = paneId?.ToString("N");
 
         switch (leaf)
         {
+            case "zsh":
+            case "bash":
+            case "fish":
+            case "sh":
+            {
+                // The mac pty spawns through `/bin/sh -c <this>`, so build one
+                // POSIX command string: env exports, cd, the one-shot initial
+                // command (claude --resume …), then exec into the interactive
+                // shell — exec is the -NoExit equivalent: when the initial
+                // command exits, the user still lands in a live shell. cwd is
+                // also applied by posix_spawn's addchdir; the cd covers
+                // callers that only pass a command line.
+                var parts = new System.Collections.Generic.List<string>();
+                if (pipePath != null)
+                {
+                    parts.Add($"export PERCH_PIPE='{EscapeSh(pipePath)}'");
+                    parts.Add($"export PERCH_PANE_ID='{EscapeSh(paneIdStr!)}'");
+                }
+                if (hasCwd) parts.Add($"cd '{EscapeSh(cwd!)}' 2>/dev/null");
+                if (!string.IsNullOrEmpty(initialCommand)) parts.Add(initialCommand);
+                var restSuffix = string.IsNullOrEmpty(rest) ? "" : " " + rest;
+                parts.Add($"exec '{EscapeSh(exe)}' -i{restSuffix}");
+                return string.Join("; ", parts);
+            }
             case "pwsh.exe":
             case "powershell.exe":
             {
@@ -142,6 +173,10 @@ internal static class Shell
     /// PowerShell single-quoted string escape: only the single quote needs
     /// doubling. `$` and backslashes are literal inside single quotes.
     private static string EscapePs(string s) => s.Replace("'", "''");
+
+    /// POSIX-shell single-quoted escape: close the quote, emit an escaped
+    /// quote, reopen. Everything else is literal inside single quotes.
+    private static string EscapeSh(string s) => s.Replace("'", "'\\''");
 
     /// Pulls the executable path out of a command line like
     /// `"C:\path with space\thing.exe" -arg`. Handles the quoted-first-token
@@ -265,6 +300,22 @@ internal static class Shell
 
         var found = new List<ShellChoice>();
 
+        if (!OperatingSystem.IsWindows())
+        {
+            // $SHELL (the user's login shell) leads; the stock suspects follow.
+            var login = Environment.GetEnvironmentVariable("SHELL");
+            if (!string.IsNullOrWhiteSpace(login) && FileExistsSafe(login))
+                found.Add(new(Path.GetFileName(login), Q(login)));
+            foreach (var p in new[] { "/bin/zsh", "/bin/bash", "/opt/homebrew/bin/fish", "/usr/local/bin/fish" })
+            {
+                if (!FileExistsSafe(p)) continue;
+                var name = Path.GetFileName(p);
+                if (found.Exists(f => Path.GetFileName(ExtractExe(f.CommandLine)) == name)) continue;
+                found.Add(new(name, Q(p)));
+            }
+            return found;
+        }
+
         // PowerShell 7+
         foreach (var p in new[]
         {
@@ -302,7 +353,7 @@ internal static class Shell
     {
         var path = Environment.GetEnvironmentVariable("PATH");
         if (string.IsNullOrEmpty(path)) return null;
-        foreach (var dir in path.Split(';', StringSplitOptions.RemoveEmptyEntries))
+        foreach (var dir in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
         {
             try
             {

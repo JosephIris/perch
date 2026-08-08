@@ -1,0 +1,5 @@
+#!/bin/sh
+# Shim: panes resolve `claude` to this (the tools dir is prepended to PATH),
+# and perch wraps the real claude to inject its hooks settings. See
+# ClaudeWrapper.cs; the .cmd twin serves Windows.
+exec "$(dirname "$0")/perch" wrap-claude "$@"
