@@ -14,7 +14,7 @@ namespace Perch;
 /// `dotnet run`, or a copy laid down by anything other than the Velopack
 /// Setup.exe. In those cases IsInstalled is false and CheckAsync returns null,
 /// so the check never throws on a non-updatable layout and the pill never shows.
-internal sealed class UpdateService
+internal sealed class UpdateService : IUpdateService
 {
     // Public GitHub repo → no access token, and stable releases only (no
     // prereleases). The feed is the .nupkg assets `vpk upload github` attaches
