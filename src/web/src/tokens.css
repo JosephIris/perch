@@ -96,6 +96,16 @@
    * Values pulled from Microsoft's Fluent design tokens. Light theme is a
    * later commit; we open dark-first to match Mica + Cascadia. */
   --color-bg:               transparent;             /* Mica shows through */
+  /* What the transparent body must become on a host with no Mica behind it
+   * (the mac WKWebView host — transparency composites to WHITE there).
+   * A step darker than --color-terminal-bg (#1f1f1f) so panes keep reading
+   * as the lifted surface, same staircase as the Windows build. Applied via
+   * html.host-photino below. */
+  --color-bg-opaque:        #1a1a1a;
+  /* mac host: height of the transparent native title-bar strip the page
+   * extends under (traffic lights float over it). Matches the Windows
+   * host's 32px WPF title bar plus the lights' comfort margin. */
+  --titlebar-inset-mac:     38px;
   --color-layer:            rgba(255, 255, 255, 0.04);
   --color-layer-alt:        rgba(255, 255, 255, 0.06);
 
@@ -268,4 +278,11 @@
   --ease-exit:    cubic-bezier(0.3, 0.0, 1.0, 1.0);
   --dur-fast:     150ms;
   --dur-normal:   200ms;
+}
+
+/* The mac host (Photino/WKWebView) has no Mica backdrop — transparent
+ * composites to white. Paint the app backdrop explicitly. The class is set
+ * by main.ts from bridge.hostKind before first paint matters. */
+html.host-photino {
+  --color-bg: var(--color-bg-opaque);
 }

@@ -4,7 +4,11 @@
 
 import "./style.css";
 
-import { onMessage, send, type StateMessage, type SidebarMode } from "./bridge.js";
+// Tag the document with the host so CSS can adapt — the mac host paints an
+// opaque backdrop where Windows lets Mica show through (see tokens.css).
+if (hostKind !== "none") document.documentElement.classList.add(`host-${hostKind}`);
+
+import { hostKind, onMessage, send, type StateMessage, type SidebarMode } from "./bridge.js";
 import { setHomeDir } from "./link-detect.js";
 import { Sidebar } from "./sidebar.js";
 import { Workspace } from "./workspace.js";

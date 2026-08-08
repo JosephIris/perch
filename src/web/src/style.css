@@ -99,6 +99,13 @@ ul { list-style: none; padding: 0; margin: 0; }
     grid-template-columns var(--dur-normal) var(--ease-entry),
     padding var(--dur-normal) var(--ease-entry);
 }
+
+/* mac host: the page extends under the transparent native title bar
+ * (full-size content view), so the app grid leaves room for the traffic
+ * lights. The strip above stays native-draggable — it IS the title bar. */
+html.host-photino #app {
+  padding-top: var(--titlebar-inset-mac);
+}
 /* A collapsed side column KEEPS its 8px column-gap and drops the matching page
  * padding instead. Net effect: the workspace's outer edge lands in exactly the
  * same place it would if that column didn't exist — so collapsing either rail

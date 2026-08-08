@@ -78,6 +78,64 @@ internal sealed class MacHost : IWebViewHost, IWindowHost
     private const long NSCriticalRequest = 0;
     private const long NSInformationalRequest = 10;
 
+    [DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")]
+    private static extern IntPtr ObjcMsgSendStr(IntPtr receiver, IntPtr selector, string arg);
+    [DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")]
+    private static extern IntPtr ObjcMsgSendPtr(IntPtr receiver, IntPtr selector, IntPtr arg);
+
+    [DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")]
+    private static extern ulong ObjcMsgSendULong(IntPtr receiver, IntPtr selector);
+    [DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")]
+    private static extern void ObjcMsgSendVoidULong(IntPtr receiver, IntPtr selector, ulong arg);
+    [DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")]
+    private static extern void ObjcMsgSendVoidBool(IntPtr receiver, IntPtr selector, bool arg);
+    [DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")]
+    private static extern void ObjcMsgSendVoidLong(IntPtr receiver, IntPtr selector, long arg);
+
+    private const ulong NSWindowStyleMaskFullSizeContentView = 1UL << 15;
+    private const long NSWindowTitleHidden = 1;
+
+    /// Native-window dressing, the mac analogue of the WPF host's
+    /// ExtendsContentIntoTitleBar + Mica-dark chrome:
+    ///  - dark appearance app-wide (the chrome is dark-first; without this
+    ///    AppKit paints a light title bar over the dark page)
+    ///  - full-size content view + transparent title bar + hidden title, so
+    ///    the page extends under the top strip and the traffic lights float
+    ///    over it (the strip stays native-draggable). The page leaves a top
+    ///    inset for it — see html.host-photino rules in the web bundle.
+    /// Call on the Photino thread once the window exists.
+    public void ApplyMacChrome()
+    {
+        try
+        {
+            _window.Invoke(() =>
+            {
+                var name = ObjcMsgSendStr(ObjcGetClass("NSString"),
+                    SelRegisterName("stringWithUTF8String:"), "NSAppearanceNameDarkAqua");
+                var appearance = ObjcMsgSendPtr(ObjcGetClass("NSAppearance"),
+                    SelRegisterName("appearanceNamed:"), name);
+                var app = ObjcMsgSend(ObjcGetClass("NSApplication"), SelRegisterName("sharedApplication"));
+                if (app != IntPtr.Zero && appearance != IntPtr.Zero)
+                    ObjcMsgSendPtr(app, SelRegisterName("setAppearance:"), appearance);
+
+                // PhotinoWindow.WindowHandle is Windows-only; reach the
+                // NSWindow through NSApp.windows.firstObject instead (one
+                // window per process today).
+                var windows = ObjcMsgSend(app, SelRegisterName("windows"));
+                var nsWindow = windows == IntPtr.Zero
+                    ? IntPtr.Zero
+                    : ObjcMsgSend(windows, SelRegisterName("firstObject"));
+                if (nsWindow == IntPtr.Zero) return;
+                var mask = ObjcMsgSendULong(nsWindow, SelRegisterName("styleMask"));
+                ObjcMsgSendVoidULong(nsWindow, SelRegisterName("setStyleMask:"),
+                    mask | NSWindowStyleMaskFullSizeContentView);
+                ObjcMsgSendVoidBool(nsWindow, SelRegisterName("setTitlebarAppearsTransparent:"), true);
+                ObjcMsgSendVoidLong(nsWindow, SelRegisterName("setTitleVisibility:"), NSWindowTitleHidden);
+            });
+        }
+        catch (Exception ex) { Log.Error("MacHost.Chrome", ex); }
+    }
+
     /// Dock-icon bounce — the mac analogue of the taskbar flash. Loud
     /// (critical) bounces until the app is foregrounded; gentle bounces once.
     /// AppKit ignores the request entirely when the app is already active,

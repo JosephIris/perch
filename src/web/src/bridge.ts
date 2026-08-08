@@ -873,6 +873,13 @@ const hostPhotino: PhotinoExternal | undefined =
     ? (window.external as unknown as PhotinoExternal)
     : undefined;
 
+/// Which native host the page is running under. "webview2" = the Windows
+/// WPF host (Mica behind a transparent body), "photino" = the mac host
+/// (WKWebView, no backdrop — the page must paint its own), "none" = plain
+/// browser / tests.
+export const hostKind: "webview2" | "photino" | "none" =
+  hostWebView ? "webview2" : hostPhotino ? "photino" : "none";
+
 export function send(msg: OutMessage): void {
   const wire = JSON.stringify(msg);
   if (hostWebView) {

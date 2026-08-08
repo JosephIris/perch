@@ -81,7 +81,11 @@ internal static class Program
             catch (Exception ex) { Log.Error("Shutdown", ex); }
             return false; // don't cancel the close
         });
-        window.RegisterWindowCreatedHandler((_, _) => ui.Post(() => _ = app!.StartAsync()));
+        window.RegisterWindowCreatedHandler((_, _) =>
+        {
+            host.ApplyMacChrome();
+            ui.Post(() => _ = app!.StartAsync());
+        });
 
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
             Log.Error("Unhandled", e.ExceptionObject as Exception ?? new Exception($"{e.ExceptionObject}"));
