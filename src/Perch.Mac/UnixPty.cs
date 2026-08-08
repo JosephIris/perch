@@ -126,6 +126,13 @@ internal sealed class UnixPty : IPty
         {
             var k = (string)e.Key;
             if (k is "TERM" or "TERM_PROGRAM" or "TERM_PROGRAM_VERSION") continue;
+            // Claude Code nesting markers. `open` forwards the caller's env,
+            // so launching perch from a terminal that lives inside a Claude
+            // Code session would leak these into every pane — and the pane's
+            // claude then thinks it's a NESTED child session and turns
+            // transcript saving off (killing the inspector journal). A pane
+            // agent is never a child of whatever launched perch.
+            if (k is "CLAUDECODE" or "CLAUDE_CODE_CHILD_SESSION" or "CLAUDE_CODE_ENTRYPOINT" or "CLAUDE_CODE_SSE_PORT") continue;
             if (ExtraEnv.ContainsKey(k)) continue;
             env.Add($"{k}={e.Value}");
         }
