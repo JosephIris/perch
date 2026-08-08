@@ -1,3 +1,4 @@
+import { chordMod } from "./bridge.js";
 // Shortcut-hint overlay. Shows after the user holds Ctrl+Shift for a brief
 // moment so quick chord input (Ctrl+Shift+T pressed and released) doesn't
 // flash a card; longer holds reveal the available actions. Hides the
@@ -24,8 +25,8 @@ export function installShortcutHint(el: HTMLElement) {
     el.classList.remove("is-open");
   }
 
-  function isChord(ev: KeyboardEvent | { ctrlKey: boolean; shiftKey: boolean }) {
-    return ev.ctrlKey && ev.shiftKey;
+  function isChord(ev: KeyboardEvent | { ctrlKey: boolean; shiftKey: boolean; metaKey: boolean }) {
+    return chordMod(ev) && ev.shiftKey;
   }
 
   // We can't trust just keydown events (the user might already be holding

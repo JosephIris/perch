@@ -1,3 +1,4 @@
+import { modKeyLabel } from "./bridge.js";
 // BoardPane = a leaf pane that renders its SESSION's board: the context
 // staging surface you throw things at before handing a task to an agent.
 //
@@ -261,7 +262,7 @@ export class BoardPane {
     const pct = document.createElement("button");
     pct.type = "button";
     pct.className = "board__pct";
-    pct.title = "Reset view (Ctrl+0)";
+    pct.title = `Reset view (${modKeyLabel}+0)`;
     pct.setAttribute("aria-label", "Reset view");
     pct.textContent = "100%";
     pct.addEventListener("click", () => this.resetFontSize());
@@ -270,7 +271,7 @@ export class BoardPane {
       this.toolButton("note", "Add a note", () => this.openDraft("note")),
       this.toolButton("file", "Add a file from this project", () => this.pickFile()),
       this.toolButton("link", "Add a link", () => this.openDraft("link")),
-      this.toolButton("paste", "Paste clipboard (Ctrl+V)", () => this.handlePaste()),
+      this.toolButton("paste", `Paste clipboard (${modKeyLabel}+V)`, () => this.handlePaste()),
       sep,
       this.toolButton("minus", "Zoom out", () => this.setZoom(this.zoom / 1.1, this.viewCentre())),
       pct,
@@ -451,7 +452,7 @@ export class BoardPane {
 
     const hint = document.createElement("span");
     hint.className = "board-node__edithint";
-    hint.textContent = "Ctrl+Enter";
+    hint.textContent = `${modKeyLabel}+Enter`;
 
     const cancel = editorButton("Cancel", () => this.cancelEditor(card));
     const commit = editorButton(label, () => this.commitEditor(card));
@@ -676,7 +677,7 @@ export class BoardPane {
 
     const hint = document.createElement("div");
     hint.className = "board-message__hint";
-    for (const k of ["Ctrl", "V"]) {
+    for (const k of [modKeyLabel, "V"]) {
       const kbd = document.createElement("kbd");
       kbd.textContent = k;
       hint.appendChild(kbd);

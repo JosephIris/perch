@@ -12,7 +12,7 @@
 // ships settings.save and closes. Shell/cwd changes affect NEW sessions
 // only (lazy spawn reads them) — the dialog says so inline.
 
-import { send } from "./bridge.js";
+import { modKeyLabel, send } from "./bridge.js";
 import type { SettingsDataMessage, InMessage, NewTabPosition } from "./bridge.js";
 import { MIN_FONT_SIZE, MAX_FONT_SIZE, DEFAULT_FONT_SIZE } from "./pane.js";
 import { Dropdown } from "./dropdown.js";
@@ -425,7 +425,7 @@ function buildSkeleton(): void {
   general.appendChild(
     makeRow(
       "Terminal font size",
-      `Pixels. Also adjustable with Ctrl + and Ctrl − (${MIN_FONT_SIZE}–${MAX_FONT_SIZE}).`,
+      `Pixels. Also adjustable with ${modKeyLabel} + and ${modKeyLabel} − (${MIN_FONT_SIZE}–${MAX_FONT_SIZE}).`,
       fontInput,
     ),
   );

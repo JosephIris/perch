@@ -149,6 +149,8 @@ internal static class Objc
     [DllImport(Lib, EntryPoint = "objc_msgSend")]
     public static extern IntPtr Send(IntPtr recv, IntPtr sel, CGRect rect, IntPtr arg);
     [DllImport(Lib, EntryPoint = "objc_msgSend")]
+    public static extern long SendLong(IntPtr recv, IntPtr sel);
+    [DllImport(Lib, EntryPoint = "objc_msgSend")]
     public static extern void SendVoid(IntPtr recv, IntPtr sel, IntPtr arg);
     [DllImport(Lib, EntryPoint = "objc_msgSend")]
     public static extern void SendVoid(IntPtr recv, IntPtr sel);

@@ -155,31 +155,101 @@ internal sealed class MacHost : IWebViewHost, IWindowHost
         catch (Exception ex) { Log.Error("MacHost.Flash", ex); }
     }
 
-    /// pbpaste: no AppKit binding needed, and the call sites (activation,
-    /// page-ready, board paste) are rare enough that a subprocess is fine.
+    // ---- Clipboard (NSPasteboard) ----------------------------------------
+    // macOS has no clipboard-change notification; the watcher polls
+    // changeCount (an integer bump per copy — cheap) and fires on change.
+
+    private System.Threading.Timer? _clipTimer;
+    private long _clipCount = -1;
+
+    public void StartClipboardWatcher(Action onChange)
+    {
+        _clipTimer = new System.Threading.Timer(_ =>
+        {
+            try
+            {
+                var count = Objc.SendLong(Pasteboard(), Objc.Sel("changeCount"));
+                if (_clipCount != -1 && count != _clipCount) onChange();
+                _clipCount = count;
+            }
+            catch (Exception ex) { Log.Error("MacHost.ClipWatch", ex); }
+        }, null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+    }
+
+    private static IntPtr Pasteboard()
+        => Objc.Send(Objc.Cls("NSPasteboard"), Objc.Sel("generalPasteboard"));
+
     public string? ReadClipboardText()
     {
         try
         {
-            var psi = new ProcessStartInfo("/usr/bin/pbpaste")
-            {
-                RedirectStandardOutput = true,
-                UseShellExecute = false,
-            };
-            using var p = Process.Start(psi)!;
-            var text = p.StandardOutput.ReadToEnd();
-            p.WaitForExit(2000);
-            return text;
+            var ns = Objc.Send(Pasteboard(), Objc.Sel("stringForType:"),
+                Objc.NSString("public.utf8-plain-text"));
+            if (ns == IntPtr.Zero) return "";
+            var utf8 = Objc.Send(ns, Objc.Sel("UTF8String"));
+            return utf8 == IntPtr.Zero ? "" : (Marshal.PtrToStringUTF8(utf8) ?? "");
         }
         catch (Exception ex) { Log.Error("MacHost.Clipboard", ex); return null; }
     }
 
     public (byte[]? Png, string? Text)? ReadClipboardForBoard()
     {
-        // Image paste lands once an AppKit NSPasteboard binding exists; text
-        // covers the common path today.
-        var text = ReadClipboardText();
-        return text == null ? null : (null, string.IsNullOrEmpty(text) ? null : text);
+        try
+        {
+            // Picture first — a copied image often ships a file path or HTML
+            // alongside it, and the picture is what the user meant. PNG when
+            // offered directly; TIFF (the AppKit lingua franca) converted
+            // through sips otherwise.
+            var png = ReadClipboardData("public.png");
+            if (png == null)
+            {
+                var tiff = ReadClipboardData("public.tiff");
+                if (tiff != null) png = TiffToPng(tiff);
+            }
+            if (png != null) return (png, null);
+            var text = ReadClipboardText();
+            return (null, string.IsNullOrEmpty(text) ? null : text);
+        }
+        catch (Exception ex) { Log.Error("MacHost.ClipBoard", ex); return null; }
+    }
+
+    private static byte[]? ReadClipboardData(string type)
+    {
+        var data = Objc.Send(Pasteboard(), Objc.Sel("dataForType:"), Objc.NSString(type));
+        if (data == IntPtr.Zero) return null;
+        var len = Objc.SendLong(data, Objc.Sel("length"));
+        if (len <= 0 || len > 64 * 1024 * 1024) return null;
+        var bytes = Objc.Send(data, Objc.Sel("bytes"));
+        if (bytes == IntPtr.Zero) return null;
+        var buf = new byte[len];
+        Marshal.Copy(bytes, buf, 0, (int)len);
+        return buf;
+    }
+
+    private static byte[]? TiffToPng(byte[] tiff)
+    {
+        var tmpIn = Path.Combine(Path.GetTempPath(), $"perch-clip-{Guid.NewGuid():N}.tiff");
+        var tmpOut = Path.ChangeExtension(tmpIn, ".png");
+        try
+        {
+            File.WriteAllBytes(tmpIn, tiff);
+            var psi = new ProcessStartInfo("/usr/bin/sips")
+            {
+                RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false,
+            };
+            foreach (var a in new[] { "-s", "format", "png", tmpIn, "--out", tmpOut })
+                psi.ArgumentList.Add(a);
+            using var p = Process.Start(psi)!;
+            p.StandardOutput.ReadToEnd(); p.StandardError.ReadToEnd();
+            if (!p.WaitForExit(10000) || p.ExitCode != 0 || !File.Exists(tmpOut)) return null;
+            return File.ReadAllBytes(tmpOut);
+        }
+        catch { return null; }
+        finally
+        {
+            try { File.Delete(tmpIn); } catch { }
+            try { File.Delete(tmpOut); } catch { }
+        }
     }
 
     public async Task<string?> PickFolderAsync(string? initialDir)

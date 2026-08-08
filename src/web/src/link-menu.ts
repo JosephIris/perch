@@ -1,3 +1,4 @@
+import { modKeyLabel } from "./bridge.js";
 // Floating action menu for terminal URL clicks. Replaces xterm's default
 // "open in window.open" with our own four-action menu that wires to the
 // host (default browser, in-pane right/down) plus a copy.
@@ -25,7 +26,7 @@ const OPTIONS: MenuOption[] = [
   {
     action: "pane-right",
     label: "Open in pane right",
-    hint: "Ctrl+→",
+    hint: `${modKeyLabel}+→`,
     icon:
       // arrow-right
       "M5 12h14M12 5l7 7-7 7",
@@ -33,13 +34,13 @@ const OPTIONS: MenuOption[] = [
   {
     action: "pane-down",
     label: "Open in pane below",
-    hint: "Ctrl+↓",
+    hint: `${modKeyLabel}+↓`,
     icon: "M12 5v14M5 12l7 7 7-7",
   },
   {
     action: "copy",
     label: "Copy URL",
-    hint: "Ctrl+C",
+    hint: `${modKeyLabel}+C`,
     icon:
       // copy icon
       "M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2v-2 M16 4a2 2 0 0 0-2-2H10a2 2 0 0 0-2 2 M16 4a2 2 0 0 1 2 2v0a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2v0a2 2 0 0 1 2-2",

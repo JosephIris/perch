@@ -880,6 +880,14 @@ const hostPhotino: PhotinoExternal | undefined =
 export const hostKind: "webview2" | "photino" | "none" =
   hostWebView ? "webview2" : hostPhotino ? "photino" : "none";
 
+/// The platform's chord modifier. Windows chords are Ctrl-based; the mac
+/// host accepts BOTH Cmd (native feel) and Ctrl (muscle-memory parity) —
+/// chordMod answers "is the chord modifier down for this event".
+export const modKeyLabel: string = hostKind === "photino" ? "\u2318" : "Ctrl";
+export function chordMod(ev: { ctrlKey: boolean; metaKey: boolean }): boolean {
+  return hostKind === "photino" ? ev.metaKey || ev.ctrlKey : ev.ctrlKey;
+}
+
 export function send(msg: OutMessage): void {
   const wire = JSON.stringify(msg);
   if (hostWebView) {

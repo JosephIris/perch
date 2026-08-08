@@ -7,8 +7,16 @@ import "./style.css";
 // Tag the document with the host so CSS can adapt — the mac host paints an
 // opaque backdrop where Windows lets Mica show through (see tokens.css).
 if (hostKind !== "none") document.documentElement.classList.add(`host-${hostKind}`);
+// mac: the static chrome's shortcut labels say Ctrl; swap for the platform
+// modifier once at boot (dynamic UI reads modKeyLabel directly).
+if (modKeyLabel !== "Ctrl") {
+  for (const el of document.querySelectorAll<HTMLElement>("[title]"))
+    if (el.title.includes("Ctrl")) el.title = el.title.replaceAll("Ctrl", modKeyLabel);
+  const hintTitle = document.querySelector(".shortcut-hint__title");
+  if (hintTitle?.textContent) hintTitle.textContent = hintTitle.textContent.replace("Ctrl", modKeyLabel);
+}
 
-import { hostKind, onMessage, send, type StateMessage, type SidebarMode } from "./bridge.js";
+import { chordMod, hostKind, modKeyLabel, onMessage, send, type StateMessage, type SidebarMode } from "./bridge.js";
 import { setHomeDir } from "./link-detect.js";
 import { Sidebar } from "./sidebar.js";
 import { Workspace } from "./workspace.js";
@@ -357,7 +365,7 @@ onMessage((msg) => {
 // Ctrl+-           → shrink.
 // Ctrl+0           → reset to default 13px.
 window.addEventListener("keydown", (ev) => {
-  if (!ev.ctrlKey || ev.altKey) return;
+  if (!chordMod(ev) || ev.altKey) return;
   if (ev.shiftKey && ev.code !== "Equal") return;   // allow Ctrl+Shift+= as Ctrl+=
   if (ev.code === "KeyB" && !ev.shiftKey) {
     toggleSidebar();
@@ -386,7 +394,7 @@ window.addEventListener("keydown", (ev) => {
 }, /* useCapture */ true);
 
 window.addEventListener("keydown", (ev) => {
-  if (!ev.ctrlKey || !ev.shiftKey) return;
+  if (!chordMod(ev) || !ev.shiftKey) return;
   const active = workspace.getActivePaneId();
   switch (ev.code) {
     case "KeyA":

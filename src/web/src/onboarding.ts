@@ -1,3 +1,4 @@
+import { modKeyLabel } from "./bridge.js";
 // First-launch onboarding lightbox. A centered modal (Constitution allows
 // centering for dialogs only) that introduces the handful of pane gestures and
 // shortcuts that aren't obvious. Auto-opened once on a fresh install (gated by
@@ -15,11 +16,11 @@ interface Tip {
 }
 
 const TIPS: Tip[] = [
-  { chips: ["Ctrl", "Shift", "D"], text: "Split a pane to the right. Ctrl + Shift + S splits it downward." },
-  { chips: ["Ctrl", "Shift", "↔"], text: "Move the active pane within its split, or drag a pane's header onto another pane to rearrange." },
+  { chips: [modKeyLabel, "Shift", "D"], text: `Split a pane to the right. ${modKeyLabel} + Shift + S splits it downward.` },
+  { chips: [modKeyLabel, "Shift", "↔"], text: "Move the active pane within its split, or drag a pane's header onto another pane to rearrange." },
   { chips: ["drag"], text: "Resize panes by dragging the divider between them." },
   { chips: ["Shift", "drag"], text: "Copy by selecting text. Hold Shift to select over a full-screen app like Claude Code; right-click copies or pastes." },
-  { chips: ["Ctrl", "Shift", "T"], text: "Open a new session. Ctrl + Shift + A is the dashboard; Ctrl + B toggles the sidebar." },
+  { chips: [modKeyLabel, "Shift", "T"], text: `Open a new session. ${modKeyLabel} + Shift + A is the dashboard; ${modKeyLabel} + B toggles the sidebar.` },
 ];
 
 interface StateTip {
