@@ -285,4 +285,12 @@
  * by main.ts from bridge.hostKind before first paint matters. */
 html.host-photino {
   --color-bg: var(--color-bg-opaque);
+  /* Same bundled brand fonts as Windows (Inter / Geist Mono — they ship in
+   * the bundle, so typography is identical cross-platform); only the
+   * FALLBACKS change: Segoe/Cascadia don't exist on macOS, so a failed
+   * font load should degrade to SF, not Helvetica/Courier. */
+  --font-text:    "Inter Variable", -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif;
+  --font-display: "Inter Variable", -apple-system, "SF Pro Display", "Helvetica Neue", sans-serif;
+  --font-small:   "Inter Variable", -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif;
+  --font-mono:    "Geist Mono Variable", "SF Mono", Menlo, monospace;
 }

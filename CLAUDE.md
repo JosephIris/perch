@@ -291,3 +291,36 @@ regress them without a screenshot showing the new approach reads better.
 
 If you're unsure how a control should look or behave, open the WPF-UI demo
 project's XAML for that control and match its patterns.
+
+
+## macOS host (Perch.Mac)
+
+The mac build shares Perch.Core and the whole web bundle; only the host
+shell differs (Photino/WKWebView + objc_msgSend interop — no AppKit
+binding, no Xcode workload). Rules above that say "Windows" mean the WPF
+host; the aesthetic constitution ("Polished Fluent", NOT macOS mimicry)
+applies to the WINDOWS build. The mac host diverges deliberately and only
+via `html.host-photino` scoped tokens:
+
+- **Backdrop:** WKWebView composites a transparent body as WHITE, so the
+  mac host paints `--color-bg-opaque` (#1a1a1a) instead of relying on
+  Mica. Never "fix" a white flash by changing the base `--color-bg`.
+- **Title bar:** full-size content view + transparent hidden title bar
+  (MacHost.ApplyMacChrome); the page takes `--titlebar-inset-mac` (38px)
+  so traffic lights float over the chrome. The strip stays
+  native-draggable — don't put interactive elements in it.
+- **Typography:** identical bundled fonts (Inter / Geist Mono); only the
+  fallback chains swap to -apple-system / SF Mono on mac.
+- **Keyboard:** chords accept ⌘ or Ctrl via `chordMod()` (bridge.ts);
+  every user-visible shortcut label must use `modKeyLabel`, never a
+  hardcoded "Ctrl". The native Edit menu (MacHost.BuildMenuBar) is what
+  makes ⌘V paste work in WKWebView — do not remove it.
+- **Pane shells:** zsh through a generated ZDOTDIR wrapper so the bundled
+  claude/codex shims win the PATH race against user rc files. Breaking
+  this silently kills hook-driven agent state.
+- **Screenshots:** capture by CGWindowID (`scripts/mac-window-id.swift` +
+  `screencapture -l`) — never foreground the app to shoot it. There is no
+  Mica caveat on mac; what you capture is what renders.
+- **Harness:** `scripts/mac-usability.mjs` (feature suite, screenshots,
+  exit code = failures) and `scripts/ctl.mjs` (raw control-pipe verbs).
+  Run the suite after any change to the mac host or the bridge.

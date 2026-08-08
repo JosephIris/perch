@@ -655,7 +655,9 @@ export class Workspace {
     const totalGrow = prevGrow0 + nextGrow0;
     const MIN_PX = 64; // don't let a pane be dragged smaller than this
 
-    gutter.setPointerCapture(ev.pointerId);
+    // Capture keeps a real drag alive when the cursor outruns the gutter;
+    // synthetic pointers (the test rig) have no capturable id — best effort.
+    try { gutter.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
     gutter.classList.add("split__gutter--dragging");
 
     const onMove = (e: PointerEvent) => {
@@ -669,7 +671,7 @@ export class Workspace {
       // box changes — no manual fit needed here.
     };
     const onUp = () => {
-      gutter.releasePointerCapture(ev.pointerId);
+      try { gutter.releasePointerCapture(ev.pointerId); } catch { /* synthetic */ }
       gutter.classList.remove("split__gutter--dragging");
       gutter.removeEventListener("pointermove", onMove);
       gutter.removeEventListener("pointerup", onUp);

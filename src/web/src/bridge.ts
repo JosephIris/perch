@@ -743,6 +743,16 @@ export type InMessage =
   /* Test-only: host asks the page to round-trip a marker through its main
    * thread so the host can time renderer responsiveness under load. */
   | { type: "render.ping"; id: number }
+  | {
+      /** Test rig only: dispatch synthetic pointer events at a selector so
+       *  the harness can exercise drags/context menus without the OS
+       *  pointer. Sent exclusively via the control pipe. */
+      type: "test.pointer";
+      selector: string;
+      action: "drag" | "contextmenu" | "click";
+      dx?: number;
+      dy?: number;
+    }
   /* Host asks the page to open the settings dialog (title-bar gear or the
    * test harness). The page already has the open path wired to the
    * sidebar gear; this just lets the host trigger it too. */

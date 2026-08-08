@@ -54,10 +54,11 @@ internal sealed class MacUrlPaneHost : IUrlPaneHost
     private readonly PhotinoWindow _window;
     private IntPtr _webView;
 
-    // Title/failed need a WKNavigationDelegate (an ObjC class of our own) —
-    // deferred; Core treats both events as optional.
-    public event Action<string>? DocumentTitleChanged { add { } remove { } }
-    public event Action<string>? NavigationFailed { add { } remove { } }
+    public event Action<string>? DocumentTitleChanged;
+    public event Action<string>? NavigationFailed;
+
+    internal void RaiseTitle(string title) => DocumentTitleChanged?.Invoke(title);
+    internal void RaiseFailed(string status) => NavigationFailed?.Invoke(status);
 
     public MacUrlPaneHost(PhotinoWindow window) => _window = window;
 
@@ -72,6 +73,10 @@ internal sealed class MacUrlPaneHost : IUrlPaneHost
         if (webView == IntPtr.Zero) throw new InvalidOperationException("WKWebView init failed");
         Objc.SendVoid(config, Objc.Sel("release"));   // the webview retains it
         _webView = webView;
+        // navigationDelegate is weak — MacNavDelegate.Instance() is a static
+        // strong ref, and Track maps this webview back to us for callbacks.
+        Objc.SendVoid(webView, Objc.Sel("setNavigationDelegate:"), MacNavDelegate.Instance());
+        MacNavDelegate.Track(webView, this);
         Objc.SendVoid(ContentView(), Objc.Sel("addSubview:"), webView);
         Navigate(url);
     }
@@ -92,10 +97,38 @@ internal sealed class MacUrlPaneHost : IUrlPaneHost
 
     public void NavigateIfChanged(string url) => _window.Invoke(() => Navigate(url));
 
+    /// didFinish fired but WKWebView's `title` property usually hasn't
+    /// caught up with the DOM yet — poll it a few times, raise on first hit.
+    internal void ReadTitleSoon()
+    {
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            for (var i = 0; i < 10; i++)
+            {
+                await System.Threading.Tasks.Task.Delay(200);
+                string? title = null;
+                try
+                {
+                    _window.Invoke(() =>
+                    {
+                        if (_webView == IntPtr.Zero) return;
+                        var ns = Objc.Send(_webView, Objc.Sel("title"));
+                        var utf8 = ns == IntPtr.Zero ? IntPtr.Zero : Objc.Send(ns, Objc.Sel("UTF8String"));
+                        title = utf8 == IntPtr.Zero ? null : Marshal.PtrToStringUTF8(utf8);
+                    });
+                }
+                catch { return; }
+                if (_webView == IntPtr.Zero) return;
+                if (!string.IsNullOrWhiteSpace(title)) { RaiseTitle(title!); return; }
+            }
+        });
+    }
+
     public void Close()
         => _window.Invoke(() =>
         {
             if (_webView == IntPtr.Zero) return;
+            MacNavDelegate.Untrack(_webView);
             Objc.SendVoid(_webView, Objc.Sel("removeFromSuperview"));
             Objc.SendVoid(_webView, Objc.Sel("release"));
             _webView = IntPtr.Zero;
@@ -148,6 +181,8 @@ internal static class Objc
     public static extern IntPtr Send(IntPtr recv, IntPtr sel, IntPtr arg);
     [DllImport(Lib, EntryPoint = "objc_msgSend")]
     public static extern IntPtr Send(IntPtr recv, IntPtr sel, CGRect rect, IntPtr arg);
+    [DllImport(Lib, EntryPoint = "objc_msgSend")]
+    public static extern IntPtr Send(IntPtr recv, IntPtr sel, IntPtr a1, IntPtr a2, IntPtr a3);
     [DllImport(Lib, EntryPoint = "objc_msgSend")]
     public static extern long SendLong(IntPtr recv, IntPtr sel);
     [DllImport(Lib, EntryPoint = "objc_msgSend")]

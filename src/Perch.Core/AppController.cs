@@ -949,6 +949,7 @@ internal sealed partial class AppController
         var text = _host.ReadClipboardText();
         if (text == null) return;
         if (text.Length > MaxCachedClipboardChars) text = "";
+        Log.Info("Clipboard.push", $"len={text.Length}");
 
         try
         {
@@ -4328,6 +4329,23 @@ internal sealed partial class AppController
             case "ui.open-settings":
                 _web.PostJson("{\"type\":\"ui.open-settings\"}");
                 break;
+            case "test.pointer":
+                // Forward to the page's synthetic-pointer dispatcher (see
+                // main.ts) so the harness can exercise drag/context-menu
+                // paths without owning the OS pointer.
+                {
+                    string S(string name) => root.TryGetProperty(name, out var v) ? (v.GetString() ?? "") : "";
+                    double N(string name) => root.TryGetProperty(name, out var v) && v.TryGetDouble(out var d) ? d : 0;
+                    _web.PostJson(JsonSerializer.Serialize(new
+                    {
+                        type = "test.pointer",
+                        selector = S("selector"),
+                        action = S("action"),
+                        dx = N("dx"),
+                        dy = N("dy"),
+                    }));
+                }
+                break;
             case "render.ping":
                 // Round-trip a marker through the page's main thread and log
                 // the latency on return (OnRenderPong). The test fires these
@@ -4376,6 +4394,9 @@ internal sealed partial class AppController
                             // self-test can assert capture/persistence.
                             cwd = p.Cwd,
                             claudeSessionId = p.ClaudeSessionId,
+                            // Split flex weight — lets the harness assert a
+                            // splitter drag actually moved the divider.
+                            weight = p.Weight,
                         }).ToArray(),
                     }).ToArray();
                     // Recently-closed list, so the test can assert archive /

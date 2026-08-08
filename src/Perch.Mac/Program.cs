@@ -20,6 +20,10 @@ internal static class Program
         // controller can ask for one.
         ImageThumb.Codec = SipsCodec.JpegBase64;
 
+        // Kill pane sessions a crashed previous run orphaned (macOS has no
+        // kill-on-close job object) — before any new pane can spawn.
+        PtyOrphans.ReapLeftovers();
+
         // Prepend the bundled tools dir (perch CLI + claude/codex shims) to
         // PATH so every pane shell inherits it — same trick as the Windows
         // App constructor, with ':' for ';'.
@@ -127,6 +131,7 @@ internal static class Program
         window.RegisterWindowCreatedHandler((_, _) =>
         {
             host.ApplyMacChrome();
+            host.BuildMenuBar();
             RestoreWindowPlacement(window, app!, ui);
             host.StartClipboardWatcher(() => ui.Post(() => app!.OnClipboardChanged()));
             ui.Post(() => _ = app!.StartAsync());

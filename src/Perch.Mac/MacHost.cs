@@ -136,6 +136,66 @@ internal sealed class MacHost : IWebViewHost, IWindowHost
         catch (Exception ex) { Log.Error("MacHost.Chrome", ex); }
     }
 
+    /// Standard App / Edit / Window menus, built with stock AppKit selectors
+    /// only (no custom targets needed). Not cosmetic: without an Edit menu
+    /// carrying the standard key equivalents, WKWebView never receives
+    /// paste:/copy:/selectAll: — Cmd+V simply does nothing in the page.
+    /// Call on the Photino thread once the app exists.
+    public void BuildMenuBar()
+    {
+        try
+        {
+            _window.Invoke(() =>
+            {
+                var app = ObjcMsgSend(ObjcGetClass("NSApplication"), SelRegisterName("sharedApplication"));
+                if (app == IntPtr.Zero) return;
+
+                IntPtr NewMenu(string title) =>
+                    Objc.Send(Objc.Send(Objc.Cls("NSMenu"), Objc.Sel("alloc")),
+                        Objc.Sel("initWithTitle:"), Objc.NSString(title));
+                IntPtr AddItem(IntPtr menu, string title, string selector, string key) =>
+                    Objc.Send(menu, Objc.Sel("addItemWithTitle:action:keyEquivalent:"),
+                        Objc.NSString(title), Objc.Sel(selector), Objc.NSString(key));
+                void AddSubmenu(IntPtr bar, IntPtr submenu)
+                {
+                    var item = Objc.Send(Objc.Send(Objc.Cls("NSMenuItem"), Objc.Sel("alloc")), Objc.Sel("init"));
+                    Objc.SendVoid(item, Objc.Sel("setSubmenu:"), submenu);
+                    Objc.SendVoid(bar, Objc.Sel("addItem:"), item);
+                }
+
+                var bar = NewMenu("");
+
+                var appMenu = NewMenu("perch");
+                AddItem(appMenu, "About perch", "orderFrontStandardAboutPanel:", "");
+                Objc.SendVoid(appMenu, Objc.Sel("addItem:"),
+                    Objc.Send(Objc.Cls("NSMenuItem"), Objc.Sel("separatorItem")));
+                AddItem(appMenu, "Hide perch", "hide:", "h");
+                AddItem(appMenu, "Quit perch", "terminate:", "q");
+                AddSubmenu(bar, appMenu);
+
+                var edit = NewMenu("Edit");
+                AddItem(edit, "Undo", "undo:", "z");
+                AddItem(edit, "Redo", "redo:", "Z");
+                Objc.SendVoid(edit, Objc.Sel("addItem:"),
+                    Objc.Send(Objc.Cls("NSMenuItem"), Objc.Sel("separatorItem")));
+                AddItem(edit, "Cut", "cut:", "x");
+                AddItem(edit, "Copy", "copy:", "c");
+                AddItem(edit, "Paste", "paste:", "v");
+                AddItem(edit, "Select All", "selectAll:", "a");
+                AddSubmenu(bar, edit);
+
+                var windowMenu = NewMenu("Window");
+                AddItem(windowMenu, "Minimize", "performMiniaturize:", "m");
+                AddItem(windowMenu, "Zoom", "performZoom:", "");
+                AddSubmenu(bar, windowMenu);
+                Objc.SendVoid(app, Objc.Sel("setWindowsMenu:"), windowMenu);
+
+                Objc.SendVoid(app, Objc.Sel("setMainMenu:"), bar);
+            });
+        }
+        catch (Exception ex) { Log.Error("MacHost.MenuBar", ex); }
+    }
+
     /// Dock-icon bounce — the mac analogue of the taskbar flash. Loud
     /// (critical) bounces until the app is foregrounded; gentle bounces once.
     /// AppKit ignores the request entirely when the app is already active,
@@ -179,15 +239,23 @@ internal sealed class MacHost : IWebViewHost, IWindowHost
     private static IntPtr Pasteboard()
         => Objc.Send(Objc.Cls("NSPasteboard"), Objc.Sel("generalPasteboard"));
 
+    /// Pasteboard OBJECT reads run on the AppKit main thread — off-main
+    /// there's no autorelease pool and stringForType: comes back nil/garbage
+    /// (changeCount is a plain integer and is safe from the watcher thread).
     public string? ReadClipboardText()
     {
         try
         {
-            var ns = Objc.Send(Pasteboard(), Objc.Sel("stringForType:"),
-                Objc.NSString("public.utf8-plain-text"));
-            if (ns == IntPtr.Zero) return "";
-            var utf8 = Objc.Send(ns, Objc.Sel("UTF8String"));
-            return utf8 == IntPtr.Zero ? "" : (Marshal.PtrToStringUTF8(utf8) ?? "");
+            string? text = null;
+            _window.Invoke(() =>
+            {
+                var ns = Objc.Send(Pasteboard(), Objc.Sel("stringForType:"),
+                    Objc.NSString("public.utf8-plain-text"));
+                if (ns == IntPtr.Zero) { text = ""; return; }
+                var utf8 = Objc.Send(ns, Objc.Sel("UTF8String"));
+                text = utf8 == IntPtr.Zero ? "" : (Marshal.PtrToStringUTF8(utf8) ?? "");
+            });
+            return text;
         }
         catch (Exception ex) { Log.Error("MacHost.Clipboard", ex); return null; }
     }
@@ -199,13 +267,16 @@ internal sealed class MacHost : IWebViewHost, IWindowHost
             // Picture first — a copied image often ships a file path or HTML
             // alongside it, and the picture is what the user meant. PNG when
             // offered directly; TIFF (the AppKit lingua franca) converted
-            // through sips otherwise.
-            var png = ReadClipboardData("public.png");
-            if (png == null)
+            // through sips otherwise. Object reads on the main thread (see
+            // ReadClipboardText).
+            byte[]? png = null;
+            byte[]? tiff = null;
+            _window.Invoke(() =>
             {
-                var tiff = ReadClipboardData("public.tiff");
-                if (tiff != null) png = TiffToPng(tiff);
-            }
+                png = ReadClipboardData("public.png");
+                if (png == null) tiff = ReadClipboardData("public.tiff");
+            });
+            if (png == null && tiff != null) png = TiffToPng(tiff);
             if (png != null) return (png, null);
             var text = ReadClipboardText();
             return (null, string.IsNullOrEmpty(text) ? null : text);

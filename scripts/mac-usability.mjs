@@ -239,21 +239,76 @@ await test("09b-url-pane", async () => {
   const http = await import("node:http");
   const server = http.createServer((_, res) => {
     res.writeHead(200, { "content-type": "text/html" });
-    res.end("<html><body style='background:#234;color:#fff;font:32px sans-serif;padding:2em'>URL PANE OK</body></html>");
+    res.end("<html><head><title>URL Pane Proof</title></head>" +
+      "<body style='background:#234;color:#fff;font:32px sans-serif;padding:2em'>URL PANE OK</body></html>");
   });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   const port = server.address().port;
   try {
-    const before = activeSession(await dump()).panes.length;
+    const beforeIds = activeSession(await dump()).panes.map((p) => p.id);
     await send({ verb: "pane.split-active", dir: "right", url: `http://127.0.0.1:${port}/` });
-    await sleep(2500);
+    await sleep(3000);
     const d = await dump();
-    assert(activeSession(d).panes.length === before + 1, "url pane did not appear");
+    const panes = activeSession(d).panes;
+    assert(panes.length === beforeIds.length + 1, "url pane did not appear");
+    // WKNavigationDelegate → didFinish → title → ApplyAutoTitle renames the
+    // fresh pane to the document title.
+    assert(panes.some((p) => (p.name ?? "").includes("URL Pane Proof")),
+      `auto-title missing: ${panes.map((p) => p.name).join(", ")}`);
     shot("09b-url-pane");
-    // Close it so later pane-count tests aren't offset.
-    await send({ verb: "pane.close-active" });
+    // Close it by id — close-active may target a different focused pane.
+    const urlPaneId = panes.find((p) => !beforeIds.includes(p.id)).id;
+    await send({ verb: "pane.close", paneId: urlPaneId });
     await sleep(800);
+    assert(activeSession(await dump()).panes.length === beforeIds.length, "url pane did not close");
   } finally { server.close(); }
+});
+
+await test("09c-splitter-drag", async () => {
+  // A clean 2-leaf split in a throwaway session, then a synthetic pointer
+  // drag on its gutter; the drag rewrites the two leaves' flex weights and
+  // persists them via pane.resizeSplit.
+  await send({ verb: "session.new" });
+  await sleep(800);
+  await send({ verb: "pane.split-active", dir: "right" });
+  await sleep(1000);
+  const s0 = activeSession(await dump());
+  const before = s0.panes.map((p) => p.weight ?? 1);
+  await send({ verb: "test.pointer", selector: ".split__gutter--v", action: "drag", dx: 120 });
+  await sleep(1200);
+  const s1 = activeSession(await dump());
+  const after = s1.panes.map((p) => p.weight ?? 1);
+  shot("09c-splitter-drag");
+  await send({ verb: "session.close", id: s1.id });   // cleanup
+  await sleep(600);
+  assert(after.some((w, i) => Math.abs(w - (before[i] ?? 1)) > 0.05),
+    `weights unchanged: ${before.join(",")} -> ${after.join(",")}`);
+});
+
+await test("09d-rclick-paste", async () => {
+  // pbcopy → the NSPasteboard changeCount watcher pushes clipboard.text to
+  // the page cache → synthetic right-click on the terminal pastes it into
+  // the pty synchronously. Asserted via the pty byte counter (echo).
+  // Pin the active session first: after 09c's throwaway-session close, the
+  // visible stage and "active session's first leaf" (what pty.snapshot
+  // reads) can briefly disagree — the click and the assertion must target
+  // the same pane.
+  const d0 = await dump();
+  await send({ verb: "session.select", id: d0.sessions[0].id });
+  await sleep(800);
+  const { execFileSync: run } = await import("node:child_process");
+  run("/bin/sh", ["-c", "printf 'RCLICK-PASTE-PROOF' | pbcopy"]);
+  await sleep(2500);   // ≥1 watcher tick + the push
+  const before = await ptyBytes();
+  await send({ verb: "test.pointer", selector: ".pane__term", action: "contextmenu" });
+  await sleep(1500);
+  const after = await ptyBytes();
+  // Clear the pasted text off the prompt line (Ctrl+C) so the next test's
+  // typed command doesn't concatenate with it.
+  await send({ verb: "pty.send", text: "\u0003" });
+  await sleep(400);
+  assert(after > before + 10, `pty bytes did not grow (${before} -> ${after}) — paste chain broken`);
+  shot("09d-rclick-paste");
 });
 
 await test("10-agent-status", async () => {

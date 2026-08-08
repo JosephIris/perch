@@ -258,6 +258,38 @@ onMessage((msg) => {
     case "ui.open-settings":
       openSettings();
       break;
+    case "test.pointer": {
+      // Stages for every session stay mounted and hide via
+      // style.display="none"; target the visible one so the events land
+      // where the user would click.
+      const scope =
+        [...document.querySelectorAll<HTMLElement>(".workspace__stage")]
+          .find((s) => s.style.display !== "none") ?? document;
+      const el = scope.querySelector(msg.selector);
+      if (!el) break;
+      const r = el.getBoundingClientRect();
+      const cx = r.left + r.width / 2;
+      const cy = r.top + r.height / 2;
+      const base = { bubbles: true, cancelable: true, composed: true };
+      if (msg.action === "contextmenu") {
+        el.dispatchEvent(new MouseEvent("contextmenu", { ...base, clientX: cx, clientY: cy, button: 2 }));
+      } else if (msg.action === "click") {
+        el.dispatchEvent(new MouseEvent("click", { ...base, clientX: cx, clientY: cy, button: 0 }));
+      } else if (msg.action === "drag") {
+        const steps = 8;
+        const dx = msg.dx ?? 0;
+        const dy = msg.dy ?? 0;
+        el.dispatchEvent(new PointerEvent("pointerdown",
+          { ...base, clientX: cx, clientY: cy, button: 0, pointerId: 9999 }));
+        for (let i = 1; i <= steps; i++) {
+          el.dispatchEvent(new PointerEvent("pointermove",
+            { ...base, clientX: cx + (dx * i) / steps, clientY: cy + (dy * i) / steps, pointerId: 9999 }));
+        }
+        el.dispatchEvent(new PointerEvent("pointerup",
+          { ...base, clientX: cx + dx, clientY: cy + dy, pointerId: 9999 }));
+      }
+      break;
+    }
     case "render.ping":
       // Reply immediately. This runs on the renderer's main-thread task
       // queue — the same queue that delivers keystrokes to xterm — so the

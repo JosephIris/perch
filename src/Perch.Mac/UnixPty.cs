@@ -95,7 +95,7 @@ internal sealed class UnixPty : IPty
         var pty = new UnixPty
         {
             ProcessId = pid,
-            Scope = new ProcessGroupScope(pid),
+            Scope = new ProcessSessionScope(pid),
             _masterFd = master,
             _lastCols = cols,
             _lastRows = rows,
@@ -106,6 +106,7 @@ internal sealed class UnixPty : IPty
         pty._readerThread.Start();
         pty._waitThread = new Thread(pty.WaitLoop) { IsBackground = true, Name = $"pty-wait-{pid}" };
         pty._waitThread.Start();
+        PtyOrphans.Record(pid);
         return pty;
     }
 
@@ -226,6 +227,7 @@ internal sealed class UnixPty : IPty
         // the tty. SIGKILL after a grace period catches HUP-ignorers.
         var pid = ProcessId;
         try { Libc.kill(-pid, Libc.SIGHUP); } catch { }
+        PtyOrphans.Forget(pid);
         _readGate.Set();
         try { _stream?.Dispose(); } catch { }
         if (_masterFd >= 0) { Libc.close(_masterFd); _masterFd = -1; }
@@ -245,17 +247,19 @@ internal sealed class UnixPtyFactory : IPtyFactory
         UnixPty.Start(command, cols, rows, cwd);
 }
 
-/// "Is this pid in the pane's process group?" — the macOS stand-in for the
-/// Windows job object. Weaker (a child can setpgid away), but it covers the
-/// backgrounded-dev-server case that motivated the job.
-internal sealed class ProcessGroupScope : IProcScope
+/// "Is this pid one of the pane's processes?" — the macOS stand-in for the
+/// Windows job object. Uses the kernel SESSION id (the pane child is a
+/// session leader via POSIX_SPAWN_SETSID): every descendant inherits it,
+/// shells' per-job process groups stay inside it, and it survives
+/// intermediate parents exiting — the same property the job object gave us.
+internal sealed class ProcessSessionScope : IProcScope
 {
-    private readonly int _pgid;
-    public ProcessGroupScope(int pgid) => _pgid = pgid;
+    private readonly int _sid;
+    public ProcessSessionScope(int sid) => _sid = sid;
     public bool ContainsPid(int pid)
     {
-        var g = Libc.getpgid(pid);
-        return g > 0 && g == _pgid;
+        var s = Libc.getsid(pid);
+        return s > 0 && s == _sid;
     }
 }
 
@@ -324,6 +328,8 @@ internal static class Libc
     public static extern int kill(int pid, int sig);
     [DllImport(Lib, SetLastError = true)]
     public static extern int getpgid(int pid);
+    [DllImport(Lib, SetLastError = true)]
+    public static extern int getsid(int pid);
 
     public static bool WIFEXITED(int status) => (status & 0x7F) == 0;
     public static int WEXITSTATUS(int status) => (status >> 8) & 0xFF;

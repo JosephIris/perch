@@ -8,6 +8,7 @@
     <RootNamespace>Perch</RootNamespace>
     <AssemblyName>Perch</AssemblyName>
     <RuntimeIdentifiers>osx-arm64;osx-x64</RuntimeIdentifiers>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
