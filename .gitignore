@@ -54,3 +54,5 @@ packaging/stage/
 packaging/out/
 packaging/*.pfx
 packaging/*.cer
+packaging/mac-publish/
+packaging/mac-releases/

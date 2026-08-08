@@ -7,5 +7,5 @@ for w in list {
     let owner = w[kCGWindowOwnerName as String] as? String ?? ""
     let num = w[kCGWindowNumber as String] as? Int ?? 0
     let layer = w[kCGWindowLayer as String] as? Int ?? -1
-    if owner == "Perch" && layer == 0 { print(num) }
+    if owner.lowercased() == "perch" && layer == 0 { print(num) }
 }
