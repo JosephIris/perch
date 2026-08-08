@@ -63,6 +63,8 @@ internal static class Program
 
         var host = new MacHost(window, server, ui, webRoot);
 
+        var urlPanes = new UrlPanes(ui, new MacUrlPaneHostFactory(window));
+
         AppController? app = null;
         ui.InvokeAsync(() =>
         {
@@ -72,8 +74,8 @@ internal static class Program
                 ui: ui,
                 ptyFactory: new UnixPtyFactory(),
                 probe: new MacSystemProbe(),
-                urlPanes: null,       // URL panes: WKWebView subviews, later
-                updates: null);       // auto-update: Sparkle-or-equivalent, later
+                urlPanes: urlPanes,
+                updates: null);       // auto-update: wired below (Velopack), see task
         }).GetAwaiter().GetResult();
 
         window.RegisterFocusInHandler((_, _) => ui.Post(() => app!.OnActivated()));

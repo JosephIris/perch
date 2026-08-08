@@ -16,18 +16,21 @@ internal partial class MainWindow : FluentWindow, IWebViewHost, IWindowHost
 
     private readonly string _webRoot;
     private readonly AppController _app;
-    private readonly WindowsUrlPanes _urlPanes;
+    private readonly UrlPanes _urlPanes;
     private ClipboardWatcher? _clipWatch;
 
     public MainWindow()
     {
         InitializeComponent();
         _webRoot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
-        _urlPanes = new WindowsUrlPanes();
+        var ui = new WpfUiThread(Dispatcher);
+        // The registry/policy layer is Core's; only the WebView2 mechanics
+        // are ours. The webview getter stays live across crash rebuilds.
+        _urlPanes = new UrlPanes(ui, new WinUrlPaneHostFactory(this, () => Web));
         _app = new AppController(
             web: this,
             host: this,
-            ui: new WpfUiThread(Dispatcher),
+            ui: ui,
             ptyFactory: new ConPtyFactory(),
             probe: new WindowsSystemProbe(),
             urlPanes: _urlPanes,
@@ -143,9 +146,6 @@ internal partial class MainWindow : FluentWindow, IWebViewHost, IWindowHost
             // crash is caught.
             core.ProcessFailed += OnCoreProcessFailed;
 
-            // URL-pane controller owns the per-URL-pane WebView2 lifecycle.
-            // (Re)bound after every (re)init so it captures the live control.
-            _urlPanes.Rebind(new UrlPaneController(this, Web));
             return true;
         }
         catch (Exception ex)
@@ -389,30 +389,3 @@ internal partial class MainWindow : FluentWindow, IWebViewHost, IWindowHost
     }
 }
 
-/// IUrlPanes over UrlPaneController. The inner controller is rebuilt after a
-/// browser-process crash (it captures the dead WebView2); this wrapper keeps
-/// the identity AppController subscribed to stable across rebinds.
-internal sealed class WindowsUrlPanes : IUrlPanes
-{
-    private UrlPaneController? _inner;
-
-    public event Action<Guid, string>? AutoTitleRequested;
-    public event Action<Guid, string>? Rejected;
-    public event Action<Guid, string>? Failed;
-
-    public void Rebind(UrlPaneController inner)
-    {
-        _inner = inner;
-        inner.AutoTitleRequested += (id, title) => AutoTitleRequested?.Invoke(id, title);
-        inner.UrlPaneRejected += (id, url) => Rejected?.Invoke(id, url);
-        inner.UrlPaneFailed += (id, status) => Failed?.Invoke(id, status);
-    }
-
-    public bool HasPanes => _inner?.HasPanes == true;
-    public void OnLayout(UrlPaneLayoutMsg msg) => _inner?.OnLayout(msg);
-    public void OnDispose(PaneRef msg) => _inner?.OnDispose(msg);
-    public void SetVisible(Guid paneId, bool visible) => _inner?.SetVisible(paneId, visible);
-    public void SetSuppressed(bool suppressed) => _inner?.SetSuppressed(suppressed);
-    public void CloseAll() => _inner?.CloseAll();
-    public string? UrlOf(Guid paneId) => _inner?.UrlOf(paneId);
-}

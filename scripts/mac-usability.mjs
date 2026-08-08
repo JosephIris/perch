@@ -233,6 +233,29 @@ await test("09-board", async () => {
   shot("09-board");
 });
 
+await test("09b-url-pane", async () => {
+  // A URL pane is a real native browser view (WKWebView subview on mac).
+  // Serve a marker page ourselves so the capture can prove content painted.
+  const http = await import("node:http");
+  const server = http.createServer((_, res) => {
+    res.writeHead(200, { "content-type": "text/html" });
+    res.end("<html><body style='background:#234;color:#fff;font:32px sans-serif;padding:2em'>URL PANE OK</body></html>");
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const port = server.address().port;
+  try {
+    const before = activeSession(await dump()).panes.length;
+    await send({ verb: "pane.split-active", dir: "right", url: `http://127.0.0.1:${port}/` });
+    await sleep(2500);
+    const d = await dump();
+    assert(activeSession(d).panes.length === before + 1, "url pane did not appear");
+    shot("09b-url-pane");
+    // Close it so later pane-count tests aren't offset.
+    await send({ verb: "pane.close-active" });
+    await sleep(800);
+  } finally { server.close(); }
+});
+
 await test("10-agent-status", async () => {
   // Type a real `perch status` into the FIRST session's shell (pty.send hits
   // the active session's first leaf — switch back to session 1 first).
