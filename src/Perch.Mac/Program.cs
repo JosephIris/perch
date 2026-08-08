@@ -37,6 +37,9 @@ internal static class Program
         var window = new PhotinoWindow()
             .SetTitle("perch")
             .SetUseOsDefaultLocation(true)
+            // Photino defaults UseOsDefaultSize=true, which silently ignores
+            // SetSize — the window came up 800×572 until this was disabled.
+            .SetUseOsDefaultSize(false)
             .SetSize(new System.Drawing.Size(1040, 640))
             .SetMinSize(640, 360)
             .SetContextMenuEnabled(false)

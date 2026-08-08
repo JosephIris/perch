@@ -3288,8 +3288,8 @@ internal sealed partial class AppController
                     path = p.Path,
                     seedPaths = (p.SeedPaths ?? new List<string>()).ToArray(),
                 }).ToArray(),
-                appVersion = _updates.CurrentVersion,
-                updatable = _updates.IsUpdatable,
+                appVersion = _updates?.CurrentVersion,
+                updatable = _updates?.IsUpdatable ?? false,
             };
             _web.PostJson(JsonSerializer.Serialize(payload));
         }
