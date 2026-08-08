@@ -4,7 +4,6 @@ using System.IO.Pipes;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Windows.Threading;
 
 namespace Perch;
 
@@ -28,14 +27,14 @@ internal sealed class ControlIpcServer : IDisposable
     public delegate void VerbHandler(string verb, JsonElement root);
 
     private readonly CancellationTokenSource _cts = new();
-    private readonly Dispatcher _dispatcher;
+    private readonly IUiThread _ui;
     private readonly VerbHandler _onVerb;
     private Task? _acceptLoop;
     private bool _disposed;
 
-    public ControlIpcServer(Dispatcher dispatcher, VerbHandler onVerb)
+    public ControlIpcServer(IUiThread ui, VerbHandler onVerb)
     {
-        _dispatcher = dispatcher;
+        _ui = ui;
         _onVerb = onVerb;
     }
 
@@ -103,7 +102,7 @@ internal sealed class ControlIpcServer : IDisposable
             // Clone the element so the callback can outlive this method's
             // `using var doc`. JsonElement is cheap to copy by deep-clone.
             var clone = doc.RootElement.Clone();
-            _dispatcher.BeginInvoke(() =>
+            _ui.Post(() =>
             {
                 try { _onVerb(verb!, clone); }
                 catch (Exception ex) { Log.Error($"ControlIpc.dispatch {verb}", ex); }

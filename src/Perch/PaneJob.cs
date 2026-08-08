@@ -26,7 +26,7 @@ namespace Perch;
 /// show you. The app-wide job in <see cref="JobObjectGuard"/> does set
 /// kill-on-close and this one nests inside it (Win8+ allows nesting), so Perch
 /// exiting still reaps everything.
-internal sealed class PaneJob : IDisposable
+internal sealed class PaneJob : IDisposable, IProcScope
 {
     // Guards _job against the scan racing a pane closing: Contains runs on the
     // poller's thread while Dispose runs on the UI thread, and using a handle
@@ -80,6 +80,16 @@ internal sealed class PaneJob : IDisposable
     {
         if (pid <= 4) return IntPtr.Zero;
         return OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+    }
+
+    /// IProcScope: open the pid, test membership, close. One handle per
+    /// query — the listener count is small enough that this stays cheap.
+    public bool ContainsPid(int pid)
+    {
+        var h = OpenForQuery(pid);
+        if (h == IntPtr.Zero) return false;
+        try { return Contains(h); }
+        finally { CloseQuery(h); }
     }
 
     public static void CloseQuery(IntPtr hProcess)

@@ -16,7 +16,14 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyTitle>Perch</AssemblyTitle>
     <Product>Perch</Product>
+    <!-- Lets the WPF host compile (not run) on macOS/Linux, so the mac port
+         can keep the Windows build honest without a Windows box. -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Perch.Core\Perch.Core.csproj" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4078.44" />
@@ -27,16 +34,6 @@
 
   <ItemGroup>
     <Resource Include="Assets\perch.ico" />
-  </ItemGroup>
-
-  <!-- Shared with perch-cli: the hook STAMPS agent labels onto a gcloud create,
-       and the host has to build a matching server-side filter to read them back.
-       Both sides must sanitize identically or the filter silently matches
-       nothing — so they compile the same file rather than each keeping a copy.
-       (A ProjectReference to perch-cli would drag in its self-contained win-x64
-       publish config; a linked source file avoids that.) -->
-  <ItemGroup>
-    <Compile Include="..\..\tools\perch-cli\GcloudLabels.cs" Link="GcloudLabels.cs" />
   </ItemGroup>
 
   <!-- Perch.Tests exercises internal types (PaneTree, Session, the message

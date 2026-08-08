@@ -65,6 +65,7 @@ public partial class App : System.Windows.Application
         // (started by ConPTY) are reaped automatically when we exit, including
         // ungraceful exits.
         JobObjectGuard.AssignSelfToKillOnCloseJob();
+        ImageThumb.Codec = WpfImageCodec.JpegBase64;
 
         // Make `perch` resolvable inside spawned panes. ConPTY children inherit
         // our process env, so prepending PATH here propagates to every pane

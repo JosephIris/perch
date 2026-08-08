@@ -25,7 +25,7 @@ namespace Perch;
 /// no color in some shells, no cursor positioning). ConPTY is what Windows
 /// Terminal / VS Code's integrated terminal use; it's the right surface for
 /// a real interactive shell.
-internal sealed class ConPty : IDisposable
+internal sealed class ConPty : IPty
 {
     public event EventHandler<ReadOnlyMemory<byte>>? OutputReceived;
     public event EventHandler<int>? Exited;
@@ -37,6 +37,8 @@ internal sealed class ConPty : IDisposable
     /// question a parent-pid walk can't answer once an ancestor has exited.
     /// Null if the OS refused us a job; attribution falls back to the pid walk.
     public PaneJob? Job { get; private set; }
+
+    public IProcScope? Scope => Job;
 
     // ---- Flow control (backpressure) -------------------------------------
     // The reader can read 8 KB and fire OutputReceived far faster than the

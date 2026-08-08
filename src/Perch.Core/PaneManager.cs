@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Windows.Threading;
 
 namespace Perch;
 
@@ -15,7 +14,7 @@ internal sealed class PaneManager : IDisposable
     // session (lazy spawn) so closed-but-persisted sessions don't fork a
     // shell at startup; disposed when the pane is removed or the session
     // closes.
-    private readonly Dictionary<Guid, ConPty> _ptys = new();
+    private readonly Dictionary<Guid, IPty> _ptys = new();
 
     // Per-pane named-pipe server listening on \\.\pipe\perch\<paneId>.
     // Agents inside the pane talk to us via the perch CLI ("perch status
@@ -31,9 +30,14 @@ internal sealed class PaneManager : IDisposable
     // hence ConcurrentDictionary. Drives the Working→Done demotion.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, long> _lastOutputTicks = new();
 
-    private readonly Dispatcher _dispatcher;
+    private readonly IUiThread _ui;
+    private readonly IPtyFactory _ptyFactory;
 
-    public PaneManager(Dispatcher dispatcher) => _dispatcher = dispatcher;
+    public PaneManager(IUiThread ui, IPtyFactory ptyFactory)
+    {
+        _ui = ui;
+        _ptyFactory = ptyFactory;
+    }
 
     /// PTY emitted bytes (fired on the ConPty read thread — subscriber
     /// marshals). Counters are already updated when this fires.
@@ -61,7 +65,7 @@ internal sealed class PaneManager : IDisposable
 
     public bool Has(Guid paneId) => _ptys.ContainsKey(paneId);
 
-    public bool TryGet(Guid paneId, out ConPty pty) => _ptys.TryGetValue(paneId, out pty!);
+    public bool TryGet(Guid paneId, out IPty pty) => _ptys.TryGetValue(paneId, out pty!);
 
     public void Write(Guid paneId, byte[] bytes)
     {
@@ -103,7 +107,7 @@ internal sealed class PaneManager : IDisposable
             Log.Info($"Pane.spawn.dup pane={pane.Id:N} -- already has a PTY, skipping");
             return;
         }
-        var pty = ConPty.Start(startCmd, cols: cols, rows: rows, cwd: cwd);
+        var pty = _ptyFactory.Start(startCmd, cols: cols, rows: rows, cwd: cwd);
         var paneId = pane.Id;
         pty.OutputReceived += (_, bytes) =>
         {
@@ -117,7 +121,7 @@ internal sealed class PaneManager : IDisposable
             // Drop the dead PTY + IPC so a subsequent pane.resize naturally
             // respawns into the same paneId. Without this the resize handler
             // sees a stale entry and just calls Resize on a dead pty.
-            _dispatcher.BeginInvoke(() => Destroy(paneId));
+            _ui.Post(() => Destroy(paneId));
             Exited?.Invoke(paneId, code);
         };
         _ptys[paneId] = pty;
@@ -125,7 +129,7 @@ internal sealed class PaneManager : IDisposable
         // Agent IPC: per-pane named pipe \\.\pipe\perch\<paneId>. The
         // pane's shell inherits PERCH_PIPE pointing here, so `perch
         // status working` from inside the shell lands at AgentStatus.
-        var ipc = new PerchIpcServer(paneId, _dispatcher);
+        var ipc = new PerchIpcServer(paneId, _ui);
         ipc.OnStatus += msg => AgentStatus?.Invoke(sess, paneId, msg);
         ipc.OnNotify += msg => AgentNotify?.Invoke(sess, paneId, msg);
         ipc.OnMeta   += msg => AgentMeta?.Invoke(sess, paneId, msg);

@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Perch</RootNamespace>
+  </PropertyGroup>
+
+  <!-- Host projects and the test suite consume Core's internals directly —
+       the app was a single exe before the mac port split it, so internals are
+       the API surface. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="Perch" />
+    <InternalsVisibleTo Include="Perch.Mac" />
+    <InternalsVisibleTo Include="Perch.Tests" />
+  </ItemGroup>
+
+  <!-- Shared with perch-cli: both sides must sanitize gcloud labels
+       identically (see the comment in Perch.csproj). The linked file moved
+       here with the rest of the portable code. -->
+  <ItemGroup>
+    <Compile Include="..\..\tools\perch-cli\GcloudLabels.cs" Link="GcloudLabels.cs" />
+  </ItemGroup>
+
+</Project>

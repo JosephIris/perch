@@ -6,22 +6,6 @@ using System.Text;
 
 namespace Perch;
 
-/// One TCP listener as the kernel reports it, before attribution.
-internal sealed record RawListener(int Port, int Pid, string Addr);
-
-/// One process row: enough to walk ancestry and describe a dev server.
-internal sealed record RawProc(int Pid, int Ppid, string Name, string Cmd, long StartMs);
-
-/// Where the localhost panel's raw facts come from.
-///
-/// Behind an interface purely so the attribution logic can be tested against
-/// fixed input — the Windows implementation talks to the kernel and there is
-/// nothing to assert about a live machine.
-internal interface ISystemProbe
-{
-    (IReadOnlyList<RawListener> Listeners, IReadOnlyList<RawProc> Procs) Probe();
-}
-
 /// The real thing: iphlpapi for listeners, Toolhelp32 for the process tree,
 /// WMI for command lines.
 ///

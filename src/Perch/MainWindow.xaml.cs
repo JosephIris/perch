@@ -23,6 +23,7 @@ public partial class MainWindow : FluentWindow
     // Per-pane ConPty + agent-IPC lifecycles, byte counters and last-output
     // timestamps all live in PaneManager. MainWindow decides what to spawn
     // and reacts to its events (wired in the constructor).
+    private readonly WpfUiThread _ui;
     private readonly PaneManager _panes;
 
     // How long a Working pane must be output-silent before the watchdog treats
@@ -286,7 +287,8 @@ public partial class MainWindow : FluentWindow
         _boardCtrl = new BoardController(OwningSession, a => Dispatcher.BeginInvoke(a));
         WireBoardController();
         _router = BuildRouter();
-        _panes = new PaneManager(Dispatcher);
+        _ui = new WpfUiThread(Dispatcher);
+        _panes = new PaneManager(_ui, new ConPtyFactory());
         _panes.Output += PostPaneOut;
         _panes.Exited += PostPaneExit;
         _panes.AgentStatus += OnAgentStatus;
@@ -311,13 +313,13 @@ public partial class MainWindow : FluentWindow
         // whose agent session no longer maps to a live pane is one nothing is
         // using. Deliberately not time-based — an agent legitimately waits an hour
         // on a running cluster.
-        _cloud = new CloudController(Dispatcher, PostToPage, LookupPaneStateBySession);
+        _cloud = new CloudController(_ui, PostToPage, LookupPaneStateBySession);
         _cloud.Start();
         // Local dev servers. No auth to probe — a port scan is always available —
         // so this is always on, but invisible until something is listening. The
         // snapshot of live pane pids is taken on THIS (UI) thread each scan, so
         // attribution never reads session/pane state off-thread.
-        _local = new LocalController(Dispatcher, PostToPage, SnapshotLivePanes, ApplyPanePorts);
+        _local = new LocalController(_ui, new WindowsSystemProbe(), PostToPage, SnapshotLivePanes, ApplyPanePorts);
         _local.Start();
         EnsurePaneNames();
         // Persist immediately on first launch so external tools (the perch
@@ -376,7 +378,7 @@ public partial class MainWindow : FluentWindow
 
             if (ControlIpcServer.IsEnabled)
             {
-                _control = new ControlIpcServer(Dispatcher, OnControlVerb);
+                _control = new ControlIpcServer(_ui, OnControlVerb);
                 _control.Start();
             }
             // Idle watchdog: 1Hz sweep that demotes output-silent Working panes
@@ -1669,7 +1671,7 @@ public partial class MainWindow : FluentWindow
                         pane.Id.ToString("N"),
                         pane.Name ?? "",
                         pane.AgentState.ToString().ToLowerInvariant(),
-                        pty.Job));
+                        pty.Scope));
         }
         return list;
     }
@@ -3151,14 +3153,14 @@ public partial class MainWindow : FluentWindow
             Height = s.WindowHeight;
         }
 
-        var virtualScreen = new System.Windows.Rect(
+        var virtualScreen = new ScreenRect(
             System.Windows.SystemParameters.VirtualScreenLeft,
             System.Windows.SystemParameters.VirtualScreenTop,
             System.Windows.SystemParameters.VirtualScreenWidth,
             System.Windows.SystemParameters.VirtualScreenHeight);
         if (!double.IsNaN(s.WindowLeft) && !double.IsNaN(s.WindowTop) &&
             WindowPlacement.IsReachable(
-                new System.Windows.Rect(s.WindowLeft, s.WindowTop, Width, Height), virtualScreen))
+                new ScreenRect(s.WindowLeft, s.WindowTop, Width, Height), virtualScreen))
         {
             // WindowStartupLocation defaults to Manual, so Left/Top are honored.
             Left = s.WindowLeft;
@@ -4099,7 +4101,7 @@ public partial class MainWindow : FluentWindow
             if (System.Windows.Clipboard.ContainsImage())
             {
                 var src = System.Windows.Clipboard.GetImage();
-                if (src != null) png = ImageThumb.EncodePng(src);
+                if (src != null) png = WpfImageCodec.EncodePng(src);
             }
             if (png == null && System.Windows.Clipboard.ContainsText())
                 text = System.Windows.Clipboard.GetText();

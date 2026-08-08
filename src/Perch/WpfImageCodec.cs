@@ -15,7 +15,7 @@ namespace Perch;
 /// dataURL is several transient copies of itself. Downscaling first turns that
 /// into tens of kilobytes, and at card or rail size the quality loss is
 /// invisible.
-internal static class ImageThumb
+internal static class WpfImageCodec
 {
     /// A downscaled JPEG of `bytes`, base64-encoded, with its long edge capped
     /// at `maxEdge`. Null on any decode failure — callers fall back to showing
@@ -28,6 +28,7 @@ internal static class ImageThumb
     {
         try
         {
+            // (Assigned to ImageThumb.Codec at app start.)
             using var ms = new MemoryStream(bytes);
             var frame = BitmapFrame.Create(ms, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
             BitmapSource src = frame;

@@ -18,7 +18,7 @@ namespace Perch;
 /// after the process that spawned the server has exited. Pid is the ConPty
 /// child, used by the legacy ancestry walk as a fallback for panes we never got
 /// a job for.
-internal sealed record PaneProc(int Pid, string PaneId, string Name, string? State, PaneJob? Job = null);
+internal sealed record PaneProc(int Pid, string PaneId, string Name, string? State, IProcScope? Scope = null);
 
 /// One loopback listener the scan found, already attributed to a live pane (or
 /// not). The controller layers the ledger on top to decide lingering-vs-other;
@@ -53,7 +53,7 @@ internal sealed class LocalPoller
 {
     private readonly ISystemProbe _probe;
 
-    public LocalPoller(ISystemProbe? probe = null) => _probe = probe ?? new WindowsSystemProbe();
+    public LocalPoller(ISystemProbe probe) => _probe = probe;
 
     /// Runtimes a dev server actually runs on. Used ONLY to keep the "other"
     /// bucket (servers Perch didn't launch) about dev work instead of a wall of
@@ -171,15 +171,12 @@ internal sealed class LocalPoller
     /// tested against each pane's job.
     private static PaneProc? FindOwnerByJob(int pid, IReadOnlyList<PaneProc> panes)
     {
-        var h = PaneJob.OpenForQuery(pid);
-        if (h == IntPtr.Zero) return null;
-        try
+        foreach (var p in panes)
         {
-            foreach (var p in panes)
-                if (p.Job != null && p.Job.Contains(h)) return p;
-            return null;
+            try { if (p.Scope?.ContainsPid(pid) == true) return p; }
+            catch { }
         }
-        finally { PaneJob.CloseQuery(h); }
+        return null;
     }
 
     /// Fallback: walk the listener's process ancestry until it hits a live

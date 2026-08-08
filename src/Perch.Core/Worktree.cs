@@ -175,7 +175,9 @@ internal static class Worktree
     /// no privilege and behaves the same for reads.
     private static async Task JunctionAsync(string link, string target)
         => await ProcRunner.RunAsync(
-            "cmd.exe", $"/c mklink /J \"{link}\" \"{target}\"", site: "mklink");
+            OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/ln",
+            OperatingSystem.IsWindows() ? $"/c mklink /J \"{link}\" \"{target}\"" : $"-s \"{target}\" \"{link}\"",
+            site: "mklink");
 
     /// Tears down a tab's worktree. Keeps the BRANCH — the commits are the work,
     /// and closing a tab must never destroy them. Junctioned dependency dirs are

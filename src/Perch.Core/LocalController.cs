@@ -4,7 +4,6 @@ using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Windows.Threading;
 
 namespace Perch;
 
@@ -21,8 +20,8 @@ namespace Perch;
 ///   other      — a dev server Perch never launched (started by hand elsewhere)
 internal sealed class LocalController : IDisposable
 {
-    private readonly Dispatcher _dispatcher;
-    private readonly LocalPoller _poller = new();
+    private readonly IUiThread _ui;
+    private readonly LocalPoller _poller;
     private readonly LocalLedger _ledger = new();
     private readonly Action<object> _push;
     /// Snapshots live panes' root pids on the UI thread. Captured BEFORE the
@@ -36,7 +35,7 @@ internal sealed class LocalController : IDisposable
     /// built against, which is why they never lit.
     private readonly Action<IReadOnlyDictionary<string, int[]>> _applyPanePorts;
 
-    private DispatcherTimer? _timer;
+    private IUiTimer? _timer;
     private CancellationTokenSource? _inflight;
     private IReadOnlyList<ServerView> _last = Array.Empty<ServerView>();
 
@@ -47,11 +46,12 @@ internal sealed class LocalController : IDisposable
     private const int FastMs = 3 * 1000;
 
     public LocalController(
-        Dispatcher dispatcher, Action<object> push,
+        IUiThread ui, ISystemProbe probe, Action<object> push,
         Func<IReadOnlyList<PaneProc>> snapshotPanes,
         Action<IReadOnlyDictionary<string, int[]>> applyPanePorts)
     {
-        _dispatcher = dispatcher;
+        _ui = ui;
+        _poller = new LocalPoller(probe);
         _push = push;
         _snapshotPanes = snapshotPanes;
         _applyPanePorts = applyPanePorts;
@@ -59,11 +59,7 @@ internal sealed class LocalController : IDisposable
 
     public void Start()
     {
-        _timer = new DispatcherTimer(DispatcherPriority.Background, _dispatcher)
-        {
-            Interval = TimeSpan.FromMilliseconds(IdleMs),
-        };
-        _timer.Tick += (_, _) => _ = RefreshAsync();
+        _timer = _ui.CreateTimer(TimeSpan.FromMilliseconds(IdleMs), () => _ = RefreshAsync());
         _timer.Start();
         // One scan at launch: sitting back down is the moment to be told a server
         // survived from last session.

@@ -5,7 +5,6 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Windows.Threading;
 
 namespace Perch;
 
@@ -37,14 +36,14 @@ internal sealed class PerchIpcServer : IDisposable
     public event Action<PeerMsgMessage>? OnPeerMsg;
 
     private readonly CancellationTokenSource _cts = new();
-    private readonly Dispatcher _dispatcher;
+    private readonly IUiThread _ui;
     private Task? _acceptLoop;
     private bool _disposed;
 
-    public PerchIpcServer(Guid paneId, Dispatcher dispatcher)
+    public PerchIpcServer(Guid paneId, IUiThread ui)
     {
         PaneId = paneId;
-        _dispatcher = dispatcher;
+        _ui = ui;
     }
 
     public void Start()
@@ -113,63 +112,63 @@ internal sealed class PerchIpcServer : IDisposable
             {
                 case "notify":
                     var n = JsonSerializer.Deserialize<NotifyMessage>(json, IpcJson.Options);
-                    if (n != null) _dispatcher.BeginInvoke(() => OnNotify?.Invoke(n));
+                    if (n != null) _ui.Post(() => OnNotify?.Invoke(n));
                     break;
                 case "status":
                     var s = JsonSerializer.Deserialize<StatusMessage>(json, IpcJson.Options);
-                    if (s != null) _dispatcher.BeginInvoke(() => OnStatus?.Invoke(s));
+                    if (s != null) _ui.Post(() => OnStatus?.Invoke(s));
                     break;
                 case "meta":
                     var m = JsonSerializer.Deserialize<MetaMessage>(json, IpcJson.Options);
-                    if (m != null) _dispatcher.BeginInvoke(() => OnMeta?.Invoke(m));
+                    if (m != null) _ui.Post(() => OnMeta?.Invoke(m));
                     break;
                 case "focus":
                     var f = JsonSerializer.Deserialize<FocusMessage>(json, IpcJson.Options);
-                    if (f != null) _dispatcher.BeginInvoke(() => OnFocus?.Invoke(f));
+                    if (f != null) _ui.Post(() => OnFocus?.Invoke(f));
                     break;
                 case "send":
                     var sm = JsonSerializer.Deserialize<SendMessage>(json, IpcJson.Options);
-                    if (sm != null) _dispatcher.BeginInvoke(() => OnSend?.Invoke(sm));
+                    if (sm != null) _ui.Post(() => OnSend?.Invoke(sm));
                     break;
                 case "open":
                     var om = JsonSerializer.Deserialize<OpenMessage>(json, IpcJson.Options);
-                    if (om != null) _dispatcher.BeginInvoke(() => OnOpen?.Invoke(om));
+                    if (om != null) _ui.Post(() => OnOpen?.Invoke(om));
                     break;
                 case "git.baseline":
                     var gb = JsonSerializer.Deserialize<GitBaselineMessage>(json, IpcJson.Options);
-                    if (gb != null) _dispatcher.BeginInvoke(() => OnGitBaseline?.Invoke(gb));
+                    if (gb != null) _ui.Post(() => OnGitBaseline?.Invoke(gb));
                     break;
                 case "git.touched":
                     var gt = JsonSerializer.Deserialize<GitTouchedMessage>(json, IpcJson.Options);
-                    if (gt != null) _dispatcher.BeginInvoke(() => OnGitTouched?.Invoke(gt));
+                    if (gt != null) _ui.Post(() => OnGitTouched?.Invoke(gt));
                     break;
                 case "git.commit":
                     var gc = JsonSerializer.Deserialize<GitCommitMessage>(json, IpcJson.Options);
-                    if (gc != null) _dispatcher.BeginInvoke(() => OnGitCommit?.Invoke(gc));
+                    if (gc != null) _ui.Post(() => OnGitCommit?.Invoke(gc));
                     break;
                 case "title":
                     var t = JsonSerializer.Deserialize<TitleMessage>(json, IpcJson.Options);
-                    if (t != null) _dispatcher.BeginInvoke(() => OnTitle?.Invoke(t));
+                    if (t != null) _ui.Post(() => OnTitle?.Invoke(t));
                     break;
                 case "name.reset":
                     var nrm = JsonSerializer.Deserialize<NameResetMessage>(json, IpcJson.Options);
-                    if (nrm != null) _dispatcher.BeginInvoke(() => OnNameReset?.Invoke(nrm));
+                    if (nrm != null) _ui.Post(() => OnNameReset?.Invoke(nrm));
                     break;
                 case "agent":
                     var am = JsonSerializer.Deserialize<AgentMessage>(json, IpcJson.Options);
-                    if (am != null) _dispatcher.BeginInvoke(() => OnAgent?.Invoke(am));
+                    if (am != null) _ui.Post(() => OnAgent?.Invoke(am));
                     break;
                 case "session":
                     var ses = JsonSerializer.Deserialize<SessionMessage>(json, IpcJson.Options);
-                    if (ses != null) _dispatcher.BeginInvoke(() => OnSession?.Invoke(ses));
+                    if (ses != null) _ui.Post(() => OnSession?.Invoke(ses));
                     break;
                 case "cloud.stamped":
                     var cs = JsonSerializer.Deserialize<CloudStampedMessage>(json, IpcJson.Options);
-                    if (cs != null) _dispatcher.BeginInvoke(() => OnCloudStamped?.Invoke(cs));
+                    if (cs != null) _ui.Post(() => OnCloudStamped?.Invoke(cs));
                     break;
                 case "peer.msg":
                     var pm = JsonSerializer.Deserialize<PeerMsgMessage>(json, IpcJson.Options);
-                    if (pm != null) _dispatcher.BeginInvoke(() => OnPeerMsg?.Invoke(pm));
+                    if (pm != null) _ui.Post(() => OnPeerMsg?.Invoke(pm));
                     break;
             }
         }

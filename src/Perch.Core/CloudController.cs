@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Windows.Threading;
 
 namespace Perch;
 
@@ -16,13 +15,13 @@ namespace Perch;
 /// subprocess.
 internal sealed class CloudController : IDisposable
 {
-    private readonly Dispatcher _dispatcher;
+    private readonly IUiThread _ui;
     private readonly CloudPoller _poller = new();
     private readonly CloudLedger _ledger = new();
     private readonly Action<object> _push;
     private readonly Func<string?, string?> _lookupPaneState;
 
-    private DispatcherTimer? _timer;
+    private IUiTimer? _timer;
     private CancellationTokenSource? _inflight;
     private IReadOnlyList<CloudResource> _last = Array.Empty<CloudResource>();
     private bool _panelOpen;
@@ -33,9 +32,9 @@ internal sealed class CloudController : IDisposable
     private const int IdleMs = 5 * 60 * 1000;
     private const int FastMs = 60 * 1000;
 
-    public CloudController(Dispatcher dispatcher, Action<object> push, Func<string?, string?> lookupPaneState)
+    public CloudController(IUiThread ui, Action<object> push, Func<string?, string?> lookupPaneState)
     {
-        _dispatcher = dispatcher;
+        _ui = ui;
         _push = push;
         _lookupPaneState = lookupPaneState;
         _poller.LookupPaneState = _lookupPaneState;
@@ -54,11 +53,7 @@ internal sealed class CloudController : IDisposable
             return;
         }
 
-        _timer = new DispatcherTimer(DispatcherPriority.Background, _dispatcher)
-        {
-            Interval = TimeSpan.FromMilliseconds(IdleMs),
-        };
-        _timer.Tick += (_, _) => _ = RefreshAsync();
+        _timer = _ui.CreateTimer(TimeSpan.FromMilliseconds(IdleMs), () => _ = RefreshAsync());
         _timer.Start();
         // One poll at launch: the most valuable moment to be told about a machine
         // that survived the night is the moment you sit back down.
@@ -96,7 +91,7 @@ internal sealed class CloudController : IDisposable
         // A machine was just created; don't make the user wait out the idle tick
         // to see it. gcloud is eventually consistent about a brand-new instance,
         // so give it a moment before asking.
-        _ = Task.Delay(6000).ContinueWith(_ => _dispatcher.BeginInvoke(() => _ = RefreshAsync()));
+        _ = Task.Delay(6000).ContinueWith(_ => _ui.Post(() => _ = RefreshAsync()));
     }
 
     public async Task RefreshAsync()
