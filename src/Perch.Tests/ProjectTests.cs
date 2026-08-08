@@ -146,13 +146,22 @@ public class ProjectTests
         finally { Directory.Delete(root, true); }
     }
 
-    [Fact]
+    [WindowsFact]
     public void Normalize_CollapsesCaseAndTrailingSeparators()
     {
         var a = ProjectStore.Normalize(@"C:\Dev\Repo");
         Assert.Equal(a, ProjectStore.Normalize(@"C:\Dev\Repo\"));
         Assert.Equal(a, ProjectStore.Normalize(@"c:\dev\repo"));
         Assert.NotEqual(a, ProjectStore.Normalize(@"C:\Dev\Other"));
+        Assert.Equal("", ProjectStore.Normalize(""));
+    }
+
+    [UnixFact]
+    public void Normalize_CollapsesTrailingSeparators_Unix()
+    {
+        var a = ProjectStore.Normalize("/dev/repo");
+        Assert.Equal(a, ProjectStore.Normalize("/dev/repo/"));
+        Assert.NotEqual(a, ProjectStore.Normalize("/dev/other"));
         Assert.Equal("", ProjectStore.Normalize(""));
     }
 

@@ -1,19 +1,24 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- Host-side unit tests. Targets net8.0-windows + UseWPF because the app
-       project is a WPF exe — but the tests only touch the pure, window-free
-       pieces (PaneTree, protocol DTOs, state projection). Anything that needs
-       a live window stays in scripts/test-*.ps1 harnesses. -->
+  <!-- Host-side unit tests. The tests only touch the pure, window-free pieces
+       (PaneTree, protocol DTOs, state projection), which all live in
+       Perch.Core (net8.0) — so the suite runs on any OS. The one exception is
+       PaneJobAttributionTests (real Win32 job objects); it needs the Windows
+       host project and only compiles into the net8.0-windows build. -->
   <PropertyGroup>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <TargetFrameworks>net8.0;net8.0-windows</TargetFrameworks>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net8.0-windows'">
     <UseWPF>true</UseWPF>
     <Platforms>x64</Platforms>
     <PlatformTarget>x64</PlatformTarget>
     <RuntimeIdentifier>win10-x64</RuntimeIdentifier>
     <SelfContained>false</SelfContained>
-    <IsPackable>false</IsPackable>
   </PropertyGroup>
 
   <ItemGroup>
@@ -23,11 +28,18 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Perch.Core\Perch.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0-windows'">
     <ProjectReference Include="..\Perch\Perch.csproj" />
   </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' != 'net8.0-windows'">
+    <Compile Remove="PaneJobAttributionTests.cs" />
+  </ItemGroup>
 
-  <!-- NOTE: GcloudLabels deliberately is NOT linked in here. Perch.csproj already
+  <!-- NOTE: GcloudLabels deliberately is NOT linked in here. Perch.Core already
        compiles it (host and hook must sanitize identically), and this project
-       references Perch — linking it again would define the type twice (CS0436). -->
+       references Perch.Core — linking it again would define the type twice
+       (CS0436). -->
 
 </Project>

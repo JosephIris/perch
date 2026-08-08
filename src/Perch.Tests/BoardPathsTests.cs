@@ -50,18 +50,32 @@ public class BoardPathsTests
         Assert.True(BoardPaths.LooksLikeAPath("does/not/exist.ts"));
     }
 
-    [Fact]
+    [WindowsFact]
     public void TryAbsoluteResolvesRelativeToTheRepo()
     {
         var got = BoardPaths.TryAbsolute("src/a.ts", @"C:\repo");
         Assert.Equal(@"C:\repo\src\a.ts", got);
     }
 
-    [Fact]
+    [UnixFact]
+    public void TryAbsoluteResolvesRelativeToTheRepo_Unix()
+    {
+        var got = BoardPaths.TryAbsolute("src/a.ts", "/repo");
+        Assert.Equal("/repo/src/a.ts", got);
+    }
+
+    [WindowsFact]
     public void TryAbsoluteKeepsAnAlreadyRootedPath()
     {
         var got = BoardPaths.TryAbsolute(@"D:\elsewhere\notes.md", @"C:\repo");
         Assert.Equal(@"D:\elsewhere\notes.md", got);
+    }
+
+    [UnixFact]
+    public void TryAbsoluteKeepsAnAlreadyRootedPath_Unix()
+    {
+        var got = BoardPaths.TryAbsolute("/elsewhere/notes.md", "/repo");
+        Assert.Equal("/elsewhere/notes.md", got);
     }
 
     [Fact]

@@ -360,13 +360,21 @@ public class BoardStoreTests
 
     // ---- path containment -------------------------------------------------
 
-    [Fact]
+    [WindowsFact]
     public void ToRepoRelative_InsideTheRepoBecomesAForwardSlashPath()
     {
         Assert.Equal("src/auth/session.ts",
             BoardStore.ToRepoRelative(@"C:\dev\perch", @"C:\dev\perch\src\auth\session.ts"));
         // Trailing separator on the root must not change the answer.
         Assert.Equal("a/b.txt", BoardStore.ToRepoRelative(@"C:\dev\perch\", @"C:\dev\perch\a\b.txt"));
+    }
+
+    [UnixFact]
+    public void ToRepoRelative_InsideTheRepoBecomesAForwardSlashPath_Unix()
+    {
+        Assert.Equal("src/auth/session.ts",
+            BoardStore.ToRepoRelative("/dev/perch", "/dev/perch/src/auth/session.ts"));
+        Assert.Equal("a/b.txt", BoardStore.ToRepoRelative("/dev/perch/", "/dev/perch/a/b.txt"));
     }
 
     [Fact]
@@ -382,11 +390,17 @@ public class BoardStoreTests
         Assert.Null(BoardStore.ToRepoRelative(@"C:\dev\perch", @"D:\elsewhere\x"));
     }
 
-    [Fact]
+    [WindowsFact]
     public void ToRepoRelative_NormalizesBeforeComparingSoDotSegmentsCannotSneakPast()
     {
         // "a/../b.txt" is inside; the naive string check would keep the "..".
         Assert.Equal("b.txt", BoardStore.ToRepoRelative(@"C:\dev\perch", @"C:\dev\perch\a\..\b.txt"));
+    }
+
+    [UnixFact]
+    public void ToRepoRelative_NormalizesBeforeComparing_Unix()
+    {
+        Assert.Equal("b.txt", BoardStore.ToRepoRelative("/dev/perch", "/dev/perch/a/../b.txt"));
     }
 
     [Fact]

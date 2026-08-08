@@ -51,9 +51,11 @@ internal sealed record LocalListener(
 /// Every layer degrades to "no servers" rather than throwing into the UI.
 internal sealed class LocalPoller
 {
-    private readonly ISystemProbe _probe;
+    private readonly ISystemProbe? _probe;
 
-    public LocalPoller(ISystemProbe probe) => _probe = probe;
+    /// Null probe is legal for tests that only exercise Build(); ScanAsync
+    /// then reports "scan failed" rather than throwing.
+    public LocalPoller(ISystemProbe? probe = null) => _probe = probe;
 
     /// Runtimes a dev server actually runs on. Used ONLY to keep the "other"
     /// bucket (servers Perch didn't launch) about dev work instead of a wall of
@@ -74,6 +76,7 @@ internal sealed class LocalPoller
     public async Task<IReadOnlyList<LocalListener>?> ScanAsync(
         IReadOnlyList<PaneProc> panes, CancellationToken ct = default)
     {
+        if (_probe == null) return null;
         try
         {
             // The probe is syscalls plus one small WMI query — fast, but not

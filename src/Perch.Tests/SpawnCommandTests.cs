@@ -48,7 +48,7 @@ public class SpawnCommandTests
         Assert.DoesNotContain("\"", cmd);
     }
 
-    [Fact]
+    [WindowsFact]
     public void TabCommand_SurvivesTheShellSplice_WithTheNameStillOneToken()
     {
         var cmd = TabCommand("loc diff fix", "abc-123");
