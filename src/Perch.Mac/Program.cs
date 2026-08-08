@@ -35,6 +35,38 @@ internal static class Program
         }
         catch (Exception ex) { Log.Error("Startup.path", ex); }
 
+        // The PATH prepend above is not enough on mac: nearly every ~/.zshrc
+        // re-prepends its own bin dirs, so an interactive pane shell would
+        // resolve the REAL claude instead of our wrap shim and perch would
+        // never see the agent's hooks. Same trick as VS Code's shell
+        // integration: point ZDOTDIR at a wrapper that sources the user's
+        // config first, then puts the tools dir back in front.
+        try
+        {
+            if (Directory.Exists(toolsDir))
+            {
+                var zdot = Path.Combine(AppPaths.DataRoot, "perch", "zdot");
+                Directory.CreateDirectory(zdot);
+                File.WriteAllText(Path.Combine(zdot, ".zshenv"),
+                    "# perch pane shell: forward to the user's zshenv.\n" +
+                    "[[ -f \"$HOME/.zshenv\" ]] && source \"$HOME/.zshenv\"\n");
+                File.WriteAllText(Path.Combine(zdot, ".zprofile"),
+                    "[[ -f \"$HOME/.zprofile\" ]] && source \"$HOME/.zprofile\"\n");
+                File.WriteAllText(Path.Combine(zdot, ".zshrc"),
+                    "# perch pane shell: run the user's config, then guarantee the\n" +
+                    "# bundled tools (perch CLI + claude/codex wrap shims) win the\n" +
+                    "# PATH race — a user rc that prepends its own bin dirs would\n" +
+                    "# otherwise resolve the real claude and skip perch's hooks.\n" +
+                    "[[ -f \"$HOME/.zshrc\" ]] && source \"$HOME/.zshrc\"\n" +
+                    "if [[ -n \"$PERCH_TOOLS_DIR\" ]]; then\n" +
+                    "  export PATH=\"$PERCH_TOOLS_DIR:$PATH\"\n" +
+                    "fi\n");
+                UnixPty.ExtraEnv["ZDOTDIR"] = zdot;
+                UnixPty.ExtraEnv["PERCH_TOOLS_DIR"] = toolsDir;
+            }
+        }
+        catch (Exception ex) { Log.Error("Startup.zdot", ex); }
+
         var webRoot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
         using var server = new StaticServer(webRoot);
         var ui = new AppDispatcher();

@@ -110,6 +110,10 @@ internal sealed class UnixPty : IPty
     }
 
 
+    /// Extra per-host environment for every pane child (ZDOTDIR wrapper,
+    /// PERCH_TOOLS_DIR). Assigned once at startup by Program.
+    public static readonly System.Collections.Generic.Dictionary<string, string> ExtraEnv = new();
+
     /// The child inherits our environment (PATH already carries the tools dir
     /// — see Program) plus terminal identity. TERM_PROGRAM=Apple_Terminal is
     /// load-bearing: macOS's stock /etc/zshrc emits OSC 7 cwd reports for
@@ -121,8 +125,10 @@ internal sealed class UnixPty : IPty
         {
             var k = (string)e.Key;
             if (k is "TERM" or "TERM_PROGRAM" or "TERM_PROGRAM_VERSION") continue;
+            if (ExtraEnv.ContainsKey(k)) continue;
             env.Add($"{k}={e.Value}");
         }
+        foreach (var kv in ExtraEnv) env.Add($"{kv.Key}={kv.Value}");
         env.Add("TERM=xterm-256color");
         env.Add("COLORTERM=truecolor");
         env.Add("TERM_PROGRAM=Apple_Terminal");
