@@ -269,13 +269,16 @@ const projectSessions: SessionView[] = [
     branch: "dag-fixes", doneAtMs: FOUR_MIN_AGO, linesAdded: 52, linesDeleted: 18, filesChanged: 3,
   }),
   // Two SLEPT tabs (the moon button) — they file into the project's collapsed
-  // "Idle" drawer instead of the active list, newest-slept first. Both wear the
-  // hollow ring, because sleeping a tab stops its agent. Two of them (not one)
-  // so the drawer's own tree connectors are visible: a trunk with an elbow.
+  // "Idle" drawer instead of the active list, newest-slept first. Two of them
+  // (not one) so the drawer's own tree connectors are visible: a trunk with an
+  // elbow. The first one keeps agentState "done" ON PURPOSE: you usually sleep
+  // a tab right after its agent hands the turn back, so the row arrives in the
+  // drawer carrying a green dot. Dormant has to win over that — see the
+  // [data-state="dormant"] rule in style.css.
   projectTab({
     id: "s-tab-sleep1", title: "cleanup ds2 gcs", dormant: true,
-    rootPane: leaf({ name: "cleanup ds2 gcs", agentState: "idle", branch: "main" }),
-    agentState: "idle", doneAtMs: 0, lastActivity: "3d ago",
+    rootPane: leaf({ name: "cleanup ds2 gcs", agentState: "done", branch: "main" }),
+    agentState: "done", doneAtMs: 0, lastActivity: "3d ago",
   }),
   projectTab({
     id: "s-tab-sleep2", title: "non_att_today", dormant: true,

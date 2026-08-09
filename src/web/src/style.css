@@ -355,6 +355,21 @@ ul { list-style: none; padding: 0; margin: 0; }
   background: var(--color-state-error);
   box-shadow: none;
 }
+/* Dormant (slept) — solid tertiary gray, no ring. Deliberately NOT the moon
+ * glyph: the moon is the VERB (the sleep button), and one symbol meaning both
+ * "put this to sleep" and "is asleep" reads as a button on a row where there
+ * is no button. Staying in the dot family also keeps the three readings
+ * distinguishable at 8px without a legend:
+ *   colored fill  → live, agent has something to say
+ *   hollow ring   → live, agent at rest
+ *   gray fill     → not running at all
+ * Gray-filled is the offline convention everywhere else (Slack, Teams), and
+ * it can't be misread as green-means-go the way the inherited "done" dot was. */
+.session-item__dot[data-state="dormant"] {
+  background: var(--color-text-tertiary);
+  box-shadow: none;
+  opacity: 0.65;
+}
 
 /* Status column wrapper — fills the fixed 10px grid slot and anchors the
  * serving pip. relative so the absolutely-positioned pip rides its corner. */

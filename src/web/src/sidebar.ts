@@ -1024,7 +1024,12 @@ export class Sidebar {
     } else {
       statusEl = document.createElement("span");
       statusEl.className = "session-item__dot";
-      statusEl.dataset.state = s.agentState;
+      // A slept tab keeps whatever agentState it wore when you slept it — and
+      // you usually sleep one right after the agent hands the turn back, so the
+      // row lands in the Idle drawer still showing a green "done" dot. Inside a
+      // drawer literally labelled Idle that reads as live. Dormant outranks the
+      // agent state: the agent isn't running, so it has no state to report.
+      statusEl.dataset.state = s.dormant ? "dormant" : s.agentState;
     }
     // Status column is a fixed 10px slot (keeps every title left-aligned). A tab
     // that owns a live dev server gets a small amber "serving" pip in the corner
