@@ -3457,9 +3457,9 @@ public partial class MainWindow : FluentWindow
         catch (Exception ex) { Log.Error("OnProjectTabNew", ex); }
     }
 
-    // Rename a project, or override what its worktrees get seeded with. Both
-    // optional — only the keys present are applied, so the settings dialog can
-    // send a partial update.
+    // Rename a project, hide/show it, or override what its worktrees get
+    // seeded with. All optional — only the keys present are applied, so the
+    // settings dialog can send a partial update.
     private void OnProjectUpdate(ProjectUpdateMsg msg)
     {
         var p = _projects.ById(msg.Id);
@@ -3469,6 +3469,11 @@ public partial class MainWindow : FluentWindow
         if (msg.Name is string n && n.Trim().Length > 0 && p.Name != n.Trim())
         {
             p.Name = n.Trim();
+            dirty = true;
+        }
+        if (msg.Hidden is bool hidden && p.Hidden != hidden)
+        {
+            p.Hidden = hidden;
             dirty = true;
         }
         if (msg.SeedPaths is List<string> seeds)
@@ -3533,6 +3538,7 @@ public partial class MainWindow : FluentWindow
                     name = p.Name,
                     path = p.Path,
                     seedPaths = (p.SeedPaths ?? new List<string>()).ToArray(),
+                    hidden = p.Hidden,
                 }).ToArray(),
                 appVersion = _updates.CurrentVersion,
                 updatable = _updates.IsUpdatable,

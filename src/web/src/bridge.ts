@@ -212,9 +212,11 @@ export type OutMessage =
   | { type: "project.add"; path: string; name?: string }
   /* Unregister. The project's tabs are NOT closed — they fall back to "Other". */
   | { type: "project.remove"; id: string }
-  /* Rename a project, or override what its worktrees get seeded with. An EMPTY
-   * seedPaths means "inherit the global list", not "seed nothing". */
-  | { type: "project.update"; id: string; name?: string; seedPaths?: string[] }
+  /* Rename a project, hide/show it in the sidebar, or override what its
+   * worktrees get seeded with. An EMPTY seedPaths means "inherit the global
+   * list", not "seed nothing". `hidden` folds the project into (or out of)
+   * project mode's "Hidden" drawer without touching the registration. */
+  | { type: "project.update"; id: string; name?: string; seedPaths?: string[]; hidden?: boolean }
   /* Create a tab under a project. `name` becomes the tab title, the branch
    * (slugified), and the cc session's --name. `worktree` cuts it its own git
    * worktree so parallel agents can't overwrite each other's files (and so the
@@ -464,6 +466,8 @@ export type ProjectView = {
   id: string;
   name: string;
   path: string;
+  /* Folded into project mode's "Hidden" drawer. Absent reads as visible. */
+  hidden?: boolean;
 };
 
 export type StateMessage = {
@@ -662,9 +666,9 @@ export type SettingsDataMessage = {
   /* Default list of things seeded into a new worktree (.env*, node_modules, …).
    * A project can override it — see `projects[].seedPaths`. */
   worktreeSeedPaths?: string[];
-  /* Registered projects, so Settings can rename / re-seed / unregister them.
-   * An empty seedPaths means the project inherits the global list. */
-  projects?: { id: string; name: string; path: string; seedPaths: string[] }[];
+  /* Registered projects, so Settings can rename / re-seed / hide / unregister
+   * them. An empty seedPaths means the project inherits the global list. */
+  projects?: { id: string; name: string; path: string; seedPaths: string[]; hidden?: boolean }[];
   /* The running version (the release this copy installed from), or null when
    * it can't be determined (dev `dotnet run` / portable). Shown in the
    * Updates row. */

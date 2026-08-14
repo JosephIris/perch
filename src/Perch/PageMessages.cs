@@ -407,8 +407,9 @@ internal sealed record SettingsSaveMsg
     public List<string>? WorktreeSeedPaths { get; init; }
 }
 
-/// Edit a registered project: rename it, or override what gets seeded into its
-/// worktrees. Every field optional — only the keys present are applied.
+/// Edit a registered project: rename it, hide/show it in the sidebar, or
+/// override what gets seeded into its worktrees. Every field optional — only
+/// the keys present are applied.
 internal sealed record ProjectUpdateMsg
 {
     public required Guid Id { get; init; }
@@ -417,6 +418,9 @@ internal sealed record ProjectUpdateMsg
     /// project that wants nothing seeded is vanishingly rare next to one where
     /// the user just cleared the box.
     public List<string>? SeedPaths { get; init; }
+    /// Fold the project into (or out of) the sidebar's "Hidden" drawer. The
+    /// registration itself is untouched — see Project.Hidden.
+    public bool? Hidden { get; init; }
 }
 
 /// Close a session. `removeWorktree` additionally reclaims its worktree folder

@@ -108,6 +108,7 @@ internal static class StateProjection
                 id = p.Id.ToString("D"),
                 name = p.Name,
                 path = p.Path,
+                hidden = p.Hidden,
             }).ToArray(),
             sessions = store.Sessions.Select(ProjectSession).ToArray(),
             // Recently-closed sessions for the sidebar's restore list. Just

@@ -27,6 +27,7 @@ import { elapsedSpan, agoSpan, ageSpan } from "./elapsed.js";
 import { spinnerSpan } from "./spinner.js";
 import { attachCommitsHover, openCommitsLightbox } from "./commits-view.js";
 import { showPairMenu } from "./pair-menu.js";
+import { showProjectMenu } from "./project-menu.js";
 
 /** Flatten a pane tree to its leaves. */
 function leaves(node: PaneTreeView): Array<Extract<PaneTreeView, { kind: "leaf" }>> {
@@ -201,6 +202,47 @@ export function groupByProject(
   };
 }
 
+/**
+ * Partitions project groups into the ones the list shows and the ones folded
+ * into the "Hidden" drawer. Hiding is a property of the REGISTRATION (host-
+ * persisted Project.Hidden), not of the tabs: a hidden project keeps its tabs
+ * filed under it — they render inside the drawer when it's open, and while
+ * it's shut the drawer head wears their most-urgent state as a dot, so hiding
+ * a project can never hide an agent that's blocked on you.
+ */
+export function splitHidden(groups: ProjectGroup[]): {
+  shown: ProjectGroup[];
+  hidden: ProjectGroup[];
+} {
+  return {
+    shown: groups.filter((g) => !g.project.hidden),
+    hidden: groups.filter((g) => g.project.hidden),
+  };
+}
+
+/** The right-pointing chevron every fold in the sidebar turns. An SVG, not a
+ *  "›" glyph: the glyph's ink sits off-centre in its em box, so rotating it
+ *  swung the mark around a point that isn't its middle — it visibly lurched
+ *  sideways instead of pivoting. An SVG rotates about the centre of its own
+ *  viewBox. Callers set the data attribute their CSS turns on. */
+function chevronSvg(className: string): SVGSVGElement {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("class", className);
+  svg.setAttribute("viewBox", "0 0 12 12");
+  svg.setAttribute("width", "12");
+  svg.setAttribute("height", "12");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", "M4.5 2.5 L8 6 L4.5 9.5");   // points right; CSS turns it down
+  path.setAttribute("stroke", "currentColor");
+  path.setAttribute("stroke-width", "1.4");
+  path.setAttribute("stroke-linecap", "round");
+  path.setAttribute("stroke-linejoin", "round");
+  svg.appendChild(path);
+  return svg;
+}
+
 const COLLAPSED_KEY = "perch.projects.collapsed";
 
 export class Sidebar {
@@ -234,6 +276,15 @@ export class Sidebar {
 
   /** Same one-render opt-in as `justToggled`, for the Idle chevron. */
   private justToggledIdle: string | null = null;
+
+  /** Whether the "Hidden" drawer (hidden projects) is unfolded. NOT persisted,
+   *  same reasoning as `idleOpen`: hidden is the resting state you chose, and a
+   *  peek that outlived the session would just be the full list again, one
+   *  launch later. */
+  private hiddenOpen = false;
+
+  /** Same one-render opt-in as `justToggled`, for the drawer chevron. */
+  private justToggledHidden = false;
 
   /** Idle count per project as of the LAST render, so a slept tab can bump the
    *  count on a CLOSED group — where the count is the only signal that anything
@@ -591,44 +642,21 @@ export class Sidebar {
     // of the session list. The two modes now answer different questions, and
     // Sessions mode (one click away) is where an unfiled session lives.
     const { groups } = groupByProject(sessions, projects);
+    const { shown, hidden } = splitHidden(groups);
 
-    for (const { project, tabs } of groups) {
-      const collapsed = this.collapsed.has(project.id);
-      const animate = this.justToggled === project.id;
-      frag.appendChild(
-        this.projectHeader(project, tabs, collapsed, aggregateState(tabs), animate)
-      );
-      // Collapsed means collapsed — every tab folds away, including the active
-      // one. Keeping the active tab visible under a closed chevron made the
-      // control contradict itself: the arrow said "shut" while a row sat right
-      // below it. You don't lose your place — the pane header and status bar
-      // still name the session — and an agent that needs you can't hide, because
-      // the header wears its group's state as a dot.
-      if (!collapsed && tabs.length) {
-        // Tabs you deliberately slept live in their own drawer at the foot of
-        // the branch, so the active list only ever shows work in progress.
-        // Both partitions are stable, so each keeps the host's order — which
-        // for these two runs already means newest-first (see PlaceAtProjectTop
-        // / PlaceAtDormantTop).
-        const live = tabs.filter((t) => !t.dormant);
-        const idle = tabs.filter((t) => t.dormant);
+    for (const g of shown) this.appendGroup(frag, g, activeId);
 
-        if (live.length) {
-          const list = this.sessionList(live, activeId, true);
-          // A drawer below means the branch keeps going — don't close the elbow.
-          if (idle.length) list.classList.add("session-list--continues");
-          // Only the just-unfolded group animates in. (Folding shut is immediate:
-          // animating a removal means keeping the node alive past its state, and a
-          // fold that lingers reads as lag, not polish.)
-          if (animate) list.classList.add("session-list--enter");
-          frag.appendChild(list);
-        }
-        if (idle.length) frag.appendChild(this.idleGroup(project.id, idle, activeId));
-        this.lastIdleCount.set(project.id, idle.length);
-      }
+    // Projects you've hidden fold into one drawer at the foot of the list.
+    // Open, they render as normal (dimmed) groups so their tabs stay
+    // reachable; right-click a header to show the project again.
+    if (hidden.length) {
+      frag.appendChild(this.hiddenDrawer(hidden));
+      if (this.hiddenOpen) for (const g of hidden) this.appendGroup(frag, g, activeId);
     }
+
     this.justToggled = null;   // one render only
     this.justToggledIdle = null;
+    this.justToggledHidden = false;
 
     // A PERMANENT way to add another project. This used to live only in the
     // empty state — which vanishes the moment you register your first repo, so
@@ -636,6 +664,91 @@ export class Sidebar {
     // and have nothing anywhere to act on them.
     frag.appendChild(this.renderAddProject());
     return frag;
+  }
+
+  /** One project group: its header plus (unless collapsed) the live tab list
+   *  and Idle drawer. Shared by the visible list and the open Hidden drawer,
+   *  so a hidden project's group renders exactly like a shown one. */
+  private appendGroup(
+    frag: DocumentFragment,
+    { project, tabs }: ProjectGroup,
+    activeId: string
+  ): void {
+    const collapsed = this.collapsed.has(project.id);
+    const animate = this.justToggled === project.id;
+    frag.appendChild(
+      this.projectHeader(project, tabs, collapsed, aggregateState(tabs), animate)
+    );
+    // Collapsed means collapsed — every tab folds away, including the active
+    // one. Keeping the active tab visible under a closed chevron made the
+    // control contradict itself: the arrow said "shut" while a row sat right
+    // below it. You don't lose your place — the pane header and status bar
+    // still name the session — and an agent that needs you can't hide, because
+    // the header wears its group's state as a dot.
+    if (!collapsed && tabs.length) {
+      // Tabs you deliberately slept live in their own drawer at the foot of
+      // the branch, so the active list only ever shows work in progress.
+      // Both partitions are stable, so each keeps the host's order — which
+      // for these two runs already means newest-first (see PlaceAtProjectTop
+      // / PlaceAtDormantTop).
+      const live = tabs.filter((t) => !t.dormant);
+      const idle = tabs.filter((t) => t.dormant);
+
+      if (live.length) {
+        const list = this.sessionList(live, activeId, true);
+        // A drawer below means the branch keeps going — don't close the elbow.
+        if (idle.length) list.classList.add("session-list--continues");
+        // Only the just-unfolded group animates in. (Folding shut is immediate:
+        // animating a removal means keeping the node alive past its state, and a
+        // fold that lingers reads as lag, not polish.)
+        if (animate) list.classList.add("session-list--enter");
+        frag.appendChild(list);
+      }
+      if (idle.length) frag.appendChild(this.idleGroup(project.id, idle, activeId));
+      this.lastIdleCount.set(project.id, idle.length);
+    }
+  }
+
+  /** The "Hidden" drawer head: every hidden project folded into one quiet row.
+   *  Shut, it wears the hidden tabs' most-urgent state as a dot — hiding a
+   *  project must never be able to hide an agent that's blocked on you, the
+   *  same rule the collapsed header dot enforces. */
+  private hiddenDrawer(hidden: ProjectGroup[]): HTMLElement {
+    const open = this.hiddenOpen;
+    const head = document.createElement("button");
+    head.type = "button";
+    head.className = "hidden-drawer__head";
+    head.setAttribute("aria-expanded", String(open));
+
+    const chev = chevronSvg("hidden-drawer__chev");
+    chev.dataset.open = String(open);
+    if (this.justToggledHidden) chev.classList.add("hidden-drawer__chev--turning");
+    head.appendChild(chev);
+
+    const label = document.createElement("span");
+    label.textContent = "Hidden";
+    head.appendChild(label);
+
+    const count = document.createElement("span");
+    count.className = "hidden-drawer__count";
+    count.textContent = String(hidden.length);
+    head.appendChild(count);
+
+    const state = aggregateState(hidden.flatMap((g) => g.tabs));
+    if (!open && state !== "idle") {
+      const dot = document.createElement("span");
+      dot.className = "hidden-drawer__state";
+      dot.dataset.state = state;
+      dot.title = `Hidden projects: ${state}`;
+      head.appendChild(dot);
+    }
+
+    head.addEventListener("click", () => {
+      this.hiddenOpen = !this.hiddenOpen;
+      this.justToggledHidden = true;   // animate the chevron, this render only
+      this.rerender?.();
+    });
+    return head;
   }
 
   // `nested` = a project's tab list. Denser than the flat session list: the
@@ -707,8 +820,19 @@ export class Sidebar {
     const tabCount = tabs.length;
     const row = document.createElement("div");
     row.className = "project-header";
+    // Inside the open Hidden drawer the group renders in full, just dimmed —
+    // enough to say "you put this away" without making its tabs second-class.
+    if (p.hidden) row.classList.add("project-header--hidden");
     row.dataset.projectId = p.id;
     row.draggable = true;   // drag-reorder handle for the whole group
+
+    // Right-click: hide the project (or show it again). The one header action
+    // that shouldn't spend a permanent button on itself.
+    row.addEventListener("contextmenu", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      showProjectMenu(ev.clientX, ev.clientY, p);
+    });
 
     // The header body is the collapse toggle. A button (not the whole row) so
     // the "+" stays independently clickable and keyboard-reachable.
@@ -724,25 +848,8 @@ export class Sidebar {
     toggle.disabled = empty;
     if (!empty) toggle.setAttribute("aria-expanded", String(!collapsed));
 
-    // An SVG chevron, not a "›" glyph. The glyph's ink sits off-centre in its em
-    // box, so rotating it swung the mark around a point that isn't its middle —
-    // it visibly lurched sideways instead of pivoting. An SVG rotates about the
-    // centre of its own viewBox, which is what the eye expects.
-    const chev = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    chev.setAttribute("class", "project-header__chev");
-    chev.setAttribute("viewBox", "0 0 12 12");
-    chev.setAttribute("width", "12");
-    chev.setAttribute("height", "12");
-    chev.setAttribute("fill", "none");
-    chev.setAttribute("aria-hidden", "true");
+    const chev = chevronSvg("project-header__chev");
     chev.dataset.collapsed = String(collapsed);
-    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    path.setAttribute("d", "M4.5 2.5 L8 6 L4.5 9.5");   // points right; CSS turns it down
-    path.setAttribute("stroke", "currentColor");
-    path.setAttribute("stroke-width", "1.4");
-    path.setAttribute("stroke-linecap", "round");
-    path.setAttribute("stroke-linejoin", "round");
-    chev.appendChild(path);
     if (animate) chev.classList.add("project-header__chev--turning");
     // Keep the slot even when empty, so names stay aligned down the column.
     if (empty) chev.style.visibility = "hidden";
@@ -830,19 +937,8 @@ export class Sidebar {
     head.className = "idle-group__head";
     head.setAttribute("aria-expanded", String(open));
 
-    const chev = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    chev.setAttribute("class", "idle-group__chev");
-    chev.setAttribute("viewBox", "0 0 12 12");
-    chev.setAttribute("fill", "none");
-    chev.setAttribute("aria-hidden", "true");
+    const chev = chevronSvg("idle-group__chev");
     chev.dataset.open = String(open);
-    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    path.setAttribute("d", "M4.5 2.5 L8 6 L4.5 9.5");
-    path.setAttribute("stroke", "currentColor");
-    path.setAttribute("stroke-width", "1.4");
-    path.setAttribute("stroke-linecap", "round");
-    path.setAttribute("stroke-linejoin", "round");
-    chev.appendChild(path);
     if (this.justToggledIdle === projectId) chev.classList.add("idle-group__chev--turning");
     head.appendChild(chev);
 

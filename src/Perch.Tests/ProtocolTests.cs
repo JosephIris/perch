@@ -310,6 +310,11 @@ public class ProtocolTests
             $"{{\"type\":\"project.update\",\"id\":\"{G1}\",\"seedPaths\":[\"src/web/node_modules\"]}}");
         Assert.Null(upd.Name);                       // absent → leave the name alone
         Assert.Equal(new[] { "src/web/node_modules" }, upd.SeedPaths);
+        Assert.Null(upd.Hidden);                     // absent → leave visibility alone
+        Assert.True(Round<ProjectUpdateMsg>(
+            $"{{\"type\":\"project.update\",\"id\":\"{G1}\",\"hidden\":true}}").Hidden);
+        Assert.False(Round<ProjectUpdateMsg>(
+            $"{{\"type\":\"project.update\",\"id\":\"{G1}\",\"hidden\":false}}").Hidden);
     }
 
     [Fact]

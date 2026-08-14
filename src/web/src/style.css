@@ -1946,8 +1946,11 @@ button.pane__chip--ports:hover {
 
 /* --- Pair menu (sidebar row right-click) --------------------------------
  * Same surface recipe as the model menu; its own class because the contents
- * differ (section label, per-tab candidates, hints). */
-.pair-menu {
+ * differ (section label, per-tab candidates, hints). The project menu
+ * (project-header right-click) shares every rule — grouped selectors, so the
+ * two popups can't drift apart. */
+.pair-menu,
+.project-menu {
   position: fixed;
   display: flex;
   flex-direction: column;
@@ -1970,7 +1973,8 @@ button.pane__chip--ports:hover {
   font-size: 11px;
   color: var(--color-text-tertiary);
 }
-.pair-menu__item {
+.pair-menu__item,
+.project-menu__item {
   display: flex;
   align-items: center;
   gap: var(--sp-8);
@@ -1984,17 +1988,21 @@ button.pane__chip--ports:hover {
   transition: background var(--dur-fast) var(--ease-entry);
 }
 .pair-menu__item:hover,
-.pair-menu__item:focus-visible {
+.pair-menu__item:focus-visible,
+.project-menu__item:hover,
+.project-menu__item:focus-visible {
   background: var(--color-subtle-secondary);
   outline: none;
 }
-.pair-menu__label {
+.pair-menu__label,
+.project-menu__label {
   flex: 1 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.pair-menu__hint {
+.pair-menu__hint,
+.project-menu__hint {
   font-family: var(--font-small);
   font-size: 11px;
   color: var(--color-text-tertiary);
@@ -2737,6 +2745,11 @@ button.pane__chip--ports:hover {
 .project-header__state[data-state="permission"] { background: var(--color-state-permission); }
 .project-header__state[data-state="done"]       { background: var(--color-state-done); }
 
+/* A hidden project's group, revealed inside the open Hidden drawer. Dimmed a
+ * step — "you put this away" — but fully functional: fold, "+", drag, tabs. */
+.project-header--hidden .project-header__name { color: var(--color-text-tertiary); }
+.project-header--hidden .project-header__toggle:disabled { color: var(--color-text-tertiary); }
+
 /* ── Nested tab rows ───────────────────────────────────────────────────────
  * A project's tabs. Deliberately DENSER than the flat session list: the header
  * already groups them, so the per-row card frame is redundant weight, and
@@ -2966,6 +2979,65 @@ button.pane__chip--ports:hover {
 .session-list--idle > .session-item--nested::before,
 .session-list--idle > .session-item--nested::after { left: 29px; }
 .session-list--idle .session-item__title { color: var(--color-text-secondary); }
+
+/* ── The Hidden drawer ─────────────────────────────────────────────────────
+ * Projects you've hidden, folded into one quiet row at the foot of the list.
+ * Same voice as the Idle drawer, but top-level: it groups whole projects, not
+ * a branch's tabs, so no tree connectors and it aligns with the headers. */
+.hidden-drawer__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin-top: var(--sp-8);
+  padding: 4px var(--sp-8);
+  border: 0;
+  border-radius: var(--r-input);
+  background: transparent;
+  font-family: var(--font-small);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+  text-align: left;
+  cursor: pointer;
+}
+.hidden-drawer__head:hover {
+  background: var(--color-subtle-secondary);
+  color: var(--color-text-secondary);
+}
+.hidden-drawer__head[aria-expanded="true"] { color: var(--color-text-secondary); }
+.hidden-drawer__head:focus-visible {
+  outline: 1px solid var(--color-accent);
+  outline-offset: -1px;
+}
+.hidden-drawer__chev {
+  flex: none;
+  width: 11px;
+  height: 11px;
+  transform: rotate(0deg);
+  transform-origin: 50% 50%;
+}
+.hidden-drawer__chev[data-open="true"] { transform: rotate(90deg); }
+.hidden-drawer__chev--turning[data-open="true"] {
+  animation: chev-open var(--dur-normal) var(--ease-entry);
+}
+.hidden-drawer__chev--turning[data-open="false"] {
+  animation: chev-close var(--dur-normal) var(--ease-entry);
+}
+.hidden-drawer__count { font-variant-numeric: tabular-nums; }
+/* Shut, this dot is the only thing standing between an agent blocked inside a
+ * hidden project and total invisibility — same palette as every state dot. */
+.hidden-drawer__state {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  margin-left: auto;
+  border-radius: 50%;
+  background: var(--color-state-idle);
+}
+.hidden-drawer__state[data-state="working"]    { background: var(--color-state-working); }
+.hidden-drawer__state[data-state="waiting"]    { background: var(--color-state-waiting); }
+.hidden-drawer__state[data-state="permission"] { background: var(--color-state-permission); }
+.hidden-drawer__state[data-state="done"]       { background: var(--color-state-done); }
 
 /* A tab that just changed sides arrives at its new home. One render only (see
  * Sidebar.regrouped) — the sidebar rebuilds every push, so an unconditional
@@ -3594,11 +3666,16 @@ button.pane__chip--ports:hover {
   min-width: 0;
   width: auto;
 }
+.settings-project__hide,
 .settings-project__remove {
   flex: none;
   padding: 5px var(--sp-12);
   font-size: var(--type-caption-size);
 }
+/* Hidden registration: the row dims to echo the sidebar's treatment. The
+ * controls stay full-strength — Show is the row's point. */
+.settings-project--hidden .settings-project__name,
+.settings-project--hidden .settings-project__path { color: var(--color-text-tertiary); }
 .settings-project__path {
   overflow: hidden;
   text-overflow: ellipsis;

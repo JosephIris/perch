@@ -169,6 +169,7 @@ function renderProjectList(msg: SettingsDataMessage): void {
   for (const p of projects) {
     const row = document.createElement("div");
     row.className = "settings-project";
+    if (p.hidden) row.classList.add("settings-project--hidden");
 
     const head = document.createElement("div");
     head.className = "settings-project__head";
@@ -190,6 +191,25 @@ function renderProjectList(msg: SettingsDataMessage): void {
       if (e.key === "Enter") name.blur();
     });
     head.appendChild(name);
+
+    // Hide ⇄ show in the sidebar. No confirm — it's fully reversible and the
+    // button itself flips to the undo. The sidebar's project mode folds hidden
+    // projects into its "Hidden" drawer.
+    const hide = document.createElement("button");
+    hide.type = "button";
+    hide.className = "settings-btn settings-btn--subtle settings-project__hide";
+    hide.textContent = p.hidden ? "Show" : "Hide";
+    hide.title = p.hidden
+      ? "Show this project in the sidebar again"
+      : "Fold this project into the sidebar's Hidden drawer";
+    hide.addEventListener("click", () => {
+      send({ type: "project.update", id: p.id, hidden: !p.hidden });
+      // The host replies with a state push, not fresh settings.data — flip the
+      // local copy and re-render this list so the row doesn't read stale.
+      p.hidden = !p.hidden;
+      renderProjectList(msg);
+    });
+    head.appendChild(hide);
 
     const remove = document.createElement("button");
     remove.type = "button";

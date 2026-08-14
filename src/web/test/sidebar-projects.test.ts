@@ -11,7 +11,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { groupByProject, aggregateState, projectAhead } from "../src/sidebar.js";
+import { groupByProject, aggregateState, projectAhead, splitHidden } from "../src/sidebar.js";
 import type { SessionView, ProjectView, AgentStateName } from "../src/bridge.js";
 
 function sess(id: string, projectId = "", agentState: AgentStateName = "idle"): SessionView {
@@ -110,6 +110,46 @@ test("no projects at all → nothing is grouped", () => {
   const { groups, other } = groupByProject([sess("s1"), sess("s2", "p1")], []);
   assert.deepEqual(groups, []);
   assert.deepEqual(other.map((s) => s.id), ["s1", "s2"]);
+});
+
+// The Hidden drawer's partition. Hiding is a property of the REGISTRATION
+// (Project.Hidden on the host), not of the tabs: a hidden project moves as a
+// whole group, tabs still filed under it — never re-filed into `other`, never
+// dropped. The drawer head's urgency dot is aggregateState over exactly these
+// groups' tabs, so the flatten here is the same one the render does.
+
+test("splitHidden: hidden registrations fold out of the shown list", () => {
+  const groups = groupByProject([], [
+    proj("p1", "perch"),
+    { ...proj("p2", "old-fork"), hidden: true },
+    proj("p3", "site"),
+  ]).groups;
+  const { shown, hidden } = splitHidden(groups);
+  assert.deepEqual(shown.map((g) => g.project.id), ["p1", "p3"]);
+  assert.deepEqual(hidden.map((g) => g.project.id), ["p2"]);
+});
+
+test("splitHidden: an absent flag reads as visible", () => {
+  // ProjectView.hidden is optional — a host that never hid anything sends
+  // nothing, and every group must land in `shown`.
+  const { shown, hidden } = splitHidden(groupByProject([], [proj("p1", "perch")]).groups);
+  assert.equal(shown.length, 1);
+  assert.deepEqual(hidden, []);
+});
+
+test("splitHidden: a hidden project keeps its tabs — the group moves whole", () => {
+  // The tab of a hidden project must NOT fall into `other` (that's what
+  // unregistering does). It rides its group into the drawer, where the open
+  // drawer renders it and the shut drawer's dot answers for it.
+  const { groups, other } = groupByProject(
+    [sess("s1", "p2", "permission")],
+    [proj("p1", "perch"), { ...proj("p2", "old-fork"), hidden: true }]
+  );
+  const { hidden } = splitHidden(groups);
+  assert.deepEqual(other, []);
+  assert.deepEqual(hidden[0].tabs.map((t) => t.id), ["s1"]);
+  // The drawer-head dot: a blocked agent inside a hidden project still raises it.
+  assert.equal(aggregateState(hidden.flatMap((g) => g.tabs)), "permission");
 });
 
 // The dot on a COLLAPSED project header. Folding a group away must not be able
