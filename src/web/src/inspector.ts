@@ -265,18 +265,32 @@ function eventText(e: InspectorEventView): string {
 // the inspector can't import the workspace (main owns it), so the capability
 // is injected.
 
-let revealFn: ((paneId: string, needles: string[]) => boolean) | null = null;
+let revealFn: ((paneId: string, patterns: string[]) => boolean) | null = null;
 
-export function setInspectorReveal(fn: (paneId: string, needles: string[]) => boolean): void {
+export function setInspectorReveal(fn: (paneId: string, patterns: string[]) => boolean): void {
   revealFn = fn;
 }
 
-/** Candidate search strings for finding a journal row's text in the terminal,
- *  longest (most specific) first. The terminal shows a RENDERING of the text —
- *  markdown marks dropped, prompts prefixed, lines wrapped — so this cleans a
- *  snippet of the first substantial line and falls back to shorter prefixes
- *  before the caller gives up. Exported for test. */
-export function revealNeedles(text: string): string[] {
+/** Escape `s` for use as a regex, then let every run of whitespace in it match
+ *  any run of whitespace. That second half is the whole point: cc wraps a long
+ *  line by PADDING the row out to the terminal's full width and continuing on
+ *  the next one, so xterm — which joins a wrapped row with its continuation for
+ *  searching — hands the search a string with a fistful of extra spaces exactly
+ *  where the wrap fell. A literal search for the text as typed misses every
+ *  wrapped line, which is nearly all of them in a narrow pane. */
+function loose(s: string): string {
+  return s.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&").replace(/\s+/g, "\\s+");
+}
+
+/** Regex sources for finding a journal row's text in the terminal, longest
+ *  (most specific) first. The terminal shows a RENDERING of the text — markdown
+ *  marks dropped, prompts prefixed, lines wrapped — so this cleans a snippet of
+ *  the first substantial line and falls back to shorter prefixes before the
+ *  caller gives up. The fallbacks earn their keep on the agent's own prose: cc
+ *  hard-wraps that at the pane width (a real newline, not a soft wrap), and no
+ *  amount of whitespace tolerance can match across one, so the needle has to
+ *  get short enough to fit inside a single rendered row. Exported for test. */
+export function revealPatterns(text: string): string[] {
   // First line with some meat on it; a one-word opener ("ok\n…") would match
   // half the buffer.
   const line =
@@ -290,7 +304,9 @@ export function revealNeedles(text: string): string[] {
   const out = [clean.slice(0, 80)];
   if (clean.length > 40) out.push(clean.slice(0, 40));
   if (clean.length > 24) out.push(clean.slice(0, 24));
-  return out;
+  // Trim first: a slice that lands mid-space would otherwise demand trailing
+  // whitespace the row may not have.
+  return out.map((s) => loose(s.trim()));
 }
 
 /** Prompt indices whose turn was stopped before the agent did ANYTHING — the
@@ -343,8 +359,11 @@ function revealBtn(e: InspectorEventView): HTMLButtonElement {
     ev.stopPropagation();               // the row's own click expands in place
     const pane = paneId;
     if (!pane || !revealFn) return;
-    if (!revealFn(pane, revealNeedles(e.text)))
-      showToast("Couldn't find this in the terminal — it may have scrolled away", "error", null);
+    if (!revealFn(pane, revealPatterns(e.text)))
+      // Say WHY, not just "no". The honest answer is almost always age: the
+      // journal reads the whole transcript, the terminal only holds this
+      // agent process's last 10k lines.
+      showToast("Couldn't find this — it's older than the terminal's scrollback", "error", null);
   });
   return b;
 }

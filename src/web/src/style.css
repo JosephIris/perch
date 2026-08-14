@@ -6097,7 +6097,9 @@ body.show-dashboard .dashboard { display: flex; }
   display: flex;
   gap: var(--sp-8);
   margin: var(--sp-12) var(--sp-8) var(--sp-4);
-  padding: var(--sp-8) var(--sp-12);
+  /* Right padding is wider than left on purpose: it's the gutter the hover
+   * "show in the terminal" button lives in (see .row-reveal). */
+  padding: var(--sp-8) var(--sp-32) var(--sp-8) var(--sp-12);
   background: var(--color-subtle-secondary);
   border-radius: var(--r-pill);
 }
@@ -6163,13 +6165,18 @@ body.show-dashboard .dashboard { display: flex; }
 
 /* "Show in the terminal" — hover-revealed jump on prompts and beats. Absolute
  * in the row's top-right so the resting layout never shifts; opacity (not
- * display) so it can take focus-visible. */
+ * display) so it can take focus-visible.
+ *
+ * It sits in a gutter the row reserves for it always (padding-right --sp-32 on
+ * .turn-prompt / .beat), not over the prose: floating it above the text meant
+ * hovering a full-width row put a button on top of the words you were reading,
+ * with the text showing through its translucent fill. */
 .turn-prompt,
 .beat { position: relative; }
 .row-reveal {
   position: absolute;
   top: 4px;
-  right: 4px;
+  right: var(--sp-8);
   width: 18px;
   height: 18px;
   display: grid;
@@ -6233,7 +6240,9 @@ body.show-dashboard .dashboard { display: flex; }
   display: grid;
   grid-template-columns: 40px 1fr;
   gap: var(--sp-8);
-  padding: var(--sp-8) var(--sp-12);
+  /* Wider right padding: the "show in the terminal" gutter, same as the prompt
+   * row's, so prose never runs under the button. */
+  padding: var(--sp-8) var(--sp-32) var(--sp-8) var(--sp-12);
   margin: 0 var(--sp-8);
   border-radius: var(--r-pill);
 }
