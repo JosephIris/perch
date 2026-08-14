@@ -14,10 +14,24 @@ architecture packages cleanly.
 
 Everything Perch persists already goes through `AppPaths.DataRoot`
 (roaming AppData): the session store, settings, WebView2 user-data folder, and
-the error log. Under MSIX those writes are transparently redirected to the
-package's AppData, and every child process (shell, `perch.exe`, `claude`,
-`git`) inherits package identity, so the host and the CLI see the *same*
-redirected view. Nothing writes next to the read-only install dir:
+the error log. Under MSIX those writes land in the *real* user AppData, not a
+package-private copy: Windows 10 1903 dropped AppData redirection for packaged
+desktop apps, so `%APPDATA%\perch` is one folder shared by every install.
+Verified 2026-07-27 by installing the MSIX next to the Velopack build — the
+packaged window listed the unpackaged install's real sessions and no
+`LocalCache\Roaming\perch` was ever created.
+
+Two consequences, one good and one that needed a fix:
+
+- Switching channels is seamless. A user who installs from the Store after
+  using the GitHub `Setup.exe` keeps every session, project and setting.
+- Two installs running at once would race on `sessions.json`, last writer
+  wins. `SingleInstance` (`src/Perch/SingleInstance.cs`) closes that: a launch
+  whose data root is already claimed focuses the existing window and exits. The
+  mutex is keyed on the resolved data root, so `PERCH_DATA_DIR`-isolated test
+  instances still coexist with the real one.
+
+Nothing writes next to the read-only install dir:
 `wwwroot` and `tools/` are read/execute only, and the WebView2 user-data
 folder is explicitly pointed at AppData (`MainWindow.xaml.cs`), which is the
 single most common MSIX breakage already avoided.
