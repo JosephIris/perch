@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Paired sessions: full flow</title>
+<style>
+  :root{
+    --surface:#181818;
+    --menu-surface:#232323;
+    --stroke:rgba(255,255,255,0.08);
+    --stroke-strong:rgba(255,255,255,0.14);
+    --subtle-2:rgba(255,255,255,0.04);
+    --subtle-3:rgba(255,255,255,0.08);
+    --text-1:rgba(255,255,255,0.92);
+    --text-2:rgba(255,255,255,0.72);
+    --text-3:rgba(255,255,255,0.5);
+    --accent:#76B9ED;
+    --accent-strong:#4cc2ff;
+    --accent-soft:rgba(118,185,237,0.4);
+    --accent-faint:rgba(118,185,237,0.14);
+    --working:#4cc2ff;
+    --done:#6CCB5F;
+    --rail:rgba(255,255,255,0.22); /* amplified ~1.6x over shipping stroke so the
+                                      bracket is legible on a web page; same trick
+                                      as tree-spinner-mockup */
+    --rail-hot:rgba(76,194,255,0.75);
+    --r-input:4px;
+    --r-card:8px;
+    --font:"Segoe UI Variable Text","Segoe UI",-apple-system,system-ui,sans-serif;
+    --mono:"Cascadia Mono","Cascadia Code",Consolas,ui-monospace,monospace;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;padding:32px 40px 64px;background:#101010;color:var(--text-1);
+    font-family:var(--font);font-size:14px;line-height:1.4;
+    -webkit-font-smoothing:antialiased;
+  }
+  h1{font-size:20px;font-weight:600;margin:0 0 4px;letter-spacing:0}
+  h2{font-size:16px;font-weight:600;margin:48px 0 16px}
+  .sub{color:var(--text-3);font-size:13px;margin:0 0 32px;max-width:640px}
+
+  .flow{display:flex;gap:36px;flex-wrap:wrap;align-items:flex-start}
+  .step{display:flex;flex-direction:column;gap:12px;width:272px}
+  .steplab{
+    font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;
+    color:var(--text-3);
+  }
+  .steplab .n{color:var(--accent);margin-right:6px}
+  .cap{font-size:12.5px;color:var(--text-2);line-height:1.5;margin:0}
+  .cap .q{color:var(--text-3)}
+
+  /* ── mini sidebar frame ─────────────────────────────────────── */
+  .side{
+    width:272px;background:var(--surface);
+    border:1px solid var(--stroke);border-radius:var(--r-card);
+    padding:10px 8px 12px;position:relative;
+  }
+  .phead{
+    display:flex;align-items:center;gap:8px;
+    padding:4px 8px 8px;color:var(--text-2);
+  }
+  .phead .chev{color:var(--text-3);font-size:11px}
+  .phead .pname{font-weight:600;font-size:13px}
+  .phead .pcount{font-size:11px;color:var(--text-3);font-variant-numeric:tabular-nums}
+
+  .row{
+    position:relative;display:grid;
+    grid-template-columns:10px minmax(0,1fr) auto;
+    align-items:center;column-gap:8px;
+    padding:8px 12px;border-radius:6px;
+    margin-bottom:8px;
+  }
+  .row:last-child{margin-bottom:0}
+  .row.active{background:var(--subtle-3)}
+  .lead{display:flex;align-items:center;justify-content:center;width:10px;height:20px}
+  .dot{width:8px;height:8px;border-radius:50%}
+  .dot[data-s="working"]{background:var(--working)}
+  .dot[data-s="done"]{background:var(--done)}
+  .dot[data-s="idle"]{background:transparent;box-shadow:inset 0 0 0 1px var(--text-3)}
+  .spin{font-family:var(--mono);font-size:12px;color:var(--working);line-height:1}
+  .t{
+    font-size:14px;font-weight:500;color:var(--text-1);
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;
+    line-height:20px;
+  }
+  .chip{
+    justify-self:end;font-family:var(--mono);font-size:10px;color:var(--text-3);
+    font-variant-numeric:tabular-nums;
+  }
+  .meta{
+    grid-column:2/-1;font-size:12px;color:var(--text-3);line-height:16px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px;
+  }
+  .meta .hot{color:var(--text-2)}
+
+  /* incoming-message note — reuses the shipping note-line slot (info level) */
+  .note{
+    grid-column:2/-1;display:flex;align-items:flex-start;gap:8px;
+    margin-top:6px;font-size:12px;color:var(--text-2);line-height:1.35;
+  }
+  .note::before{
+    content:"";flex:0 0 auto;width:6px;height:6px;border-radius:50%;
+    background:var(--accent);margin-top:5px;
+  }
+  .note .from{color:var(--text-3)}
+  .note .body{
+    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+  }
+  .note--warn::before{background:#FCE100}
+
+  /* ── pair bracket ───────────────────────────────────────────── */
+  /* Per-row rail segments (tree-connector style) so the bracket always spans
+     dot→dot regardless of row height: first row runs tick→through the 8px
+     row gap, last row runs its top→tick. */
+  .pair{position:relative}
+  .pair .prow::before{content:"";position:absolute;left:4px;width:1px;background:var(--rail)}
+  .pair .prow:first-child::before{top:17px;bottom:-8px}
+  .pair .prow:last-child::before{top:0;height:18px}
+  .pair .prow::after{ /* tick from rail to the status dot */
+    content:"";position:absolute;left:4px;top:17px;width:6px;height:1px;
+    background:var(--rail);
+  }
+  .pair--hot .prow::before,.pair--hot .prow::after{background:var(--rail-hot)}
+
+  /* ── context menu (frame 1) ─────────────────────────────────── */
+  .menu{
+    position:absolute;z-index:3;width:172px;
+    background:var(--menu-surface);border:1px solid var(--stroke-strong);
+    border-radius:var(--r-card);padding:4px;
+    box-shadow:0 8px 24px rgba(0,0,0,0.4);
+  }
+  .mi{
+    display:flex;align-items:center;gap:8px;
+    padding:6px 10px;border-radius:var(--r-input);
+    font-size:13px;color:var(--text-1);
+  }
+  .mi .sub-t{margin-left:auto;color:var(--text-3);font-size:11px}
+  .mi.hov{background:var(--subtle-3)}
+  .mi.dim{color:var(--text-2)}
+  .msep{height:1px;background:var(--stroke);margin:4px 6px}
+
+  /* link tag for cross-project pairs */
+  .linktag{
+    justify-self:end;display:inline-flex;align-items:center;gap:5px;
+    font-size:11px;color:var(--text-3);
+    padding:1px 6px;border-radius:var(--r-input);background:var(--subtle-2);
+  }
+  .linktag svg{display:block;opacity:.7}
+
+  /* ── live demo choreography (9s loop) ───────────────────────── */
+  .lv-rail .prow::before,.lv-rail .prow::after{
+    animation:railheat 9s linear infinite;
+  }
+  @keyframes railheat{
+    0%,12%,42%,100%{background:var(--rail)}
+    16%,38%{background:var(--rail-hot)}
+  }
+  .lv-send{position:relative;height:16px}
+  .lv-send .a,.lv-send .b{position:absolute;inset:0}
+  .lv-send .a{animation:senda 9s linear infinite}
+  .lv-send .b{opacity:0;animation:sendb 9s linear infinite}
+  @keyframes senda{0%,12%,42%,100%{opacity:1}16%,38%{opacity:0}}
+  @keyframes sendb{0%,12%,42%,100%{opacity:0}16%,38%{opacity:1}}
+  .lv-note{opacity:0;animation:notein 9s linear infinite}
+  @keyframes notein{0%,38%,88%,100%{opacity:0}44%,80%{opacity:1}}
+
+  .board{display:flex;gap:36px;flex-wrap:wrap;align-items:flex-start}
+  .notes{max-width:340px;font-size:13px;color:var(--text-2);line-height:1.55}
+  .notes h3{
+    font-size:12px;text-transform:uppercase;letter-spacing:.04em;
+    color:var(--text-3);margin:0 0 8px;font-weight:600;
+  }
+  .notes p{margin:0 0 12px}
+  .notes .k{color:var(--accent);font-weight:600}
+  .notes code{
+    font-family:var(--mono);font-size:12px;color:var(--text-1);
+    background:var(--subtle-3);padding:1px 5px;border-radius:4px;
+  }
+</style>
+</head>
+<body>
+
+<h1>Paired sessions</h1>
+<p class="sub">Two tabs get wired together in the sidebar. Perch introduces them once; from then on each agent decides for itself when its work matters to the other and messages it. The bracket is the standing relationship, the glow is live traffic, the note is what arrived.</p>
+
+<div class="flow">
+
+  <!-- STEP 1 — pair gesture -->
+  <div class="step">
+    <span class="steplab"><span class="n">1</span>Pair them</span>
+    <div class="side">
+      <div class="phead"><span class="chev">⌄</span><span class="pname">perch</span><span class="pcount">3</span></div>
+      <div class="row active">
+        <span class="lead"><span class="spin" data-spin>⠋</span></span>
+        <span class="t">user-profiles</span><span class="chip">12m</span>
+        <span class="meta">▸ display-name migration</span>
+      </div>
+      <div class="row">
+        <span class="lead"><span class="spin" data-spin>⠋</span></span>
+        <span class="t">weekly-digest</span><span class="chip">4m</span>
+        <span class="meta">▸ writing weeklyDigest.ts</span>
+      </div>
+      <div class="row">
+        <span class="lead"><span class="dot" data-s="done"></span></span>
+        <span class="t">docs sweep</span><span class="chip">2h</span>
+      </div>
+      <div class="menu" style="top:58px;left:96px">
+        <div class="mi dim">Rename</div>
+        <div class="mi dim">Put to sleep</div>
+        <div class="msep"></div>
+        <div class="mi hov">Pair with weekly-digest</div>
+        <div class="mi dim">Close</div>
+      </div>
+    </div>
+    <p class="cap">Right-click a session and pick a partner. (Or drag one row onto another.)</p>
+  </div>
+
+  <!-- STEP 2 — bracket appears -->
+  <div class="step">
+    <span class="steplab"><span class="n">2</span>Bracket appears</span>
+    <div class="side">
+      <div class="phead"><span class="chev">⌄</span><span class="pname">perch</span><span class="pcount">3</span></div>
+      <div class="pair">
+        <div class="row active prow">
+          <span class="lead"><span class="spin" data-spin>⠋</span></span>
+          <span class="t">user-profiles</span><span class="chip">12m</span>
+          <span class="meta">▸ display-name migration</span>
+        </div>
+        <div class="row prow">
+          <span class="lead"><span class="spin" data-spin>⠋</span></span>
+          <span class="t">weekly-digest</span><span class="chip">4m</span>
+          <span class="meta">▸ writing weeklyDigest.ts</span>
+        </div>
+      </div>
+      <div class="row">
+        <span class="lead"><span class="dot" data-s="done"></span></span>
+        <span class="t">docs sweep</span><span class="chip">2h</span>
+      </div>
+    </div>
+    <p class="cap">The rows sit adjacent and a hairline bracket joins their dots. Invisibly, Perch tells each agent: <span class="q">"you're paired with X. Send it a short heads-up whenever your work affects it."</span></p>
+  </div>
+
+  <!-- STEP 3 — message in flight -->
+  <div class="step">
+    <span class="steplab"><span class="n">3</span>A message flows</span>
+    <div class="side">
+      <div class="phead"><span class="chev">⌄</span><span class="pname">perch</span><span class="pcount">3</span></div>
+      <div class="pair pair--hot">
+        <div class="row active prow">
+          <span class="lead"><span class="spin" data-spin>⠋</span></span>
+          <span class="t">user-profiles</span><span class="chip">13m</span>
+          <span class="meta">▸ <span class="hot">messaging weekly-digest</span></span>
+        </div>
+        <div class="row prow">
+          <span class="lead"><span class="spin" data-spin>⠋</span></span>
+          <span class="t">weekly-digest</span><span class="chip">5m</span>
+          <span class="meta">▸ writing weeklyDigest.ts</span>
+        </div>
+      </div>
+      <div class="row">
+        <span class="lead"><span class="dot" data-s="done"></span></span>
+        <span class="t">docs sweep</span><span class="chip">2h</span>
+      </div>
+    </div>
+    <p class="cap">user-profiles renamed a column and <em>decided on its own</em> that the digest job needs to know. While the note is in flight the bracket warms.</p>
+  </div>
+
+  <!-- STEP 4 — received -->
+  <div class="step">
+    <span class="steplab"><span class="n">4</span>Partner receives it</span>
+    <div class="side">
+      <div class="phead"><span class="chev">⌄</span><span class="pname">perch</span><span class="pcount">3</span></div>
+      <div class="pair">
+        <div class="row active prow">
+          <span class="lead"><span class="spin" data-spin>⠋</span></span>
+          <span class="t">user-profiles</span><span class="chip">13m</span>
+          <span class="meta">▸ display-name migration</span>
+        </div>
+        <div class="row prow" style="padding-bottom:10px">
+          <span class="lead"><span class="spin" data-spin>⠋</span></span>
+          <span class="t">weekly-digest</span><span class="chip">5m</span>
+          <span class="meta">▸ writing weeklyDigest.ts</span>
+          <span class="note"><span class="body"><span class="from">from user-profiles · </span>"users.name is now users.display_name, update the digest query"</span></span>
+        </div>
+      </div>
+      <div class="row">
+        <span class="lead"><span class="dot" data-s="done"></span></span>
+        <span class="t">docs sweep</span><span class="chip">2h</span>
+      </div>
+    </div>
+    <p class="cap">The receiving agent reads it between tool calls, mid-task, no interruption. The row shows what arrived; it fades once you click the row or the agent acts on it.</p>
+  </div>
+
+  <!-- STEP 5 — and back -->
+  <div class="step">
+    <span class="steplab"><span class="n">5</span>And back the other way</span>
+    <div class="side">
+      <div class="phead"><span class="chev">⌄</span><span class="pname">perch</span><span class="pcount">3</span></div>
+      <div class="pair pair--hot">
+        <div class="row active prow" style="padding-bottom:10px">
+          <span class="lead"><span class="spin" data-spin>⠋</span></span>
+          <span class="t">user-profiles</span><span class="chip">14m</span>
+          <span class="meta">▸ display-name migration</span>
+          <span class="note"><span class="body"><span class="from">from weekly-digest · </span>"digest query updated, greeting users by display name now"</span></span>
+        </div>
+        <div class="row prow">
+          <span class="lead"><span class="spin" data-spin>⠋</span></span>
+          <span class="t">weekly-digest</span><span class="chip">6m</span>
+          <span class="meta">▸ <span class="hot">messaging user-profiles</span></span>
+        </div>
+      </div>
+      <div class="row">
+        <span class="lead"><span class="dot" data-s="done"></span></span>
+        <span class="t">docs sweep</span><span class="chip">2h</span>
+      </div>
+    </div>
+    <p class="cap">Fully symmetric: the partner reasons the same way about you. Either side can also just ask the other a question and get the answer back.</p>
+  </div>
+
+</div>
+
+<h2>Live · the loop as it plays</h2>
+<div class="board">
+  <div class="step">
+    <div class="side">
+      <div class="phead"><span class="chev">⌄</span><span class="pname">perch</span><span class="pcount">2</span></div>
+      <div class="pair lv-rail">
+        <div class="row active prow">
+          <span class="lead"><span class="spin" data-spin>⠋</span></span>
+          <span class="t">user-profiles</span><span class="chip">13m</span>
+          <span class="meta lv-send">
+            <span class="a">▸ display-name migration</span>
+            <span class="b">▸ <span class="hot">messaging weekly-digest</span></span>
+          </span>
+        </div>
+        <div class="row prow" style="padding-bottom:10px">
+          <span class="lead"><span class="spin" data-spin>⠋</span></span>
+          <span class="t">weekly-digest</span><span class="chip">5m</span>
+          <span class="meta">▸ writing weeklyDigest.ts</span>
+          <span class="note lv-note"><span class="body"><span class="from">from user-profiles · </span>"users.name is now users.display_name, update the digest query"</span></span>
+        </div>
+      </div>
+    </div>
+    <p class="cap">Nine-second loop: quiet → send (bracket warms) → note lands → fades. This is the whole ambient signature. Nothing flashes, nothing asks for you.</p>
+  </div>
+
+  <div class="step">
+    <span class="steplab">Variant · pair spans two projects</span>
+    <div class="side">
+      <div class="phead"><span class="chev">⌄</span><span class="pname">perch</span><span class="pcount">1</span></div>
+      <div class="row">
+        <span class="lead"><span class="spin" data-spin>⠋</span></span>
+        <span class="t">user-profiles</span>
+        <span class="linktag"><svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M6.5 9.5l3-3M5 7l-2 2a2.5 2.5 0 003.5 3.5l2-2M11 9l2-2A2.5 2.5 0 009.5 3.5l-2 2"/></svg>site</span>
+      </div>
+      <div class="phead" style="padding-top:10px"><span class="chev">⌄</span><span class="pname">site</span><span class="pcount">1</span></div>
+      <div class="row">
+        <span class="lead"><span class="dot" data-s="working"></span></span>
+        <span class="t">landing-copy</span>
+        <span class="linktag"><svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M6.5 9.5l3-3M5 7l-2 2a2.5 2.5 0 003.5 3.5l2-2M11 9l2-2A2.5 2.5 0 009.5 3.5l-2 2"/></svg>user-profiles</span>
+      </div>
+    </div>
+    <p class="cap">Across projects the rows can't sit adjacent, so no bracket; each wears a quiet link tag naming its partner. Same behavior underneath.</p>
+  </div>
+
+  <div class="notes">
+    <h3>Who decides when to talk?</h3>
+    <p><span class="k">The agents do.</span> Pairing sends each session one standing instruction naming its partner and what it's working on. From then on, deciding "does this change affect my partner?" is the same judgment the agent already applies when it decides to run tests or update a doc. It happens inside its normal reasoning, not on a timer.</p>
+    <p>No polling, no schedule. If nothing relevant happens, no messages. When something does, the sender writes a short summary in its own words (never your history or files) and the receiver folds it in mid-task.</p>
+    <h3>What Perch does</h3>
+    <p>The introduction at pair time, the name plumbing (sessions address each other by the tab titles you see), and the rendering: bracket, warm-up, note. Perch never composes a message. Unpair and the standing instruction is withdrawn.</p>
+    <h3>Not an alarm</h3>
+    <p>Messages are agent-to-agent coordination, so they never enter <code>Needs you</code>, never flash the taskbar, never pulse a pane. If a partner is asleep the sender's row says so (<code>weekly-digest is asleep · not delivered</code>); waking on knock is the v2 trick.</p>
+  </div>
+</div>
+
+<script>
+  const F="⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";let i=0;
+  setInterval(()=>{i=(i+1)%F.length;
+    document.querySelectorAll("[data-spin]").forEach(e=>e.textContent=F[i]);
+  },80);
+</script>
+</body>
+</html>
