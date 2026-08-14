@@ -259,6 +259,96 @@ function eventText(e: InspectorEventView): string {
   }
 }
 
+// ---- Show in the terminal --------------------------------------------------
+// A journal row is a READING of something that happened in the terminal; this
+// jumps you to the original. Wired by main.ts to Workspace.revealInTerminal —
+// the inspector can't import the workspace (main owns it), so the capability
+// is injected.
+
+let revealFn: ((paneId: string, needles: string[]) => boolean) | null = null;
+
+export function setInspectorReveal(fn: (paneId: string, needles: string[]) => boolean): void {
+  revealFn = fn;
+}
+
+/** Candidate search strings for finding a journal row's text in the terminal,
+ *  longest (most specific) first. The terminal shows a RENDERING of the text —
+ *  markdown marks dropped, prompts prefixed, lines wrapped — so this cleans a
+ *  snippet of the first substantial line and falls back to shorter prefixes
+ *  before the caller gives up. Exported for test. */
+export function revealNeedles(text: string): string[] {
+  // First line with some meat on it; a one-word opener ("ok\n…") would match
+  // half the buffer.
+  const line =
+    text.split("\n").map((s) => s.trim()).find((s) => s.length >= 8) ?? text.trim();
+  const clean = line
+    .replace(/^[#>\-*•\s]+/, "")     // leading heading/list/quote marks
+    .replace(/\*\*|__|`/g, "")       // inline bold/code marks the render drops
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!clean) return [];
+  const out = [clean.slice(0, 80)];
+  if (clean.length > 40) out.push(clean.slice(0, 40));
+  if (clean.length > 24) out.push(clean.slice(0, 24));
+  return out;
+}
+
+/** Prompt indices whose turn was stopped before the agent did ANYTHING — the
+ *  very next event is the interrupt. Claude Code's own chat quietly drops
+ *  these, so the journal is the only place they'd still read as asked-and-
+ *  answered; the strike-through says what actually happened. A prompt whose
+ *  turn produced work or prose before the Esc is NOT canceled — it was
+ *  partially executed, and striking it would claim otherwise. Exported for
+ *  test. */
+export function canceledPrompts(
+  events: readonly Pick<InspectorEventView, "kind">[],
+): Set<number> {
+  const out = new Set<number>();
+  for (let i = 0; i < events.length; i++)
+    if (events[i].kind === "prompt" && events[i + 1]?.kind === "interrupt") out.add(i);
+  return out;
+}
+
+/** The hover button carrying the jump. Its own element (not a row click):
+ *  prompts and beats already spend their click on expand-in-place. */
+function revealBtn(e: InspectorEventView): HTMLButtonElement {
+  const b = el("button", "row-reveal") as HTMLButtonElement;
+  b.type = "button";
+  b.title = "Show in the terminal";
+  b.setAttribute("aria-label", "Show in the terminal");
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 12 12");
+  svg.setAttribute("width", "12");
+  svg.setAttribute("height", "12");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("aria-hidden", "true");
+  const frame = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+  frame.setAttribute("x", "1");
+  frame.setAttribute("y", "2");
+  frame.setAttribute("width", "10");
+  frame.setAttribute("height", "8");
+  frame.setAttribute("rx", "1.5");
+  frame.setAttribute("stroke", "currentColor");
+  frame.setAttribute("stroke-width", "1.1");
+  svg.appendChild(frame);
+  const caret = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  caret.setAttribute("d", "M3.2 4.6 L5.2 6 L3.2 7.4");
+  caret.setAttribute("stroke", "currentColor");
+  caret.setAttribute("stroke-width", "1.1");
+  caret.setAttribute("stroke-linecap", "round");
+  caret.setAttribute("stroke-linejoin", "round");
+  svg.appendChild(caret);
+  b.appendChild(svg);
+  b.addEventListener("click", (ev) => {
+    ev.stopPropagation();               // the row's own click expands in place
+    const pane = paneId;
+    if (!pane || !revealFn) return;
+    if (!revealFn(pane, revealNeedles(e.text)))
+      showToast("Couldn't find this in the terminal — it may have scrolled away", "error", null);
+  });
+  return b;
+}
+
 /** Rows whose double-click copies. Everything the rail renders as a discrete
  *  thing-that-happened, plus the file rows in the Changes strip. */
 const COPYABLE = ".beat, .turn-prompt, .turn-interrupt, .skill, .work, .file-row";
@@ -408,7 +498,7 @@ function renderChanges(host: HTMLElement, data: InspectorDataMessage, open: bool
   });
 }
 
-function renderEvent(e: InspectorEventView, i: number): HTMLElement {
+function renderEvent(e: InspectorEventView, i: number, canceled = false): HTMLElement {
   if (e.kind === "interrupt") {
     // You hit Esc / Ctrl-C. Painted as an alarm — red row, "!" badge — so a
     // stopped turn is obvious at a glance instead of hiding as another prompt.
@@ -429,10 +519,17 @@ function renderEvent(e: InspectorEventView, i: number): HTMLElement {
     // (the event list is append-only) so it survives the poll re-render.
     const p = el("div", expanded.has(i) ? "turn-prompt turn-prompt--open" : "turn-prompt");
     p.dataset.i = String(i);
+    // Struck through: this message never ran — the very next event is your
+    // interrupt. cc's own chat quietly drops these; see canceledPrompts.
+    if (canceled) {
+      p.classList.add("turn-prompt--canceled");
+      p.title = "Canceled — you interrupted before the agent responded";
+    }
     p.appendChild(elText("span", "turn-prompt__time", hhmm(e.ts)));
     p.appendChild(elText("span", "turn-prompt__caret", ">"));
     p.appendChild(elText("span", "turn-prompt__text", e.text));
     p.appendChild(el("span", "turn-prompt__chev"));
+    p.appendChild(revealBtn(e));
     p.addEventListener("click", (ev) => {
       if (ev.detail > 1) return;                 // second click of a copy — see "Copy"
       if (!p.classList.contains("turn-prompt--expandable")) return;   // nothing to open
@@ -454,6 +551,7 @@ function renderEvent(e: InspectorEventView, i: number): HTMLElement {
     const text = el("span", "beat__text");
     appendInline(text, e.text);
     b.appendChild(text);
+    b.appendChild(revealBtn(e));
     b.addEventListener("click", (ev) => {
       if (ev.detail > 1) return;                 // second click of a copy — see "Copy"
       if (!b.classList.contains("beat--expandable")) return;          // nothing to open
@@ -570,8 +668,9 @@ function renderStream(host: HTMLElement, data: InspectorDataMessage): void {
   // every poll, so without this gate the whole list would re-cascade each tick; a
   // freshly-shown pane (prevEventCount 0) shows its history at rest.
   const fresh = prevEventCount;
+  const canceled = canceledPrompts(data.events);
   data.events.forEach((ev, i) => {
-    const row = renderEvent(ev, i);
+    const row = renderEvent(ev, i, canceled.has(i));
     copySource.set(row, eventText(ev));
     if (fresh > 0 && i >= fresh) row.classList.add("row-enter");
     frag.appendChild(row);

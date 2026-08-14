@@ -7,6 +7,7 @@ import type { ILinkProvider, ILink } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
+import { SearchAddon } from "@xterm/addon-search";
 
 import { b64ToBytes, bytesToB64, send } from "./bridge.js";
 import type { PaneTreeView } from "./bridge.js";
@@ -274,6 +275,43 @@ export class Pane {
         if (text) void copyText(text);
       }, 0);
     });
+  }
+
+  // Lazy: most panes never get a journal "show in terminal" click, so the
+  // addon isn't loaded until the first one.
+  private search: SearchAddon | null = null;
+  private searchClearTimer: number | null = null;
+
+  /** Scroll the terminal to the most recent occurrence of any of `needles`
+   *  (tried in order — longest, most specific first) and highlight it via the
+   *  selection, which the theme already styles. Selection is safe here:
+   *  copy-on-select rides mouseup, so a programmatic selection copies nothing.
+   *  Returns false when nothing matches — e.g. the text left the scrollback,
+   *  or a TUI redraw reformatted it beyond recognition.
+   */
+  revealText(needles: string[]): boolean {
+    if (!this.search) {
+      this.search = new SearchAddon();
+      this.term.loadAddon(this.search);
+    }
+    // Start every attempt from the buffer's end: with no prior selection,
+    // findPrevious searches bottom-up, so the newest occurrence wins — the one
+    // a journal row most plausibly refers to.
+    this.term.clearSelection();
+    for (const n of needles) {
+      if (!n) continue;
+      if (this.search.findPrevious(n)) {
+        // Let the highlight land, then put the terminal back the way it was —
+        // a selection left behind flips right-click from paste to copy.
+        if (this.searchClearTimer !== null) clearTimeout(this.searchClearTimer);
+        this.searchClearTimer = window.setTimeout(() => {
+          this.searchClearTimer = null;
+          this.term.clearSelection();
+        }, 2500);
+        return true;
+      }
+    }
+    return false;
   }
 
   // Re-entrancy guard for the readText() fallback below — set while a read is
