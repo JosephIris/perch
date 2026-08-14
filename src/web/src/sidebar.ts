@@ -244,6 +244,7 @@ function chevronSvg(className: string): SVGSVGElement {
 }
 
 const COLLAPSED_KEY = "perch.projects.collapsed";
+const CLOSED_MIN_KEY = "perch.closed.min";
 
 export class Sidebar {
   private readonly listEl: HTMLElement;
@@ -282,6 +283,11 @@ export class Sidebar {
    *  peek that outlived the session would just be the full list again, one
    *  launch later. */
   private hiddenOpen = false;
+
+  /** "Recently closed" minimized to its title row. Persisted (localStorage),
+   *  unlike the drawers: it's a standing layout choice — you shrank the list
+   *  to reclaim sidebar height, and it should stay shrunk next launch. */
+  private closedMin = false;
 
   /** Same one-render opt-in as `justToggled`, for the drawer chevron. */
   private justToggledHidden = false;
@@ -333,6 +339,11 @@ export class Sidebar {
       if (raw) for (const id of JSON.parse(raw) as string[]) this.collapsed.add(id);
     } catch {
       /* corrupt/unavailable storage → start expanded. Not worth failing over. */
+    }
+    try {
+      this.closedMin = localStorage.getItem(CLOSED_MIN_KEY) === "1";
+    } catch {
+      /* unavailable storage → start expanded */
     }
   }
 
@@ -521,6 +532,7 @@ export class Sidebar {
       return;
     }
     this.closedEl.hidden = false;
+    this.closedEl.classList.toggle("recently-closed--min", this.closedMin);
 
     const frag = document.createDocumentFragment();
 
@@ -533,14 +545,48 @@ export class Sidebar {
     count.className = "recently-closed__count";
     count.textContent = String(closed.length);
     header.append(label, count);
+
+    // Minimize ⇄ restore. Minimized, the section is just this title row stuck
+    // above the footer — the count still says how much is stashed in it.
+    const min = document.createElement("button");
+    min.type = "button";
+    min.className = "recently-closed__min";
+    const minTitle = this.closedMin ? "Show the recently closed list" : "Minimize to the title";
+    min.title = minTitle;
+    min.setAttribute("aria-label", minTitle);
+    min.setAttribute("aria-expanded", String(!this.closedMin));
+    const chev = chevronSvg("recently-closed__min-chev");
+    chev.dataset.min = String(this.closedMin);
+    min.appendChild(chev);
+    min.addEventListener("click", (ev) => {
+      ev.stopPropagation();   // the minimized header is itself a toggle target
+      this.toggleClosedMin();
+    });
+    header.appendChild(min);
+
+    // Minimized, the whole title row is the way back — a bar that begs to be
+    // clicked shouldn't make you hunt for its one 16px button.
+    if (this.closedMin) header.addEventListener("click", () => this.toggleClosedMin());
     frag.appendChild(header);
 
-    const list = document.createElement("div");
-    list.className = "recently-closed__list";
-    for (const c of closed) list.appendChild(this.renderClosedRow(c));
-    frag.appendChild(list);
+    if (!this.closedMin) {
+      const list = document.createElement("div");
+      list.className = "recently-closed__list";
+      for (const c of closed) list.appendChild(this.renderClosedRow(c));
+      frag.appendChild(list);
+    }
 
     this.closedEl.replaceChildren(frag);
+  }
+
+  private toggleClosedMin(): void {
+    this.closedMin = !this.closedMin;
+    try {
+      localStorage.setItem(CLOSED_MIN_KEY, this.closedMin ? "1" : "0");
+    } catch {
+      /* best-effort */
+    }
+    this.rerender?.();
   }
 
   private renderClosedRow(c: ClosedSessionView): HTMLElement {

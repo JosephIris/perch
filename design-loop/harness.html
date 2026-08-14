@@ -78,22 +78,33 @@
         </button>
       </div>
       <div id="sidebar-scroll" class="sidebar__scroll"></div>
-      <!-- Mirrors index.html so #cloud / #cloud-sidebar can be captured here. -->
-      <div id="cloud-area" class="cloud-area" hidden>
-        <div class="cloud-area__label">Cloud</div>
-        <button id="cloud-card" class="cloud-card" type="button" aria-label="Cloud resources">
-          <span class="cloud-card__head">
-            <span class="cloud-card__dot" aria-hidden="true"></span>
-            <span class="cloud-card__title" id="cloud-card-title"></span>
-            <span class="cloud-card__rate" id="cloud-card-rate"></span>
-          </span>
-          <span class="cloud-card__sub" id="cloud-card-sub"></span>
-          <span class="cloud-card__alert" id="cloud-card-alert" hidden>
-            <span class="cloud-card__alert-dot" aria-hidden="true"></span>
-            <span class="cloud-card__alert-text" id="cloud-card-alert-text"></span>
-            <span class="cloud-card__alert-cost" id="cloud-card-alert-cost"></span>
-          </span>
+      <!-- Mirrors index.html so #cloud / #cloud-sidebar can be captured here
+           (wrapper + toggle included for fidelity; the toggle is inert — the
+           harness never calls initUtilityMini). -->
+      <div id="utility-areas" class="utility-areas">
+        <button id="utility-mini-toggle" class="utility-mini-toggle" type="button">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+            <path d="M2.5 4.5 L6 8 L9.5 4.5" stroke="currentColor" stroke-width="1.4"
+                  stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
         </button>
+        <div id="cloud-area" class="cloud-area" hidden>
+          <div class="cloud-area__label">Cloud</div>
+          <button id="cloud-card" class="cloud-card" type="button" aria-label="Cloud resources">
+            <span class="cloud-card__head">
+              <span class="cloud-card__dot" aria-hidden="true"></span>
+              <span class="cloud-card__mini" id="cloud-card-mini"></span>
+              <span class="cloud-card__title" id="cloud-card-title"></span>
+              <span class="cloud-card__rate" id="cloud-card-rate"></span>
+            </span>
+            <span class="cloud-card__sub" id="cloud-card-sub"></span>
+            <span class="cloud-card__alert" id="cloud-card-alert" hidden>
+              <span class="cloud-card__alert-dot" aria-hidden="true"></span>
+              <span class="cloud-card__alert-text" id="cloud-card-alert-text"></span>
+              <span class="cloud-card__alert-cost" id="cloud-card-alert-cost"></span>
+            </span>
+          </button>
+        </div>
       </div>
       <footer class="sidebar__footer">
         <button class="sidebar__identity" type="button" title="Perch" aria-label="Perch">

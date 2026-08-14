@@ -89,53 +89,69 @@
         <span class="update-banner__action">Restart</span>
       </button>
 
-      <!-- Cloud resources. Hidden entirely unless this user's agents have GCP
-           machines actually running (which needs gcloud installed AND
-           authenticated), so a user who doesn't drive GCP from an agent never
-           sees any of it.
-
-           Its mere PRESENCE means something is billing — hence the teal
-           --color-cloud class rather than a neutral card. Escalates to caution
-           and grows the alert row when a machine has no agent attached.
-           Click → the cloud panel. -->
-      <div id="cloud-area" class="cloud-area" hidden>
-        <div class="cloud-area__label">Cloud</div>
-        <button id="cloud-card" class="cloud-card" type="button" aria-label="Cloud resources">
-          <span class="cloud-card__head">
-            <span class="cloud-card__dot" aria-hidden="true"></span>
-            <span class="cloud-card__title" id="cloud-card-title"></span>
-            <span class="cloud-card__rate" id="cloud-card-rate"></span>
-          </span>
-          <span class="cloud-card__sub" id="cloud-card-sub"></span>
-          <span class="cloud-card__alert" id="cloud-card-alert" hidden>
-            <span class="cloud-card__alert-dot" aria-hidden="true"></span>
-            <span class="cloud-card__alert-text" id="cloud-card-alert-text"></span>
-            <span class="cloud-card__alert-cost" id="cloud-card-alert-cost"></span>
-          </span>
+      <!-- Cloud + Local utility areas, one wrapper so mini mode (see
+           mini-mode.ts) can lay the two cards side by side as compact chips.
+           The chevron button — pinned to the top-right of whichever area is
+           up — flips full ⇄ mini; the choice persists page-locally. -->
+      <div id="utility-areas" class="utility-areas">
+        <button id="utility-mini-toggle" class="utility-mini-toggle" type="button">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+            <path d="M2.5 4.5 L6 8 L9.5 4.5" stroke="currentColor" stroke-width="1.4"
+                  stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
         </button>
-      </div>
 
-      <!-- Local dev servers. Hidden until something is actually listening on
-           loopback, so a session with no dev server running never sees it.
-           Amber (--color-local): a server on YOUR machine — a different axis
-           from cloud's teal (remote + metered). Escalates to caution and grows
-           the alert row when a server outlives the pane that spawned it.
-           Click → the local servers panel. -->
-      <div id="local-area" class="local-area" hidden>
-        <div class="local-area__label">Local</div>
-        <button id="local-card" class="local-card" type="button" aria-label="Local dev servers">
-          <span class="local-card__head">
-            <span class="local-card__dot" aria-hidden="true"></span>
-            <span class="local-card__title" id="local-card-title"></span>
-            <span class="local-card__port" id="local-card-port"></span>
-          </span>
-          <span class="local-card__sub" id="local-card-sub"></span>
-          <span class="local-card__alert" id="local-card-alert" hidden>
-            <span class="local-card__alert-dot" aria-hidden="true"></span>
-            <span class="local-card__alert-text" id="local-card-alert-text"></span>
-            <span class="local-card__alert-meta" id="local-card-alert-meta"></span>
-          </span>
-        </button>
+        <!-- Cloud resources. Hidden entirely unless this user's agents have GCP
+             machines actually running (which needs gcloud installed AND
+             authenticated), so a user who doesn't drive GCP from an agent never
+             sees any of it.
+
+             Its mere PRESENCE means something is billing — hence the teal
+             --color-cloud class rather than a neutral card. Escalates to caution
+             and grows the alert row when a machine has no agent attached.
+             Click → the cloud panel. -->
+        <div id="cloud-area" class="cloud-area" hidden>
+          <div class="cloud-area__label">Cloud</div>
+          <button id="cloud-card" class="cloud-card" type="button" aria-label="Cloud resources">
+            <span class="cloud-card__head">
+              <span class="cloud-card__dot" aria-hidden="true"></span>
+              <!-- Mini-only machine count; the full title/sub/alert fold away. -->
+              <span class="cloud-card__mini" id="cloud-card-mini"></span>
+              <span class="cloud-card__title" id="cloud-card-title"></span>
+              <span class="cloud-card__rate" id="cloud-card-rate"></span>
+            </span>
+            <span class="cloud-card__sub" id="cloud-card-sub"></span>
+            <span class="cloud-card__alert" id="cloud-card-alert" hidden>
+              <span class="cloud-card__alert-dot" aria-hidden="true"></span>
+              <span class="cloud-card__alert-text" id="cloud-card-alert-text"></span>
+              <span class="cloud-card__alert-cost" id="cloud-card-alert-cost"></span>
+            </span>
+          </button>
+        </div>
+
+        <!-- Local dev servers. Hidden until something is actually listening on
+             loopback, so a session with no dev server running never sees it.
+             Amber (--color-local): a server on YOUR machine — a different axis
+             from cloud's teal (remote + metered). Escalates to caution and grows
+             the alert row when a server outlives the pane that spawned it.
+             Click → the local servers panel. -->
+        <div id="local-area" class="local-area" hidden>
+          <div class="local-area__label">Local</div>
+          <button id="local-card" class="local-card" type="button" aria-label="Local dev servers">
+            <span class="local-card__head">
+              <span class="local-card__dot" aria-hidden="true"></span>
+              <span class="local-card__mini" id="local-card-mini"></span>
+              <span class="local-card__title" id="local-card-title"></span>
+              <span class="local-card__port" id="local-card-port"></span>
+            </span>
+            <span class="local-card__sub" id="local-card-sub"></span>
+            <span class="local-card__alert" id="local-card-alert" hidden>
+              <span class="local-card__alert-dot" aria-hidden="true"></span>
+              <span class="local-card__alert-text" id="local-card-alert-text"></span>
+              <span class="local-card__alert-meta" id="local-card-alert-meta"></span>
+            </span>
+          </button>
+        </div>
       </div>
 
       <!-- Bottom row: app identity + settings. Mirrors Claude's user-info

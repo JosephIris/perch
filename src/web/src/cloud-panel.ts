@@ -448,8 +448,12 @@ function updateSidebar(): void {
   const title = document.getElementById("cloud-card-title");
   const rateEl = document.getElementById("cloud-card-rate");
   const sub = document.getElementById("cloud-card-sub");
+  const mini = document.getElementById("cloud-card-mini");
   if (title) title.textContent = `${latest.length} machine${latest.length === 1 ? "" : "s"}`;
   if (rateEl) rateEl.textContent = `${rate(burn)}/hr`;
+  // Mini chip: just the count — the teal dot names the axis, the rate rides
+  // the right edge, and "machines" won't fit half a sidebar.
+  if (mini) mini.textContent = String(latest.length);
 
   if (sub) {
     // Composition + what it has cost so far. NOT "today" — we keep no history,

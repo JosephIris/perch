@@ -439,9 +439,14 @@ function updateSidebar(): void {
   const title = document.getElementById("local-card-title");
   const portEl = document.getElementById("local-card-port");
   const sub = document.getElementById("local-card-sub");
+  const mini = document.getElementById("local-card-mini");
   if (title) title.textContent = noneOfOurs
     ? "No Perch servers"
     : `${vis.length} server${vis.length === 1 ? "" : "s"}`;
+  // Mini chip: the visible-server count (0 is honest when the "Perch only"
+  // filter hides everything); the amber dot names the axis, the port rides
+  // the right edge.
+  if (mini) mini.textContent = String(vis.length);
 
   // Trailing port: the newest live server's, else the newest of anything shown.
   if (portEl) {

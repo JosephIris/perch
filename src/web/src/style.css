@@ -134,14 +134,13 @@ ul { list-style: none; padding: 0; margin: 0; }
 .sidebar {
   grid-area: sidebar;
   display: grid;
-  /* mode · new-session · dashboard · scroll (the list) · recently-closed · footer.
-   * The row count MUST match the child count: a child with no explicit row
+  /* The row count MUST match the child count: a child with no explicit row
    * lands in an implicit `auto` track at the end, which silently shifts every
    * sibling up a row — the scroll list loses the 1fr and the row above it
    * inherits it, stretching into a dead gap. */
   /* One entry per direct child, in order: mode toggle · new-session · dashboard ·
-   * scroll(1fr) · recently-closed · update-banner · cloud-area · footer. The 1fr
-   * MUST stay on the scroll list (4th) — see the warning above. */
+   * scroll(1fr) · recently-closed · update-banner · utility-areas (cloud+local) ·
+   * footer. The 1fr MUST stay on the scroll list (4th) — see the warning above. */
   grid-template-rows: auto auto auto 1fr auto auto auto auto;
   /* Explicit column is REQUIRED. Without it the single implicit column is an
    * `auto` track, which is treated as indefinite-width — so every `width:100%`
@@ -2342,6 +2341,38 @@ button.pane__chip--ports:hover {
   font-size: 11px;
   color: var(--color-text-disabled);
 }
+/* Minimize ⇄ restore. Chevron down = fold to the title row; up = bring the
+ * list back. Quiet tertiary, same voice as the utility areas' toggle. */
+.recently-closed__min {
+  margin-left: auto;
+  align-self: center;
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--r-input);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+.recently-closed__min:hover {
+  background: var(--color-subtle-secondary);
+  color: var(--color-text-secondary);
+}
+.recently-closed__min:focus-visible {
+  outline: 1px solid var(--color-accent);
+  outline-offset: -1px;
+}
+.recently-closed__min-chev { transform: rotate(90deg); }
+.recently-closed__min-chev[data-min="true"] { transform: rotate(-90deg); }
+/* Minimized: the section is just its title row stuck above the footer, and
+ * the whole row is the way back — pill hover says so. */
+.recently-closed--min .recently-closed__header {
+  cursor: pointer;
+  border-radius: var(--r-input);
+}
+.recently-closed--min .recently-closed__header:hover { background: var(--color-subtle-secondary); }
 .recently-closed__list {
   display: flex;
   flex-direction: column;
@@ -5263,6 +5294,81 @@ body.show-dashboard .dashboard { display: flex; }
  *   cloud    running, all attributed  → teal
  *   caution  a machine has no agent   → the card LEAVES its class for caution
  *                                        and grows the alert row */
+/* ══ Utility areas wrapper (cloud + local) ══════════════════════════════════
+ * Exists for mini mode: full stacks the two labeled cards as always; mini
+ * compresses each to a one-line chip and lays them side by side, filling the
+ * sidebar's width. The chevron toggle pins to the wrapper's top-right — in
+ * full mode that's the label row of whichever area is up; in mini it joins
+ * the chip row as the trailing flex item. */
+.utility-areas { position: relative; display: flex; flex-direction: column; }
+/* Neither area up → nothing to size; the bare toggle must not float alone. */
+.utility-areas:not(:has(.cloud-area:not([hidden]), .local-area:not([hidden]))) { display: none; }
+
+.utility-mini-toggle {
+  position: absolute;
+  top: -2px;
+  right: var(--sp-4);
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--r-input);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+.utility-mini-toggle:hover {
+  background: var(--color-subtle-secondary);
+  color: var(--color-text-secondary);
+}
+.utility-mini-toggle:focus-visible {
+  outline: 1px solid var(--color-accent);
+  outline-offset: -1px;
+}
+/* The glyph is drawn pointing down ("shrink this downward"); mini flips it up. */
+.utility-areas--mini .utility-mini-toggle svg { transform: rotate(180deg); }
+
+.utility-areas--mini {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--sp-8);
+  padding-right: var(--sp-4);
+}
+.utility-areas--mini .utility-mini-toggle {
+  position: static;
+  order: 99;
+  flex: 0 0 auto;
+}
+.utility-areas--mini .cloud-area,
+.utility-areas--mini .local-area { flex: 1 1 0; min-width: 0; padding: 0; }
+/* The chip keeps dot + count + rate/port; everything wordy folds away. The
+ * escalation classes stay on the card, so caution/radar/live still color the
+ * chip — mini never mutes a state, it only drops the prose. */
+.utility-areas--mini .cloud-area__label,
+.utility-areas--mini .local-area__label,
+.utility-areas--mini .cloud-card__title,
+.utility-areas--mini .local-card__title,
+.utility-areas--mini .cloud-card__sub,
+.utility-areas--mini .local-card__sub,
+.utility-areas--mini .cloud-card__alert,
+.utility-areas--mini .local-card__alert { display: none; }
+.utility-areas--mini .cloud-card,
+.utility-areas--mini .local-card { padding: var(--sp-4) var(--sp-8); }
+
+/* Mini-only count (the full title says "4 machines"; half a sidebar fits "4"). */
+.cloud-card__mini,
+.local-card__mini {
+  display: none;
+  font-family: var(--font-small);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+.utility-areas--mini .cloud-card__mini,
+.utility-areas--mini .local-card__mini { display: inline; }
+
 .cloud-area { padding: 0 var(--sp-4) 0 0; }
 .cloud-area[hidden] { display: none; }
 .cloud-area__label {
@@ -6045,6 +6151,49 @@ body.show-dashboard .dashboard { display: flex; }
 .turn-prompt__chev::before { content: "\2304"; }          /* ⌄ */
 .turn-prompt--expandable.turn-prompt--open .turn-prompt__chev::before { content: "\2303"; }   /* ⌃ */
 .turn-prompt--expandable .turn-prompt__chev { display: block; }
+
+/* Canceled — the very next journal event is your interrupt, so this message
+ * never ran. cc's chat quietly drops these; the strike keeps the journal
+ * honest without deleting the row (you did type it). */
+.turn-prompt--canceled .turn-prompt__text {
+  text-decoration: line-through;
+  color: var(--color-text-tertiary);
+}
+.turn-prompt--canceled .turn-prompt__caret { color: var(--color-text-disabled); }
+
+/* "Show in the terminal" — hover-revealed jump on prompts and beats. Absolute
+ * in the row's top-right so the resting layout never shifts; opacity (not
+ * display) so it can take focus-visible. */
+.turn-prompt,
+.beat { position: relative; }
+.row-reveal {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--r-input);
+  background: var(--color-subtle-tertiary);
+  color: var(--color-text-tertiary);
+  opacity: 0;
+  pointer-events: none;
+  cursor: pointer;
+  transition: opacity var(--dur-fast) var(--ease-entry);
+}
+.turn-prompt:hover .row-reveal,
+.beat:hover .row-reveal,
+.row-reveal:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+.row-reveal:hover { color: var(--color-text-primary); }
+.row-reveal:focus-visible {
+  outline: 1px solid var(--color-accent);
+  outline-offset: -1px;
+}
 
 /* Interrupt — a turn you stopped (Esc / Ctrl-C). The one alarm in the stream:
  * error-tinted fill and a filled "!" badge so a halted turn is unmissable while

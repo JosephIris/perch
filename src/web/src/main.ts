@@ -21,7 +21,8 @@ import { RestoreProgress } from "./restore-progress.js";
 import { invalidateCommits } from "./commits.js";
 import { initCloud } from "./cloud-panel.js";
 import { initLocal } from "./local-panel.js";
-import { initInspector, toggleInspector, openInspectorSearch } from "./inspector.js";
+import { initUtilityMini } from "./mini-mode.js";
+import { initInspector, toggleInspector, openInspectorSearch, setInspectorReveal } from "./inspector.js";
 import { setModelLimits } from "./model-menu.js";
 import { initWebPaneSuppression } from "./webpane-suppress.js";
 import type { PaneTreeView } from "./bridge.js";
@@ -54,11 +55,17 @@ initCloud();
 // actually listening on loopback.
 initLocal();
 
+// The full ⇄ mini toggle over both of the above. Page-local layout preference.
+initUtilityMini();
+
 // Inspector rail (right column). Same self-wiring shape: owns its DOM, listens
 // for `state` itself to follow the focused pane, and fetches its own data via
 // inspector.request. Open by default; the host ferries the persisted state in
 // prefs.inspectorOpen on the first push.
 initInspector();
+// Journal rows' "show in the terminal" jump — injected because the inspector
+// is self-wiring and can't import the workspace main owns.
+setInspectorReveal((paneId, needles) => workspace.revealInTerminal(paneId, needles));
 
 // Footer auto-update pill (hidden until the host reports a newer release).
 const updateBanner = $<HTMLButtonElement>("update-banner");
