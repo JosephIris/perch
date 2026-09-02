@@ -114,8 +114,10 @@ internal static class HookHandler
                 var promptText = StringFrom(root, "prompt", maxLen: 400);
                 if (!string.IsNullOrWhiteSpace(promptText))
                     Send(pipeName, new { type = "title", text = promptText });
-                // If this pane's tab has a board, point the agent at it.
-                EmitBoardContext();
+                // If this pane's tab has a board, point the agent at it; if
+                // the pane is a team bot, hand it the current roster. One
+                // object on stdout, or nothing.
+                EmitPromptContext();
                 break;
 
             case "notification":
@@ -207,7 +209,15 @@ internal static class HookHandler
                     var sendTarget = PeerTarget(root);
                     if (sendTarget.Length > 0)
                     {
-                        Send(pipeName, new { type = "peer.msg", phase = "sending", target = sendTarget, text = PeerText(root) });
+                        Send(pipeName, new
+                        {
+                            type = "peer.msg",
+                            phase = "sending",
+                            target = sendTarget,
+                            text = PeerText(root),
+                            message = PeerFullText(root),
+                            summary = PeerSummary(root),
+                        });
                         Send(pipeName, new { type = "status", state = "working", detail = $"messaging {sendTarget}" });
                     }
                 }
@@ -270,6 +280,8 @@ internal static class HookHandler
                             target = sentTarget,
                             text = PeerText(root),
                             ok = PeerSendOk(root),
+                            message = PeerFullText(root),
+                            summary = PeerSummary(root),
                         });
                 }
                 break;
@@ -359,8 +371,16 @@ internal static class HookHandler
         return 0;
     }
 
-    /// Tell the agent its tab has a reference board, by printing Claude Code's
+    /// Tell the agent its tab has a reference board, and/or that it is a bot
+    /// on a team with these colleagues, by printing Claude Code's
     /// `additionalContext` on stdout.
+    ///
+    /// ## One object, or nothing
+    ///
+    /// Claude Code reads stdout as ONE JSON object. Two parts (board + roster)
+    /// are therefore joined into a single additionalContext string rather than
+    /// printed as two objects — the second would be a parse error at best and
+    /// raw context at worst. No parts → print nothing (see the rules below).
     ///
     /// ## Why UserPromptSubmit and not SessionStart
     ///
@@ -384,40 +404,106 @@ internal static class HookHandler
     /// errors.log. So: catch everything, never throw, print nothing at all when
     /// there is no board, and keep every diagnostic on stderr — stray stdout
     /// from this hook becomes context.
-    private static void EmitBoardContext()
+    private static void EmitPromptContext()
     {
         try
         {
             var paneId = Environment.GetEnvironmentVariable("PERCH_PANE_ID");
             if (string.IsNullOrWhiteSpace(paneId)) return;
 
-            var marker = Path.Combine(Path.GetTempPath(), $"perch-board-{paneId}.txt");
-            if (!File.Exists(marker)) return;
-
-            var dir = File.ReadAllText(marker).Trim();
-            if (dir.Length == 0 || !Directory.Exists(dir)) return;
-
-            var index = Path.Combine(dir, "board.md");
-            if (!File.Exists(index)) return;
+            var parts = new System.Collections.Generic.List<string>(2);
+            var board = BoardContextLine(paneId);
+            if (board != null) parts.Add(board);
+            var roster = TeamContextBlock(paneId);
+            if (roster != null) parts.Add(roster);
+            if (parts.Count == 0) return;   // silence is the contract
 
             Console.Out.Write(JsonSerializer.Serialize(new
             {
                 hookSpecificOutput = new
                 {
                     hookEventName = "UserPromptSubmit",
-                    additionalContext =
-                        $"This tab has a reference board at {index} — context the user collected for this task "
-                        + "(files, screenshots, cached pages, notes). Read it when you need background, and "
-                        + "re-read it later if you need to: the user adds to it while you work. "
-                        + "Paths inside it are relative to the repository root.",
+                    additionalContext = string.Join("\n\n", parts),
                 },
             }, JsonOpts));
             Console.Out.Flush();
         }
         catch (Exception ex)
         {
-            // Never cost the user a turn over a board hint.
+            // Never cost the user a turn over a context hint.
+            Console.Error.WriteLine($"perch hooks: prompt context failed: {ex.Message}");
+        }
+    }
+
+    /// The board hint: the PATH of the tab's board.md, never its contents.
+    /// Null when this pane's tab has no (readable) board.
+    private static string? BoardContextLine(string paneId)
+    {
+        try
+        {
+            var marker = Path.Combine(Path.GetTempPath(), $"perch-board-{paneId}.txt");
+            if (!File.Exists(marker)) return null;
+
+            var dir = File.ReadAllText(marker).Trim();
+            if (dir.Length == 0 || !Directory.Exists(dir)) return null;
+
+            var index = Path.Combine(dir, "board.md");
+            if (!File.Exists(index)) return null;
+
+            return $"This tab has a reference board at {index} — context the user collected for this task "
+                + "(files, screenshots, cached pages, notes). Read it when you need background, and "
+                + "re-read it later if you need to: the user adds to it while you work. "
+                + "Paths inside it are relative to the repository root.";
+        }
+        catch (Exception ex)
+        {
             Console.Error.WriteLine($"perch hooks: board context failed: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// Cap on the roster text we inline per turn. The roster is a few lines
+    /// per teammate plus etiquette — a 5-bot team is ~1.5 KB — so anything
+    /// past this is a bug or a tampered file, and we cut rather than pay for
+    /// it on every prompt.
+    private const int RosterMaxBytes = 6 * 1024;
+
+    /// The team roster: unlike the board this IS inlined, because it is
+    /// small, changes when a teammate joins or leaves, and is the one thing
+    /// a bot must have without being told to go and read a file. Null when
+    /// this pane is not a bot. Same containment rule as the wrapper's brief
+    /// pointer: the file must be a .md under a `.perch\team\` folder.
+    private static string? TeamContextBlock(string paneId)
+    {
+        try
+        {
+            var marker = Path.Combine(Path.GetTempPath(), $"perch-team-{paneId}.txt");
+            if (!File.Exists(marker)) return null;
+
+            var path = File.ReadAllText(marker).Trim();
+            if (path.Length == 0 || path.Length > 260) return null;
+            foreach (var c in path)
+                if (char.IsControl(c) || c is '"' or '\'') return null;
+            if (!path.EndsWith(".md", StringComparison.OrdinalIgnoreCase)) return null;
+            if (path.IndexOf(@"\.perch\team\", StringComparison.OrdinalIgnoreCase) < 0
+                && path.IndexOf("/.perch/team/", StringComparison.OrdinalIgnoreCase) < 0) return null;
+            if (!File.Exists(path)) return null;
+
+            var text = File.ReadAllText(path).Trim();
+            if (text.Length == 0) return null;
+            if (Encoding.UTF8.GetByteCount(text) > RosterMaxBytes)
+            {
+                // Cut on characters, not bytes: never split a surrogate pair.
+                var cut = Math.Min(text.Length, RosterMaxBytes);
+                while (cut > 0 && Encoding.UTF8.GetByteCount(text.AsSpan(0, cut)) > RosterMaxBytes) cut--;
+                text = text.Substring(0, cut).TrimEnd() + "\n[roster truncated]";
+            }
+            return text;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"perch hooks: team context failed: {ex.Message}");
+            return null;
         }
     }
 
@@ -527,6 +613,31 @@ internal static class HookHandler
         return "";
     }
 
+    /// The FULL body of a SendMessage tool call, newlines intact, for the
+    /// team room. Capped well under the 64 KB stdin read so a huge message
+    /// can't make the IPC line unbounded; null when absent. `summary` is
+    /// deliberately NOT a fallback here — that is what PeerSummary is for.
+    private static string? PeerFullText(JsonElement? root)
+    {
+        foreach (var f in new[] { "message", "content", "prompt" })
+        {
+            var v = ToolInputString(root, f);
+            if (string.IsNullOrWhiteSpace(v)) continue;
+            var s = v!.Trim();
+            return s.Length > 16 * 1024 ? s.Substring(0, 16 * 1024) + "…" : s;
+        }
+        return null;
+    }
+
+    /// The sender's own one-line summary of a SendMessage, when it gave one.
+    private static string? PeerSummary(JsonElement? root)
+    {
+        var v = ToolInputString(root, "summary");
+        if (string.IsNullOrWhiteSpace(v)) return null;
+        var s = v!.Trim().Replace('\n', ' ').Replace('\r', ' ');
+        return s.Length > 200 ? s.Substring(0, 200) + "…" : s;
+    }
+
     /// Did the send actually deliver? The response shape is a plain prose
     /// string, so this is a marker sniff, biased toward true: a false "sent"
     /// just means no warn note, while a false "failed" would put a scary note
@@ -541,18 +652,25 @@ internal static class HookHandler
                  || lower.Contains("\"is_error\":true"));
     }
 
-    /// This pane's own peer name — the same host-written file the wrapper
-    /// passed as --name at launch. Null when the host hasn't assigned one.
+    /// This pane's own peer name: the address other sessions use in
+    /// SendMessage. Prefers the name wrap-claude recorded it ACTUALLY passed
+    /// (perch-claude-launched-name-*), which honours a caller's own --name;
+    /// falls back to the host's intended name (perch-claude-name-*) for a
+    /// wrapper that predates the record. Null when neither exists.
     private static string? ReadOwnPeerName()
     {
         try
         {
             var paneId = Environment.GetEnvironmentVariable("PERCH_PANE_ID");
             if (string.IsNullOrEmpty(paneId)) return null;
-            var path = Path.Combine(Path.GetTempPath(), $"perch-claude-name-{paneId}.txt");
-            if (!File.Exists(path)) return null;
-            var name = File.ReadAllText(path).Trim();
-            return name.Length is 0 or > 60 ? null : name;
+            foreach (var file in new[] { $"perch-claude-launched-name-{paneId}.txt", $"perch-claude-name-{paneId}.txt" })
+            {
+                var path = Path.Combine(Path.GetTempPath(), file);
+                if (!File.Exists(path)) continue;
+                var name = File.ReadAllText(path).Trim();
+                if (name.Length is > 0 and <= 60) return name;
+            }
+            return null;
         }
         catch { return null; }
     }

@@ -36,13 +36,53 @@
           ]
         };
       }
+      function reply(obj, delayMs) {
+        var wire = JSON.stringify(obj);
+        setTimeout(function () { listeners.forEach(function (l) { l({ data: wire }); }); }, delayMs || 0);
+      }
       window.chrome = window.chrome || {};
       window.chrome.webview = {
         postMessage: function (wire) {
           var msg; try { msg = JSON.parse(wire); } catch (e) { return; }
-          if (msg && msg.type === "commits.request") {
-            var reply = JSON.stringify(sample(msg.paneId));
-            setTimeout(function () { listeners.forEach(function (l) { l({ data: reply }); }); }, 120);
+          if (!msg) return;
+          if (msg.type === "commits.request") {
+            reply(sample(msg.paneId), 120);
+          }
+          // Team room: harness.ts parks its fixture on window.__teamFixture;
+          // answer team.request with it so the room fetches the way it would
+          // from the host.
+          if (msg.type === "team.request" && window.__teamFixture) {
+            reply(window.__teamFixture, 80);
+          }
+          // Your post echoes back as a ledger row so the pending row settles.
+          if (msg.type === "team.post" && window.__teamFixture) {
+            var fx = window.__teamFixture;
+            var seq = fx.lastSeq + 1;
+            var to = msg.to === null ? ["Ada"] : msg.to;
+            var row = { seq: seq, ts: new Date().toISOString(), kind: "user", from: "you", to: to, text: msg.text, clientId: msg.clientId };
+            fx.entries.push(row); fx.lastSeq = seq;
+            reply({ type: "team.data", projectId: msg.projectId, entries: [row], lastSeq: seq }, 400);
+          }
+          // Brief generation: progress ticks, then a result (or an error for
+          // the #newbot-error view).
+          if (msg.type === "team.brief.generate") {
+            var view = location.hash.replace("#", "");
+            var phases = ["Reading the repo…", "Looking at src/web…", "Writing the brief…"];
+            phases.forEach(function (p, i) {
+              reply({ type: "team.brief.progress", jobId: msg.jobId, phase: p, elapsedMs: (i + 1) * 900 }, 300 + i * 900);
+            });
+            if (view === "newbot-generating") return;   // stay in progress for the shot
+            if (view === "newbot-error") {
+              reply({ type: "team.brief.result", jobId: msg.jobId, error: "stopped at the cost cap" }, 3200);
+            } else {
+              reply({ type: "team.brief.result", jobId: msg.jobId, costUsd: 0.42, brief:
+                "## Role\nYou are the frontend developer for storefront-web: the sidebar, the panes, the dialogs and the CSS tokens under `src/web`.\n\n" +
+                "## What you own\n- `src/web/src/sidebar.ts`, `workspace.ts`, `pane.ts` and every dialog under `src/web/src`\n- `src/web/src/style.css` and `tokens.css`\n\n" +
+                "## What you never touch\n- Anything under `src/Perch` (the host) — ask the backend dev\n- `tools/perch-cli`\n\n" +
+                "## Who you ask\n- The backend dev, for a new host message or a changed `state` shape\n- The designer, before inventing a new surface\n\n" +
+                "## Definition of done\n`npm run typecheck` and `npm test` green, a harness screenshot for anything visual, and the constitution's checklist honoured.\n\n" +
+                "## How you communicate on the team\nMessage a teammate with SendMessage by session name when you need something from them; post a note to the room when something others depend on lands." }, 3200);
+            }
           }
         },
         addEventListener: function (type, listener) { if (type === "message") listeners.push(listener); }

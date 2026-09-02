@@ -80,7 +80,8 @@ internal static class StateProjection
         SessionStore store, Guid? activePaneId, int fontSize, bool onboardingSeen,
         ProjectStore? projects = null, string sidebarMode = "sessions",
         IReadOnlyList<ModelUsageLimit>? modelLimits = null, bool inspectorOpen = true,
-        bool wideLayout = false, bool localPerchOnly = false)
+        bool wideLayout = false, bool localPerchOnly = false,
+        Func<Guid, object?>? teamOf = null)
     {
         return new
         {
@@ -109,6 +110,10 @@ internal static class StateProjection
                 name = p.Name,
                 path = p.Path,
                 hidden = p.Hidden,
+                // The project's team (bots + positions), or null when it has
+                // none. Bots are also ordinary rows in `sessions`; this is
+                // what lets the sidebar badge them and show the room's door.
+                team = teamOf?.Invoke(p.Id),
             }).ToArray(),
             sessions = store.Sessions.Select(ProjectSession).ToArray(),
             // Recently-closed sessions for the sidebar's restore list. Just

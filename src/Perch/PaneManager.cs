@@ -58,6 +58,7 @@ internal sealed class PaneManager : IDisposable
     public event Action<Session, Guid, SessionMessage>? AgentSession;
     public event Action<Session, Guid, CloudStampedMessage>? CloudStamped;
     public event Action<Session, Guid, PeerMsgMessage>? PeerMsg;
+    public event Action<Session, Guid, TeamPostMessage>? TeamPost;
 
     public bool Has(Guid paneId) => _ptys.ContainsKey(paneId);
 
@@ -138,6 +139,7 @@ internal sealed class PaneManager : IDisposable
         ipc.OnSession += msg => AgentSession?.Invoke(sess, paneId, msg);
         ipc.OnCloudStamped += msg => CloudStamped?.Invoke(sess, paneId, msg);
         ipc.OnPeerMsg += msg => PeerMsg?.Invoke(sess, paneId, msg);
+        ipc.OnTeamPost += msg => TeamPost?.Invoke(sess, paneId, msg);
         ipc.Start();
         _paneIpc[paneId] = ipc;
 

@@ -284,6 +284,29 @@ public partial class MainWindow : FluentWindow
         _projects = ProjectStore.Load();
         // Before BuildRouter: the router registers a handler that reads it.
         _boardCtrl = new BoardController(OwningSession, a => Dispatcher.BeginInvoke(a));
+        _teamCtrl = new TeamController(new TeamHost
+        {
+            ProjectById = id => _projects.ById(id),
+            Projects = () => _projects.Projects,
+            SessionById = id => _store.Sessions.FirstOrDefault(s => s.Id == id),
+            Sessions = () => _store.Sessions,
+            ResolveCwd = ResolvePaneCwd,
+            ReadTranscript = (pane, sid, cwd) => _transcripts.Read(pane, sid, cwd),
+            TypeToClaude = TypeToClaude,
+            Wake = WakeSession,
+            CreateTab = (proj, name, worktree, model, ccName) =>
+                CreateProjectTabAsync(proj, name, "claude", worktree, model, ccName),
+            CloseSession = (id, removeWorktree) =>
+                OnSessionClose(new SessionCloseMsg { Id = id, RemoveWorktree = removeWorktree }),
+            Post = payload => Web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(payload)),
+            PushState = PushState,
+            Delay = (action, delay) =>
+            {
+                var timer = new System.Windows.Threading.DispatcherTimer { Interval = delay };
+                timer.Tick += (_, __) => { timer.Stop(); action(); };
+                timer.Start();
+            },
+        });
         WireBoardController();
         _router = BuildRouter();
         _panes = new PaneManager(Dispatcher);
@@ -301,6 +324,10 @@ public partial class MainWindow : FluentWindow
         _panes.AgentSession += OnAgentSession;
         _panes.CloudStamped += OnCloudStamped;
         _panes.PeerMsg += OnPeerMsg;
+        // The team room records the same observed sends (full text) and a
+        // bot's `perch team post` notes; the pair note above stays as it was.
+        _panes.PeerMsg += (s, p, m) => _teamCtrl.OnPeerMsg(s, p, m);
+        _panes.TeamPost += (s, p, m) => _teamCtrl.OnTeamPost(s, p, m);
         // Usage poller for the model picker. Subscribe once here; a new snapshot
         // marshals back to the UI thread and re-pushes state so the menu picks
         // up freshly-disabled models. PushState guards on the webview being up.
@@ -764,7 +791,18 @@ public partial class MainWindow : FluentWindow
         .Add("local.refresh", () => _ = _local?.RefreshAsync())
         .Add<LocalOpenMsg>("local.open", m => OpenLocalUrl(m.Port))
         .Add<LocalKillMsg>("local.kill", m => _ = _local?.KillAsync(m.Pid))
-        .Add("local.killLingering", () => _ = _local?.KillLingeringAsync());
+        .Add("local.killLingering", () => _ = _local?.KillLingeringAsync())
+        // Team room + new-bot dialog. The four-file rule applies (PageMessages,
+        // here, ProtocolTests, protocol-sync.test.ts).
+        .Add<TeamRequestMsg>("team.request", m => _teamCtrl.OnRequest(m))
+        .Add<TeamPostMsg>("team.post", m => _teamCtrl.OnPost(m))
+        .Add<TeamBotCreateMsg>("team.bot.create", m => _ = _teamCtrl.OnBotCreateAsync(m))
+        .Add<TeamBriefGenerateMsg>("team.brief.generate", m => _teamCtrl.OnBriefGenerate(m))
+        .Add<TeamBriefCancelMsg>("team.brief.cancel", m => _teamCtrl.OnBriefCancel(m))
+        .Add<TeamPositionUpdateMsg>("team.position.update", m => _teamCtrl.OnPositionUpdate(m))
+        .Add<TeamBotRemoveMsg>("team.bot.remove", m => _teamCtrl.OnBotRemove(m))
+        .Add<TeamReferenceBrowseMsg>("team.reference.browse", OnTeamReferenceBrowse)
+        .Add<TeamRoomMsg>("team.room", m => _teamCtrl.OnRoom(m));
 
     private void OnWebMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
@@ -1180,6 +1218,10 @@ public partial class MainWindow : FluentWindow
             // Same %TEMP% mechanism as the model state above, for the same
             // reason: the per-pane pipe only runs the other way.
             _boardCtrl.PublishMarkers(sess);
+            // Likewise a team bot's brief (--append-system-prompt-file at the
+            // launch) and the roster its prompt hook injects; cleared for any
+            // pane that isn't a bot's.
+            _teamCtrl.PublishMarkers(sess);
             // Shell.BuildStartupCommandLine injects PERCH_PIPE / PERCH_PANE_ID
             // env vars per-pane so agents inside the shell can call back
             // into our IPC layer (stage 4 reactivates that pipe).
@@ -1611,6 +1653,9 @@ public partial class MainWindow : FluentWindow
             };
             timer.Start();
         }
+        // A team post parked while this bot's Claude was down lands now, on
+        // the same settle delay as the pairing intro.
+        _teamCtrl.OnAgentUp(sess);
         MarkRestorePaneReady(paneId);
         // cc is listening — but NOT yet painted. This only arms the boot cover's
         // quiet-watch; the cover drops once cc's paint settles and the pane's
@@ -2425,6 +2470,7 @@ public partial class MainWindow : FluentWindow
         var next = wasActive ? _store.PickActiveAfter(sess) : null;
 
         _store.SetDormant(sess, true);
+        _teamCtrl.OnSessionSlept(sess);
 
         if (wasActive)
         {
@@ -2450,6 +2496,7 @@ public partial class MainWindow : FluentWindow
     private void WakeSession(Session sess)
     {
         _store.SetDormant(sess, false);
+        _teamCtrl.OnSessionWoke(sess);
         // A polite exit from the sleep may still be in flight, and Spawn refuses
         // a pane id that still owns a live PTY — cut the grace short or the
         // woken tab comes up dead.
@@ -2579,7 +2626,7 @@ public partial class MainWindow : FluentWindow
     /// title (the name its NEXT launch will use).
     private string PeerNameOf(Session sess)
         => AllLeaves(sess.Root).FirstOrDefault(p => p.IsTerminal && !string.IsNullOrEmpty(p.PeerName))?.PeerName
-           ?? ClaudePeerNames.Sanitize(sess.Title);
+           ?? ClaudePeerNames.ForTitle(sess.Title);
 
     /// Type one line into the session's running Claude pane (the same PTY
     /// mechanism as the /model live switch). False when no running Claude.
@@ -2640,10 +2687,9 @@ public partial class MainWindow : FluentWindow
     {
         foreach (var s in _store.Sessions)
             foreach (var p in AllLeaves(s.Root))
-                if (p.IsTerminal && string.Equals(p.PeerName, name, StringComparison.OrdinalIgnoreCase))
+                if (p.IsTerminal && ClaudePeerNames.Matches(p.PeerName, name))
                     return s;
-        return _store.Sessions.FirstOrDefault(
-            s => string.Equals(ClaudePeerNames.Sanitize(s.Title), name, StringComparison.OrdinalIgnoreCase));
+        return _store.Sessions.FirstOrDefault(s => ClaudePeerNames.Matches(s.Title, name));
     }
 
     /// Keep every live pane's --name file equal to its tab title (deduped
@@ -2674,17 +2720,22 @@ public partial class MainWindow : FluentWindow
                 s.PairNoteAtMs = 0;
             }
 
-            var baseName = ClaudePeerNames.Sanitize(s.Title);
             var ordinal = 0;
             foreach (var p in AllLeaves(s.Root))
             {
                 if (!p.IsTerminal) continue;
                 ordinal++;
+                // A bot's address is pinned at creation and never follows the
+                // title; everything else is the title's slug (the same spelling
+                // the launch command uses, so the hook and the sweep agree).
+                var baseName = !string.IsNullOrWhiteSpace(p.PinnedPeerName)
+                    ? p.PinnedPeerName!
+                    : ClaudePeerNames.ForTitle(s.Title);
                 var suffix = ordinal;
                 string candidate;
                 do
                 {
-                    candidate = suffix <= 1 ? baseName : $"{baseName} {suffix}";
+                    candidate = suffix <= 1 ? baseName : $"{baseName}-{suffix}";
                     suffix++;
                 } while (used.Contains(candidate)
                          || (liveNames.Contains(candidate)
@@ -2721,6 +2772,8 @@ public partial class MainWindow : FluentWindow
         // agent stops messaging a ghost); the closing side skips its own note —
         // that pane is about to get its polite /exit.
         BreakPair(sess, notifySelf: false, notifyPartner: true);
+        // A bot whose tab closes stays on its team's roster as "not running".
+        _teamCtrl.OnSessionClosed(sess);
         var leaves = AllLeaves(sess.Root).ToList();
 
         var wtPath = sess.WorktreePath;
@@ -3267,6 +3320,33 @@ public partial class MainWindow : FluentWindow
 
     private void OnProjectAdd(ProjectAddMsg msg) => AddProject(msg.Path, msg.Name);
 
+    /// The new-bot dialog's "Browse…" for a reference folder. Same native
+    /// picker as adding a project; the answer is keyed by the page's request id
+    /// so a dialog that was closed meanwhile can drop it.
+    private void OnTeamReferenceBrowse(TeamReferenceBrowseMsg msg)
+    {
+        string? picked = null;
+        try
+        {
+            var proj = _projects.ById(msg.ProjectId);
+            var dlg = new Microsoft.Win32.OpenFolderDialog
+            {
+                Title = "Reference folder for the brief",
+                InitialDirectory = proj?.Path ?? _settings.ResolveDefaultCwd(),
+            };
+            if (dlg.ShowDialog(this) == true) picked = dlg.FolderName;
+        }
+        catch (Exception ex) { Log.Error("OnTeamReferenceBrowse", ex); }
+        try
+        {
+            Web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(new
+            {
+                type = "team.reference.picked", requestId = msg.RequestId, path = picked,
+            }));
+        }
+        catch (Exception ex) { Log.Error("OnTeamReferenceBrowse.post", ex); }
+    }
+
     private void AddProject(string path, string? name = null)
     {
         var p = _projects.Add(path, name);
@@ -3374,87 +3454,104 @@ public partial class MainWindow : FluentWindow
                 return;
             }
 
-            var name = (msg.Name ?? "").Trim();
-            if (name.Length == 0) name = proj.Name;
-
-            // Worktree first: if it fails we must NOT fall back to opening in the
-            // main checkout. That's the exact collision the worktree prevents (two
-            // agents in one directory silently overwriting each other), so a
-            // failure has to stop the tab, loudly.
-            string cwd = proj.Path, wtPath = "", wtBranch = "";
-            if (msg.Worktree == true)
-            {
-                var (path, branch, error) = await Worktree.CreateAsync(_settings, proj, name);
-                if (error != null || path == null)
-                {
-                    PostToast($"Couldn't create the worktree: {error}", "error", Guid.Empty);
-                    return;
-                }
-                cwd = wtPath = path;
-                wtBranch = branch ?? "";
-            }
-
-            var s = _store.AddNew();
-
-            // Pick the color BEFORE filing the tab under the project. AddNew has
-            // already stamped a globally-unused color on the new leaf, so if it
-            // were already a member of the project, the pick would treat its own
-            // placeholder as "taken" and skip a hue — three tabs came out 0, 2, 3
-            // instead of 0, 1, 2.
-            var colorIndex = _store.PickUnusedColorForProject(proj.Id);
-
-            s.Title = name;
-            s.IsAutoTitle = false;          // a name you typed is never overwritten by OSC 7
-            s.ProjectId = proj.Id;
-            s.Cwd = cwd;
-            s.Root.Cwd = cwd;               // the PANE cwd is what the git signals measure
-            s.WorktreePath = wtPath;
-            s.WorktreeRepo = wtPath.Length > 0 ? proj.Path : "";
-            s.WorktreeBranch = wtBranch;
-            AutoName(s.Root);
-            s.Root.ColorIndex = colorIndex;   // first hue unused by THIS project's tabs
-
-            var agent = msg.Agent ?? "claude";
-            if (agent == "claude")
-            {
-                // Mint the session id ourselves instead of learning it from the
-                // hook afterwards. It makes resume deterministic, and it's what
-                // lets several agents share a repo without `--continue` lassoing
-                // each other's conversations.
-                var sid = Guid.NewGuid().ToString();
-                s.Root.ClaudeSessionId = sid;
-                // --name gets the SLUG, not the raw name. The command is spliced
-                // into the shell's own startup line (pwsh -Command "…"), which
-                // escapes an inner double quote as `" — so `--name "loc diff fix"`
-                // reached claude as the three tokens `"loc`, `diff`, `fix"`, and
-                // the session came up called `"loc`. A slug has no spaces, needs
-                // no quoting, and survives every shell we spawn. (It's also what
-                // Termic passes.) Our own sidebar keeps the name you typed.
-                var ccName = GitProc.Slugify(name);
-                if (ccName.Length == 0) ccName = "tab";
-                _pendingInitialCommand[s.Root.Id] = $"claude --session-id {sid} --name {ccName}";
-                // Creation-time model pick. Set on the PaneNode NOW — the PTY
-                // spawns lazily AFTER the PushState below (page renders → first
-                // pane.resize → SpawnPty), and SpawnPty writes the wrap-claude
-                // state file from pane.Model before starting the shell, so the
-                // very first `claude` launch in this tab gets --model. Clamped
-                // to the same allowlist as pane.model; anything else → default.
-                var modelAlias = (msg.Model ?? "").Trim().ToLowerInvariant();
-                if (modelAlias.Length > 0 && !ModelAliases.Contains(modelAlias)) modelAlias = "";
-                s.Root.Model = modelAlias;
-            }
-            else if (agent == "codex")
-            {
-                _pendingInitialCommand[s.Root.Id] = "codex";
-            }
-
-            PlaceNewTab(s);
-            _store.ActiveSessionId = s.Id;
-            _activePaneId = s.Root.Id;
-            _store.Save();
-            PushState();   // the page renders the stage → pane.resize → lazy spawn
+            await CreateProjectTabAsync(proj, msg.Name, msg.Agent ?? "claude", msg.Worktree == true, msg.Model, null);
         }
         catch (Exception ex) { Log.Error("OnProjectTabNew", ex); }
+    }
+
+    /// Open a named agent tab under a project — the body of "New tab in
+    /// <project>", shared with team-bot creation. `pinnedPeerName`, when
+    /// given, is the session name the tab launches under instead of the
+    /// title's slug (a bot's address, minted unique app-wide by the team
+    /// controller); it is pinned on the pane so a rename never moves it.
+    /// Returns the session, or null when the tab could not be made (the
+    /// reason has already been toasted).
+    private async Task<Session?> CreateProjectTabAsync(
+        Project proj, string? rawName, string agent, bool worktree, string? model, string? pinnedPeerName)
+    {
+        var name = (rawName ?? "").Trim();
+        if (name.Length == 0) name = proj.Name;
+
+        // Worktree first: if it fails we must NOT fall back to opening in the
+        // main checkout. That's the exact collision the worktree prevents (two
+        // agents in one directory silently overwriting each other), so a
+        // failure has to stop the tab, loudly.
+        string cwd = proj.Path, wtPath = "", wtBranch = "";
+        if (worktree)
+        {
+            var (path, branch, error) = await Worktree.CreateAsync(_settings, proj, name);
+            if (error != null || path == null)
+            {
+                PostToast($"Couldn't create the worktree: {error}", "error", Guid.Empty);
+                return null;
+            }
+            cwd = wtPath = path;
+            wtBranch = branch ?? "";
+        }
+
+        var s = _store.AddNew();
+
+        // Pick the color BEFORE filing the tab under the project. AddNew has
+        // already stamped a globally-unused color on the new leaf, so if it
+        // were already a member of the project, the pick would treat its own
+        // placeholder as "taken" and skip a hue — three tabs came out 0, 2, 3
+        // instead of 0, 1, 2.
+        var colorIndex = _store.PickUnusedColorForProject(proj.Id);
+
+        s.Title = name;
+        s.IsAutoTitle = false;          // a name you typed is never overwritten by OSC 7
+        s.ProjectId = proj.Id;
+        s.Cwd = cwd;
+        s.Root.Cwd = cwd;               // the PANE cwd is what the git signals measure
+        s.WorktreePath = wtPath;
+        s.WorktreeRepo = wtPath.Length > 0 ? proj.Path : "";
+        s.WorktreeBranch = wtBranch;
+        AutoName(s.Root);
+        s.Root.ColorIndex = colorIndex;   // first hue unused by THIS project's tabs
+
+        if (agent == "claude")
+        {
+            // Mint the session id ourselves instead of learning it from the
+            // hook afterwards. It makes resume deterministic, and it's what
+            // lets several agents share a repo without `--continue` lassoing
+            // each other's conversations.
+            var sid = Guid.NewGuid().ToString();
+            s.Root.ClaudeSessionId = sid;
+            // --name gets the SLUG, not the raw name. The command is spliced
+            // into the shell's own startup line (pwsh -Command "…"), which
+            // escapes an inner double quote as `" — so `--name "loc diff fix"`
+            // reached claude as the three tokens `"loc`, `diff`, `fix"`, and
+            // the session came up called `"loc`. A slug has no spaces, needs
+            // no quoting, and survives every shell we spawn. (It's also what
+            // Termic passes.) Our own sidebar keeps the name you typed.
+            var ccName = pinnedPeerName ?? ClaudePeerNames.ForTitle(name);
+            // Record the address this launch will answer to, in the SAME
+            // spelling — the sweep and the session-start hook confirm it,
+            // and an observed SendMessage target resolves back to this row.
+            s.Root.PeerName = ccName;
+            s.Root.PinnedPeerName = pinnedPeerName;
+            _pendingInitialCommand[s.Root.Id] = $"claude --session-id {sid} --name {ccName}";
+            // Creation-time model pick. Set on the PaneNode NOW — the PTY
+            // spawns lazily AFTER the PushState below (page renders → first
+            // pane.resize → SpawnPty), and SpawnPty writes the wrap-claude
+            // state file from pane.Model before starting the shell, so the
+            // very first `claude` launch in this tab gets --model. Clamped
+            // to the same allowlist as pane.model; anything else → default.
+            var modelAlias = (model ?? "").Trim().ToLowerInvariant();
+            if (modelAlias.Length > 0 && !ModelAliases.Contains(modelAlias)) modelAlias = "";
+            s.Root.Model = modelAlias;
+        }
+        else if (agent == "codex")
+        {
+            _pendingInitialCommand[s.Root.Id] = "codex";
+        }
+
+        PlaceNewTab(s);
+        _store.ActiveSessionId = s.Id;
+        _activePaneId = s.Root.Id;
+        _store.Save();
+        PushState();   // the page renders the stage → pane.resize → lazy spawn
+        return s;
     }
 
     // Rename a project, hide/show it, or override what its worktrees get
@@ -4037,6 +4134,7 @@ public partial class MainWindow : FluentWindow
     /// _urlPaneCtrl, because it needs no WebView2 environment — it only reads
     /// and writes files.
     private readonly BoardController _boardCtrl;
+    private readonly TeamController _teamCtrl;
 
     /// Wire the board controller's outbound events to the page. Called from the
     /// constructor; kept separate so the field initializer stays a one-liner.
@@ -4265,6 +4363,7 @@ public partial class MainWindow : FluentWindow
         // And its board marker, so a temp file left behind can't point a future
         // pane at a board that was never its own.
         BoardController.ClearMarker(id);
+        TeamMarkers.Clear(id);
         var sess = OwningSession(id);
         if (sess == null) return;
         // Closing the only leaf in a session = close the session. The worktree is
@@ -4448,7 +4547,7 @@ public partial class MainWindow : FluentWindow
             var snap = StateProjection.BuildSnapshot(
                 _store, _activePaneId, _settings.FontSize, _settings.OnboardingSeen,
                 _projects, _settings.SidebarMode, _usage?.CurrentLimits(), _settings.InspectorOpen,
-                _settings.WideLayout, _settings.LocalPerchOnly);
+                _settings.WideLayout, _settings.LocalPerchOnly, _teamCtrl.ProjectTeamView);
             Web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(snap));
         }
         catch (Exception ex) { Log.Error("PushState", ex); }
@@ -4636,6 +4735,16 @@ public partial class MainWindow : FluentWindow
                         foreach (var leaf in AllLeaves(s.Root))
                             if (_panes.TryGet(leaf.Id, out var pty))
                                 Log.Info("FlowStats", $"FLOW pane={leaf.Id:D} max={pty.MaxOutstanding}");
+                }
+                break;
+            case "team.dump":
+                // The project's team plus the room ledger's tail, as one
+                // TEAM_DUMP{json} log line for scripts/test-team.ps1.
+                {
+                    var pid = root.TryGetProperty("projectId", out var pj) && Guid.TryParse(pj.GetString(), out var g)
+                        ? g
+                        : _projects.Projects.FirstOrDefault()?.Id ?? Guid.Empty;
+                    Log.Info("TEAM_DUMP" + _teamCtrl.Dump(pid));
                 }
                 break;
             case "state.dump":

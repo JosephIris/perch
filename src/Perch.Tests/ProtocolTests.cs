@@ -262,6 +262,33 @@ public class ProtocolTests
             "{\"type\":\"peer.msg\",\"phase\":\"sent\",\"target\":\"weekly-digest\",\"text\":\"t\",\"ok\":false}",
             IpcJson.Options)!;
         Assert.False(sent.Ok);
+        // The pre-team shape carries no body: Message/Summary default null
+        // rather than failing the parse of an older hook binary.
+        Assert.Null(sent.Message);
+        Assert.Null(sent.Summary);
+
+        // The team-room shape: the full body (newlines intact) and the
+        // sender's own summary ride alongside the unchanged one-line cut.
+        var full = JsonSerializer.Deserialize<PeerMsgMessage>(
+            "{\"type\":\"peer.msg\",\"phase\":\"sent\",\"target\":\"bo\",\"text\":\"Schema done\",\"ok\":true,"
+            + "\"message\":\"Schema done.\\nThe column is tenant_id.\",\"summary\":\"Schema done\"}",
+            IpcJson.Options)!;
+        Assert.True(full.Ok);
+        Assert.Equal("Schema done.\nThe column is tenant_id.", full.Message);
+        Assert.Equal("Schema done", full.Summary);
+        Assert.Equal("Schema done", full.Text);
+    }
+
+    [Fact]
+    public void TeamPost_PipeShape()
+    {
+        // `perch team post <text>` from inside a bot's pane: text only.
+        var post = JsonSerializer.Deserialize<TeamPostMessage>(
+            "{\"type\":\"team.post\",\"text\":\"Sidebar mockup is in design-loop/team.html\"}",
+            IpcJson.Options)!;
+        Assert.Equal("Sidebar mockup is in design-loop/team.html", post.Text);
+        // A bare post (no text) still parses; the host drops it.
+        Assert.Null(JsonSerializer.Deserialize<TeamPostMessage>("{\"type\":\"team.post\"}", IpcJson.Options)!.Text);
     }
 
     [Fact]
@@ -480,6 +507,100 @@ public class ProtocolTests
     }
 
     // ---- Router mechanics ---------------------------------------------------
+
+    // ---- team ------------------------------------------------------------
+    // The team room and new-bot dialog, written exactly as team-room.ts /
+    // new-bot-dialog.ts send them.
+
+    [Fact]
+    public void TeamRequest_SinceSeqOptional()
+    {
+        var m = Round<TeamRequestMsg>($"{{\"type\":\"team.request\",\"projectId\":\"{G1}\"}}");
+        Assert.Equal(Guid.Parse(G1), m.ProjectId);
+        Assert.Null(m.SinceSeq);
+        Assert.Equal(41, Round<TeamRequestMsg>($"{{\"type\":\"team.request\",\"projectId\":\"{G1}\",\"sinceSeq\":41}}").SinceSeq);
+    }
+
+    [Fact]
+    public void TeamPost_ToIsPolymorphic()
+    {
+        // An array of nicknames, the string "everyone", or null (unaddressed —
+        // the host routes it). All three must land intact.
+        var named = Round<TeamPostMsg>($"{{\"type\":\"team.post\",\"projectId\":\"{G1}\",\"text\":\"@Ada hi\",\"to\":[\"Ada\"],\"clientId\":\"c1\"}}");
+        Assert.Equal("@Ada hi", named.Text);
+        Assert.Equal("c1", named.ClientId);
+        Assert.Equal(JsonValueKind.Array, named.To!.Value.ValueKind);
+        Assert.Equal("Ada", named.To.Value[0].GetString());
+
+        var all = Round<TeamPostMsg>($"{{\"type\":\"team.post\",\"projectId\":\"{G1}\",\"text\":\"x\",\"to\":\"everyone\",\"clientId\":\"c2\"}}");
+        Assert.Equal("everyone", all.To!.Value.GetString());
+
+        var routed = Round<TeamPostMsg>($"{{\"type\":\"team.post\",\"projectId\":\"{G1}\",\"text\":\"x\",\"to\":null,\"clientId\":\"c3\"}}");
+        Assert.True(routed.To == null || routed.To.Value.ValueKind == JsonValueKind.Null);
+    }
+
+    [Fact]
+    public void TeamBotCreate_NewOrExistingPosition()
+    {
+        var fresh = Round<TeamBotCreateMsg>(
+            $"{{\"type\":\"team.bot.create\",\"projectId\":\"{G1}\",\"nickname\":\"Ada\",\"worktree\":true," +
+            "\"position\":{\"name\":\"Frontend dev\",\"purpose\":\"Owns src/web\",\"referencePath\":\"C:\\\\repo\",\"model\":\"sonnet\",\"brief\":\"## Role\\nYou own src/web.\"}}");
+        Assert.Equal("Ada", fresh.Nickname);
+        Assert.True(fresh.Worktree);
+        Assert.Null(fresh.PositionSlug);
+        Assert.Equal("Frontend dev", fresh.Position!.Name);
+        Assert.Equal(@"C:\repo", fresh.Position.ReferencePath);
+        Assert.Equal("## Role\nYou own src/web.", fresh.Position.Brief);
+
+        var reuse = Round<TeamBotCreateMsg>(
+            $"{{\"type\":\"team.bot.create\",\"projectId\":\"{G1}\",\"nickname\":\"Bo\",\"worktree\":false,\"positionSlug\":\"frontend-dev\"}}");
+        Assert.Equal("frontend-dev", reuse.PositionSlug);
+        Assert.False(reuse.Worktree);
+        Assert.Null(reuse.Position);
+        // perch test sends flags as strings.
+        Assert.True(Round<TeamBotCreateMsg>(
+            $"{{\"type\":\"team.bot.create\",\"projectId\":\"{G1}\",\"nickname\":\"Cy\",\"worktree\":\"true\",\"positionSlug\":\"x\"}}").Worktree);
+    }
+
+    [Fact]
+    public void TeamBriefMessages()
+    {
+        var g = Round<TeamBriefGenerateMsg>(
+            $"{{\"type\":\"team.brief.generate\",\"jobId\":\"j1\",\"projectId\":\"{G1}\",\"positionName\":\"Analyst\",\"purpose\":\"Reads the data\",\"referencePath\":\"C:\\\\repo\",\"model\":\"opus\"}}");
+        Assert.Equal("j1", g.JobId);
+        Assert.Equal("Analyst", g.PositionName);
+        Assert.Equal("Reads the data", g.Purpose);
+        Assert.Equal("opus", g.Model);
+        Assert.Equal("j1", Round<TeamBriefCancelMsg>("{\"type\":\"team.brief.cancel\",\"jobId\":\"j1\"}").JobId);
+    }
+
+    [Fact]
+    public void TeamPositionUpdate_PartialKeys()
+    {
+        var m = Round<TeamPositionUpdateMsg>(
+            $"{{\"type\":\"team.position.update\",\"projectId\":\"{G1}\",\"slug\":\"analyst\",\"brief\":\"## Role\\nnew\"}}");
+        Assert.Equal("analyst", m.Slug);
+        Assert.Equal("## Role\nnew", m.Brief);
+        Assert.Null(m.Purpose);
+        Assert.Null(m.Name);
+    }
+
+    [Fact]
+    public void TeamBotRemove_AndRoom_AndBrowse()
+    {
+        var r = Round<TeamBotRemoveMsg>(
+            $"{{\"type\":\"team.bot.remove\",\"projectId\":\"{G1}\",\"botId\":\"bo\",\"closeTab\":true}}");
+        Assert.Equal("bo", r.BotId);
+        Assert.True(r.CloseTab);
+        Assert.Null(r.RemoveWorktree);
+
+        var room = Round<TeamRoomMsg>($"{{\"type\":\"team.room\",\"projectId\":\"{G1}\",\"open\":true}}");
+        Assert.True(room.Open);
+
+        var b = Round<TeamReferenceBrowseMsg>($"{{\"type\":\"team.reference.browse\",\"requestId\":\"r1\",\"projectId\":\"{G1}\"}}");
+        Assert.Equal("r1", b.RequestId);
+        Assert.Equal(Guid.Parse(G1), b.ProjectId);
+    }
 
     [Fact]
     public void Router_DispatchesTypedAndPayloadless()

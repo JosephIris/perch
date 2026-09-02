@@ -52,6 +52,7 @@ internal static class Program
                 "send"   => CmdSend(pipeName, args),
                 "open"   => CmdOpen(pipeName, args),
                 "agent"  => CmdAgent(pipeName, args),
+                "team"   => CmdTeam(pipeName, args),
                 "hooks"  => HookHandler.Run(pipeName, args),
                 _ => PrintUnknown(args[0]),
             };
@@ -164,6 +165,23 @@ internal static class Program
         return Send(pipeName, new { type = "agent", name });
     }
 
+    private static int CmdTeam(string pipeName, string[] args)
+    {
+        // Usage: perch team post <text...>
+        // A note from a bot to the team room — for the user, pinging no
+        // teammate. (Bot-to-bot goes through Claude Code's own SendMessage;
+        // this is the "done, it's in src/x" that doesn't need a colleague's
+        // attention.) The host appends it to the room ledger; nothing else.
+        if (args.Length < 2 || args[1] != "post")
+        {
+            Console.Error.WriteLine("perch team: usage: perch team post <text...>");
+            return 2;
+        }
+        if (args.Length < 3) { Console.Error.WriteLine("perch team post: missing text"); return 2; }
+        var text = string.Join(' ', args, 2, args.Length - 2);
+        return Send(pipeName, new { type = "team.post", text });
+    }
+
     private static int CmdTest(string[] args)
     {
         // Usage: perch test <verb> [--text S] [--id GUID] [--title S] [--shell S]
@@ -262,6 +280,7 @@ internal static class Program
         Console.WriteLine("  perch send <target> <input...>");
         Console.WriteLine("  perch open [--name X] [--cwd path] [--cmd command]");
         Console.WriteLine("  perch agent <name>           (header badge; empty clears)");
+        Console.WriteLine("  perch team post <text...>    (a note to the team room; pings nobody)");
         Console.WriteLine();
         Console.WriteLine("Outside a perch pane (no PERCH_PIPE set) every command is a silent no-op.");
     }

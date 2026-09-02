@@ -425,15 +425,6 @@ export class Workspace {
 
   getActivePaneId(): string | null { return this.activePaneId; }
 
-  /** Scroll a terminal pane to the newest occurrence of any of `patterns` and
-   *  highlight it (the Inspector's "show in the terminal"). False when the
-   *  pane is gone, isn't a terminal, or nothing matches. */
-  revealInTerminal(paneId: string, patterns: string[]): boolean {
-    const pane = this.findPane(paneId);
-    if (!(pane instanceof Pane)) return false;
-    return pane.revealText(patterns);
-  }
-
   /** The root DOM element of a mounted, VISIBLE pane, or null. Used to anchor
    *  the notify toast — only the active session's panes are on screen, so a
    *  background pane returns null and the toast falls back to default

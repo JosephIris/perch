@@ -360,6 +360,12 @@ internal sealed class PaneNode
     /// host's name sweep; confirmed by the session-start hook.
     public string? PeerName { get; set; }
 
+    /// A peer name fixed at creation instead of derived from the tab title —
+    /// a team bot's address, minted unique app-wide when the bot was made.
+    /// The name sweep uses it verbatim, so renaming the tab never moves the
+    /// address a teammate was told. PERSISTED. Null for ordinary panes.
+    public string? PinnedPeerName { get; set; }
+
     /// True while Name is the auto-assigned "pane-N" placeholder OR an
     /// auto-derived title (e.g. a URL pane's website <title>). User-typed
     /// rename via pane.rename flips this false; subsequent URL-pane title

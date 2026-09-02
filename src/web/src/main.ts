@@ -22,9 +22,12 @@ import { invalidateCommits } from "./commits.js";
 import { initCloud } from "./cloud-panel.js";
 import { initLocal } from "./local-panel.js";
 import { initUtilityMini } from "./mini-mode.js";
-import { initInspector, toggleInspector, openInspectorSearch, setInspectorReveal } from "./inspector.js";
+import { initInspector, toggleInspector, openInspectorSearch } from "./inspector.js";
 import { setModelLimits } from "./model-menu.js";
 import { initWebPaneSuppression } from "./webpane-suppress.js";
+import { applyTeamState, toggleTeamRoom, onTeamRoomChange } from "./team-room.js";
+import { teamProjectFor } from "./team.js";
+import { applyBriefProgress, applyBriefResult, applyReferencePicked } from "./new-bot-dialog.js";
 import type { PaneTreeView } from "./bridge.js";
 
 // One shared 1Hz ticker keeps every "working · 2m" label live without
@@ -63,9 +66,6 @@ initUtilityMini();
 // inspector.request. Open by default; the host ferries the persisted state in
 // prefs.inspectorOpen on the first push.
 initInspector();
-// Journal rows' "show in the terminal" jump — injected because the inspector
-// is self-wiring and can't import the workspace main owns.
-setInspectorReveal((paneId, needles) => workspace.revealInTerminal(paneId, needles));
 
 // Footer auto-update pill (hidden until the host reports a newer release).
 const updateBanner = $<HTMLButtonElement>("update-banner");
@@ -104,6 +104,8 @@ function renderSidebar() {
   syncModeToggle(lastState.prefs?.sidebarMode ?? "sessions");
 }
 sidebar.rerender = renderSidebar;
+// The team row wears the selected pill while its room is open; redraw on flip.
+onTeamRoomChange(renderSidebar);
 
 const modeSessions = $<HTMLButtonElement>("mode-sessions");
 const modeProjects = $<HTMLButtonElement>("mode-projects");
@@ -211,6 +213,9 @@ onMessage((msg) => {
       setModelLimits(msg.modelLimits);
       maybeShowOnboarding(msg.prefs);
       renderSidebar();
+      // The room derives presence from the same session list; it re-renders
+      // when a bot's state moved and otherwise just refreshes its header.
+      applyTeamState(msg);
       // Pass the full session list + active id: the workspace keeps a stage
       // per session alive across switches (preserving terminal scrollback)
       // and disposes a stage only when its session drops out of this list.
@@ -282,6 +287,15 @@ onMessage((msg) => {
         msg.nodeId,
         msg.data ? `data:${msg.mediaType};base64,${msg.data}` : ""
       );
+      break;
+    case "team.brief.progress":
+      applyBriefProgress(msg);
+      break;
+    case "team.brief.result":
+      applyBriefResult(msg);
+      break;
+    case "team.reference.picked":
+      applyReferencePicked(msg);
       break;
     case "resume.prompt": {
       // One-time "reopen previous Claude sessions?" prompt. Until we answer,
@@ -437,6 +451,17 @@ window.addEventListener("keydown", (ev) => {
       openInspectorSearch();
       ev.preventDefault(); ev.stopPropagation();
       break;
+    case "KeyM": {
+      // Team room for the active tab's project (or the first project with
+      // bots). NOT Ctrl+Shift+R: that family is reload-class in Chromium and
+      // would fire at the browser level regardless of preventDefault.
+      ev.preventDefault(); ev.stopPropagation();
+      const pid = lastState ? teamProjectFor(lastState) : null;
+      if (!pid) { toast.show("No team yet — add a bot from a project's menu", "info", null); break; }
+      dashboard.hide();
+      toggleTeamRoom(pid);
+      break;
+    }
     // Ctrl+Shift+arrows: move the active pane within its split. The host
     // reorders it among its siblings (no-op if the direction is across the
     // split's axis or the pane is already at the edge).

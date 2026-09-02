@@ -7,7 +7,6 @@ import type { ILinkProvider, ILink } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
-import { SearchAddon } from "@xterm/addon-search";
 
 import { b64ToBytes, bytesToB64, send } from "./bridge.js";
 import type { PaneTreeView } from "./bridge.js";
@@ -277,50 +276,15 @@ export class Pane {
     });
   }
 
-  // Lazy: most panes never get a journal "show in terminal" click, so the
-  // addon isn't loaded until the first one.
-  private search: SearchAddon | null = null;
-  private searchClearTimer: number | null = null;
-
-  /** Scroll the terminal to the most recent occurrence of any of `patterns`
-   *  (regex sources, tried in order — longest, most specific first) and
-   *  highlight it via the selection, which the theme already styles. Selection
-   *  is safe here: copy-on-select rides mouseup, so a programmatic selection
-   *  copies nothing.
-   *
-   *  Searched as regexes, not literals, because the patterns are whitespace-
-   *  tolerant (see revealPatterns) — a wrapped line's padding sits in the
-   *  middle of xterm's search string and a literal needle never survives it.
-   *
-   *  Returns false when nothing matches — the text left the 10k-line
-   *  scrollback, it predates this agent process (a resumed session's journal
-   *  reaches back further than its terminal does), or a TUI redraw reformatted
-   *  it beyond recognition.
-   */
-  revealText(patterns: string[]): boolean {
-    if (!this.search) {
-      this.search = new SearchAddon();
-      this.term.loadAddon(this.search);
-    }
-    // Start every attempt from the buffer's end: with no prior selection,
-    // findPrevious searches bottom-up, so the newest occurrence wins — the one
-    // a journal row most plausibly refers to.
-    this.term.clearSelection();
-    for (const n of patterns) {
-      if (!n) continue;
-      if (this.search.findPrevious(n, { regex: true })) {
-        // Let the highlight land, then put the terminal back the way it was —
-        // a selection left behind flips right-click from paste to copy.
-        if (this.searchClearTimer !== null) clearTimeout(this.searchClearTimer);
-        this.searchClearTimer = window.setTimeout(() => {
-          this.searchClearTimer = null;
-          this.term.clearSelection();
-        }, 2500);
-        return true;
-      }
-    }
-    return false;
-  }
+  // NOTE: a journal row used to carry a "show in the terminal" button that
+  // scrolled this pane to the matching line via the xterm search addon. It
+  // could never work and has been removed. Claude Code takes the ALTERNATE
+  // screen buffer, which has no scrollback at all — xterm holds only the ~30
+  // currently-painted rows, and cc repaints those constantly. Measured on a
+  // live pane: buffer.type === "alternate", buffer.length === rows,
+  // baseY === 0. A prompt from two seconds earlier was already unfindable.
+  // Anything that wants to search an agent pane's history has to read the
+  // transcript (which is what the Inspector already does), not the terminal.
 
   // Re-entrancy guard for the readText() fallback below — set while a read is
   // in flight so a second right-click during the await can't queue a second

@@ -26,8 +26,14 @@ import { send } from "./bridge.js";
 // they're small, short-lived, and usually nowhere near a web pane, so blanking
 // every pane on each dropdown open would be a worse flicker than the rare
 // occlusion. Add a class here if a new full-viewport modal family appears.
+//
+// .team-room and .settings-page are the two surfaces that mount INSIDE #app
+// (the room spans the workspace + inspector columns; the settings page is a
+// body child but was missing here), so the observer watches #app's children
+// as well as body's.
 const MODAL_SELECTOR =
-  ".projects-overlay,.settings-overlay,.cloud-overlay,.local-overlay,.onboarding-overlay";
+  ".projects-overlay,.settings-overlay,.cloud-overlay,.local-overlay,.onboarding-overlay," +
+  ".team-room,.settings-page";
 
 let suppressed = false;
 
@@ -39,6 +45,9 @@ function sync(): void {
 }
 
 export function initWebPaneSuppression(): void {
-  new MutationObserver(sync).observe(document.body, { childList: true });
+  const observer = new MutationObserver(sync);
+  observer.observe(document.body, { childList: true });
+  const app = document.getElementById("app");
+  if (app) observer.observe(app, { childList: true });
   sync();
 }

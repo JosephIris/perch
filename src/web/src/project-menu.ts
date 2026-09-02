@@ -6,6 +6,7 @@
 
 import type { ProjectView } from "./bridge.js";
 import { send } from "./bridge.js";
+import { showNewBotDialog } from "./new-bot-dialog.js";
 
 let openMenu: HTMLElement | null = null;
 
@@ -17,6 +18,23 @@ export function showProjectMenu(x: number, y: number, p: ProjectView): void {
   const menu = document.createElement("div");
   menu.className = "project-menu";
   menu.setAttribute("role", "menu");
+
+  // "Add a bot…" — the one door into a team for a project that has none yet
+  // (once it has bots, the room's roster carries its own "Add bot").
+  const addBot = document.createElement("button");
+  addBot.type = "button";
+  addBot.className = "project-menu__item";
+  addBot.setAttribute("role", "menuitem");
+  const addLabel = document.createElement("span");
+  addLabel.className = "project-menu__label";
+  addLabel.textContent = "Add a bot…";
+  addBot.appendChild(addLabel);
+  addBot.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    dismissProjectMenu();
+    showNewBotDialog(p);
+  });
+  menu.appendChild(addBot);
 
   const btn = document.createElement("button");
   btn.type = "button";

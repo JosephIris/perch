@@ -69,12 +69,37 @@ internal static class ClaudeWrapper
             // about the rename" addressable without a lookup. Skipped when the
             // user passed their own -n/--name.
             var peerName = ReadPeerName();
-            if (!string.IsNullOrEmpty(peerName)
-                && Array.IndexOf(passthroughArgs, "--name") < 0
-                && Array.IndexOf(passthroughArgs, "-n") < 0)
+            var callerNamed = Array.IndexOf(passthroughArgs, "--name") >= 0
+                || Array.IndexOf(passthroughArgs, "-n") >= 0;
+            if (!string.IsNullOrEmpty(peerName) && !callerNamed)
             {
                 psi.ArgumentList.Add("--name");
                 psi.ArgumentList.Add(peerName!);
+            }
+
+            // Record the name this launch ACTUALLY goes out under. The host
+            // writes the name it INTENDS; a project tab passes its own --name
+            // (a slug, because a spaced name shreds in the shell's startup
+            // line) and that one wins. The session-start hook used to re-read
+            // the host's file, so the host recorded "loc diff fix" for a
+            // session that answers to "loc-diff-fix", and every peer note
+            // addressed to the real name was dropped as "not one of our
+            // tabs". Now the hook reports THIS file: the address, not the
+            // intent.
+            RecordLaunchedName(callerNamed ? CallerName(passthroughArgs) : peerName);
+
+            // Per-bot standing brief, same temp-file channel. The host points
+            // this pane at the bot's rendered system.md and it is appended to
+            // Claude Code's own system prompt (append, never replace: the bot
+            // is a full Claude Code session with a role, not a bare model).
+            // Re-read at every launch so an edited brief applies on relaunch
+            // without a flag. A caller supplying its own system-prompt flag
+            // wins, same as --model and --name.
+            var brief = ReadBriefPath();
+            if (brief != null && !HasSystemPromptArg(passthroughArgs))
+            {
+                psi.ArgumentList.Add("--append-system-prompt-file");
+                psi.ArgumentList.Add(brief);
             }
         }
         foreach (var a in passthroughArgs) psi.ArgumentList.Add(a);
@@ -134,6 +159,94 @@ internal static class ClaudeWrapper
             foreach (var c in name)
                 if (char.IsControl(c) || c is '"' or '\'') return null;
             return name;
+        }
+        catch { return null; }
+    }
+
+    /// The name the caller passed with --name/-n (either "--name X" or
+    /// "--name=X"), or null when the flag has no value.
+    private static string? CallerName(string[] args)
+    {
+        for (var i = 0; i < args.Length; i++)
+        {
+            var a = args[i];
+            if (a is "--name" or "-n")
+                return i + 1 < args.Length ? args[i + 1] : null;
+            if (a.StartsWith("--name=", StringComparison.Ordinal))
+                return a.Substring("--name=".Length);
+        }
+        return null;
+    }
+
+    /// Write %TEMP%\perch-claude-launched-name-&lt;PERCH_PANE_ID&gt;.txt with the
+    /// effective session name, or delete it when this launch has none (cc
+    /// then auto-names from the cwd and the hook falls back to the host's
+    /// file, then to nothing). Never throws: a missing record costs the host
+    /// an address, not the user a launch.
+    private static void RecordLaunchedName(string? name)
+    {
+        try
+        {
+            var paneId = Environment.GetEnvironmentVariable("PERCH_PANE_ID");
+            if (string.IsNullOrEmpty(paneId)) return;
+            var path = Path.Combine(Path.GetTempPath(), $"perch-claude-launched-name-{paneId}.txt");
+            var n = (name ?? "").Trim();
+            if (n.Length == 0 || n.Length > 60)
+            {
+                if (File.Exists(path)) File.Delete(path);
+                return;
+            }
+            File.WriteAllText(path, n);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"perch wrap-claude: couldn't record the session name: {ex.Message}");
+        }
+    }
+
+    /// True when the caller already chose a system prompt, in any of the
+    /// four spellings Claude Code accepts. Ours must not stack on top.
+    private static bool HasSystemPromptArg(string[] args)
+    {
+        foreach (var a in args)
+        {
+            if (a is "--append-system-prompt" or "--append-system-prompt-file"
+                  or "--system-prompt" or "--system-prompt-file") return true;
+            if (a.StartsWith("--append-system-prompt=", StringComparison.Ordinal)
+                || a.StartsWith("--append-system-prompt-file=", StringComparison.Ordinal)
+                || a.StartsWith("--system-prompt=", StringComparison.Ordinal)
+                || a.StartsWith("--system-prompt-file=", StringComparison.Ordinal)) return true;
+        }
+        return false;
+    }
+
+    /// Read the host-written per-pane brief pointer from
+    /// %TEMP%\perch-claude-brief-&lt;PERCH_PANE_ID&gt;.txt. Returns the absolute path
+    /// of the bot's system.md, or null when this pane runs no bot.
+    ///
+    /// Validated harder than the other side-channels because the payload is
+    /// a FILE READ INTO THE SYSTEM PROMPT: the path must exist, be a .md of
+    /// sane size, carry no quote/control characters, and live under a
+    /// `.perch\team\` folder. A stale or tampered marker therefore cannot
+    /// make `claude` swallow an arbitrary file as its instructions.
+    private static string? ReadBriefPath()
+    {
+        try
+        {
+            var paneId = Environment.GetEnvironmentVariable("PERCH_PANE_ID");
+            if (string.IsNullOrEmpty(paneId)) return null;
+            var marker = Path.Combine(Path.GetTempPath(), $"perch-claude-brief-{paneId}.txt");
+            if (!File.Exists(marker)) return null;
+            var path = File.ReadAllText(marker).Trim();
+            if (path.Length == 0 || path.Length > 260) return null;
+            foreach (var c in path)
+                if (char.IsControl(c) || c is '"' or '\'') return null;
+            if (!path.EndsWith(".md", StringComparison.OrdinalIgnoreCase)) return null;
+            if (path.IndexOf(@"\.perch\team\", StringComparison.OrdinalIgnoreCase) < 0
+                && path.IndexOf("/.perch/team/", StringComparison.OrdinalIgnoreCase) < 0) return null;
+            var info = new FileInfo(path);
+            if (!info.Exists || info.Length > 256 * 1024) return null;
+            return info.FullName;
         }
         catch { return null; }
     }

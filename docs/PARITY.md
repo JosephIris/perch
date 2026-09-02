@@ -17,7 +17,7 @@ is missing most of the agent-orchestration layer on top.
 | Category | Upstream perch | perch | Status |
 |---|---|---|---|
 | Workspace model | Repo-rooted; each run is a git worktree on its own branch | Flat session list, no repo/worktree concept | ❌ |
-| Multi-agent parallel runs | Same prompt across N agents/models, diff side-by-side | None | ❌ |
+| Multi-agent parallel runs | Same prompt across N agents/models, diff side-by-side | Teams: named bots with positions + a group room (`docs/TEAMS.md`); no side-by-side diff yet | 🟡 |
 | Agent as first-class concept | Agent presets (Claude Code, Codex, Aider, …) | `Session.Shell` string + ClaudeWrapper/HookHandler | 🟡 |
 | Run review UI | Diff viewer, file tree, accept/discard per run | None | ❌ |
 | Session/pane terminal | xterm.js + splits | xterm.js + recursive splits + lazy spawn + JobObject cleanup | ✅ |

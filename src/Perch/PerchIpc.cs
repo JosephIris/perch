@@ -35,6 +35,7 @@ internal sealed class PerchIpcServer : IDisposable
     public event Action<SessionMessage>? OnSession;
     public event Action<CloudStampedMessage>? OnCloudStamped;
     public event Action<PeerMsgMessage>? OnPeerMsg;
+    public event Action<TeamPostMessage>? OnTeamPost;
 
     private readonly CancellationTokenSource _cts = new();
     private readonly Dispatcher _dispatcher;
@@ -171,6 +172,10 @@ internal sealed class PerchIpcServer : IDisposable
                     var pm = JsonSerializer.Deserialize<PeerMsgMessage>(json, IpcJson.Options);
                     if (pm != null) _dispatcher.BeginInvoke(() => OnPeerMsg?.Invoke(pm));
                     break;
+                case "team.post":
+                    var tp = JsonSerializer.Deserialize<TeamPostMessage>(json, IpcJson.Options);
+                    if (tp != null) _dispatcher.BeginInvoke(() => OnTeamPost?.Invoke(tp));
+                    break;
             }
         }
         catch (JsonException ex) { Log.Error("PerchIpc.Dispatch.Json", ex); }
@@ -286,11 +291,25 @@ internal sealed record SessionMessage(
 /// fires from PostToolUse with the delivered/failed verdict (`ok`). `target`
 /// is the peer NAME the sender addressed; the host resolves it to a pane via
 /// the names it assigned. `text` is a one-line cut of the message body.
+///
+/// `message` is the FULL body and `summary` the sender's own one-liner, both
+/// added for the team room, which shows what a bot actually said to a
+/// teammate rather than a 140-char cut. Optional so a hook binary predating
+/// them still parses (the pair note only ever needed `text`).
 internal sealed record PeerMsgMessage(
     [property: JsonPropertyName("phase")] string? Phase,
     [property: JsonPropertyName("target")] string? Target,
     [property: JsonPropertyName("text")] string? Text,
-    [property: JsonPropertyName("ok")] bool? Ok = null);
+    [property: JsonPropertyName("ok")] bool? Ok = null,
+    [property: JsonPropertyName("message")] string? Message = null,
+    [property: JsonPropertyName("summary")] string? Summary = null);
+
+/// Sent by `perch team post <text>` from inside a bot's pane: a note for the
+/// team room (and so for the user) that pings no teammate. The bot's way to
+/// say "done, it's in src/x" without a SendMessage to each colleague. The
+/// host appends it to the room ledger; nothing is typed anywhere.
+internal sealed record TeamPostMessage(
+    [property: JsonPropertyName("text")] string? Text);
 
 /// Sent by the cc HookHandler (PreToolUse/Bash) the moment it stamps agent
 /// labels onto a `gcloud ... create`. The hook can only put JOIN KEYS on the

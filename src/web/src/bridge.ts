@@ -269,7 +269,37 @@ export type OutMessage =
    * npm → node children go with it. */
   | { type: "local.kill"; pid: number }
   /* "Kill all" in the lingering area — every server whose owning pane is gone. */
-  | { type: "local.killLingering" };
+  | { type: "local.killLingering" }
+  /* ---- Team room --------------------------------------------------------
+   * A project's bots and the one ledger they all post into. Bots are ordinary
+   * sessions (they keep their sidebar rows); these messages only add the team
+   * layer on top. */
+  /* Fetch the room's ledger. `sinceSeq` asks only for entries after that seq
+   * (the incremental poll); absent → the newest window the host keeps. */
+  | { type: "team.request"; projectId: string; sinceSeq?: number }
+  /* Your post. `to` is what the page resolved from the @mentions — nicknames,
+   * "everyone", or null when there were none (the host routes it, and the
+   * echoed entry carries the resolved recipients). `clientId` is page-minted so
+   * the optimistic row can be matched to its echo. */
+  | { type: "team.post"; projectId: string; text: string; to: string[] | "everyone" | null; clientId: string }
+  /* Create a bot: an existing position by slug, or a new one whose `brief` is
+   * the text the user accepted in the dialog (generated or hand-written). */
+  | { type: "team.bot.create"; projectId: string; nickname: string; worktree: boolean; positionSlug?: string;
+      position?: { name: string; purpose: string; referencePath: string; model: string; brief: string } }
+  /* The headless "read the repo, write the brief" job. `jobId` is page-minted
+   * so a reply for a dialog that has since closed can be dropped. */
+  | { type: "team.brief.generate"; jobId: string; projectId: string; positionName: string; purpose: string; referencePath: string; model: string }
+  | { type: "team.brief.cancel"; jobId: string }
+  /* Edit a saved position. Absent fields are left alone. */
+  | { type: "team.position.update"; projectId: string; slug: string; brief?: string; purpose?: string; name?: string }
+  /* Take a bot off the team. Its tab stays unless `closeTab`; the worktree
+   * stays unless `removeWorktree` (same option the close dialog offers). */
+  | { type: "team.bot.remove"; projectId: string; botId: string; closeTab: boolean; removeWorktree?: boolean }
+  /* Native folder picker for the reference repo; replies team.reference.picked. */
+  | { type: "team.reference.browse"; requestId: string; projectId: string }
+  /* Room opened/closed. While open the host pushes team.data on every new
+   * entry, so the page's poll is only a fallback. */
+  | { type: "team.room"; projectId: string; open: boolean };
 
 // ---- Incoming message shapes (host -> page) --------------------------------
 
@@ -468,6 +498,10 @@ export type ProjectView = {
   path: string;
   /* Folded into project mode's "Hidden" drawer. Absent reads as visible. */
   hidden?: boolean;
+  /* The project's team, when it has one. Absent or empty → no team row, no
+   * room. Bots are also ordinary rows in `sessions[]`; this is the layer that
+   * says which of them are bots and what position each holds. */
+  team?: TeamView;
 };
 
 export type StateMessage = {
@@ -640,6 +674,111 @@ export type InspectorDataMessage = {
   pending?: boolean;
 };
 
+// ---- Team room -------------------------------------------------------------
+
+/* A position is the job a bot holds: a purpose in plain language and the brief
+ * the host generated from it. Several bots can hold one position. */
+export type TeamPositionView = {
+  slug: string;
+  name: string;
+  purpose: string;
+  /* Model alias for bots in this position; "" = the default. */
+  model: string;
+  /* False while the brief has never been generated or written. */
+  hasBrief?: boolean;
+  /* The brief's text, when the host chooses to ferry it (it's what "Edit
+   * brief…" opens on). Absent → the editor starts empty and offers to
+   * regenerate. */
+  brief?: string;
+};
+
+export type TeamBotView = {
+  botId: string;
+  nickname: string;
+  positionSlug: string;
+  positionName: string;
+  /* Its tab — the session.select target. "" when the tab is gone (the bot is
+   * still on the roster, just not running). */
+  sessionId: string;
+  /* The Claude Code session name it answers to (what teammates put in
+   * SendMessage). Normally the nickname's slug; shown when it differs. */
+  peerName: string;
+};
+
+export type TeamView = { bots: TeamBotView[]; positions: TeamPositionView[] };
+
+/* One row of the room's ledger.
+ *   user   — your post (from "you"; `to` is who it went to, absent = routed).
+ *   beat   — what a bot SAID (an assistant text block from its transcript).
+ *   work   — what a bot DID (a tool call; verb/target/repeat as in the journal).
+ *   peer   — a bot messaged another bot (`to` = [nickname]).
+ *   note   — a bot posted to the room for you, pinging nobody.
+ *   system — the room narrating itself: joined / left / waiting / asleep … */
+export type TeamEntryKind = "user" | "beat" | "work" | "peer" | "note" | "system";
+
+export type TeamEntryView = {
+  /* Ledger sequence; strictly increasing, the merge/dedupe key. */
+  seq: number;
+  ts: string;
+  kind: TeamEntryKind;
+  /* Nickname, or "you", or "perch" for system rows. */
+  from: string;
+  to?: string[] | "everyone";
+  text: string;
+  botId?: string;
+  paneId?: string;
+  /* work rows only, mirroring InspectorEventView. */
+  verb?: string;
+  target?: string;
+  note?: string;
+  repeat?: number;
+  /* user rows only — the echo of team.post's clientId. */
+  clientId?: string;
+  /* system rows only. */
+  event?: "joined" | "left" | "waiting" | "permission" | "done" | "asleep" | "woke" | "error"
+        | "routed" | "delivered" | "undelivered";
+  /* user rows: false while the host is holding the post for a bot that has no
+   * Claude up yet (asleep, still booting). Flips true when it lands. */
+  delivered?: boolean;
+};
+
+/* Reply to team.request, and pushed unsolicited while the room is open. The
+ * page merges by seq, so a push and a poll landing together can't duplicate. */
+export type TeamDataMessage = {
+  type: "team.data";
+  projectId: string;
+  entries: TeamEntryView[];
+  lastSeq: number;
+  /* The host cut to the newest window; older rows exist but aren't sent. */
+  truncated?: boolean;
+  /** Page-side only, as on InspectorDataMessage: a payload the PAGE made up
+   *  because a request timed out — "not known yet", never "empty". */
+  pending?: boolean;
+};
+
+export type TeamBriefProgressMessage = {
+  type: "team.brief.progress";
+  jobId: string;
+  /* Short human phase ("Reading the repo…"). */
+  phase: string;
+  elapsedMs: number;
+};
+
+export type TeamBriefResultMessage = {
+  type: "team.brief.result";
+  jobId: string;
+  brief?: string;
+  error?: string;
+  costUsd?: number;
+};
+
+/* Reply to team.reference.browse. `path` null = the picker was cancelled. */
+export type TeamReferencePickedMessage = {
+  type: "team.reference.picked";
+  requestId: string;
+  path: string | null;
+};
+
 /* Reply to settings.request. shells is the host's detected-shell list;
  * cmd is the command line to store as defaultShell. defaultCwdResolved is
  * what an empty defaultCwd falls back to (shown as the input placeholder
@@ -770,7 +909,12 @@ export type InMessage =
   /* Every loopback server listening right now: dev servers you started, plus any
    * that outlived the pane that spawned them. Only appears while something is
    * actually listening. */
-  | LocalDataMessage;
+  | LocalDataMessage
+  /* Team room: the ledger, brief-generation progress/result, folder pick. */
+  | TeamDataMessage
+  | TeamBriefProgressMessage
+  | TeamBriefResultMessage
+  | TeamReferencePickedMessage;
 
 /** One machine (or one Dataproc cluster — a cluster is ONE row, not five). */
 export interface CloudResourceView {

@@ -23,7 +23,10 @@ import { showNewTabDialog } from "./new-tab-dialog.js";
 import { RestoreProgress } from "./restore-progress.js";
 import { openCommitsPopover, openCommitsLightbox } from "./commits-view.js";
 import { showCloudPanel, applyCloudData } from "./cloud-panel.js";
-import type { SessionView, PaneTreeView } from "./bridge.js";
+import type { SessionView, PaneTreeView, ProjectView, StateMessage, TeamDataMessage, TeamEntryView } from "./bridge.js";
+import { openTeamRoom, applyTeamState, onTeamRoomChange, feedTeamFixture } from "./team-room.js";
+import { showNewBotDialog, applyBriefProgress, applyBriefResult, applyReferencePicked } from "./new-bot-dialog.js";
+import { onMessage as onHostMessage } from "./bridge.js";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { createSetupOverlay } from "./setup-overlay.js";
@@ -1223,4 +1226,170 @@ if (view === "dashboard") {
       },
     ],
   });
+}
+
+
+// ---- Team room ---------------------------------------------------------------
+// #team          — the room over a 3-bot team: Ada working (2m), Bo blocked on a
+//                  permission prompt, Cy asleep. ~20 ledger rows covering every
+//                  kind, two work folds, a peer message, a pending post, and the
+//                  "older messages aren't shown" banner.
+// #team-empty    — a project with a team folder but no bots yet.
+// #team-sidebar  — the sidebar alone: the team row (with an unread count) and
+//                  the bots' rows wearing their position tags.
+// #newbot*       — the dialog: fresh / mid-generation / reviewing the brief /
+//                  the failure recovery / the existing-position path.
+if (view === "team" || view === "team-empty" || view === "team-sidebar" || view.startsWith("newbot")) {
+  const teamProjects: ProjectView[] = [
+    {
+      id: "p-ptp", name: "storefront-web", path: "C:\\dev\\storefront-web",
+      team: {
+        positions: [
+          { slug: "frontend-dev", name: "Frontend dev", purpose: "Owns everything under src/web: the sidebar, the panes, the dialogs and the CSS tokens.", model: "sonnet", hasBrief: true },
+          { slug: "backend-dev", name: "Backend dev", purpose: "Owns the WPF host, the IPC pipes, the hook handler and the CLI.", model: "", hasBrief: true },
+          { slug: "designer", name: "Designer", purpose: "Keeps every surface on the constitution; mocks new surfaces before code.", model: "", hasBrief: false },
+        ],
+        bots: [
+          { botId: "b-ada", nickname: "Ada", positionSlug: "frontend-dev", positionName: "Frontend dev", sessionId: "s-ada", peerName: "ada" },
+          { botId: "b-bo", nickname: "Bo", positionSlug: "backend-dev", positionName: "Backend dev", sessionId: "s-bo", peerName: "bo" },
+          { botId: "b-cy", nickname: "Cy", positionSlug: "designer", positionName: "Designer", sessionId: "s-cy", peerName: "cy-2" },
+        ],
+      },
+    },
+    { id: "p-gm", name: "home-tools", path: "C:\\dev\\home-tools", team: { positions: [], bots: [] } },
+  ];
+  const permAsk = { text: "Allow running `npm install` in the worktree?", level: "error" as const };
+  const teamSessions: SessionView[] = [
+    projectTab({
+      id: "s-ada", title: "Ada",
+      rootPane: leaf({ name: "Ada", agentState: "working", activityDetail: "editing sidebar.ts", branch: "team/ada", colorIndex: 0, ahead: 2, aheadMine: 2 }),
+      agentState: "working", activityDetail: "editing sidebar.ts", workingCount: 1, turnStartMs: TWO_MIN_AGO,
+      worktreeBranch: "team/ada", branch: "team/ada", linesAdded: 143, linesDeleted: 31, filesChanged: 4, ahead: 2, aheadMine: 2,
+    }),
+    projectTab({
+      id: "s-bo", title: "Bo",
+      rootPane: leaf({ name: "Bo", agentState: "permission", branch: "team/bo", colorIndex: 3, notification: permAsk }),
+      agentState: "permission", notification: permAsk, waitingCount: 1,
+      worktreeBranch: "team/bo", branch: "team/bo", linesAdded: 12, linesDeleted: 2, filesChanged: 1,
+    }),
+    projectTab({
+      id: "s-cy", title: "Cy",
+      rootPane: leaf({ name: "Cy", agentState: "done", branch: "team/cy", colorIndex: 5 }),
+      agentState: "done", dormant: true, doneAtMs: Date.now() - 41 * 60_000,
+      worktreeBranch: "team/cy", branch: "team/cy",
+    }),
+    projectTab({
+      id: "s-plain", title: "signup flow",
+      rootPane: leaf({ name: "signup flow", agentState: "done", branch: "main", colorIndex: 1 }),
+      doneAtMs: Date.now() - 47_000, linesAdded: 40, linesDeleted: 9, filesChanged: 2,
+    }),
+  ];
+  const teamState: StateMessage = {
+    type: "state",
+    activeSessionId: "s-ada",
+    activePaneId: (teamSessions[0].rootPane as Extract<PaneTreeView, { kind: "leaf" }>).paneId,
+    homeDir: "C:\\Users\\me",
+    sessions: teamSessions,
+    projects: teamProjects,
+    closedSessions: [],
+    prefs: { fontSize: 13, sidebarMode: "projects", inspectorOpen: true },
+  };
+
+  // The ledger. Times run backwards from now so continuation grouping (3 min)
+  // and the hover stamps read plausibly.
+  const at = (minsAgo: number, secs = 0) => new Date(Date.now() - minsAgo * 60_000 - secs * 1000).toISOString();
+  let seq = 40;   // truncated: the room starts mid-history
+  const row = (over: Partial<TeamEntryView> & { kind: TeamEntryView["kind"]; from: string; text: string; ts: string }): TeamEntryView =>
+    ({ seq: ++seq, ...over });
+  const work = (from: string, botId: string, ts: string, verb: string, target: string, repeat?: number) =>
+    row({ kind: "work", from, botId, ts, verb, target, text: "", ...(repeat ? { repeat } : {}) });
+  const entries: TeamEntryView[] = [
+    row({ kind: "system", from: "perch", ts: at(58), text: "Ada joined as Frontend dev", event: "joined" }),
+    row({ kind: "system", from: "perch", ts: at(57), text: "Bo joined as Backend dev", event: "joined" }),
+    row({ kind: "user", from: "you", ts: at(55), to: "everyone", text: "@everyone introduce yourselves in one line, then Ada: the sidebar's team row is misaligned when a project is collapsed. Bo: is `team.data` pushed while the room is open?" }),
+    row({ kind: "beat", from: "Ada", botId: "b-ada", ts: at(54, 40), text: "Ada, Frontend dev — I own **src/web**: the sidebar, panes, dialogs and tokens. I'll take the team row alignment now." }),
+    row({ kind: "beat", from: "Bo", botId: "b-bo", ts: at(54, 20), text: "Bo, Backend dev — host, IPC and the hook handler. Yes: while the room is open the host pushes `team.data` on every new ledger entry; the page's poll is only a fallback." }),
+    work("Ada", "b-ada", at(52), "Read", "sidebar.ts"),
+    work("Ada", "b-ada", at(51, 40), "Read", "style.css"),
+    work("Ada", "b-ada", at(51, 10), "Grep", "team-row"),
+    work("Ada", "b-ada", at(50), "Edit", "sidebar.ts"),
+    work("Ada", "b-ada", at(49, 30), "Edit", "style.css"),
+    work("Ada", "b-ada", at(49), "Bash", "npm test", 2),
+    row({ kind: "beat", from: "Ada", botId: "b-ada", ts: at(48), text: "Found it — the row sat inside the folded list, so it collapsed with the tabs. Moved it to a sibling of the header; it now stays visible when the group is shut, and the unread count can't fold away." }),
+    row({ kind: "peer", from: "Ada", botId: "b-ada", ts: at(47), to: ["Bo"], text: "Bo — I need `unread` in the team row. Can `team.data` carry `lastSeq` even when `entries` is empty? Then the page can count without a second request." }),
+    row({ kind: "beat", from: "Bo", botId: "b-bo", ts: at(46), text: "It already does: `lastSeq` is the ledger head on every reply, entries or not. Nothing to change on my side." }),
+    work("Bo", "b-bo", at(45), "Read", "TeamController.cs"),
+    work("Bo", "b-bo", at(44, 30), "Edit", "TeamController.cs"),
+    work("Bo", "b-bo", at(44), "Bash", "dotnet test src/Perch.Tests"),
+    row({ kind: "note", from: "Bo", botId: "b-bo", ts: at(43), text: "Pushed the ledger fan-out to `team.data` — the room now updates the instant a bot posts. Ada's page work can rely on it." }),
+    row({ kind: "system", from: "perch", ts: at(40), text: "Cy joined as Designer", event: "joined" }),
+    row({ kind: "user", from: "you", ts: at(38), to: ["Cy"], text: "@Cy before Ada polishes the room, mock the empty state — what does a project with no bots see?" }),
+    row({ kind: "beat", from: "Cy", botId: "b-cy", ts: at(36), text: "Mocked two options in `design-loop/team-empty-options.html`: a centered card with a single accent CTA, and a quieter inline line under the header. Recommending the card — it's the one place the constitution allows centering, and a first-run state should be unmissable." }),
+    row({ kind: "system", from: "perch", ts: at(30), text: "Cy is asleep", event: "asleep" }),
+    row({ kind: "user", from: "you", ts: at(6), to: ["Ada"], text: "Ada — ship the row fix and post when the harness shot is in." }),
+    row({ kind: "beat", from: "Ada", botId: "b-ada", ts: at(5, 30), text: "On it. Running the harness now; shot lands in `design-loop/team-sidebar.png`." }),
+    row({ kind: "beat", from: "Ada", botId: "b-ada", ts: at(4), text: "Typecheck and tests are green. Taking the screenshot." }),
+    row({ kind: "system", from: "perch", ts: at(3), text: "Bo needs your permission — `npm install` in the worktree", event: "permission", botId: "b-bo" }),
+    row({ kind: "user", from: "you", ts: at(2), to: ["Bo"], text: "@Bo hold on the install until Ada's done; I'll approve it then." }),
+  ];
+  const fixture: TeamDataMessage = { type: "team.data", projectId: "p-ptp", entries, lastSeq: seq, truncated: true };
+  (window as unknown as { __teamFixture: TeamDataMessage }).__teamFixture = fixture;
+  // Nothing for home-tools yet: an empty, non-truncated ledger.
+  const emptyFixture: TeamDataMessage = { type: "team.data", projectId: "p-gm", entries: [], lastSeq: 0 };
+
+  // #team-sidebar wants an unread count: pretend you last looked three rows ago.
+  if (view === "team-sidebar") {
+    try { localStorage.setItem("perch.team.seen", JSON.stringify({ "p-ptp": seq - 3 })); } catch { /* file:// */ }
+    feedTeamFixture(fixture);
+  }
+
+  // main.ts isn't loaded here, so route the dialog's host replies ourselves.
+  onHostMessage((m) => {
+    if (m.type === "team.brief.progress") applyBriefProgress(m);
+    else if (m.type === "team.brief.result") applyBriefResult(m);
+    else if (m.type === "team.reference.picked") applyReferencePicked(m);
+  });
+
+  const sb = new Sidebar(list, newBtn, closedEl);
+  sb.rerender = () => sb.render(teamSessions, "s-ada", [], teamProjects, "projects");
+  sb.rerender();
+  onTeamRoomChange(() => sb.rerender?.());
+  applyTeamState(teamState);
+
+  if (view === "team") {
+    feedTeamFixture(fixture);
+    openTeamRoom("p-ptp");
+  } else if (view === "team-empty") {
+    feedTeamFixture(emptyFixture);
+    openTeamRoom("p-gm");
+  } else if (view.startsWith("newbot")) {
+    // A project with no positions yet for the plain dialog; the one with
+    // positions for the "existing position" path.
+    const fresh: ProjectView = { id: "p-gm", name: "home-tools", path: "C:\\dev\\home-tools", team: { positions: [], bots: [] } };
+    if (view === "newbot-reuse") {
+      showNewBotDialog(teamProjects[0], { positionSlug: "frontend-dev" });
+    } else {
+      showNewBotDialog(fresh);
+      if (view !== "newbot") {
+        // Fill the fields the way a person would, then press Generate; the
+        // harness.html stub answers with progress ticks and a result (or an
+        // error for #newbot-error, or nothing after progress for #newbot-generating).
+        setTimeout(() => {
+          const set = (sel: string, v: string) => {
+            const e = document.querySelector<HTMLInputElement | HTMLTextAreaElement>(sel);
+            if (!e) return;
+            e.value = v;
+            e.dispatchEvent(new Event("input", { bubbles: true }));
+          };
+          const inputs = Array.from(document.querySelectorAll<HTMLInputElement>(".newbot-card input.newtab-input"));
+          if (inputs[0]) { inputs[0].value = "Ada"; inputs[0].dispatchEvent(new Event("input", { bubbles: true })); }
+          if (inputs[1]) { inputs[1].value = "Frontend dev"; inputs[1].dispatchEvent(new Event("input", { bubbles: true })); }
+          set(".newbot-card textarea.newbot-area:not(.newbot-brief)",
+            "Owns everything under src/web — the sidebar, the panes, the dialogs and the CSS tokens. Keeps the chrome calm and on the constitution.");
+          const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>(".newbot-card .projects-card__btn"));
+          buttons.find((b) => b.textContent === "Generate brief")?.click();
+        }, 80);
+      }
+    }
+  }
 }

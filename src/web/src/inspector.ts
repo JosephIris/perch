@@ -19,6 +19,7 @@ import { send, onMessage, type InspectorDataMessage, type InspectorEventView,
          type PaneTreeView, type StateMessage } from "./bridge.js";
 import { copyText } from "./clipboard.js";
 import { showToast } from "./toast.js";
+import { appendInline, hhmm } from "./text.js";
 
 // ---- Data layer ------------------------------------------------------------
 // Same request/reply + cache shape as commits.ts. The cache exists so switching
@@ -181,35 +182,8 @@ function compact(n: number): string {
   return `${(n / 1_000_000).toFixed(1)}M`;
 }
 
-/** Local wall-clock "19:32" — the journal is read against the terminal beside
- *  it, and the terminal shows local time. */
-function hhmm(iso: string): string {
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return "";
-  const d = new Date(t);
-  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-}
-
-/** Render the two bits of inline markdown an agent actually uses in prose:
- *  **bold** and `code`. Left raw, they're pure noise — a beat reads as
- *  "**Pushed to home-tools** (branch `user-cache-restrict`)", asterisks and all,
- *  which is worse than either rendering them or stripping them.
- *
- *  Tokenized into DOM nodes rather than assigned as innerHTML: transcript text
- *  is agent output, and agent output is not something we hand to an HTML parser.
- *  Anything more than these two forms (headings, lists, links) stays literal —
- *  a 336px rail is not a markdown viewer. */
-function appendInline(host: HTMLElement, text: string): void {
-  const re = /\*\*([^*]+)\*\*|`([^`]+)`/g;
-  let last = 0;
-  for (let m = re.exec(text); m; m = re.exec(text)) {
-    if (m.index > last) host.append(text.slice(last, m.index));
-    if (m[1] !== undefined) host.appendChild(elText("strong", "beat__strong", m[1]));
-    else host.appendChild(elText("code", "beat__code", m[2]));
-    last = m.index + m[0].length;
-  }
-  if (last < text.length) host.append(text.slice(last));
-}
+// hhmm() and appendInline() live in text.ts now — the team room renders beats
+// with the same tokenizer, so there is exactly one.
 
 // ---- Copy ------------------------------------------------------------------
 // Double-click any row to copy it. The rail is where you read what the agent
@@ -259,55 +233,12 @@ function eventText(e: InspectorEventView): string {
   }
 }
 
-// ---- Show in the terminal --------------------------------------------------
-// A journal row is a READING of something that happened in the terminal; this
-// jumps you to the original. Wired by main.ts to Workspace.revealInTerminal —
-// the inspector can't import the workspace (main owns it), so the capability
-// is injected.
-
-let revealFn: ((paneId: string, patterns: string[]) => boolean) | null = null;
-
-export function setInspectorReveal(fn: (paneId: string, patterns: string[]) => boolean): void {
-  revealFn = fn;
-}
-
-/** Escape `s` for use as a regex, then let every run of whitespace in it match
- *  any run of whitespace. That second half is the whole point: cc wraps a long
- *  line by PADDING the row out to the terminal's full width and continuing on
- *  the next one, so xterm — which joins a wrapped row with its continuation for
- *  searching — hands the search a string with a fistful of extra spaces exactly
- *  where the wrap fell. A literal search for the text as typed misses every
- *  wrapped line, which is nearly all of them in a narrow pane. */
-function loose(s: string): string {
-  return s.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&").replace(/\s+/g, "\\s+");
-}
-
-/** Regex sources for finding a journal row's text in the terminal, longest
- *  (most specific) first. The terminal shows a RENDERING of the text — markdown
- *  marks dropped, prompts prefixed, lines wrapped — so this cleans a snippet of
- *  the first substantial line and falls back to shorter prefixes before the
- *  caller gives up. The fallbacks earn their keep on the agent's own prose: cc
- *  hard-wraps that at the pane width (a real newline, not a soft wrap), and no
- *  amount of whitespace tolerance can match across one, so the needle has to
- *  get short enough to fit inside a single rendered row. Exported for test. */
-export function revealPatterns(text: string): string[] {
-  // First line with some meat on it; a one-word opener ("ok\n…") would match
-  // half the buffer.
-  const line =
-    text.split("\n").map((s) => s.trim()).find((s) => s.length >= 8) ?? text.trim();
-  const clean = line
-    .replace(/^[#>\-*•\s]+/, "")     // leading heading/list/quote marks
-    .replace(/\*\*|__|`/g, "")       // inline bold/code marks the render drops
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!clean) return [];
-  const out = [clean.slice(0, 80)];
-  if (clean.length > 40) out.push(clean.slice(0, 40));
-  if (clean.length > 24) out.push(clean.slice(0, 24));
-  // Trim first: a slice that lands mid-space would otherwise demand trailing
-  // whitespace the row may not have.
-  return out.map((s) => loose(s.trim()));
-}
+// NOTE: prompt and beat rows briefly carried a "show in the terminal" button
+// that scrolled the pane to the matching line. It was removed because it can
+// never work: Claude Code renders into the terminal's ALTERNATE screen buffer,
+// which by definition keeps no scrollback, so xterm holds only the ~30 rows cc
+// is painting right now. The journal reads the transcript and is therefore the
+// only place a pane's history exists — there is nothing upstream to jump to.
 
 /** Prompt indices whose turn was stopped before the agent did ANYTHING — the
  *  very next event is the interrupt. Claude Code's own chat quietly drops
@@ -323,49 +254,6 @@ export function canceledPrompts(
   for (let i = 0; i < events.length; i++)
     if (events[i].kind === "prompt" && events[i + 1]?.kind === "interrupt") out.add(i);
   return out;
-}
-
-/** The hover button carrying the jump. Its own element (not a row click):
- *  prompts and beats already spend their click on expand-in-place. */
-function revealBtn(e: InspectorEventView): HTMLButtonElement {
-  const b = el("button", "row-reveal") as HTMLButtonElement;
-  b.type = "button";
-  b.title = "Show in the terminal";
-  b.setAttribute("aria-label", "Show in the terminal");
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("viewBox", "0 0 12 12");
-  svg.setAttribute("width", "12");
-  svg.setAttribute("height", "12");
-  svg.setAttribute("fill", "none");
-  svg.setAttribute("aria-hidden", "true");
-  const frame = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-  frame.setAttribute("x", "1");
-  frame.setAttribute("y", "2");
-  frame.setAttribute("width", "10");
-  frame.setAttribute("height", "8");
-  frame.setAttribute("rx", "1.5");
-  frame.setAttribute("stroke", "currentColor");
-  frame.setAttribute("stroke-width", "1.1");
-  svg.appendChild(frame);
-  const caret = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  caret.setAttribute("d", "M3.2 4.6 L5.2 6 L3.2 7.4");
-  caret.setAttribute("stroke", "currentColor");
-  caret.setAttribute("stroke-width", "1.1");
-  caret.setAttribute("stroke-linecap", "round");
-  caret.setAttribute("stroke-linejoin", "round");
-  svg.appendChild(caret);
-  b.appendChild(svg);
-  b.addEventListener("click", (ev) => {
-    ev.stopPropagation();               // the row's own click expands in place
-    const pane = paneId;
-    if (!pane || !revealFn) return;
-    if (!revealFn(pane, revealPatterns(e.text)))
-      // Say WHY, not just "no". The honest answer is almost always age: the
-      // journal reads the whole transcript, the terminal only holds this
-      // agent process's last 10k lines.
-      showToast("Couldn't find this — it's older than the terminal's scrollback", "error", null);
-  });
-  return b;
 }
 
 /** Rows whose double-click copies. Everything the rail renders as a discrete
@@ -548,7 +436,6 @@ function renderEvent(e: InspectorEventView, i: number, canceled = false): HTMLEl
     p.appendChild(elText("span", "turn-prompt__caret", ">"));
     p.appendChild(elText("span", "turn-prompt__text", e.text));
     p.appendChild(el("span", "turn-prompt__chev"));
-    p.appendChild(revealBtn(e));
     p.addEventListener("click", (ev) => {
       if (ev.detail > 1) return;                 // second click of a copy — see "Copy"
       if (!p.classList.contains("turn-prompt--expandable")) return;   // nothing to open
@@ -570,7 +457,6 @@ function renderEvent(e: InspectorEventView, i: number, canceled = false): HTMLEl
     const text = el("span", "beat__text");
     appendInline(text, e.text);
     b.appendChild(text);
-    b.appendChild(revealBtn(e));
     b.addEventListener("click", (ev) => {
       if (ev.detail > 1) return;                 // second click of a copy — see "Copy"
       if (!b.classList.contains("beat--expandable")) return;          // nothing to open

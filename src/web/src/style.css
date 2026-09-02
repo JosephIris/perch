@@ -6097,9 +6097,7 @@ body.show-dashboard .dashboard { display: flex; }
   display: flex;
   gap: var(--sp-8);
   margin: var(--sp-12) var(--sp-8) var(--sp-4);
-  /* Right padding is wider than left on purpose: it's the gutter the hover
-   * "show in the terminal" button lives in (see .row-reveal). */
-  padding: var(--sp-8) var(--sp-32) var(--sp-8) var(--sp-12);
+  padding: var(--sp-8) var(--sp-12);
   background: var(--color-subtle-secondary);
   border-radius: var(--r-pill);
 }
@@ -6163,45 +6161,6 @@ body.show-dashboard .dashboard { display: flex; }
 }
 .turn-prompt--canceled .turn-prompt__caret { color: var(--color-text-disabled); }
 
-/* "Show in the terminal" — hover-revealed jump on prompts and beats. Absolute
- * in the row's top-right so the resting layout never shifts; opacity (not
- * display) so it can take focus-visible.
- *
- * It sits in a gutter the row reserves for it always (padding-right --sp-32 on
- * .turn-prompt / .beat), not over the prose: floating it above the text meant
- * hovering a full-width row put a button on top of the words you were reading,
- * with the text showing through its translucent fill. */
-.turn-prompt,
-.beat { position: relative; }
-.row-reveal {
-  position: absolute;
-  top: 4px;
-  right: var(--sp-8);
-  width: 18px;
-  height: 18px;
-  display: grid;
-  place-items: center;
-  border: 0;
-  border-radius: var(--r-input);
-  background: var(--color-subtle-tertiary);
-  color: var(--color-text-tertiary);
-  opacity: 0;
-  pointer-events: none;
-  cursor: pointer;
-  transition: opacity var(--dur-fast) var(--ease-entry);
-}
-.turn-prompt:hover .row-reveal,
-.beat:hover .row-reveal,
-.row-reveal:focus-visible {
-  opacity: 1;
-  pointer-events: auto;
-}
-.row-reveal:hover { color: var(--color-text-primary); }
-.row-reveal:focus-visible {
-  outline: 1px solid var(--color-accent);
-  outline-offset: -1px;
-}
-
 /* Interrupt — a turn you stopped (Esc / Ctrl-C). The one alarm in the stream:
  * error-tinted fill and a filled "!" badge so a halted turn is unmissable while
  * scanning, where a plain prompt row would let it slip past. Error-tint rgba
@@ -6240,9 +6199,7 @@ body.show-dashboard .dashboard { display: flex; }
   display: grid;
   grid-template-columns: 40px 1fr;
   gap: var(--sp-8);
-  /* Wider right padding: the "show in the terminal" gutter, same as the prompt
-   * row's, so prose never runs under the button. */
-  padding: var(--sp-8) var(--sp-32) var(--sp-8) var(--sp-12);
+  padding: var(--sp-8) var(--sp-12);
   margin: 0 var(--sp-8);
   border-radius: var(--r-pill);
 }
@@ -6790,4 +6747,768 @@ body.show-dashboard .dashboard { display: flex; }
  * in setup-overlay.ts); only the caption dots animate from CSS. */
 @media (prefers-reduced-motion: reduce) {
   .setup-overlay__dots::after { animation: none; content: "…"; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * Team room
+ * ══════════════════════════════════════════════════════════════════════════
+ * One conversation across a project's bots. Sits IN #app's grid, spanning the
+ * workspace and inspector columns, so the sidebar stays put: its bot rows are
+ * the fastest jump to a terminal and back. The surface is one step lifted
+ * (--color-room-surface, like a pane) with a hairline, never a shadow.
+ *
+ * Feed rows share the journal's vocabulary where the content is the same
+ * (.work rows inside a fold are the inspector's own), and stay unframed:
+ * messages are not cards. Only YOUR rows carry a subtle fill. */
+
+.team-room {
+  grid-column: workspace-start / inspector-end;
+  grid-row: 1;
+  position: relative;
+  z-index: 20;                       /* above the stage, below flyouts (30) */
+  display: grid;
+  grid-template-rows: auto 1fr auto; /* head · main (or empty) · composer */
+  min-height: 0;
+  min-width: 0;
+  background: var(--color-room-surface);
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--r-card);
+  overflow: hidden;
+  font-family: var(--font-text);
+  color: var(--color-text-primary);
+  animation: settings-page-in var(--dur-normal) var(--ease-entry);
+}
+.team-room--closing {
+  animation: settings-fade-out var(--dur-fast) var(--ease-exit) forwards;
+  pointer-events: none;
+}
+
+/* ── Header ─────────────────────────────────────────────────────────────── */
+.team-room__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-12);
+  padding: var(--sp-12) var(--sp-12) var(--sp-12) var(--sp-24);
+  border-bottom: 1px solid var(--color-stroke);
+}
+.team-room__title {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-8);
+  min-width: 0;
+  font-family: var(--font-display);
+  font-size: var(--type-subtitle-size);
+  font-weight: 600;
+  line-height: var(--type-title-line);
+}
+.team-room__project {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.team-room__sep { color: var(--color-text-disabled); font-weight: 400; }
+.team-room__name { color: var(--color-text-secondary); font-weight: 400; }
+.team-room__counts { display: flex; gap: 6px; }
+.team-room__close {
+  margin-left: auto;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--type-body-size);
+  cursor: pointer;
+}
+.team-room__close:hover { background: var(--color-subtle-secondary); color: var(--color-text-primary); }
+.team-room__close:focus-visible { outline: 1px solid var(--color-accent); outline-offset: -1px; }
+
+/* ── Main: feed + roster ────────────────────────────────────────────────── */
+.team-room__main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--team-roster-width);
+  min-height: 0;
+}
+.team-room__main[hidden] { display: none; }
+.team-room__feedwrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+.team-room__truncated {
+  padding: var(--sp-8) var(--sp-24);
+  border-bottom: 1px solid var(--color-stroke);
+  font-family: var(--font-small);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+}
+.team-room__truncated[hidden] { display: none; }
+.team-feed {
+  flex: 1;
+  min-height: 0;
+  padding: var(--sp-16) var(--sp-24);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+/* Cap the measure on a wide window; a bot's paragraph should not run the
+ * whole room. Rows keep their left edge — no centering. */
+.team-feed > * { width: 100%; max-width: var(--team-feed-measure); box-sizing: border-box; }
+.team-feed__jump { z-index: 1; }
+.tf-msg.row-enter,
+.tf-work.row-enter,
+.tf-sys.row-enter { animation: inspector-row-in var(--dur-normal) var(--ease-entry); }
+
+/* ── Messages ───────────────────────────────────────────────────────────── */
+.tf-msg {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  column-gap: var(--sp-12);
+  padding: var(--sp-8) var(--sp-12);
+  border-radius: var(--r-card);
+}
+.tf-msg--cont { padding-top: 2px; padding-bottom: 2px; }
+.tf-msg--user { background: var(--color-subtle-secondary); }
+.tf-msg--pending { opacity: 0.7; }
+.tf-msg--expandable { cursor: pointer; }
+.tf-msg--expandable:hover { background: var(--color-subtle-secondary); }
+.tf-msg--user.tf-msg--expandable:hover { background: var(--color-subtle-tertiary); }
+
+/* Avatar: the bot's pane hue at low tint, its initial on top. Your own rows
+ * get the journal's ">" caret instead of a letter — same "you" glyph the
+ * inspector uses for your prompts. */
+.tf-msg__avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-display);
+  font-size: var(--type-caption-size);
+  font-weight: 600;
+  color: var(--tag, var(--color-text-secondary));
+  background: color-mix(in srgb, var(--tag, var(--color-text-tertiary)) 16%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tag, var(--color-text-tertiary)) 32%, transparent);
+  user-select: none;
+}
+.tf-msg__avatar--you {
+  font-family: var(--font-mono);
+  color: var(--color-text-tertiary);
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--color-rail-faint);
+}
+/* Continuation rows swap the avatar for a hover-revealed time in the same
+ * column, so a run of messages reads as one voice without losing the stamp. */
+.tf-msg .tf-msg__time--cont {
+  align-self: start;
+  margin: 0;
+  padding-top: 3px;
+  text-align: right;
+  font-family: var(--font-small);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: transparent;
+}
+.tf-msg:hover .tf-msg__time--cont { color: var(--color-text-disabled); }
+
+.tf-msg__body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+.tf-msg__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-8);
+  min-width: 0;
+}
+.tf-msg__name {
+  font-size: var(--type-body-size);
+  font-weight: 500;
+  color: var(--color-text-primary);
+  white-space: nowrap;
+}
+.tf-msg__pos,
+.tf-msg__tag {
+  font-family: var(--font-small);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tf-msg__arrow { color: var(--color-text-tertiary); }
+.tf-msg__time {
+  margin-left: var(--sp-4);
+  font-family: var(--font-small);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-disabled);
+}
+.tf-msg__text {
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line);
+  color: var(--color-text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.tf-msg--user .tf-msg__text { color: var(--color-text-primary); }
+/* A bot's long message clamps; click opens it in place (keyed by seq, so the
+ * next poll's repaint keeps it open). Six lines: enough to know what it says. */
+.tf-msg--beat .tf-msg__text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 6;
+  overflow: hidden;
+}
+.tf-msg--open .tf-msg__text { -webkit-line-clamp: unset; overflow: visible; }
+.tf-msg__to {
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+}
+.tf-msg--held .tf-msg__to { color: var(--color-caution); }
+.tf-msg--failed .tf-msg__to { color: var(--color-error); }
+.tf-msg--failed { opacity: 1; }
+
+/* @mention chips — accent family: "this reached someone". */
+.tf-mention {
+  display: inline-block;
+  padding: 0 5px;
+  border-radius: var(--r-input);
+  background: var(--color-mention-faint);
+  color: var(--color-mention);
+  font-weight: 500;
+}
+.tf-mention--all {
+  background: var(--color-subtle-tertiary);
+  color: var(--color-text-primary);
+}
+
+/* ── Work folds ─────────────────────────────────────────────────────────── */
+/* A run of one bot's tool calls, folded to a quiet line. Texture, not
+ * content — the eye skips it and lands on the messages, and it opens when
+ * you want to know what actually happened between two of them. */
+.tf-work {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  column-gap: var(--sp-12);
+  padding: 0 var(--sp-12);
+}
+.tf-work__rail {
+  text-align: center;
+  font-size: 10px;
+  line-height: 20px;
+  color: var(--color-rail-faint);
+}
+.tf-work__line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-8);
+  min-width: 0;
+}
+.tf-work__summary {
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  font-family: var(--font-small);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tf-work__summary:hover,
+.tf-work[aria-expanded="true"] .tf-work__summary { color: var(--color-text-secondary); }
+.tf-work__summary:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 1px; border-radius: 2px; }
+.tf-work__time {
+  font-family: var(--font-small);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: transparent;
+}
+.tf-work:hover .tf-work__time { color: var(--color-text-disabled); }
+.tf-work__open {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  opacity: 0;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: opacity var(--dur-fast) var(--ease-entry);
+}
+.tf-work:hover .tf-work__open,
+.tf-work__open:focus-visible { opacity: 1; }
+.tf-work__open:hover { color: var(--color-accent); }
+.tf-work__rows { grid-column: 2; margin: 2px 0 var(--sp-4) calc(-1 * var(--sp-8)); }
+.tf-work__rows[hidden] { display: none; }
+
+/* ── System lines ───────────────────────────────────────────────────────── */
+.tf-sys {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  padding: var(--sp-4) var(--sp-12) var(--sp-4) var(--sp-24);
+  font-family: var(--font-small);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+}
+.tf-sys__dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-text-disabled);
+}
+.tf-sys[data-tone="attention"] { color: var(--color-text-secondary); }
+.tf-sys[data-tone="attention"] .tf-sys__dot { background: var(--color-caution); }
+.tf-sys[data-tone="error"] .tf-sys__dot { background: var(--color-error); }
+.tf-sys[data-event="joined"] .tf-sys__dot { background: var(--color-state-done); }
+.tf-sys__text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tf-sys__open {
+  padding: 1px var(--sp-8);
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--r-input);
+  background: transparent;
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+.tf-sys__open:hover { background: var(--color-subtle-secondary); color: var(--color-text-primary); }
+.tf-sys__time {
+  margin-left: auto;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-disabled);
+}
+
+/* ── Roster ─────────────────────────────────────────────────────────────── */
+.team-roster {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-left: 1px solid var(--color-stroke);
+}
+.team-roster__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  padding: var(--sp-16) var(--sp-12) var(--sp-8) var(--sp-16);
+}
+.team-roster__label {
+  font-family: var(--font-small);
+  font-size: 11px;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+}
+.team-roster__count { font-family: var(--font-small); font-size: 11px; color: var(--color-text-tertiary); }
+.team-roster__add {
+  margin-left: auto;
+  padding: 4px var(--sp-8);
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--r-input);
+  background: transparent;
+  font-family: var(--font-text);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+.team-roster__add:hover { background: var(--color-subtle-secondary); color: var(--color-text-primary); }
+.team-roster__add:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 1px; }
+.team-roster__list {
+  overflow-y: auto;
+  min-height: 0;
+  padding: 0 var(--sp-8) var(--sp-8);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+.roster-bot {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  column-gap: var(--sp-8);
+  row-gap: 1px;
+  align-items: center;
+  width: 100%;
+  padding: var(--sp-8) var(--sp-8);
+  border: 0;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--color-text-primary);
+  font-family: var(--font-text);
+  text-align: left;
+  cursor: pointer;
+}
+.roster-bot:hover { background: var(--color-subtle-secondary); }
+.roster-bot:focus-visible { outline: 1px solid var(--color-accent); outline-offset: -1px; }
+.roster-bot[data-state="offline"] { color: var(--color-text-secondary); cursor: default; }
+.roster-bot__lead {
+  grid-row: 1 / span 2;
+  width: 10px;
+  height: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+/* The dot IS the sidebar's dot (same class, same data-state palette); the
+ * roster only adds the two states the sidebar shows structurally. */
+.roster-bot__dot[data-state="offline"] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--color-text-disabled);
+}
+.roster-bot__text {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-8);
+  min-width: 0;
+}
+.roster-bot__nick {
+  font-size: var(--type-body-size);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.roster-bot__pos {
+  font-family: var(--font-small);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.roster-bot__state {
+  grid-column: 2;
+  display: flex;
+  gap: var(--sp-4);
+  font-family: var(--font-small);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.roster-bot__state[data-state="working"] .roster-bot__word { color: var(--color-text-secondary); }
+.roster-bot__state[data-state="waiting"] { color: var(--color-caution); }
+.roster-bot__state[data-state="permission"] { color: var(--color-state-permission); }
+.roster-bot__dotsep { color: var(--color-text-disabled); }
+
+/* ── Empty state ────────────────────────────────────────────────────────── */
+/* Centered — the one place the constitution allows it. */
+.team-room__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-8);
+  padding: var(--sp-48);
+  text-align: center;
+}
+.team-room__empty[hidden] { display: none; }
+.team-room__empty-title {
+  font-family: var(--font-display);
+  font-size: var(--type-subtitle-size);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.team-room__empty-body {
+  max-width: 360px;
+  font-size: var(--type-caption-size);
+  line-height: var(--type-body-line);
+  color: var(--color-text-tertiary);
+}
+.team-room__empty-cta { margin-top: var(--sp-16); }
+
+/* ── Composer ───────────────────────────────────────────────────────────── */
+.team-composer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-8);
+  padding: var(--sp-12) var(--sp-24) var(--sp-16);
+  border-top: 1px solid var(--color-stroke);
+}
+.team-composer[hidden] { display: none; }
+.team-composer__to {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-4);
+  min-height: 20px;
+}
+.team-composer__to[hidden] { display: none; }
+.team-composer__route {
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+}
+.to-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px var(--sp-4) 1px var(--sp-8);
+  border-radius: 999px;
+  background: var(--color-mention-faint);
+  color: var(--color-mention);
+  font-family: var(--font-small);
+  font-size: 11px;
+  font-weight: 500;
+}
+.to-chip--all { background: var(--color-subtle-tertiary); color: var(--color-text-primary); }
+.to-chip__x {
+  width: 16px;
+  height: 16px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  line-height: 1;
+  opacity: 0.7;
+  cursor: pointer;
+}
+.to-chip__x:hover { opacity: 1; background: var(--color-subtle-tertiary); }
+.team-composer__row {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--sp-8);
+}
+.team-composer__input {
+  flex: 1;
+  min-width: 0;
+  min-height: 36px;
+  padding: var(--sp-8) var(--sp-12);
+  box-sizing: border-box;
+  resize: none;
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--r-card);
+  background: var(--color-subtle-secondary);
+  font-family: var(--font-text);
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line);
+  color: var(--color-text-primary);
+  transition: border-color var(--dur-fast) var(--ease-entry);
+}
+.team-composer__input:focus { outline: none; border-color: var(--color-accent); }
+.team-composer__input::placeholder { color: var(--color-text-disabled); }
+.team-composer__send {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--r-card);
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-entry);
+}
+.team-composer__send:hover { background: var(--color-accent-strong); }
+.team-composer__send:disabled {
+  background: var(--color-subtle-tertiary);
+  color: var(--color-text-disabled);
+  cursor: default;
+}
+.team-composer__send:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 2px; }
+
+/* The @ typeahead — a flyout, so the flyout recipe (surface, hairline, one
+ * shadow) applies. */
+.mention-pop {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  min-width: 220px;
+  max-width: 320px;
+  padding: var(--sp-4);
+  border-radius: var(--r-card);
+  border: 1px solid var(--color-stroke);
+  background: var(--color-flyout-surface);
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  box-shadow: var(--shadow-flyout);
+  font-family: var(--font-text);
+  color: var(--color-text-primary);
+}
+.mention-pop__item {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-8);
+  width: 100%;
+  padding: 6px var(--sp-8);
+  border: 0;
+  border-radius: var(--r-input);
+  background: transparent;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.mention-pop__item:hover,
+.mention-pop__item--active { background: var(--color-subtle-secondary); }
+.mention-pop__nick { font-weight: 500; }
+.mention-pop__pos,
+.mention-pop__hint {
+  margin-left: auto;
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+}
+
+/* ── New bot dialog ─────────────────────────────────────────────────────── */
+.newbot-card {
+  width: 560px;
+  overflow-y: auto;
+}
+/* The dialog hides whole fields by attribute (mode switch, brief stage); the
+ * field's own display:flex would otherwise beat the UA's [hidden] rule. */
+.newtab-field[hidden],
+.newtab-check[hidden] { display: none; }
+.newbot-input--prose {
+  width: 100%;
+  font-family: var(--font-text);
+  font-size: var(--type-body-size);
+}
+.newbot-area {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: var(--font-text);
+  font-size: var(--type-body-size);
+}
+.newbot-brief {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  min-height: 200px;
+}
+.newbot-path { display: flex; gap: var(--sp-8); }
+.newbot-path .settings-control--text { flex: 1; width: auto; min-width: 0; }
+.newbot-path__browse { flex: none; padding: 6px var(--sp-12); }
+.newtab-field__hint--error { color: var(--color-error); }
+.newbot-dropdown .dropdown__trigger { width: 100%; }
+.newbot-stage {
+  margin-bottom: var(--sp-16);
+  padding-top: var(--sp-16);
+  border-top: 1px solid var(--color-stroke);
+}
+.newbot-stage[hidden] { display: none; }
+.newbot-stage__progress {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  margin-bottom: var(--sp-16);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-secondary);
+}
+.newbot-stage__progress[hidden] { display: none; }
+.newbot-stage__spinner { font-family: var(--font-mono); color: var(--color-state-working); }
+.newbot-stage__elapsed { color: var(--color-text-tertiary); font-variant-numeric: tabular-nums; }
+.newbot-stage__hint { margin-left: auto; color: var(--color-text-tertiary); }
+.newbot-stage__error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-8);
+  margin-bottom: var(--sp-16);
+  font-size: var(--type-caption-size);
+  color: var(--color-error);
+}
+.newbot-stage__error[hidden] { display: none; }
+.newbot-stage__error-actions { display: flex; gap: var(--sp-8); margin-left: auto; }
+.newbot-stage__note {
+  margin-bottom: var(--sp-8);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+}
+
+/* ── Sidebar: the team row and bot tags ─────────────────────────────────── */
+/* The door to the room, directly under a project header. Wears the selected
+ * pill while the room is open — fill only, no stripe. */
+.team-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  width: 100%;
+  margin: 0 0 var(--sp-4);
+  padding: 6px var(--sp-12) 6px 24px;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: transparent;
+  font-family: var(--font-text);
+  color: var(--color-text-secondary);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-entry);
+}
+.team-row:hover { background: var(--color-subtle-secondary); color: var(--color-text-primary); }
+.team-row--active { background: var(--color-subtle-tertiary); color: var(--color-text-primary); }
+.team-row:focus-visible { outline: 1px solid var(--color-accent); outline-offset: -1px; }
+.team-row__glyph { flex: none; color: var(--color-text-tertiary); }
+.team-row--active .team-row__glyph,
+.team-row:hover .team-row__glyph { color: var(--color-text-secondary); }
+.team-row__text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.team-row__name { font-size: 13px; font-weight: 500; }
+.team-row__summary {
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.team-row__unread {
+  margin-left: auto;
+  min-width: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--color-accent-faint);
+  color: var(--color-accent);
+  font-family: var(--font-small);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+}
+/* A bot's tab row names its position after the nickname, quietly. */
+.session-item__pos {
+  flex: 0 0 auto;
+  margin-left: var(--sp-8);
+  padding: 0 6px;
+  max-width: 45%;
+  border-radius: var(--r-input);
+  background: var(--color-subtle-secondary);
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The tag stays even next to a right-edge chip: it is the bot's identity, and
+ * hiding it only on some rows read as two different kinds of row (a hovered
+ * row kept it, its neighbour lost it). The chip is short; the tag ellipsizes. */
+.project-menu__item--danger { color: var(--color-error); }
+
+@media (prefers-reduced-motion: reduce) {
+  .team-room,
+  .team-room--closing,
+  .tf-msg.row-enter,
+  .tf-work.row-enter,
+  .tf-sys.row-enter { animation: none; }
 }

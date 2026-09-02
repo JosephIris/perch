@@ -268,4 +268,24 @@
   --ease-exit:    cubic-bezier(0.3, 0.0, 1.0, 1.0);
   --dur-fast:     150ms;
   --dur-normal:   200ms;
+
+  /* Team room. The roster column is one sidebar-ish rail (240 = 30×8); the
+   * feed's measure caps line length on a wide window so a bot's paragraph
+   * stays readable instead of running the full width of the room. */
+  --team-roster-width: 240px;
+  --team-feed-measure: 880px;
+  /* @mention chips. The accent family: a mention is "this reached someone",
+   * the same claim the accent makes everywhere else, never a new hue. */
+  --color-mention:       var(--color-accent);
+  --color-mention-faint: var(--color-accent-faint);
+  /* Quiet connective strokes — the work fold's rail, an avatar's ring. Fainter
+   * than --color-stroke because they sit inside rows, not between surfaces. */
+  --color-rail-faint:    rgba(255, 255, 255, 0.16);
+  /* Flyout surface + shadow (menus, the mention popover). Shadows are allowed
+   * on flyouts only — see CLAUDE.md "Elevation". Tokenized here so the popover
+   * matches .model-menu / .pair-menu exactly. */
+  --color-flyout-surface: rgba(28, 28, 28, 0.96);
+  --shadow-flyout:        0 8px 32px rgba(0, 0, 0, 0.4);
+  /* The room's own surface sits one step above the sidebar, like a pane. */
+  --color-room-surface:   var(--color-terminal-bg);
 }

@@ -448,6 +448,109 @@ internal sealed record InspectorImageMsg
 /// numbers and bools may arrive as strings, because `perch test` ships every
 /// flag as a string. This is what lets the control path share the page
 /// handlers without per-verb payload rewriting.
+// ---- team ------------------------------------------------------------------
+// The team room and the new-bot dialog. Mirrors the `team.*` members of the
+// OutMessage union; the replies (`team.data`, `team.brief.progress`,
+// `team.brief.result`, `team.reference.picked`) are built by TeamController.
+
+/// The room asking for entries newer than `sinceSeq` (absent = everything the
+/// host is willing to send, newest 500).
+internal sealed record TeamRequestMsg
+{
+    public required Guid ProjectId { get; init; }
+    public long? SinceSeq { get; init; }
+}
+
+/// The owner's post. `to` is polymorphic on the wire — an array of nicknames,
+/// the string "everyone", or null for an unaddressed post the host routes —
+/// so it arrives as a raw JsonElement and TeamController interprets it.
+internal sealed record TeamPostMsg
+{
+    public required Guid ProjectId { get; init; }
+    public required string Text { get; init; }
+    public JsonElement? To { get; init; }
+    /// Page-generated id echoed on the ledger entry so the optimistic row can
+    /// be reconciled.
+    public required string ClientId { get; init; }
+}
+
+/// A new position, sent inline with the bot that first fills it. `brief` is
+/// the text the owner accepted (generated or hand-written).
+internal sealed record TeamPositionSpec
+{
+    public required string Name { get; init; }
+    public required string Purpose { get; init; }
+    public string? ReferencePath { get; init; }
+    public string? Model { get; init; }
+    public string? Brief { get; init; }
+}
+
+/// Create a bot: a nickname plus either an existing position (`positionSlug`)
+/// or a new one (`position`). The host mints the session name, opens the tab
+/// (in its own worktree unless told otherwise) and writes the bot's files.
+internal sealed record TeamBotCreateMsg
+{
+    public required Guid ProjectId { get; init; }
+    public required string Nickname { get; init; }
+    public bool? Worktree { get; init; }
+    public string? PositionSlug { get; init; }
+    public TeamPositionSpec? Position { get; init; }
+}
+
+/// Start a brief-generation job (a headless `claude -p` over the reference
+/// folder). `jobId` is page-generated so a stale reply can be dropped.
+internal sealed record TeamBriefGenerateMsg
+{
+    public required string JobId { get; init; }
+    public required Guid ProjectId { get; init; }
+    public required string PositionName { get; init; }
+    public required string Purpose { get; init; }
+    public string? ReferencePath { get; init; }
+    public string? Model { get; init; }
+}
+
+internal sealed record TeamBriefCancelMsg
+{
+    public required string JobId { get; init; }
+}
+
+/// Edit a position in place. Only the keys present are applied.
+internal sealed record TeamPositionUpdateMsg
+{
+    public required Guid ProjectId { get; init; }
+    public required string Slug { get; init; }
+    public string? Brief { get; init; }
+    public string? Purpose { get; init; }
+    public string? Name { get; init; }
+}
+
+/// Remove a bot from the team. `closeTab` also closes its session (archived to
+/// Recently closed like any close); `removeWorktree` additionally reclaims the
+/// folder, which makes that close permanent.
+internal sealed record TeamBotRemoveMsg
+{
+    public required Guid ProjectId { get; init; }
+    public required string BotId { get; init; }
+    public bool? CloseTab { get; init; }
+    public bool? RemoveWorktree { get; init; }
+}
+
+/// The dialog's "Browse…" for a reference folder. Answered with
+/// `team.reference.picked { requestId, path | null }`.
+internal sealed record TeamReferenceBrowseMsg
+{
+    public required string RequestId { get; init; }
+    public required Guid ProjectId { get; init; }
+}
+
+/// The room opened or closed for a project — a cadence hint: while open, the
+/// host pushes new entries as they land instead of waiting to be polled.
+internal sealed record TeamRoomMsg
+{
+    public required Guid ProjectId { get; init; }
+    public required bool Open { get; init; }
+}
+
 internal static class PageJson
 {
     public static readonly JsonSerializerOptions Options = CreateOptions();

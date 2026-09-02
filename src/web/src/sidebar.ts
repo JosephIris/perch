@@ -28,6 +28,10 @@ import { spinnerSpan } from "./spinner.js";
 import { attachCommitsHover, openCommitsLightbox } from "./commits-view.js";
 import { showPairMenu } from "./pair-menu.js";
 import { showProjectMenu } from "./project-menu.js";
+import { showBotMenu } from "./bot-menu.js";
+import { isTeamRoomOpen, openTeamRoom, closeTeamRoom, unreadFor } from "./team-room.js";
+import { teamSummary } from "./team.js";
+import type { TeamBotView } from "./bridge.js";
 
 /** Flatten a pane tree to its leaves. */
 function leaves(node: PaneTreeView): Array<Extract<PaneTreeView, { kind: "leaf" }>> {
@@ -317,6 +321,11 @@ export class Sidebar {
    *  live tab as a candidate, not just the sub-list its row rendered from. */
   private allSessions: SessionView[] = [];
 
+  /** Which sessions are team bots (and under which project) — a bot's row
+   *  wears its position and opens the bot menu instead of the pair menu.
+   *  Rebuilt from `projects[].team` on every render. */
+  private botBySession = new Map<string, { bot: TeamBotView; project: ProjectView }>();
+
   constructor(listEl: HTMLElement, newSessionBtn: HTMLElement, closedEl: HTMLElement) {
     this.listEl = listEl;
     this.newSessionBtn = newSessionBtn;
@@ -438,6 +447,10 @@ export class Sidebar {
     mode: SidebarMode = "sessions"
   ) {
     this.allSessions = sessions;
+    this.botBySession = new Map();
+    for (const p of projects)
+      for (const bot of p.team?.bots ?? [])
+        if (bot.sessionId) this.botBySession.set(bot.sessionId, { bot, project: p });
     this.renderClosed(closed);
     this.markRegrouped(sessions);
     const modeChanged = this.lastMode !== null && mode !== this.lastMode;
@@ -725,6 +738,11 @@ export class Sidebar {
     frag.appendChild(
       this.projectHeader(project, tabs, collapsed, aggregateState(tabs), animate)
     );
+    // The door to the room, directly under the header when the project has
+    // bots. Stays visible when the group is folded: it's the one row that
+    // summarizes the team, and an unread count must not fold out of sight.
+    const bots = project.team?.bots ?? [];
+    if (bots.length > 0) frag.appendChild(this.teamRow(project, bots));
     // Collapsed means collapsed — every tab folds away, including the active
     // one. Keeping the active tab visible under a closed chevron made the
     // control contradict itself: the arrow said "shut" while a row sat right
@@ -753,6 +771,73 @@ export class Sidebar {
       if (idle.length) frag.appendChild(this.idleGroup(project.id, idle, activeId));
       this.lastIdleCount.set(project.id, idle.length);
     }
+  }
+
+  /** The project's "Team room" row: a people glyph, the name, a one-line
+   *  summary ("2 working · 1 waiting"), and an unread count. Wears the
+   *  selected pill while the room is open — the room is what's on screen, so
+   *  the row that opened it reads as the current selection. */
+  private teamRow(p: ProjectView, bots: TeamBotView[]): HTMLElement {
+    const open = isTeamRoomOpen(p.id);
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "team-row" + (open ? " team-row--active" : "");
+    row.dataset.projectId = p.id;
+    row.title = `Open ${p.name}'s team room`;
+    row.setAttribute("aria-pressed", String(open));
+
+    const glyph = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    glyph.setAttribute("class", "team-row__glyph");
+    glyph.setAttribute("width", "14");
+    glyph.setAttribute("height", "14");
+    glyph.setAttribute("viewBox", "0 0 24 24");
+    glyph.setAttribute("fill", "none");
+    glyph.setAttribute("stroke", "currentColor");
+    glyph.setAttribute("stroke-width", "1.7");
+    glyph.setAttribute("stroke-linecap", "round");
+    glyph.setAttribute("stroke-linejoin", "round");
+    glyph.setAttribute("aria-hidden", "true");
+    for (const d of [
+      "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2",
+      "M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
+      "M22 21v-2a4 4 0 0 0-3-3.87",
+      "M16 3.13a4 4 0 0 1 0 7.75",
+    ]) {
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("d", d);
+      glyph.appendChild(path);
+    }
+    row.appendChild(glyph);
+
+    const text = document.createElement("span");
+    text.className = "team-row__text";
+    const name = document.createElement("span");
+    name.className = "team-row__name";
+    name.textContent = "Team room";
+    text.appendChild(name);
+    const summary = teamSummary(bots, this.allSessions);
+    if (summary) {
+      const sub = document.createElement("span");
+      sub.className = "team-row__summary";
+      sub.textContent = summary;
+      text.appendChild(sub);
+    }
+    row.appendChild(text);
+
+    const unread = unreadFor(p.id);
+    if (unread > 0) {
+      const badge = document.createElement("span");
+      badge.className = "team-row__unread";
+      badge.textContent = unread > 99 ? "99+" : String(unread);
+      badge.title = `${unread} new in the room`;
+      row.appendChild(badge);
+    }
+
+    row.addEventListener("click", () => {
+      if (open) closeTeamRoom();
+      else openTeamRoom(p.id);
+    });
+    return row;
   }
 
   /** The "Hidden" drawer head: every hidden project folded into one quiet row.
@@ -1142,10 +1227,14 @@ export class Sidebar {
 
     // Right-click: pair this tab with another (or unpair). The one row action
     // that isn't a hover button — it needs a target list.
+    const teamBot = this.botBySession.get(s.id);
     item.addEventListener("contextmenu", (ev) => {
       ev.preventDefault();
       ev.stopPropagation();
-      showPairMenu(ev.clientX, ev.clientY, s, this.allSessions);
+      // A bot's row offers the bot actions (edit brief, remove); pairing is
+      // for ordinary tabs — a bot already has its whole team to talk to.
+      if (teamBot) showBotMenu(ev.clientX, ev.clientY, teamBot.project, teamBot.bot);
+      else showPairMenu(ev.clientX, ev.clientY, s, this.allSessions);
     });
 
     // Status column. At rest it's the state dot (CSS colors it via
@@ -1198,6 +1287,15 @@ export class Sidebar {
     title.className = "session-item__title";
     title.textContent = s.title;
     primary.appendChild(title);
+    // A team bot's row names its position, quietly, after the nickname —
+    // the roster in the room is the full picture; this just says "bot" here.
+    if (teamBot) {
+      const pos = document.createElement("span");
+      pos.className = "session-item__pos";
+      pos.textContent = teamBot.bot.positionName;
+      pos.title = `${teamBot.bot.nickname} · ${teamBot.bot.positionName}`;
+      primary.appendChild(pos);
+    }
     item.appendChild(primary);
 
     // The tab's /color tag deliberately does NOT mark the sidebar row: we

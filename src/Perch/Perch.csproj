@@ -37,6 +37,11 @@
        publish config; a linked source file avoids that.) -->
   <ItemGroup>
     <Compile Include="..\..\tools\perch-cli\GcloudLabels.cs" Link="GcloudLabels.cs" />
+    <!-- Same reason for BinResolver: the host's own PATH is prefixed with its
+         tools dir (App.xaml.cs), so a headless `claude -p` launched from the
+         host would resolve to our claude.cmd shim. The resolver that skips
+         every perch tools dir is the one the shim already trusts. -->
+    <Compile Include="..\..\tools\perch-cli\BinResolver.cs" Link="BinResolver.cs" />
   </ItemGroup>
 
   <!-- Perch.Tests exercises internal types (PaneTree, Session, the message

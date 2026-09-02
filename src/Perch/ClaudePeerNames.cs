@@ -12,10 +12,21 @@ namespace Perch;
 /// Why names at all: cross-session messaging addresses sessions BY NAME.
 /// Left to itself cc derives one from the working directory — which collides
 /// the moment two tabs share a repo (the normal Perch case). Keeping the name
-/// equal to the tab title means `/list-agents` inside any session shows
-/// exactly the names the user sees in the sidebar, and "tell weekly-digest
-/// about the rename" needs no lookup. The host dedupes across live panes
-/// (" 2", " 3") so a shared title can't make the address ambiguous.
+/// derived from the tab title means `/list-agents` inside any session shows
+/// names the user recognises from the sidebar, and "tell weekly-digest about
+/// the rename" needs no lookup. The host dedupes across live panes ("-2",
+/// "-3") so a shared title can't make the address ambiguous.
+///
+/// ## One spelling, everywhere
+///
+/// A name is always the SLUG of the title (lowercase, dashes): "Loc diff fix"
+/// → `loc-diff-fix`. That is what a project tab passes on its command line
+/// (a slug needs no quoting through the shell splice), what the sweep writes
+/// to the temp file, and what a teammate types into SendMessage. The earlier
+/// scheme kept spaces and case in the host's copy while the launch used the
+/// slug, so an observed `peer.msg` target never matched a row and pair notes
+/// were silently dropped. `Matches` compares through the slug so any legacy
+/// spelling still resolves.
 internal static class ClaudePeerNames
 {
     /// The path wrap-claude and the session-start hook read. Keyed by the pane
@@ -41,9 +52,28 @@ internal static class ClaudePeerNames
         catch (Exception ex) { Log.Info("ClaudePeerNames.Write", $"skipped: {ex.Message}"); }
     }
 
-    /// A tab title reduced to a safe, stable session name: control chars and
+    /// The session name a tab title launches under: its slug, or "tab" when
+    /// the title has no alphanumerics at all (never an empty --name).
+    public static string ForTitle(string? title)
+    {
+        var slug = GitProc.Slugify(title ?? "");
+        return slug.Length == 0 ? "tab" : slug;
+    }
+
+    /// Do two spellings name the same session? Compared through the slug, so
+    /// "Loc diff fix", "loc-diff-fix" and "LOC DIFF FIX" all agree, while
+    /// empty never matches anything.
+    public static bool Matches(string? a, string? b)
+    {
+        if (string.IsNullOrWhiteSpace(a) || string.IsNullOrWhiteSpace(b)) return false;
+        var sa = GitProc.Slugify(a);
+        var sb = GitProc.Slugify(b);
+        return sa.Length > 0 && string.Equals(sa, sb, StringComparison.Ordinal);
+    }
+
+    /// A tab title reduced to a safe, readable display form: control chars and
     /// quotes dropped, whitespace collapsed, capped at 40 chars. Empty in →
-    /// "tab" out, so a pane never ships an empty --name.
+    /// "tab" out. Used for prose ("paired with …"), never for addresses.
     public static string Sanitize(string? title)
     {
         var sb = new StringBuilder();
