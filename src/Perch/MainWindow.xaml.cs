@@ -2637,7 +2637,24 @@ public partial class MainWindow : FluentWindow
         if (pane == null) return false;
         try
         {
-            _panes.Write(pane.Id, System.Text.Encoding.UTF8.GetBytes(line + "\r"));
+            // The text and the Enter go in SEPARATE writes, a beat apart. A
+            // whole sentence landing in one write trips Claude Code's paste
+            // detection, and an Enter inside a paste is a newline, not a
+            // submit — the line just sat in the input box (seen with a team
+            // post; the pairing intro had the same exposure).
+            var paneId = pane.Id;
+            _panes.Write(paneId, System.Text.Encoding.UTF8.GetBytes(line));
+            var timer = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(150),
+            };
+            timer.Tick += (_, __) =>
+            {
+                timer.Stop();
+                try { if (_panes.Has(paneId)) _panes.Write(paneId, new byte[] { (byte)'\r' }); }
+                catch (Exception ex) { Log.Info("Pair", $"enter into {paneId:N} failed: {ex.Message}"); }
+            };
+            timer.Start();
             return true;
         }
         catch (Exception ex)

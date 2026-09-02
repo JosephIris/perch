@@ -97,6 +97,22 @@ public partial class App : System.Windows.Application
         }
         catch (Exception ex) { Log.Error("PATH.perchTools", ex); }
 
+        // Perch launched from inside a Claude Code session (a dev running it
+        // from an agent's terminal, a test harness) inherits that session's
+        // markers, and every pane's `claude` then believes it is a CHILD of it:
+        // transcript saving off, no journal, no resume. Scrub the markers here
+        // so children start clean; user configuration (CLAUDE_CONFIG_DIR, the
+        // git-bash path) is deliberately left alone.
+        foreach (var name in new[]
+        {
+            "CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PID",
+            "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_EXECPATH", "CLAUDE_CODE_BRIDGE_SESSION_ID",
+            "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_EFFORT",
+        })
+        {
+            try { Environment.SetEnvironmentVariable(name, null); } catch { }
+        }
+
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
             Log.Error("AppDomain.UnhandledException", e.ExceptionObject as Exception);
 

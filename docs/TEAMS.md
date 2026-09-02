@@ -1,12 +1,18 @@
 # Perch Teams (bots with positions, nicknames, and a group room)
 
-> Status: **Milestone A in progress (2026-09-02).** Host, CLI/hook, and page
-> protocol shipped with unit tests (`TeamStoreTests`, `TeamRenderTests`,
-> `RoomLedgerTests`, `TeamMarkersTests`, `ClaudeHeadlessTests`,
-> `TeamControllerTests`, `ProtocolTests` team cases; page `team-*.test.ts`),
-> the hook harness `scripts/test-team-hook.ps1`, and the live harness
-> `scripts/test-team.ps1` (fake claude). Plan:
-> `~/.claude/plans/eventual-jumping-hopcroft.md`.
+> Status: **Milestone A shipped (2026-09-02).** Host, CLI/hook and page with
+> unit tests (host 478, web 182), the hook harness `scripts/test-team-hook.ps1`,
+> the live harness `scripts/test-team.ps1` (fake claude, 35 checks) and the
+> real-Claude run `scripts/e2e-team-real.ps1` — brief generated from a repo
+> (haiku, ~$0.07), two bots up with their briefs, both answer an @everyone
+> post in the room, Ada messages Bo with SendMessage and the room records
+> the full text. Plan: `~/.claude/plans/eventual-jumping-hopcroft.md`.
+>
+> Two things the real run taught: a bot in a brand-new folder first gets
+> Claude Code's "trust this folder?" question in its terminal (default answer
+> is "No, exit" — pick "Yes" once per folder; the post waits, parked, until
+> the session starts). And typed lines must send their Enter in a separate
+> write, or Claude Code's paste detection swallows it (`TypeToClaude`).
 
 ## Goal
 
@@ -125,6 +131,12 @@ truncated}` (pushed on every append; polled by the room while a bot works),
 
 - Received cross-session messages are dropped from the inspector journal by
   `IsInjected` (non-human origin) — the `peer-in` carve-out needs the JSONL
-  shape captured from a real exchange first (Milestone B2).
+  shape captured from a real exchange first (Milestone B2). The e2e run's
+  3-second window after the send was too short to see the receiver's row;
+  extend the wait and grep the receiver's transcript for the payload.
+- Perch launched from inside a Claude Code session inherits that session's
+  markers (`CLAUDE_CODE_CHILD_SESSION` and friends); every pane's `claude`
+  then runs as a child with transcript saving off. `App` scrubs them at
+  startup since 2026-09-02.
 - Membership changes reach a bot at its next prompt (roster is passive).
 - Grok Bot runs in the cloud, always on; Perch bots stop when the PC sleeps.

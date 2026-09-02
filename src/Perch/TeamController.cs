@@ -751,10 +751,16 @@ internal sealed class TeamController
             var key = pane.Id;
             if (!_ingested.TryGetValue(key, out var seen) || seen.Session != pane.ClaudeSessionId)
             {
-                // First sight of this transcript in this process: don't replay
-                // history — unless nothing is in the ledger yet (a brand-new
-                // bot whose first rows we simply haven't copied).
-                var start = seen.Session == null && store.Ledger.LastSeq > 0 ? events.Count : 0;
+                // First sight of this transcript in this process (a fresh bot,
+                // or Perch restarted under a running one). Skip only what the
+                // ledger already holds from this bot — by time, not by count —
+                // so a reply that landed before the room's first poll is kept
+                // and a restart doesn't replay yesterday.
+                var newest = store.Ledger.ReadAll()
+                    .Where(r => r.From == bot.Slug && r.Kind is "beat" or "work")
+                    .Select(r => r.TsMs).DefaultIfEmpty(0).Max();
+                var start = 0;
+                while (start < events.Count && ParseTs(events[start].Ts) <= newest) start++;
                 _ingested[key] = (pane.ClaudeSessionId!, start);
                 seen = _ingested[key];
             }

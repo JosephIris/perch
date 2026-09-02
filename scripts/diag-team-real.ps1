@@ -70,17 +70,21 @@ try {
     Set-Content -Path (Join-Path $teamDir 'positions\frontend-dev\brief.md') -Value "## Role`nYou own src/web." -Encoding utf8
 
     [void](Send-Verb 'team.bot.create' @{ projectId = $pid2; nickname = 'Ada'; positionSlug = 'frontend-dev'; worktree = 'false' })
-    Start-Sleep -Seconds 14
     [void](Cdp-Eval "(()=>{document.documentElement.style.background='#1f1f1f';return 1})()")
     [void](Cdp-Eval "(()=>{const b=[...document.querySelectorAll('button')].find(x=>/get started/i.test(x.textContent||''));if(b){b.click();return 1}return 0})()")
-    Start-Sleep -Milliseconds 800
+    # Trust question: Down selects "Yes, I trust this folder", then Enter.
+    if (-not (Wait-Until { (Log-Count 'type=session') -ge 1 } 12)) {
+        [void](Send-Verb 'pty.send' @{ text = "$([char]27)[B`r" })
+        [void](Wait-Until { (Log-Count 'type=session') -ge 1 } 60)
+    }
+    Write-Host "  session hooks: $(Log-Count 'type=session')"
+    Start-Sleep -Seconds 8
     Shot (Join-Path $OutDir 'diag-bot-pane.png')
-    Write-Host "  session hooks so far: $(Log-Count 'type=session')"
-    [void](Send-Verb 'pty.send' @{ text = "`r" })
-    Start-Sleep -Seconds 12
+    # Now a room post, and a look at the pane 20 s later: did the line submit?
+    [void](Send-Verb 'team.post' @{ projectId = $pid2; text = 'Reply with one line: your name and what you own. Do not use any tools.'; to = 'everyone'; clientId = 'd1' })
+    Start-Sleep -Seconds 20
     Shot (Join-Path $OutDir 'diag-bot-pane-2.png')
-    Write-Host "  session hooks after Enter: $(Log-Count 'type=session')"
-    Select-String -Path $LogPath -Pattern 'Setup:|type=session|ERROR' -EA SilentlyContinue | Select-Object -Last 6 | ForEach-Object { Write-Host "    $($_.Line)" }
+    Select-String -Path $LogPath -Pattern 'Setup:|type=session|Team\.|ERROR' -EA SilentlyContinue | Select-Object -Last 8 | ForEach-Object { Write-Host "    $($_.Line)" }
 }
 finally {
     if ($proc -and -not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -EA SilentlyContinue; Start-Sleep -Milliseconds 600 }
