@@ -856,6 +856,37 @@ internal sealed class TeamController
         Log.Info("Team.perm.ask", $"bot={h.Bot.Slug} id={id} tool={tool}");
         RefreshRoster(h.Project, h.Store);
         PostEntries(h.Project.Id, h.Store, new[] { entry });
+        // The hook only waits so long. After that Claude shows the prompt in
+        // the bot's own terminal, and a card still offering Allow would be
+        // lying — pressing it then does nothing at all.
+        _h.Delay(() => PermTimedOut(h.Project.Id, id), PermCardWait);
+    }
+
+    /// How long a permission card is answerable: the hook's own wait plus a
+    /// moment, so the room never says "expired" while the bot is still
+    /// listening.
+    internal static readonly TimeSpan PermCardWait = TimeSpan.FromSeconds(575);
+
+    /// Nobody answered in time. Say so, with the bot's terminal one click
+    /// away, and stop the card offering buttons that can no longer work.
+    private void PermTimedOut(Guid projectId, string id)
+    {
+        if (!_awaitingPerm.TryGetValue(id, out var who)) return;   // answered in time
+        _awaitingPerm.Remove(id);
+        var proj = _h.ProjectById(projectId);
+        var store = StoreFor(projectId);
+        if (proj == null || store == null) return;
+        var bot = store.Doc.Bot(who.Slug);
+        var e = store.Ledger.Append(new RoomEntry
+        {
+            Kind = "system", From = who.Slug, Event = "permission.expired", Note = id,
+            To = bot == null ? null : new List<string> { bot.Slug },
+            PaneId = who.PaneId == Guid.Empty ? null : who.PaneId.ToString("D"),
+            Text = $"{bot?.Nickname ?? "The bot"} waited ten minutes — the question is in its own terminal now",
+        });
+        Log.Info("Team.perm.timeout", $"id={id} bot={who.Slug}");
+        RefreshRoster(proj, store);
+        PostEntries(proj.Id, store, new[] { e });
     }
 
     /// The owner answered a permission card: write the decision where the

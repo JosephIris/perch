@@ -1103,6 +1103,25 @@ public class TeamControllerTests
 
             h.Ctrl.OnPermDenied(sess, sess.Root.Id, new PermDeniedMessage("Bash", "curl evil", "classifier"));
             Assert.Contains(h.Ledger, e => e.Event == "denied" && e.From == "ada" && e.Text.StartsWith("Ada: auto mode blocked Bash: curl evil"));
+
+            // An answer that never comes: the hook gives up, Claude asks in the
+            // bot's own terminal, and the room says so instead of leaving a
+            // card whose Allow would now do nothing.
+            h.Ctrl.OnPermAsk(sess, sess.Root.Id, new PermAskMessage("p3", "Bash", "git push"));
+            var timer = h.Delayed.Last();
+            h.Delayed.Clear();
+            timer();
+            var expired = h.Ledger.Single(e => e.Event == "permission.expired");
+            Assert.Equal("p3", expired.Note);
+            Assert.Equal("ada", expired.From);
+            Assert.Contains("waited ten minutes", expired.Text);
+            // Answered in time, the timer says nothing.
+            h.Ctrl.OnPermAsk(sess, sess.Root.Id, new PermAskMessage("p4", "Bash", "git status"));
+            var timer4 = h.Delayed.Last();
+            h.Ctrl.OnPermAnswer(new TeamPermAnswerMsg { ProjectId = h.Project.Id, Id = "p4", Decision = "allow" });
+            timer4();
+            Assert.Single(h.Ledger, e => e.Event == "permission.expired");
+            File.Delete(TeamPaths.PermAnswerPathFor("p4"));
         }
         finally
         {

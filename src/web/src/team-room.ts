@@ -89,7 +89,10 @@ export function systemTone(event: TeamEntryView["event"]): "calm" | "attention" 
     case "ask":                                // a bot's question, answered from the card
     case "trust":                              // a bot's start-up question, answered from the card
     case "task.review": return "attention";   // the lead is asking you to confirm
+    case "permission.expired":                 // the card ran out of time
+      return "attention";
     case "error":
+    case "peer.failed":                        // a bot's message never left
     case "denied": return "error";            // auto mode blocked the bot
     default: return "calm";
   }
@@ -231,6 +234,9 @@ function writeActivityPref(on: boolean): void {
  * rebuilds its DOM, so the faces it mounted last time are disposed first —
  * a face keeps a slot on the shared ticker until then. */
 const feedFaces: BotFace[] = [];
+/* Which faces belong to which feed row, so a row that survives a render keeps
+ * its avatar animating and a row that goes away stops paying for one. */
+let feedFacesByKey = new Map<string, BotFace[]>();
 const rosterFaces: BotFace[] = [];
 
 function disposeFaces(list: BotFace[]): void {
@@ -1143,6 +1149,49 @@ function repinIfPinned(): void {
   if (lastPinned && feedEl) feedEl.scrollTop = feedEl.scrollHeight;
 }
 
+/** A row's identity across renders: its ledger seq (a folded run of tool calls
+ *  is keyed by its first). Stable, because the ledger only ever appends. */
+export function rowKey(row: FeedRow): string {
+  return row.kind === "workfold" ? `w${row.seq}` : `e${row.seq}`;
+}
+
+/** Everything about a row that changes what it looks like. Same signature =
+ *  the node on screen is still correct and is left alone — which is what keeps
+ *  a card's buttons alive under the owner's finger. */
+export function rowSig(
+  row: FeedRow,
+  ctx: {
+    answered: { perms: Set<string>; asks: Set<string>; trust: Set<string> };
+    reactions: Map<number, ReactionPill[]>;
+    /* Reactions you clicked that the host has not echoed yet — they are on
+     * screen, so they belong in the signature. */
+    optimistic: Map<number, Set<string>>;
+    /* Nickname (and slug) → the tab that bot runs in. A reused row keeps the
+     * handlers it was built with, so its "Open" button holds the session id of
+     * that moment: if the bot moved tabs, the row has to be rebuilt. */
+    sessions: Map<string, string>;
+    openFolds: Set<number>;
+    openBeats: Set<number>;
+  },
+): string {
+  const pills = (ctx.reactions.get(row.seq) ?? []).map((p) => `${p.emoji}${p.who.join(",")}`).join("")
+    + "|" + [...(ctx.optimistic.get(row.seq) ?? [])].join("");
+  const tab = (who: string | undefined) => (who ? ctx.sessions.get(who) ?? "" : "");
+  if (row.kind === "workfold")
+    return `w|${row.entries.length}|${row.summary}|${row.cont}|${ctx.openFolds.has(row.seq)}|${pills}|${tab(row.from)}`;
+  const e = row.entry;
+  const note = e.note ?? "";
+  const done = e.kind === "system"
+    ? `${ctx.answered.perms.has(note)}${ctx.answered.asks.has(note)}` +
+      (Array.isArray(e.to) ? e.to.map((n) => ctx.answered.trust.has(n)).join("") : "")
+    : "";
+  return [
+    "e", e.kind, e.seq, e.text.length, e.summary?.length ?? 0, e.event ?? "", e.delivered ?? "",
+    row.cont, ctx.openBeats.has(e.seq), done, e.image ?? "", pills,
+    tab(e.from), tab(Array.isArray(e.to) ? e.to[0] : undefined),
+  ].join("|");
+}
+
 function renderFeed(entries: TeamEntryView[], bots: TeamBotView[]): void {
   answered = answeredSet(entries);
   reactions = reactionsFor(entries);
@@ -1191,19 +1240,60 @@ function renderFeed(entries: TeamEntryView[], bots: TeamBotView[]): void {
   }
 
   const shown = visibleEntries(entries, showActivity);
-  disposeFaces(feedFaces);
   const rows = groupRows(foldFeed(shown));
   const names = bots.map((b) => b.nickname);
-  const frag = document.createDocumentFragment();
+
+  // Rows are REUSED, not rebuilt. A bot at work adds a row every couple of
+  // seconds, and tearing the whole feed down each time destroys the button
+  // under the owner's cursor: a press that starts on the old node and ends on
+  // its replacement fires no click at all, which is how an Allow could be
+  // pressed and simply not happen. Each row carries a key and a signature of
+  // everything its rendering depends on; only a row whose signature changed is
+  // built again.
+  const alive = new Map<string, HTMLElement>();
+  for (const child of Array.from(feedEl.children) as HTMLElement[])
+    if (child.dataset.key) alive.set(child.dataset.key, child);
+
+  const sessions = new Map<string, string>();
+  for (const b of bots) { const id = b.sessionId ?? ""; sessions.set(b.nickname, id); sessions.set(b.botId, id); }
+  const sigCtx = { answered, reactions, optimistic: optimisticReactions, sessions, openFolds, openBeats };
+  const nodes: HTMLElement[] = [];
+  const nextFaces = new Map<string, BotFace[]>();
   let maxSeq = renderedSeq;
+
+  /* Build (or reuse) one row, carrying its faces with it. A rebuilt row's old
+   * faces are disposed; a kept row's keep running. */
+  const place = (key: string, sig: string, build: () => HTMLElement, enter: boolean) => {
+    const prev = alive.get(key);
+    if (prev && prev.dataset.sig === sig) {
+      nodes.push(prev);
+      nextFaces.set(key, feedFacesByKey.get(key) ?? []);
+      return;
+    }
+    for (const f of feedFacesByKey.get(key) ?? []) f.dispose();
+    const before = feedFaces.length;
+    const node = build();
+    node.dataset.key = key;
+    node.dataset.sig = sig;
+    if (enter) node.classList.add("row-enter");
+    nodes.push(node);
+    nextFaces.set(key, feedFaces.slice(before));
+  };
+
   for (const row of rows) {
-    const node = renderRow(row, bots, names);
-    if (row.seq > renderedSeq) node.classList.add("row-enter");
     if (row.seq > maxSeq) maxSeq = row.seq;
-    frag.appendChild(node);
+    place(rowKey(row), rowSig(row, sigCtx), () => renderRow(row, bots, names), row.seq > renderedSeq);
   }
-  for (const [clientId, p] of pending) frag.appendChild(renderPending(clientId, p, names));
-  feedEl.replaceChildren(frag);
+  for (const [clientId, p] of pending)
+    place(`p${clientId}`, `p:${p.failed}:${p.text.length}`, () => renderPending(clientId, p, names), false);
+
+  // Faces of rows that are gone stop; everything still on screen keeps moving.
+  for (const [key, list] of feedFacesByKey) if (!nextFaces.has(key)) for (const f of list) f.dispose();
+  feedFacesByKey = nextFaces;
+  feedFaces.length = 0;
+  for (const list of nextFaces.values()) feedFaces.push(...list);
+
+  feedEl.replaceChildren(...nodes);
   renderedSeq = maxSeq;
 
   if (pinned) feedEl.scrollTop = feedEl.scrollHeight;
@@ -1629,7 +1719,8 @@ function renderSystem(e: TeamEntryView, bots: TeamBotView[]): HTMLElement {
   // Rows that need the owner IN the bot's terminal — it is asking something
   // the room can't relay, a typed post is sitting there unsent, or auto mode
   // blocked it — carry the door to it.
-  if ((e.event === "waiting" || e.event === "permission" || e.event === "undelivered" || e.event === "denied") && target?.sessionId) {
+  if ((e.event === "waiting" || e.event === "permission" || e.event === "permission.expired"
+       || e.event === "undelivered" || e.event === "denied") && target?.sessionId) {
     const o = openBtn(target);
     if (o) node.appendChild(o);
   }

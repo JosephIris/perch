@@ -848,7 +848,14 @@ export type TeamEntryView = {
         /* cards you answer in the room: a permission prompt (Allow / Deny),
          * a bot's question (`perch team ask`); the rows that close them; a
          * classifier block in auto mode; a post copied to the lead */
-        | "permission.answered" | "denied" | "ask" | "ask.answered" | "cc";
+        | "permission.answered" | "denied" | "ask" | "ask.answered" | "cc"
+        /* the room's card ran out of time: the prompt is in the bot's own
+         * terminal now, and Allow here would do nothing */
+        | "permission.expired"
+        /* a bot's message to a teammate never left */
+        | "peer.failed"
+        /* something too long for the feed; see kind "artefact" */
+        | "artefact";
   /* user rows: false while the host is holding the post for a bot that has no
    * Claude up yet (asleep, still booting). Flips true when it lands. */
   delivered?: boolean;

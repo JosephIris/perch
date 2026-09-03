@@ -443,7 +443,9 @@ export function answeredSet(entries: TeamEntryView[]): { perms: Set<string>; ask
   const perms = new Set<string>(), asks = new Set<string>(), trust = new Set<string>();
   for (const e of entries) {
     if (e.kind !== "system") continue;
-    if (e.event === "permission.answered" && e.note) perms.add(e.note);
+    // Expired counts as closed: the card can no longer be answered from here,
+    // so it must stop offering buttons that would do nothing.
+    if ((e.event === "permission.answered" || e.event === "permission.expired") && e.note) perms.add(e.note);
     else if (e.event === "ask.answered" && e.note) asks.add(e.note);
     else if ((e.event === "trusted" || e.event === "exited") && Array.isArray(e.to))
       for (const n of e.to) trust.add(n);

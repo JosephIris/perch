@@ -7,7 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { visibleEntries, reactionsFor, taskOrder, answeredSet, handoffLabel, REACTIONS } from "../src/team.js";
 import { findLinks, findImagePaths, imageLabel } from "../src/text.js";
-import { feedRowClass, systemTone, taskStatusWord, permissionDetails, cardKind, artefactKindWord } from "../src/team-room.js";
+import { feedRowClass, systemTone, taskStatusWord, permissionDetails, cardKind, artefactKindWord, rowKey, rowSig } from "../src/team-room.js";
 import type { TeamEntryView, TeamTaskView } from "../src/bridge.js";
 import type { FeedRow } from "../src/team.js";
 
@@ -148,4 +148,50 @@ test("artefactKindWord: says what the thing is, in words the owner uses", () => 
   assert.equal(artefactKindWord("TS"), "ts");
   assert.equal(artefactKindWord(""), "note");
   assert.equal(artefactKindWord(undefined), "note");
+});
+
+test("rowSig: a row keeps its identity while nothing on it changed", () => {
+  // This is what keeps a card's Allow button alive under the pointer. The feed
+  // redraws whenever a bot does anything; a row whose signature is unchanged is
+  // left in place, and a press that starts and ends on it still counts.
+  const card = entry({ seq: 12, kind: "system", from: "perch", event: "permission", note: "p-9", text: "Bo wants to run Bash: git push" });
+  const row = rowOf(card);
+  const ctx = () => ({ answered: answeredSet([]), reactions: new Map(), optimistic: new Map(), sessions: new Map(), openFolds: new Set<number>(), openBeats: new Set<number>() });
+  assert.equal(rowKey(row), "e12");
+  assert.equal(rowSig(row, ctx()), rowSig(row, ctx()), "same row, same context, same signature");
+
+  // Answered → the card must be rebuilt (its buttons are gone).
+  const after = { ...ctx(), answered: answeredSet([entry({ seq: 13, kind: "system", from: "perch", event: "permission.answered", note: "p-9", text: "You allowed Bo" })]) };
+  assert.notEqual(rowSig(row, after), rowSig(row, ctx()));
+
+  // A reaction landing on the row changes it too.
+  const reacted = { ...ctx(), reactions: new Map([[12, [{ emoji: "✅", who: ["you"] }]]]) };
+  assert.notEqual(rowSig(row, reacted), rowSig(row, ctx()));
+
+  // And an optimistic one you just clicked, before the host echoes it.
+  const optimistic = { ...ctx(), optimistic: new Map([[12, new Set(["👀"])]]) };
+  assert.notEqual(rowSig(row, optimistic), rowSig(row, ctx()));
+});
+
+test("rowSig: a folded run of tool calls is rebuilt only as it grows or opens", () => {
+  const work = (seq: number) => entry({ seq, kind: "work", from: "Ada", verb: "Read", target: "a.ts", text: "" });
+  const fold = (n: number): FeedRow =>
+    ({ kind: "workfold", seq: 20, from: "Ada", entries: Array.from({ length: n }, (_, i) => work(20 + i)), summary: `read ${n} files`, cont: false });
+  const ctx = () => ({ answered: answeredSet([]), reactions: new Map(), optimistic: new Map(), sessions: new Map(), openFolds: new Set<number>(), openBeats: new Set<number>() });
+  assert.equal(rowKey(fold(2)), "w20");
+  assert.equal(rowSig(fold(2), ctx()), rowSig(fold(2), ctx()));
+  assert.notEqual(rowSig(fold(3), ctx()), rowSig(fold(2), ctx()));
+  const open = { ...ctx(), openFolds: new Set([20]) };
+  assert.notEqual(rowSig(fold(2), open), rowSig(fold(2), ctx()));
+});
+
+test("answeredSet: a card that ran out of time stops offering buttons", () => {
+  // The hook waits about ten minutes, then Claude asks in the bot's own
+  // terminal. Allow here would do nothing after that, so the card must close.
+  const set = answeredSet([
+    entry({ seq: 1, kind: "system", from: "perch", event: "permission", note: "p-1", text: "Bo wants to run Bash" }),
+    entry({ seq: 2, kind: "system", from: "bo", event: "permission.expired", note: "p-1", text: "Bo waited ten minutes" }),
+  ]);
+  assert.ok(set.perms.has("p-1"));
+  assert.equal(systemTone("permission.expired"), "attention");
 });
