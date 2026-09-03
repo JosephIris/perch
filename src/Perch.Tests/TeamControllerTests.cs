@@ -828,33 +828,41 @@ public class TeamControllerTests
     }
 
     [Fact]
-    public async Task PeerMsg_AFailedSend_IsOneQuietLine_NotAMessage()
+    public async Task PeerMsg_AFailedSend_IsPassedOnByPerch_NotDropped()
     {
         var h = new Harness();
         await h.CreateBot("Ada");
         await h.CreateBot("Bo", slug: "frontend-dev");
         var ada = h.Sessions[0];
+        var bo = h.Sessions[1];
 
-        // The send didn't land: the body never reached Bo, so it is not shown
-        // as something Ada said — one line with the reason instead.
+        // Claude Code refused the send because a nickname is not unique — an
+        // earlier run's session answers to "bo" too. Perch knows exactly who
+        // was meant, so the message is typed into Bo instead of being dropped:
+        // a hand-off on the floor is how the live team stalled.
+        h.Typed.Clear();
         h.Ctrl.OnPeerMsg(ada, ada.Root.Id, new PeerMsgMessage("sent", "bo", "…", false,
             "FYI: stand down on the ticket definitions", "FYI: stand down",
             "2 agents are named 'bo'. Re-send with the ref of the one you mean"));
-        Assert.DoesNotContain(h.Ledger, e => e.Kind == "peer");
-        var failed = h.Ledger.Single(e => e.Event == "peer.failed");
-        Assert.Equal("ada", failed.From);
-        Assert.Contains("couldn't reach Bo", failed.Text);
-        Assert.Contains("2 agents are named", failed.Text);
-
-        // The retry that works is the only bubble in the room…
-        h.Ctrl.OnPeerMsg(ada, ada.Root.Id, new PeerMsgMessage("sent", "bo [7d21]", "…", true,
-            "FYI: stand down on the ticket definitions", "FYI: stand down"));
+        var (to, line) = Assert.Single(h.Typed);
+        Assert.Equal(bo.Id, to);
+        Assert.Equal("[Perch team] Ada → you: FYI: stand down on the ticket definitions", line);
         var peer = h.Ledger.Single(e => e.Kind == "peer");
         Assert.Equal("stand down on the ticket definitions", peer.Text);
+        Assert.True(peer.Ok);
+        Assert.Contains(h.Ledger, e => e.Event == "routed" && e.Text.Contains("Perch passed it on"));
+        Assert.DoesNotContain(h.Ledger, e => e.Event == "peer.failed");
 
-        // …and the same body again moments later is the same message, not a
-        // second one.
-        h.Ctrl.OnPeerMsg(ada, ada.Root.Id, new PeerMsgMessage("sent", "bo", "…", true,
+        // Nobody to pass it to: then it is one quiet line, as before.
+        h.Ctrl.OnPeerMsg(ada, ada.Root.Id, new PeerMsgMessage("sent", "someone-else", "…", false,
+            "FYI: nobody here", "FYI", "No agent named 'someone-else' is reachable."));
+        var failed = h.Ledger.Single(e => e.Event == "peer.failed");
+        Assert.Equal("ada", failed.From);
+        Assert.Contains("couldn't reach", failed.Text);
+
+        // The bot's own retry lands the same body seconds later: that is the
+        // message the room already shows, not a second one.
+        h.Ctrl.OnPeerMsg(ada, ada.Root.Id, new PeerMsgMessage("sent", "bo [7d21]", "…", true,
             "FYI: stand down on the ticket definitions", "FYI: stand down"));
         Assert.Single(h.Ledger, e => e.Kind == "peer");
         foreach (var s in h.Sessions) TeamMarkers.Clear(s.Root.Id);

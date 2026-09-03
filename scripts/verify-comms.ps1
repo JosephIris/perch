@@ -84,6 +84,21 @@ function Team-Dump { param([string]$ProjectId)
     $line = Log-Last 'TEAM_DUMP'
     return ($line.Substring($line.IndexOf('TEAM_DUMP') + 9) | ConvertFrom-Json)
 }
+$script:cardsSeen = @{}
+# The bots reach for `perch team post`, and auto mode asks about an unknown
+# binary. An owner watching the room answers those cards; the gate does the
+# same, so a section about DELIVERY does not fail on an unanswered prompt.
+# Step 4 is the exception - there the answer is deliberately late.
+function Answer-Cards {
+    param([string]$ProjectId)
+    $ids = @(Select-String -Path $LogPath -Pattern 'Team.perm.ask' -SimpleMatch -EA SilentlyContinue |
+             ForEach-Object { ($_.Line -replace '.*id=([0-9a-f]+).*', '$1') })
+    foreach ($id in $ids) {
+        if ($script:cardsSeen.ContainsKey($id)) { continue }
+        $script:cardsSeen[$id] = $true
+        [void](Send-Verb 'team.perm.answer' @{ projectId = $ProjectId; id = $id; decision = 'allow' })
+    }
+}
 $fails = @()
 function Check { param([string]$Name, [bool]$Ok, [string]$Detail = '')
     if ($Ok) { Write-Host "  [+] $Name" -ForegroundColor Green }
@@ -117,9 +132,12 @@ try {
     Set-Content -Path (Join-Path $teamDir 'positions\courier\brief.md') -Encoding utf8 -Value @'
 ## Role
 
-You answer posts from the team room. Reply with ONE short line and nothing
-else. Never run a shell command, never read a file, never use any tool: the
-answer is always just the line asked for.
+You answer posts from the team room in ONE short line. Two exceptions, and
+only these: use the SendMessage tool when a post tells you to message a
+teammate, and run `perch team post "<line>"` when a post tells you to post
+something to the room. When a TEAMMATE messages you, post what they said to
+the room with `perch team post` straight away, quoting their word exactly.
+Never read a file, never write code, never run anything else.
 '@
 
     $env:PERCH_ENABLE_TEST_IPC = '1'
@@ -174,8 +192,9 @@ answer is always just the line asked for.
     Check "the post was typed into the bot" (Wait-Until { (Log-Count 'Team.deliver') -gt $before } 20)
     Check "the prompt-submit hook confirmed it" (Wait-Until { (Log-Last 'Team.submit') -match 'confirmed' } 30)
     Check "the bot's answer came back into the room" (Wait-Until {
+        Answer-Cards $projectId
         $d = Team-Dump $projectId
-        @($d.ledger | Where-Object { $_.kind -eq 'beat' -and $_.text -match 'PONGONE' }).Count -ge 1
+        @($d.ledger | Where-Object { ($_.kind -eq 'beat' -or $_.kind -eq 'note') -and $_.text -match 'PONGONE' }).Count -ge 1
     } 180)
     Check "no 'didn't take the post' row" ((Log-Count "Team.submit") -ge 1 -and (Log-Count 'gave up') -eq 0)
 
@@ -218,8 +237,9 @@ answer is always just the line asked for.
     Check "the bot's Claude came up" (Wait-Until { (Log-Count 'type=session') -gt $sessionsBefore } 120)
     Check "the parked post was delivered after that" (Wait-Until { (Log-Count 'Team.deliver') -gt $deliverBefore } 30)
     Check "the woken bot answered in the room" (Wait-Until {
+        Answer-Cards $projectId
         $d = Team-Dump $projectId
-        @($d.ledger | Where-Object { $_.kind -eq 'beat' -and $_.text -match 'PONGTWO' }).Count -ge 1
+        @($d.ledger | Where-Object { ($_.kind -eq 'beat' -or $_.kind -eq 'note') -and $_.text -match 'PONGTWO' }).Count -ge 1
     } 180)
     $d = Team-Dump $projectId
     $cold = @($d.ledger | Where-Object { $_.kind -eq 'user' -and $_.text -match 'PONGTWO' }) | Select-Object -First 1
@@ -263,7 +283,7 @@ answer is always just the line asked for.
         # further cards (the bot's own `perch team post` needs one too, now
         # that the repo has a permissions block) are answered promptly, the
         # way an owner watching the room would.
-        $answered = @{}
+        $answered = $script:cardsSeen
         $first = $true
         $deadline = (Get-Date).AddSeconds(240)
         $ran = $false
@@ -288,6 +308,55 @@ answer is always just the line asked for.
         Check "and the room said so when it had to press it on screen" (
             $ran -and ((Log-Count 'Team.perm.onscreen') -ge 0))   # informational: the fallback may not be needed
     }
+
+    # --- 5. bot to bot, idle receiver and busy receiver ----------------------
+    # Joseph: "messages from one bot to another isn't solid either, left
+    # hanging waiting for me to click enter." A send that the ROOM records as
+    # sent is not proof: the test is that the OTHER bot acts on it. Twice -
+    # once while it is idle, once while it is in the middle of a turn, which is
+    # where a queued message is most likely to be lost.
+    Write-Host "`n[5] a message from one bot to another actually reaches it"
+    [void](Send-Verb 'team.bot.create' @{ projectId = $projectId; nickname = 'Bo'; positionSlug = 'courier'; worktree = 'false' })
+    $bosUp = Wait-Until { (Log-Count 'type=session') -ge 2 } 20
+    if (-not $bosUp) {
+        if (Wait-Until { (Log-Count 'Team.trust.ask') -ge 1 } 25) {
+            [void](Send-Verb 'team.bot.answer' @{ projectId = $projectId; botId = 'bo'; answer = 'trust' })
+        }
+        $bosUp = Wait-Until { (Log-Count 'type=session') -ge 2 } 90
+    }
+    Check "Bo's Claude reported its session" $bosUp
+    Start-Sleep -Seconds 6
+
+    # (a) idle receiver
+    [void](Send-Verb 'team.post' @{ projectId = $projectId; text = 'Use your SendMessage tool to send bo exactly this: PEERONE. Nothing else.'; to = '["Ada"]'; clientId = 'p1' })
+    Check "the room recorded Ada's message to Bo" (Wait-Until {
+        Answer-Cards $projectId
+        $d = Team-Dump $projectId
+        @($d.ledger | Where-Object { $_.kind -eq 'peer' -and $_.text -match 'PEERONE' -and $_.ok -eq $true }).Count -ge 1
+    } 150)
+    # …and Bo ACTED on it. Bo's brief says answer in one line, so its own reply
+    # is what proves the message arrived rather than sat in a box.
+    Check "Bo acted on the message while idle" (Wait-Until {
+        Answer-Cards $projectId
+        $d = Team-Dump $projectId
+        @($d.ledger | Where-Object { $_.from -eq 'Bo' -and $_.text -match 'PEERONE' }).Count -ge 1
+    } 180)
+
+    # (b) busy receiver: Bo is mid-turn when the message arrives
+    [void](Send-Verb 'team.post' @{ projectId = $projectId; text = 'Count slowly from 1 to 12, one number per line, then post the word COUNTED to the room.'; to = '["Bo"]'; clientId = 'p2' })
+    Start-Sleep -Seconds 3
+    [void](Send-Verb 'team.post' @{ projectId = $projectId; text = 'Use your SendMessage tool to send bo exactly this: PEERTWO. Nothing else.'; to = '["Ada"]'; clientId = 'p3' })
+    Check "the room recorded the second message" (Wait-Until {
+        Answer-Cards $projectId
+        $d = Team-Dump $projectId
+        @($d.ledger | Where-Object { $_.kind -eq 'peer' -and $_.text -match 'PEERTWO' -and $_.ok -eq $true }).Count -ge 1
+    } 150)
+    Check "Bo acted on it although it was mid-turn" (Wait-Until {
+        Answer-Cards $projectId
+        $d = Team-Dump $projectId
+        @($d.ledger | Where-Object { $_.from -eq 'Bo' -and $_.text -match 'PEERTWO' }).Count -ge 1
+    } 240)
+    Check "no send failed on an ambiguous name" ((Log-Count 'Team.peer.failed') -eq 0)
 
     Write-Host ""
     if ($fails.Count -gt 0) {

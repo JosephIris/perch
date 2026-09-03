@@ -230,8 +230,10 @@ a post.
   a post reaches a running bot and is answered; after a restart a bot whose tab
   has no terminal is started, the post waits for its Claude rather than being
   typed into a booting shell, then lands and is answered; "Send again" re-types
-  a failed post with no second post in the room. Must be green before a
-  `v*.*.*` tag — see CLAUDE.md.
+  a failed post with no second post in the room; a permission card answered
+  fifteen seconds late still runs the command; and a message from one bot to
+  another reaches the other bot — which ACTS on it — both while it is idle and
+  mid-turn. Must be green before a `v*.*.*` tag — see CLAUDE.md.
 - `scripts/e2e-team-real.ps1` — real Claude: brief from a repo, two bots up
   (trust card answered), replies in the room, bot-to-bot message recorded,
   ask card answered, a permission prompt (project ask rule) answered from the

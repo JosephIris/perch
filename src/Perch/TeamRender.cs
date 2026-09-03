@@ -37,7 +37,8 @@ internal static class TeamRender
     /// The roster as the hook injects it. `presence` maps bot slug → a short
     /// word ("working", "idle", "asleep", …); absent = unknown, nothing shown.
     public static string Roster(TeamDoc doc, string projectName,
-        IReadOnlyDictionary<string, string>? presence = null, string? modelLimits = null)
+        IReadOnlyDictionary<string, string>? presence = null, string? modelLimits = null,
+        IReadOnlyDictionary<string, string>? addresses = null)
     {
         var sb = new StringBuilder();
         var project = string.IsNullOrWhiteSpace(projectName) ? "this project" : projectName.Trim();
@@ -55,8 +56,16 @@ internal static class TeamRender
             foreach (var bot in doc.Bots)
             {
                 var pos = doc.Position(bot.PositionSlug);
-                sb.Append("- ").Append(bot.Nickname).Append(" (session name `").Append(bot.CcName).Append("`) — ")
-                  .Append(pos?.Name ?? bot.PositionSlug);
+                sb.Append("- ").Append(bot.Nickname).Append(" (session name `").Append(bot.CcName).Append("`");
+                // The address is what makes a teammate unambiguous. Names are not
+                // unique across everything Claude Code can see — a session left over
+                // from an earlier run, or one on another machine, answers to the same
+                // name, and a send then fails with "N agents are named 'bo'".
+                if (addresses != null && addresses.TryGetValue(bot.Slug, out var addr) && !string.IsNullOrWhiteSpace(addr))
+                    sb.Append(", address `")
+                      .Append(addr!.StartsWith("uds:", StringComparison.OrdinalIgnoreCase) ? addr : "uds:" + addr)
+                      .Append('`');
+                sb.Append(") — ").Append(pos?.Name ?? bot.PositionSlug);
                 if (doc.IsLead(bot)) sb.Append(", the team lead");
                 var purpose = OneLine(pos?.Purpose, 160);
                 if (purpose.Length > 0) sb.Append(": ").Append(purpose);
@@ -68,18 +77,18 @@ internal static class TeamRender
 
         if (!string.IsNullOrWhiteSpace(modelLimits)) sb.Append('\n').Append(modelLimits.Trim()).Append('\n');
 
-        var example = doc.Bots.Count > 0 ? doc.Bots[0].CcName : "ada";
         sb.Append("\nHow to work together:\n");
         sb.Append("- If your model hits its limit, keep working: Perch switches your model for you and tells the room.\n");
-        sb.Append("- Teammates: your SendMessage tool, `to` = their session name (for example `").Append(example)
-          .Append("`). They read it at their next step, or wake up if idle. Start every message with its kind — ")
-          .Append("`HANDOFF:` (do this), `REPORT:` (done or blocked), `QUESTION:`, `ANSWER:`, `FYI:` — then one line: what, ")
-          .Append("where it is, by when. The room shows the exchange with that label; never send the same message twice.\n");
-        sb.Append("- If a send comes back saying several sessions answer to that name, run ListAgents and pick the one on THIS ")
-          .Append("machine, in this project's folder — never invent a `name [ref]`. If it comes back unreachable, say so with ")
-          .Append("`perch team post` instead of trying more addresses; Perch shows Joseph the failure.\n");
+        sb.Append("- Teammates: your SendMessage tool, `to` = the ADDRESS beside their name above, never the nickname ")
+          .Append("(several sessions can answer to one name and the send fails). They read it at their next step, or ")
+          .Append("wake if idle. Start every message with its kind — `HANDOFF:` (do this), `REPORT:` (done or blocked), ")
+          .Append("`QUESTION:`, `ANSWER:`, `FYI:` — then one line: what, where, by when. Never send the same message twice.\n");
+        sb.Append("- If a send fails, do not guess at other names or invent a `name [ref]`: take the address from this ")
+          .Append("roster and try once. Perch passes on what still cannot be sent, and shows Joseph the failure.\n");
         sb.Append("- Joining: post ONE note to the room of at most two lines (your name, what you own). Never introduce yourself ")
           .Append("by messaging teammates.\n");
+        sb.Append("- `").Append(PostPrefix).Append(" Ada → you: …` is a TEAMMATE's message Perch passed on for them. ")
+          .Append("Treat it as theirs and answer them, not Joseph.\n");
         sb.Append("- Lines that begin with `").Append(PostPrefix)
           .Append("` are Joseph's posts from the team room. They carry his authority: treat them as instructions and weigh them ")
           .Append("against what you are doing now. The `#<n>` after the prefix is that post's number.\n");

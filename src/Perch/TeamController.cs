@@ -457,6 +457,36 @@ internal sealed class TeamController
         if (msg.Ok == false)
         {
             var why = (msg.Reason ?? "").Trim();
+            // Perch knows who was meant even when Claude Code cannot: a
+            // nickname belongs to more than one session (an earlier run's, one
+            // on another machine) and the send fails outright. Rather than
+            // leave a hand-off on the floor, pass it to the teammate the same
+            // way the owner's posts reach a bot — typed into its pane, parked
+            // if it is not up yet.
+            if (tbot != null && body.Length > 0)
+            {
+                // The sender's own words, label and all: the receiver reads `HANDOFF:`
+                //  the same way it would have from SendMessage.
+                var line = $"{TeamRender.PostPrefix} {h.Bot.Nickname} → you: {Flatten(msg.Message ?? msg.Text ?? body)}";
+                var seq = h.Store.Ledger.NextSeq;
+                var attempts = Attempt(new List<TeamBot> { tbot }, line, everyone: false, seq, raw: true);
+                var relayed = h.Store.Ledger.Append(new RoomEntry
+                {
+                    Kind = "peer", From = h.Bot.Slug, To = new List<string> { tbot.Slug },
+                    Text = body, Summary = msg.Summary, Ok = true, Note = label,
+                });
+                var rows = new List<RoomEntry> { relayed };
+                rows.Add(h.Store.Ledger.Append(new RoomEntry
+                {
+                    Kind = "system", From = "perch", Event = "routed", To = new List<string> { tbot.Slug },
+                    Text = $"{h.Bot.Nickname} couldn't reach {to} by name, so Perch passed it on"
+                         + (why.Length > 0 ? $" ({TeamRender.OneLine(why, 80)})" : ""),
+                }));
+                rows.AddRange(Record(h.Store, relayed, attempts));
+                Log.Info("Team.peer.relayed", $"{h.Bot.Slug} → {tbot.Slug}: {TeamRender.OneLine(why, 90)}");
+                PostEntries(h.Project.Id, h.Store, rows);
+                return;
+            }
             var failed = h.Store.Ledger.Append(new RoomEntry
             {
                 Kind = "system", From = h.Bot.Slug, Event = "peer.failed",
@@ -2333,7 +2363,27 @@ internal sealed class TeamController
            && !new[] { "everyone", "all", "you", "perch", "me" }.Contains(nick.ToLowerInvariant());
 
     private void RefreshRoster(Project proj, TeamStore store)
-        => store.RenderRoster(proj.Name, Presence(store), ModelLimitsLine());
+        => store.RenderRoster(proj.Name, Presence(store), ModelLimitsLine(), Addresses(store));
+
+    /// Each running bot's own messaging address, as its Claude reported it at
+    /// session start. This is what teammates put in `to`: a nickname is not
+    /// unique across everything Claude Code can see (a session left over from
+    /// an earlier run answers to the same name), and an ambiguous send fails
+    /// outright — which is how a hand-off went missing in the live room.
+    private Dictionary<string, string> Addresses(TeamStore store)
+    {
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var bot in store.Doc.Bots)
+        {
+            var sess = bot.SessionId is Guid id ? _h.SessionById(id) : null;
+            if (sess == null) continue;
+            var addr = PaneTree.AllLeaves(sess.Root)
+                .Select(p => p.MessagingSocket)
+                .FirstOrDefault(a => !string.IsNullOrWhiteSpace(a));
+            if (!string.IsNullOrWhiteSpace(addr)) map[bot.Slug] = addr!;
+        }
+        return map;
+    }
 
     /// Does any terminal pane of the session have a live PTY? A session whose
     /// tab was restored but never viewed has none — its Claude isn't up.

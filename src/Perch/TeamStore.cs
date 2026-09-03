@@ -543,9 +543,10 @@ internal sealed class TeamStore
     /// board as it concerns that bot, and its memory — what the hook inlines
     /// into each of its prompts). Cheap, so callers do it on every
     /// membership, presence or task change rather than tracking dirtiness.
-    public void RenderRoster(string projectName, IReadOnlyDictionary<string, string>? presence = null, string? modelLimits = null)
+    public void RenderRoster(string projectName, IReadOnlyDictionary<string, string>? presence = null,
+        string? modelLimits = null, IReadOnlyDictionary<string, string>? addresses = null)
     {
-        var roster = TeamRender.Roster(Doc, projectName, presence, modelLimits);
+        var roster = TeamRender.Roster(Doc, projectName, presence, modelLimits, addresses);
         try { AtomicFile.WriteAllText(RosterPath, roster); }
         catch (Exception ex) { Log.Error("TeamStore.RenderRoster", ex); }
         foreach (var bot in Doc.Bots)

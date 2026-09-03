@@ -40,9 +40,15 @@ public class TeamRenderTests
     public void Roster_NamesEveryAddress_AndTheThreeWaysToTalk()
     {
         var roster = TeamRender.Roster(Team(3), "perch",
-            new Dictionary<string, string> { ["ada"] = "working", ["cy"] = "asleep" });
+            new Dictionary<string, string> { ["ada"] = "working", ["cy"] = "asleep" },
+            modelLimits: null,
+            // A teammate is addressed by ADDRESS, not by name: several sessions
+            // can answer to "bo" (an earlier run's, another machine's) and the
+            // send then fails outright, which is how a hand-off went missing.
+            addresses: new Dictionary<string, string> { ["bo"] = @"uds:\\.\pipe\LOCAL\cc-msg-7d21" });
         Assert.Contains("Ada (session name `ada`) — Frontend dev", roster);
-        Assert.Contains("Bo (session name `bo`) — Backend dev", roster);
+        Assert.Contains(@"Bo (session name `bo`, address `uds:\\.\pipe\LOCAL\cc-msg-7d21`) — Backend dev", roster);
+        Assert.Contains("`to` = the ADDRESS beside their name above, never the nickname", roster);
         Assert.Contains("Cy (session name `cy`)", roster);
         Assert.Contains("[working]", roster);
         Assert.Contains("[asleep]", roster);
