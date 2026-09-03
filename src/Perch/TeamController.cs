@@ -1241,6 +1241,10 @@ internal sealed class TeamController
     public void OnRoom(TeamRoomMsg msg)
     {
         if (msg.Open) _openRooms.Add(msg.ProjectId); else _openRooms.Remove(msg.ProjectId);
+        // Opening the room sweeps up any card an older build left pinned: a
+        // confirmed card now leaves the board when it is confirmed, so a "done"
+        // card still sitting there is finished by definition.
+        if (msg.Open) MaybeArchive(msg.ProjectId);
     }
 
     /// The room asking for entries. Copies the bots' newest transcript rows
