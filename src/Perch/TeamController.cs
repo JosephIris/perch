@@ -128,7 +128,11 @@ internal sealed class TeamController
     {
         public required long Seq { get; init; }
         public required TeamBot Bot { get; init; }
+        /// The exact line that was typed, so it can be typed again.
+        public required string Line { get; init; }
         public int Tries;
+        /// Whether the line has already been typed a second time.
+        public bool Retried;
     }
     private readonly Dictionary<Guid, PendingSubmit> _submits = new();
 
@@ -1055,7 +1059,38 @@ internal sealed class TeamController
     /// The session-start hook fired in `sess`: a Claude is listening. Flush
     /// anything parked for it, after the same settle delay the pairing intro
     /// uses so the line lands in a painted input box.
-    public void OnAgentUp(Session sess) => FlushParked(sess.Id, TimeSpan.FromSeconds(4));
+    public void OnAgentUp(Session sess)
+    {
+        // Claude is listening now, so a pane we started for a post is no
+        // longer "starting".
+        _coldStart.Remove(sess.Id);
+        FlushParked(sess.Id, TimeSpan.FromSeconds(4));
+    }
+
+    /// Panes Perch started because a post was addressed to them, and the
+    /// moment it started them. Nothing is typed into one until its
+    /// session-start hook fires — see Attempt.
+    private readonly Dictionary<Guid, DateTimeOffset> _coldStart = new();
+
+    /// How long a starting pane is given to report a Claude before Perch says
+    /// so. Generous: a cold Claude on a big repository takes a while.
+    internal static readonly TimeSpan ColdStartGrace = TimeSpan.FromSeconds(120);
+
+    /// The pane never reported a Claude. Stop holding the post hostage: say so
+    /// in the room, with the terminal one click away, and let the ordinary
+    /// flush try anyway — the worst case is the line sits in a shell, which
+    /// the submit check will then report.
+    private void ColdStartOverdue(Guid sid)
+    {
+        if (!_coldStart.Remove(sid)) return;              // Claude came up in time
+        if (BotOfSession(sid) is not { } h) return;
+        if (!_parked.ContainsKey(sid)) return;            // nothing waiting after all
+        Log.Info("Team.start.overdue", $"session={sid:N} bot={h.Bot.Slug}");
+        var seq = _parked[sid].FirstOrDefault().Seq;
+        Say(h, h.Bot, "undelivered", seq,
+            $"{h.Bot.Nickname} hasn't finished starting, so this hasn't gone in yet — open its terminal to see why");
+        FlushParked(sid, TimeSpan.FromSeconds(1));
+    }
 
     /// A hook status for one of `sess`'s panes, BEFORE the window applies it.
     /// Two things to learn from it: the prompt-submit hook echoing a
@@ -1092,12 +1127,15 @@ internal sealed class TeamController
             if (s == null || !_parked.TryGetValue(sid, out var lines)) return;
             if (BotOfSession(sid) is not { } h) { _parked.Remove(sid); return; }
             if (s.Dormant || Blocked(s)) return;   // not yet; the next state change tries again
+            // Still booting: the shell answers long before Claude does, and a
+            // line typed into that gap is lost. OnAgentUp releases this.
+            if (_coldStart.ContainsKey(sid)) return;
             var delivered = new List<RoomEntry>();
             foreach (var (seq, line, nick) in lines.ToList())
             {
                 if (!_h.TypeToClaude(s, line)) break;
                 lines.Remove((seq, line, nick));
-                Expect(sid, h.Bot, seq);
+                Expect(sid, h.Bot, seq, line);
                 delivered.Add(h.Store.Ledger.Append(new RoomEntry
                 {
                     Kind = "system", From = "perch", Event = "delivered",
@@ -1123,9 +1161,9 @@ internal sealed class TeamController
     /// A line was just typed for post `seq`: wait for the prompt-submit hook,
     /// and press Enter again if it doesn't come. One pending line per
     /// session — a newer post supersedes the check for an older one.
-    private void Expect(Guid sid, TeamBot bot, long seq)
+    private void Expect(Guid sid, TeamBot bot, long seq, string line)
     {
-        _submits[sid] = new PendingSubmit { Seq = seq, Bot = bot };
+        _submits[sid] = new PendingSubmit { Seq = seq, Bot = bot, Line = line };
         _h.Delay(() => CheckSubmitted(sid, seq), SubmitChecks[0]);
     }
 
@@ -1166,9 +1204,20 @@ internal sealed class TeamController
             Log.Info("Team.submit", $"session={sid:N} seq={seq} unconfirmed, bot is working (queued)");
             return;
         }
+        // The bot is idle and never took it: the line went somewhere it
+        // shouldn't have — a shell that was still starting, a screen that
+        // redrew over it. Type it once more before telling the owner it
+        // failed; the whole point of the room is that a post reaches its bot.
+        if (!p.Retried && _h.TypeToClaude(s, p.Line))
+        {
+            Log.Info("Team.submit", $"session={sid:N} seq={seq} typed again");
+            _submits[sid] = new PendingSubmit { Seq = seq, Bot = p.Bot, Line = p.Line, Retried = true };
+            _h.Delay(() => CheckSubmitted(sid, seq), SubmitChecks[0]);
+            return;
+        }
         Log.Info("Team.submit", $"session={sid:N} seq={seq} gave up");
         Say(h, p.Bot, "undelivered", seq,
-            $"{nick} didn't take the post — it may be sitting in their terminal; open it and press Enter");
+            $"{nick} didn't take the post — open its terminal, or send it again from here");
     }
 
     /// A system row about one bot, tied to a post. From = the bot, so the
@@ -1778,6 +1827,43 @@ internal sealed class TeamController
         PostEntries(proj.Id, store, new[] { e });
     }
 
+    /// "Send again" on a post that never landed: type the same line into that
+    /// bot again, from the room, without making a second post out of it.
+    public void OnDeliverRetry(TeamDeliverRetryMsg msg)
+    {
+        var proj = _h.ProjectById(msg.ProjectId);
+        var store = StoreFor(msg.ProjectId);
+        if (proj == null || store == null) return;
+        var bot = store.Doc.Bot(msg.BotId ?? "");
+        var sess = bot?.SessionId is Guid id ? _h.SessionById(id) : null;
+        var post = store.Ledger.ReadAll().LastOrDefault(e => e.Seq == msg.Seq && e.Kind == "user");
+        if (bot == null || sess == null || post == null)
+        {
+            Log.Info("Team.retry", $"seq={msg.Seq} bot={msg.BotId}: nothing to send again");
+            return;
+        }
+        if (sess.Dormant) _h.Wake(sess);
+        else if (!SessionRunning(sess)) _h.EnsureRunning?.Invoke(sess);
+        var everyone = post.To == null || post.To.Contains(TeamRender.Everyone);
+        var line = DeliveryLine(post.Text, everyone ? null : bot.Nickname, post.Seq);
+        var ok = !sess.Dormant && !Blocked(sess) && _h.TypeToClaude(sess, line);
+        Log.Info("Team.retry", $"seq={msg.Seq} bot={bot.Slug} ok={ok}");
+        if (ok) Expect(sess.Id, bot, post.Seq, line);
+        else
+        {
+            // Not ready yet: park it, and the ordinary flush delivers it the
+            // moment the pane can take it.
+            if (!_parked.TryGetValue(sess.Id, out var list)) _parked[sess.Id] = list = new();
+            list.Add((post.Seq, line, bot.Nickname));
+        }
+        var e = store.Ledger.Append(new RoomEntry
+        {
+            Kind = "system", From = bot.Slug, Event = ok ? "delivered" : "waiting", Note = post.Seq.ToString(),
+            Text = ok ? $"Sent to {bot.Nickname} again" : $"{bot.Nickname} isn't ready yet — this goes in as soon as it is",
+        });
+        PostEntries(proj.Id, store, new[] { e });
+    }
+
     /// The owner takes a card off the board by hand — the escape hatch for a
     /// card nobody is going to finish, or one that is done in everything but
     /// name. Nothing is asked of the bots.
@@ -2042,13 +2128,29 @@ internal sealed class TeamController
             var line = raw ? text : DeliveryLine(text, everyone ? null : bot.Nickname, seq);
             var sess = bot.SessionId is Guid id ? _h.SessionById(id) : null;
             if (sess == null) { results.Add(new Attempted(bot, false, true, false, line, null)); continue; }
-            if (sess.Dormant) _h.Wake(sess);
+            var starting = false;
+            if (sess.Dormant) { _h.Wake(sess); starting = true; }
             // A tab restored after a restart but never looked at has no
             // terminal yet — a post to it must start it, or it sits parked
             // until the owner happens to click the tab.
-            else if (!SessionRunning(sess)) { Log.Info("Team.start.needed", $"session={sess.Id:N} bot={bot.Slug}"); _h.EnsureRunning?.Invoke(sess); }
+            else if (!SessionRunning(sess))
+            {
+                Log.Info("Team.start.needed", $"session={sess.Id:N} bot={bot.Slug}");
+                _h.EnsureRunning?.Invoke(sess);
+                starting = true;
+            }
+            // A pane that is only just starting is NOT ready for a line: the
+            // shell is up long before Claude is, and typing into that gap put
+            // the post into a shell prompt where it sat unread. It waits for
+            // the session-start hook (OnAgentUp) instead.
+            if (starting)
+            {
+                _coldStart[sess.Id] = DateTimeOffset.UtcNow;
+                var waking = sess.Id;
+                _h.Delay(() => ColdStartOverdue(waking), ColdStartGrace);
+            }
             var blocked = !sess.Dormant && Blocked(sess);
-            var ok = !sess.Dormant && !blocked && _h.TypeToClaude(sess, line);
+            var ok = !starting && !sess.Dormant && !blocked && _h.TypeToClaude(sess, line);
             results.Add(new Attempted(bot, ok, false, blocked, line, sess.Id));
         }
         return results;
@@ -2077,7 +2179,7 @@ internal sealed class TeamController
             else if (a.Ok)
             {
                 Log.Info("Team.deliver", $"session={a.SessionId:N} seq={post.Seq} bot={a.Bot.Slug}");
-                Expect(a.SessionId!.Value, a.Bot, post.Seq);
+                Expect(a.SessionId!.Value, a.Bot, post.Seq, a.Line);
             }
             else if (a.SessionId is Guid sid)
             {

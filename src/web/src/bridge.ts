@@ -316,6 +316,9 @@ export type OutMessage =
   | { type: "team.task.rename"; projectId: string; taskId: string; title: string }
   | { type: "team.task.confirm"; projectId: string; taskId: string }
   | { type: "team.task.close"; projectId: string; taskId: string }
+  /* "Send again" on a post a bot never took: the host types the same line
+   * into that bot again, and no second post appears in the room. */
+  | { type: "team.deliver.retry"; projectId: string; seq: number; botId: string }
   /* The artefacts panel: open one (the host answers with its text), and the
    * list of recent ones for the panel's menu. */
   | { type: "team.artefact.open"; projectId: string; id: string }

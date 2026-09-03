@@ -601,6 +601,15 @@ internal sealed record TeamTaskConfirmMsg
     public required string TaskId { get; init; }
 }
 
+/// "Send again" on a post a bot never took: the same line, typed into that
+/// bot again, with no second post in the room.
+internal sealed record TeamDeliverRetryMsg
+{
+    public required Guid ProjectId { get; init; }
+    public required long Seq { get; init; }
+    public required string BotId { get; init; }
+}
+
 /// The owner takes a card off the board by hand, whatever state it is in:
 /// nothing is asked of the bots, nothing is reset. The escape hatch for a
 /// card that is finished in all but name, or that nobody will finish.

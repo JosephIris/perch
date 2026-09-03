@@ -858,6 +858,7 @@ public partial class MainWindow : FluentWindow
         .Add<TeamTaskConfirmMsg>("team.task.confirm", m => _teamCtrl.OnTaskConfirm(m))
         .Add<TeamTaskRejectMsg>("team.task.reject", m => _teamCtrl.OnTaskReject(m))
         .Add<TeamTaskCloseMsg>("team.task.close", m => _teamCtrl.OnTaskClose(m))
+        .Add<TeamDeliverRetryMsg>("team.deliver.retry", m => _teamCtrl.OnDeliverRetry(m))
         .Add<TeamArtefactOpenMsg>("team.artefact.open", m => _teamCtrl.OnArtefactOpen(m))
         .Add<TeamArtefactListMsg>("team.artefact.list", m => _teamCtrl.OnArtefactList(m))
         .Add<TeamPermAnswerMsg>("team.perm.answer", m => _teamCtrl.OnPermAnswer(m))

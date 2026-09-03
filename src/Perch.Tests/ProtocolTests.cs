@@ -629,6 +629,8 @@ public class ProtocolTests
         Assert.Equal("footer shifts", reject.Note);
         var close = Round<TeamTaskCloseMsg>($"{{\"type\":\"team.task.close\",\"projectId\":\"{G1}\",\"taskId\":\"abcd1234\"}}");
         Assert.Equal("abcd1234", close.TaskId);
+        var again = Round<TeamDeliverRetryMsg>($"{{\"type\":\"team.deliver.retry\",\"projectId\":\"{G1}\",\"seq\":803,\"botId\":\"alush\"}}");
+        Assert.Equal((803L, "alush"), (again.Seq, again.BotId));
         var open = Round<TeamArtefactOpenMsg>($"{{\"type\":\"team.artefact.open\",\"projectId\":\"{G1}\",\"id\":\"9f2c11aa\"}}");
         Assert.Equal("9f2c11aa", open.Id);
         var list = Round<TeamArtefactListMsg>($"{{\"type\":\"team.artefact.list\",\"projectId\":\"{G1}\"}}");

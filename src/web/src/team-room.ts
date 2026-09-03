@@ -1723,6 +1723,15 @@ function renderSystem(e: TeamEntryView, bots: TeamBotView[]): HTMLElement {
   // Rows that need the owner IN the bot's terminal — it is asking something
   // the room can't relay, a typed post is sitting there unsent, or auto mode
   // blocked it — carry the door to it.
+  // A post that never landed can be sent again from here: the same line into
+  // the same bot, with no second post in the room. The row names the post
+  // (note = its seq) and the bot (from), which is all the host needs.
+  if (e.event === "undelivered" && e.note && target && project && /^\d+$/.test(e.note)) {
+    node.appendChild(button("tf-sys__open tf-sys__open--primary", "Send again", () => {
+      send({ type: "team.deliver.retry", projectId: project.id, seq: Number(e.note), botId: target.botId });
+      disableAll();
+    }, `Type it into ${target.nickname} again`));
+  }
   if ((e.event === "waiting" || e.event === "permission" || e.event === "permission.expired"
        || e.event === "undelivered" || e.event === "denied") && target?.sessionId) {
     const o = openBtn(target);

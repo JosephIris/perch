@@ -320,6 +320,11 @@ public class TeamControllerTests
             h.RunLastDelayed();
         }
         Assert.Equal(2, h.Entered.Count);
+        // The budget running out types the line ONCE more before anything is
+        // said; only when that second attempt is unconfirmed too does the room
+        // hear about it.
+        Assert.DoesNotContain(h.Ledger, e => e.Event == "undelivered");
+        for (var i = 0; i < TeamController.SubmitChecks.Length; i++) h.RunLastDelayed();
         Assert.Empty(h.Delayed);
         var stuck = h.Ledger.Single(e => e.Event == "undelivered");
         Assert.Equal("ada", stuck.From);
@@ -399,7 +404,9 @@ public class TeamControllerTests
         Assert.Empty(h.Typed);
         h.TypeOk = true;
         h.Ctrl.OnAgentUp(sess);
-        h.Delayed.Single()();
+        // (One of the pending timers is the cold-start watchdog; the flush is
+        // the newest.)
+        h.RunLastDelayed();
         Assert.Single(h.Typed);
         TeamMarkers.Clear(sess.Root.Id);
     }
@@ -1063,6 +1070,70 @@ public class TeamControllerTests
         var (_, line) = Assert.Single(h.Typed);
         Assert.Equal($"[Perch team] #{post.Seq} Joseph → @Ada: please fix the sidebar", line);
         TeamMarkers.Clear(h.Sessions.Single().Root.Id);
+    }
+
+    [Fact]
+    public async Task APostToAColdBot_WaitsForItsClaude_ThenLands()
+    {
+        var h = new Harness();
+        await h.CreateBot("Ada");
+        var sess = h.Sessions.Single();
+        h.NoPty.Add(sess.Root.Id);  // the tab exists but has no terminal yet
+
+        h.Post("wake up and read the brief", "[\"Ada\"]");
+        // Nothing is typed into a pane that is only just starting: the shell
+        // answers long before Claude does, and a line typed into that gap is
+        // lost (this is what dropped two posts in the live room).
+        Assert.Empty(h.Typed);
+        Assert.Contains(sess.Id, h.Started);
+        Assert.False(h.Ledger.Single(e => e.Kind == "user").Delivered);
+
+        // A status from the booting pane must NOT release it either: the
+        // flush it schedules finds the pane still starting and types nothing.
+        h.Status(sess, "working");
+        h.RunLastDelayed();
+        Assert.Empty(h.Typed);
+
+        // The session-start hook is the go-ahead: now it goes in.
+        h.NoPty.Clear();
+        h.Ctrl.OnAgentUp(sess);
+        h.RunLastDelayed();
+        var (to, line) = Assert.Single(h.Typed);
+        Assert.Equal(sess.Id, to);
+        Assert.Contains("wake up and read the brief", line);
+        TeamMarkers.Clear(sess.Root.Id);
+    }
+
+    [Fact]
+    public async Task APostThatNeverLands_IsTypedAgain_AndCanBeSentAgainFromTheRoom()
+    {
+        var h = new Harness();
+        await h.CreateBot("Ada");
+        var sess = h.Sessions.Single();
+        h.Post("did you see the ticket?", "[\"Ada\"]");
+        Assert.Single(h.Typed);
+
+        // No echo through the whole budget: the line is typed ONCE more before
+        // the room is told anything — a post reaching its bot is the point.
+        for (var i = 0; i < TeamController.SubmitChecks.Length; i++) h.RunLastDelayed();
+        Assert.Equal(2, h.Typed.Count);
+        Assert.DoesNotContain(h.Ledger, e => e.Event == "undelivered");
+
+        // The second try fails too: now it says so, naming the post.
+        for (var i = 0; i < TeamController.SubmitChecks.Length; i++) h.RunLastDelayed();
+        var stuck = h.Ledger.Single(e => e.Event == "undelivered");
+        var postSeq = h.Ledger.Single(e => e.Kind == "user").Seq;
+        Assert.Equal(postSeq.ToString(), stuck.Note);
+        Assert.Contains("send it again from here", stuck.Text);
+
+        // "Send again" types the very same line, with no second post.
+        h.Typed.Clear();
+        h.Ctrl.OnDeliverRetry(new TeamDeliverRetryMsg { ProjectId = h.Project.Id, Seq = postSeq, BotId = "ada" });
+        var (_, again) = Assert.Single(h.Typed);
+        Assert.Contains("did you see the ticket?", again);
+        Assert.Single(h.Ledger, e => e.Kind == "user");
+        Assert.Contains(h.Ledger, e => e.Event == "delivered" && e.Text == "Sent to Ada again");
+        TeamMarkers.Clear(sess.Root.Id);
     }
 
     [Fact]
