@@ -7203,6 +7203,94 @@ body.show-dashboard .dashboard { display: flex; }
   background: transparent;
   box-shadow: inset 0 0 0 1px var(--color-text-disabled);
 }
+/* ── Task board ────────────────────────────────────────────────────────── */
+/* The second pane of the room's right column, under the roster: the one
+ * task the team is on, each bot's piece, and the confirm step. The roster
+ * keeps the top; this takes what it needs (capped) and scrolls inside. */
+.team-roster__list { flex: 1 1 auto; }
+.team-tasks {
+  flex: 0 1 auto;
+  max-height: 62%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-top: 1px solid var(--color-stroke);
+}
+.team-tasks__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  padding: var(--sp-12) var(--sp-12) var(--sp-4) var(--sp-16);
+}
+.team-tasks__status {
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  padding: 1px 6px;
+  border-radius: var(--r-pill);
+  background: var(--color-subtle-secondary);
+}
+.team-tasks__status:empty { display: none; }
+.team-tasks__status[data-status="review"] { color: var(--color-state-waiting); }
+.team-tasks__status[data-status="done"] { color: var(--color-state-done); }
+.team-tasks__body {
+  overflow-y: auto;
+  min-height: 0;
+  padding: 0 var(--sp-16) var(--sp-12);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-8);
+  font-size: var(--type-caption-size);
+}
+.team-tasks__empty { margin: 0; color: var(--color-text-tertiary); line-height: 1.4; }
+.team-tasks__title {
+  font-size: var(--type-body-size);
+  font-weight: 500;
+  color: var(--color-text-primary);
+  line-height: 1.35;
+  text-wrap: balance;
+}
+.team-tasks__meta { color: var(--color-text-tertiary); }
+.team-tasks__items { display: flex; flex-direction: column; gap: var(--sp-4); margin: 0; padding: 0; list-style: none; }
+.task-item {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr);
+  column-gap: var(--sp-8);
+  align-items: baseline;
+}
+.task-item__dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  align-self: center;
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--color-text-tertiary);
+}
+.task-item__dot[data-status="doing"]   { background: var(--color-state-working); box-shadow: none; }
+.task-item__dot[data-status="done"]    { background: var(--color-state-done); box-shadow: none; }
+.task-item__dot[data-status="blocked"] { background: var(--color-state-permission); box-shadow: none; }
+.task-item__who { font-weight: 500; color: var(--color-text-primary); }
+.task-item__what { color: var(--color-text-secondary); }
+.task-item__what--none { color: var(--color-text-tertiary); font-style: normal; }
+.task-item__note { grid-column: 2; color: var(--color-text-tertiary); }
+.team-tasks__actions { display: flex; gap: var(--sp-8); flex-wrap: wrap; align-items: center; }
+.team-tasks__say { color: var(--color-text-secondary); }
+.team-tasks__editor { display: flex; flex-direction: column; gap: var(--sp-8); }
+.team-tasks__input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: var(--sp-8);
+  border-radius: var(--r-input);
+  border: 1px solid var(--color-stroke);
+  background: var(--color-subtle-secondary);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: var(--type-body-size);
+  resize: vertical;
+  min-height: 56px;
+}
+.team-tasks__input:focus-visible { outline: 1px solid var(--color-accent); outline-offset: -1px; }
+.team-tasks__wrap { display: flex; flex-wrap: wrap; gap: var(--sp-4) var(--sp-8); color: var(--color-text-tertiary); }
+.team-tasks__wrap .pending { color: var(--color-state-working); }
+
 /* Roster rows lead with the bot's face instead of the 10 px dot: the
  * column widens to the face and the two text rows centre on it. */
 .roster-bot--face { grid-template-columns: 28px minmax(0, 1fr); }

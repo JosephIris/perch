@@ -54,7 +54,8 @@ plus one **team room** where the owner reads everything and orchestrates.
 
 ```
 <repo>\.perch\team\                 SHARED: tracked in git, travels with a pull
-  team.json                         TeamDoc (positions + hats, bots + looks)
+  team.json                         TeamDoc (positions + hats, bots + looks, the lead)
+  tasks.json                        TaskDoc (the one current task + its pieces; the last 20 done)
   positions\<slug>\brief.md         the position's standing brief
   bots\<slug>\memory.md             the bot's own notes (it edits them; ≤ 2 KB inlined)
   local\                            LOCAL: this machine only, git-ignored
@@ -77,6 +78,35 @@ its menu) sends `team.bot.start`, which opens a fresh tab under the same
 nickname, face and memory (`TeamController.OnBotStartAsync`; the address is
 kept unless a live pane here already answers to it). `team.json` changing on
 disk (a pull) is noticed on the next room request (`StaleOnDisk` → reload).
+
+**The lead and the task board.** One bot per team leads (`TeamDoc.LeadSlug`):
+the first bot created into a lead-type position (hat "captain") takes it,
+and the owner can hand it over from any bot's menu ("Make team lead",
+`team.lead.set`). The lead's system prompt carries a built-in role on top of
+its brief (`TeamRender.LeadRole`): agree ONE task with the owner, set it,
+split it into a piece per bot, track it, and ask the owner to confirm when
+it's done. The board is `tasks.json` beside `team.json` (shared):
+`Current` (one `TaskBoard`: title, status open → review → done, `Items`
+one per bot with status todo/doing/done/blocked and a one-line note) and
+`Done` (the last 20). Bots drive it with `perch team task main|assign|mine|
+done` (`TeamTaskMessage` over the pane pipe; `TeamController.OnTeamTask`
+enforces lead-only for main/assign/done); every prompt's context carries the
+board as it concerns that bot (`TeamRender.TaskBlock`). The owner sets or
+renames the task and confirms or rejects from the room's task pane
+(`team.task.set/confirm/reject`).
+
+**Done means reset.** The board is the unit of a bot's context. On confirm,
+the board goes `done`, everyone gets one owner post ("wrap up: memory first,
+then one line; your context is cleared after that reply"), and each running
+bot is in `_wrapping`. When the wrap-up post is seen submitted in a pane
+and that pane's next turn ends (`OnAgentStatus`: post echo, then Done),
+Perch types `/clear` into it (`ResetBot`; `/clear` re-fires session-start,
+so the brief is re-applied and the next prompt carries roster, board and
+memory) and the room gets "Ada reset for the next task". Bots that aren't
+running have nothing to clear. When nobody is left wrapping, the board is
+archived and the room says it's ready for the next task. This is what keeps
+a long-running team from degrading: standing knowledge lives in briefs,
+memory and the repo; the conversation is disposable.
 
 **Memory.** `bots/<slug>/memory.md` is seeded with the bot's name and the
 rule; the system prompt names the path; every prompt's context carries the

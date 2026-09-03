@@ -300,6 +300,14 @@ export type OutMessage =
   /* Start a bot that has no tab on this machine (it came with a pull, or its
    * tab was closed): a fresh tab under the same nickname, face and memory. */
   | { type: "team.bot.start"; projectId: string; botId: string }
+  /* Make a bot the team's one lead. */
+  | { type: "team.lead.set"; projectId: string; botId: string }
+  /* The task board: the owner sets or renames the task, confirms it's done
+   * (bots wrap up and reset), or says not yet (back to open; the lead is
+   * told, with the note). */
+  | { type: "team.task.set"; projectId: string; title: string }
+  | { type: "team.task.confirm"; projectId: string }
+  | { type: "team.task.reject"; projectId: string; note?: string }
   /* Native folder picker for the reference repo; replies team.reference.picked. */
   | { type: "team.reference.browse"; requestId: string; projectId: string }
   /* Room opened/closed. While open the host pushes team.data on every new
@@ -719,7 +727,39 @@ export type TeamBotView = {
   look?: { hat?: string; eyewear?: string; extra?: string; temper?: string };
 };
 
-export type TeamView = { bots: TeamBotView[]; positions: TeamPositionView[] };
+/* One bot's piece of the current task. */
+export type TeamTaskItemView = {
+  botId: string;
+  bot: string;
+  title: string;
+  status: "todo" | "doing" | "done" | "blocked" | string;
+  note: string;
+  updatedAtMs: number;
+};
+
+/* The team's current task: one at a time. open → review (the lead asked the
+ * owner to confirm) → done (confirmed; bots in `wrapping` are still writing
+ * their memory and being reset; when it empties the board is archived). */
+export type TeamTaskView = {
+  id: string;
+  title: string;
+  status: "open" | "review" | "done" | string;
+  /* Nickname, or "you". */
+  setBy: string;
+  reviewBy?: string;
+  createdAtMs: number;
+  doneAtMs?: number;
+  items: TeamTaskItemView[];
+  wrapping: string[];
+};
+
+export type TeamView = {
+  bots: TeamBotView[];
+  positions: TeamPositionView[];
+  /* The one lead's botId; absent when no bot leads yet. */
+  lead?: string;
+  task?: TeamTaskView | null;
+};
 
 /* One row of the room's ledger.
  *   user   — your post (from "you"; `to` is who it went to — a post naming
@@ -754,7 +794,10 @@ export type TeamEntryView = {
    * (note = its seq): its pane is asking something, or the typed line never
    * submitted. Both offer the bot's terminal. */
   event?: "joined" | "left" | "waiting" | "permission" | "done" | "asleep" | "woke" | "error"
-        | "delivered" | "undelivered";
+        | "delivered" | "undelivered"
+        /* the task board: a change, the lead asking to confirm, the owner
+         * confirming, a bot reset for the next task, a new lead */
+        | "task" | "task.review" | "task.done" | "reset" | "lead";
   /* user rows: false while the host is holding the post for a bot that has no
    * Claude up yet (asleep, still booting). Flips true when it lands. */
   delivered?: boolean;

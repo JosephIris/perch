@@ -36,6 +36,7 @@ internal sealed class PerchIpcServer : IDisposable
     public event Action<CloudStampedMessage>? OnCloudStamped;
     public event Action<PeerMsgMessage>? OnPeerMsg;
     public event Action<TeamPostMessage>? OnTeamPost;
+    public event Action<TeamTaskMessage>? OnTeamTask;
 
     private readonly CancellationTokenSource _cts = new();
     private readonly Dispatcher _dispatcher;
@@ -176,6 +177,10 @@ internal sealed class PerchIpcServer : IDisposable
                     var tp = JsonSerializer.Deserialize<TeamPostMessage>(json, IpcJson.Options);
                     if (tp != null) _dispatcher.BeginInvoke(() => OnTeamPost?.Invoke(tp));
                     break;
+                case "team.task":
+                    var tt = JsonSerializer.Deserialize<TeamTaskMessage>(json, IpcJson.Options);
+                    if (tt != null) _dispatcher.BeginInvoke(() => OnTeamTask?.Invoke(tt));
+                    break;
             }
         }
         catch (JsonException ex) { Log.Error("PerchIpc.Dispatch.Json", ex); }
@@ -310,6 +315,17 @@ internal sealed record PeerMsgMessage(
 /// host appends it to the room ledger; nothing is typed anywhere.
 internal sealed record TeamPostMessage(
     [property: JsonPropertyName("text")] string? Text);
+
+/// `perch team task …` from a bot: the task board's verbs. `op` is "main"
+/// (the lead sets or renames the task), "assign" (the lead gives `bot` a
+/// piece), "mine" (a bot sets its own piece, status, note) or "done" (the
+/// lead asks the owner to confirm). TeamController checks who may do what.
+internal sealed record TeamTaskMessage(
+    [property: JsonPropertyName("op")] string? Op,
+    [property: JsonPropertyName("bot")] string? Bot,
+    [property: JsonPropertyName("title")] string? Title,
+    [property: JsonPropertyName("status")] string? Status,
+    [property: JsonPropertyName("note")] string? Note);
 
 /// Sent by the cc HookHandler (PreToolUse/Bash) the moment it stamps agent
 /// labels onto a `gcloud ... create`. The hook can only put JOIN KEYS on the

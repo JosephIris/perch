@@ -57,6 +57,7 @@ internal static class TeamRender
                 var pos = doc.Position(bot.PositionSlug);
                 sb.Append("- ").Append(bot.Nickname).Append(" (session name `").Append(bot.CcName).Append("`) — ")
                   .Append(pos?.Name ?? bot.PositionSlug);
+                if (doc.IsLead(bot)) sb.Append(", the team lead");
                 var purpose = OneLine(pos?.Purpose, 160);
                 if (purpose.Length > 0) sb.Append(": ").Append(purpose);
                 if (presence != null && presence.TryGetValue(bot.Slug, out var word) && !string.IsNullOrEmpty(word))
@@ -94,11 +95,12 @@ internal static class TeamRender
     /// `memoryPath` names the file the bot keeps its notes in; the notes
     /// themselves ride in with every prompt (Context), not here, so an edit
     /// mid-session is seen at the next turn rather than the next launch.
-    public static string SystemPrompt(TeamBot bot, TeamPosition pos, string brief, string projectName, string? memoryPath = null)
+    public static string SystemPrompt(TeamBot bot, TeamPosition pos, string brief, string projectName, string? memoryPath = null, bool isLead = false)
     {
         var project = string.IsNullOrWhiteSpace(projectName) ? "this project" : projectName.Trim();
         var sb = new StringBuilder();
         sb.Append("# You are ").Append(bot.Nickname).Append(", the ").Append(pos.Name)
+          .Append(isLead ? " and the team lead" : "")
           .Append(" on the ").Append(project).Append(" team\n\n");
         sb.Append("Your Claude Code session name is `").Append(bot.CcName)
           .Append("`; teammates address you by it. You share this repository with other bots, each in its own session. ")
@@ -115,6 +117,76 @@ internal static class TeamRender
         sb.Append(string.IsNullOrWhiteSpace(brief)
             ? "(No brief has been written for this position yet. Work from the purpose above and ask the owner when unsure.)\n"
             : brief.Trim() + "\n");
+        if (isLead) sb.Append('\n').Append(LeadRole(bot));
+        return sb.ToString();
+    }
+
+    /// The lead's role, on top of its brief: the one bot that runs the task
+    /// board. Built in rather than generated, because the board's commands
+    /// and the wrap-up rule are Perch's, not the position's.
+    public static string LeadRole(TeamBot bot)
+    {
+        var sb = new StringBuilder();
+        sb.Append("## You lead the team\n\n");
+        sb.Append("You are the one lead. The team works on ONE task at a time, on the task board Joseph sees in the room. ")
+          .Append("Your job, on top of your brief:\n");
+        sb.Append("- Agree the task with Joseph, then set it: `perch team task main \"<what done looks like>\"`. ")
+          .Append("Only you and Joseph set it.\n");
+        sb.Append("- Split it: give each teammate their piece with `perch team task assign <session name> \"<their piece>\"`, ")
+          .Append("and message them about it. Set your own piece too (`perch team task mine \"…\"`).\n");
+        sb.Append("- Track it: the board (every piece and its status) arrives with each of your prompts. Chase blocked ")
+          .Append("pieces, re-split when the plan changes, and keep Joseph posted in the room in a few lines.\n");
+        sb.Append("- Close it: when every piece is done and you have checked the result, run `perch team task done`. ")
+          .Append("That asks Joseph to confirm. Do not say the task is done in prose; the command is what the room shows.\n");
+        sb.Append("- After Joseph confirms, everyone (you included) writes what the next task needs into their memory ")
+          .Append("file and is reset. Expect to start the next task with only your brief, the roster and your memory.\n");
+        return sb.ToString();
+    }
+
+    // ---- task block --------------------------------------------------------
+
+    /// The task board as it concerns one bot, for its per-prompt context:
+    /// the task, every piece with its status, and the commands this bot may
+    /// use (the lead gets the board's; a member gets its own piece's).
+    public static string TaskBlock(TaskDoc tasks, TeamDoc doc, TeamBot bot)
+    {
+        var sb = new StringBuilder();
+        var isLead = doc.IsLead(bot);
+        var lead = doc.Lead;
+        sb.Append("# Current task\n");
+        var board = tasks.Current;
+        if (board == null)
+        {
+            sb.Append("(No task set yet.");
+            if (isLead) sb.Append(" You are the lead: agree one with Joseph, then `perch team task main \"<what done looks like>\"`.");
+            else if (lead != null) sb.Append(' ').Append(lead.Nickname).Append(" leads and will set one; if Joseph gives you work directly, do it and keep your piece current.");
+            else sb.Append(" There is no lead yet; Joseph sets the task from the room.");
+            sb.Append(")\n");
+        }
+        else
+        {
+            sb.Append("**").Append(OneLine(board.Title, 300)).Append("** — ").Append(board.Status);
+            if (board.Status == "review") sb.Append(" (waiting for Joseph to confirm)");
+            if (board.Status == "done") sb.Append(" (confirmed; wrap up when asked)");
+            sb.Append('\n');
+            foreach (var b in doc.Bots)
+            {
+                var item = board.ItemOf(b.Slug);
+                sb.Append("- ").Append(b.Nickname).Append(b.Slug == bot.Slug ? " (you)" : "").Append(": ");
+                if (item == null) { sb.Append("no piece yet\n"); continue; }
+                sb.Append('[').Append(item.Status).Append("] ").Append(OneLine(item.Title, 160));
+                var note = OneLine(item.Note, 160);
+                if (note.Length > 0) sb.Append(" — ").Append(note);
+                sb.Append('\n');
+            }
+        }
+        sb.Append("\nKeep your piece current: `perch team task mine \"<your piece>\" --status doing|done|blocked --note \"<one line>\"`.\n");
+        if (isLead)
+            sb.Append("You lead: `perch team task main \"…\"` sets or renames the task, `perch team task assign <session name> \"…\"` ")
+              .Append("gives a teammate their piece, `perch team task done` asks Joseph to confirm when every piece is done.\n");
+        else if (lead != null)
+            sb.Append(lead.Nickname).Append(" (`").Append(lead.CcName).Append("`) leads: they set the task and its pieces and close it. ")
+              .Append("Tell them when yours is done or blocked.\n");
         return sb.ToString();
     }
 
@@ -123,10 +195,11 @@ internal static class TeamRender
     /// What the prompt hook inlines for one bot: the shared roster, then that
     /// bot's own memory with the rule for keeping it. One file per bot
     /// (local/bots/&lt;slug&gt;/context.md) because the memory is the bot's alone.
-    public static string Context(string roster, TeamBot bot, string memory, string memoryPath)
+    public static string Context(string roster, TeamBot bot, string memory, string memoryPath, string? taskBlock = null)
     {
         var sb = new StringBuilder();
         sb.Append(roster.TrimEnd()).Append("\n\n");
+        if (!string.IsNullOrWhiteSpace(taskBlock)) sb.Append(taskBlock.TrimEnd()).Append("\n\n");
         sb.Append("# Your memory\n");
         sb.Append("Your notes, kept in `").Append(memoryPath).Append("` and shared through the repository, so a future ")
           .Append(bot.Nickname).Append(" on any machine reads them. Edit the file with your tools when you learn something ")

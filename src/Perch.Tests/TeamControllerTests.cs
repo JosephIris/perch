@@ -434,6 +434,136 @@ public class TeamControllerTests
     }
 
     [Fact]
+    public async Task TheFirstLeadTypeBot_Leads_AndTheOwnerCanHandItOver()
+    {
+        var h = new Harness();
+        var ada = await h.CreateBot("Ada");                                  // Frontend dev: not a lead
+        Assert.Null(h.Store.Doc.LeadSlug);
+        var lee = await h.CreateBot("Lee", position: "Team lead");
+        Assert.Equal("lee", h.Store.Doc.LeadSlug);
+        Assert.Contains(h.Ledger, e => e.Event == "lead" && e.Text == "Lee leads the team");
+        Assert.Contains("You lead the team", File.ReadAllText(h.Store.SystemPathFor("lee")));
+        Assert.DoesNotContain("You lead the team", File.ReadAllText(h.Store.SystemPathFor("ada")));
+        Assert.Contains("Lee (session name `lee`) — Team lead, the team lead", File.ReadAllText(h.Store.RosterPath));
+
+        h.Ctrl.OnLeadSet(new TeamLeadSetMsg { ProjectId = h.Project.Id, BotId = ada.Slug });
+        Assert.Equal("ada", h.Store.Doc.LeadSlug);
+        Assert.Contains("You lead the team", File.ReadAllText(h.Store.SystemPathFor("ada")));
+        Assert.DoesNotContain("You lead the team", File.ReadAllText(h.Store.SystemPathFor("lee")));
+        var view = JsonSerializer.SerializeToElement(h.Ctrl.ProjectTeamView(h.Project.Id)!);
+        Assert.Equal("ada", view.GetProperty("lead").GetString());
+        Assert.Same(lee, h.Store.Doc.Bot("lee"));
+        foreach (var s in h.Sessions) TeamMarkers.Clear(s.Root.Id);
+    }
+
+    [Fact]
+    public async Task TaskBoard_TheLeadRunsIt_EveryBotKeepsItsPiece_AndTheOwnerConfirms()
+    {
+        var h = new Harness();
+        var lee = await h.CreateBot("Lee", position: "Team lead");
+        var ada = await h.CreateBot("Ada");
+        var leeSess = h.Sessions.Single(s => s.Root.PinnedPeerName == "lee");
+        var adaSess = h.Sessions.Single(s => s.Root.PinnedPeerName == "ada");
+        void Task(Session s, string op, string? title = null, string? bot = null, string? status = null, string? note = null)
+            => h.Ctrl.OnTeamTask(s, s.Root.Id, new TeamTaskMessage(op, bot, title, status, note));
+
+        // A member can't set the task; the room says so.
+        Task(adaSess, "main", "Ship the sidebar");
+        Assert.Null(h.Store.Tasks.Current);
+        Assert.Contains(h.Ledger, e => e.Event == "error" && e.Text.Contains("only the lead (Lee)"));
+
+        // The lead sets it, splits it; Ada keeps her piece current.
+        Task(leeSess, "main", "Ship the sidebar");
+        var board = h.Store.Tasks.Current!;
+        Assert.Equal("open", board.Status);
+        Assert.Equal("lee", board.SetBy);
+        Task(leeSess, "assign", "Nest the bots under the team row", bot: "ada");
+        Task(leeSess, "mine", "Review Ada's change", status: "doing");
+        Task(adaSess, "mine", status: "doing", note: "chevron in, CSS next");
+        Assert.Equal("doing", board.ItemOf("ada")!.Status);
+        Assert.Equal("Nest the bots under the team row", board.ItemOf("ada")!.Title);
+        Assert.Equal("chevron in, CSS next", board.ItemOf("ada")!.Note);
+        // The board reaches every bot with its prompt, phrased for its role.
+        var adaCtx = File.ReadAllText(h.Store.ContextPathFor("ada"));
+        Assert.Contains("**Ship the sidebar** — open", adaCtx);
+        Assert.Contains("- Ada (you): [doing] Nest the bots under the team row — chevron in, CSS next", adaCtx);
+        Assert.Contains("Lee (`lee`) leads", adaCtx);
+        Assert.Contains("perch team task done", File.ReadAllText(h.Store.ContextPathFor("lee")));
+        Assert.DoesNotContain("perch team task done", adaCtx);
+        // Persisted beside team.json, shared.
+        Assert.True(File.Exists(h.Store.TasksPath));
+        Assert.Contains("Ship the sidebar", File.ReadAllText(h.Store.TasksPath));
+
+        // The lead closes it → review; the owner says not yet → open, and the
+        // lead gets the note as an owner post.
+        Task(leeSess, "done");
+        Assert.Equal("review", board.Status);
+        Assert.Contains(h.Ledger, e => e.Event == "task.review" && e.Text.StartsWith("Lee says the task is done"));
+        h.Typed.Clear();
+        h.Ctrl.OnTaskReject(new TeamTaskRejectMsg { ProjectId = h.Project.Id, Note = "the footer still shifts" });
+        Assert.Equal("open", board.Status);
+        var (toLee, line) = Assert.Single(h.Typed);
+        Assert.Equal(leeSess.Id, toLee);
+        Assert.Equal("[Perch team] Joseph → @Lee: Not done yet: the footer still shifts", line);
+
+        // Second time: the owner confirms. Everyone gets the wrap-up post;
+        // each bot is reset when its turn ends AFTER that post went in.
+        Task(leeSess, "done");
+        h.Typed.Clear();
+        h.Ctrl.OnTaskConfirm(new TeamTaskConfirmMsg { ProjectId = h.Project.Id });
+        Assert.Equal("done", board.Status);
+        Assert.Equal(2, h.Typed.Count);
+        Assert.All(h.Typed, t => Assert.Contains("Wrap up now: update your memory file", t.Line));
+        var view = JsonSerializer.SerializeToElement(h.Ctrl.ProjectTeamView(h.Project.Id)!).GetProperty("task");
+        Assert.Equal(2, view.GetProperty("wrapping").GetArrayLength());
+
+        // A Done BEFORE the post echo is the old turn ending: no reset.
+        h.Typed.Clear();
+        h.Status(adaSess, "done");
+        Assert.Empty(h.Typed);
+        // The echo, then the turn end: /clear is typed, the room says reset.
+        h.Status(adaSess, "working", "[Perch team] Joseph → @everyone: The task");
+        h.Status(adaSess, "done");
+        var (resetSess, cleared) = Assert.Single(h.Typed);
+        Assert.Equal(adaSess.Id, resetSess);
+        Assert.Equal("/clear", cleared);
+        Assert.Contains(h.Ledger, e => e.Event == "reset" && e.Text == "Ada reset for the next task");
+        Assert.NotNull(h.Store.Tasks.Current);   // Lee is still wrapping
+
+        h.Status(leeSess, "working", "[Perch team] Joseph → @everyone: The task");
+        h.Status(leeSess, "done");
+        Assert.Null(h.Store.Tasks.Current);
+        var archived = Assert.Single(h.Store.Tasks.Done);
+        Assert.Equal("Ship the sidebar", archived.Title);
+        Assert.Contains(h.Ledger, e => e.Event == "task" && e.Text.StartsWith("Everyone is reset"));
+        // The context now says there is no task, and the lead is told to set one.
+        Assert.Contains("(No task set yet. You are the lead", File.ReadAllText(h.Store.ContextPathFor("lee")));
+        foreach (var s in h.Sessions) TeamMarkers.Clear(s.Root.Id);
+    }
+
+    [Fact]
+    public async Task TaskBoard_TheOwnerCanSetTheTask_WithoutALead()
+    {
+        var h = new Harness();
+        await h.CreateBot("Ada");
+        h.Ctrl.OnTaskSet(new TeamTaskSetMsg { ProjectId = h.Project.Id, Title = "Fix the login flow" });
+        var board = h.Store.Tasks.Current!;
+        Assert.Equal("you", board.SetBy);
+        Assert.Contains(h.Ledger, e => e.Event == "task" && e.Text == "Task set by Joseph: Fix the login flow");
+        h.Ctrl.OnTaskSet(new TeamTaskSetMsg { ProjectId = h.Project.Id, Title = "Fix the login and signup flows" });
+        Assert.Same(board, h.Store.Tasks.Current);
+        Assert.Contains(h.Ledger, e => e.Event == "task" && e.Text == "Joseph renamed the task: Fix the login and signup flows");
+        // A bot with no session (not running) has nothing to wrap: confirm
+        // archives at once.
+        var sess = h.Sessions.Single();
+        h.Sessions.Clear();
+        h.Ctrl.OnSessionClosed(sess);
+        h.Ctrl.OnTaskConfirm(new TeamTaskConfirmMsg { ProjectId = h.Project.Id });
+        Assert.Null(h.Store.Tasks.Current);
+        Assert.Single(h.Store.Tasks.Done);
+    }
+
+    [Fact]
     public async Task Post_WithNoBotsLeft_SaysSo()
     {
         var h = new Harness();

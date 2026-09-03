@@ -329,6 +329,7 @@ public partial class MainWindow : FluentWindow
         // bot's `perch team post` notes; the pair note above stays as it was.
         _panes.PeerMsg += (s, p, m) => _teamCtrl.OnPeerMsg(s, p, m);
         _panes.TeamPost += (s, p, m) => _teamCtrl.OnTeamPost(s, p, m);
+        _panes.TeamTask += (s, p, m) => _teamCtrl.OnTeamTask(s, p, m);
         // Usage poller for the model picker. Subscribe once here; a new snapshot
         // marshals back to the UI thread and re-pushes state so the menu picks
         // up freshly-disabled models. PushState guards on the webview being up.
@@ -803,6 +804,10 @@ public partial class MainWindow : FluentWindow
         .Add<TeamPositionUpdateMsg>("team.position.update", m => _teamCtrl.OnPositionUpdate(m))
         .Add<TeamBotRemoveMsg>("team.bot.remove", m => _teamCtrl.OnBotRemove(m))
         .Add<TeamBotStartMsg>("team.bot.start", m => _ = _teamCtrl.OnBotStartAsync(m))
+        .Add<TeamLeadSetMsg>("team.lead.set", m => _teamCtrl.OnLeadSet(m))
+        .Add<TeamTaskSetMsg>("team.task.set", m => _teamCtrl.OnTaskSet(m))
+        .Add<TeamTaskConfirmMsg>("team.task.confirm", m => _teamCtrl.OnTaskConfirm(m))
+        .Add<TeamTaskRejectMsg>("team.task.reject", m => _teamCtrl.OnTaskReject(m))
         .Add<TeamReferenceBrowseMsg>("team.reference.browse", OnTeamReferenceBrowse)
         .Add<TeamRoomMsg>("team.room", m => _teamCtrl.OnRoom(m));
 

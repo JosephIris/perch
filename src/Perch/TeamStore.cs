@@ -56,6 +56,7 @@ internal sealed class TeamStore
     public TeamDoc Doc { get; private set; } = new();
 
     public string JsonPath => Path.Combine(Dir, "team.json");
+    public string TasksPath => Path.Combine(Dir, "tasks.json");
     public string LocalJsonPath => Path.Combine(LocalDir, "sessions.json");
     public string RosterPath => Path.Combine(LocalDir, "roster.md");
     public string LedgerPath => Path.Combine(LocalDir, "room.jsonl");
@@ -72,6 +73,42 @@ internal sealed class TeamStore
 
     private RoomLedger? _ledger;
     public RoomLedger Ledger => _ledger ??= new RoomLedger(LedgerPath);
+
+    /// The task board (tasks.json beside team.json; shared). Read on first
+    /// use and on Reload; a missing or unreadable file is an empty board —
+    /// never fatal, the team file is the one that matters.
+    private TaskDoc? _tasks;
+    public TaskDoc Tasks => _tasks ??= LoadTasks();
+
+    private TaskDoc LoadTasks()
+    {
+        try
+        {
+            if (!File.Exists(TasksPath)) return new TaskDoc();
+            var doc = JsonSerializer.Deserialize(File.ReadAllText(TasksPath), TaskJsonContext.Default.TaskDoc);
+            if (doc == null) return new TaskDoc();
+            doc.Done ??= new();
+            if (doc.Current != null) doc.Current.Items ??= new();
+            return doc;
+        }
+        catch (Exception ex)
+        {
+            Log.Error("TeamStore.ReadTasks", ex);
+            return new TaskDoc();
+        }
+    }
+
+    public void SaveTasks()
+    {
+        if (!Readable) return;
+        try
+        {
+            var doc = Tasks;
+            while (doc.Done.Count > TaskDoc.DoneKept) doc.Done.RemoveAt(0);
+            AtomicFile.WriteAllText(TasksPath, JsonSerializer.Serialize(doc, TaskJsonContext.Default.TaskDoc));
+        }
+        catch (Exception ex) { Log.Error("TeamStore.SaveTasks", ex); }
+    }
 
     /// team.json as last read, to notice a pull or a hand edit (StaleOnDisk).
     private DateTime _jsonStamp;
@@ -131,10 +168,10 @@ internal sealed class TeamStore
         catch { return false; }
     }
 
-    /// Re-read both files. Session ids come from the local file, so a bot
-    /// another machine added shows up "not running" and one running here
-    /// keeps its tab.
-    public void Reload() => Load();
+    /// Re-read both files (and the task board). Session ids come from the
+    /// local file, so a bot another machine added shows up "not running" and
+    /// one running here keeps its tab.
+    public void Reload() { Load(); _tasks = null; }
 
     private void Load()
     {
@@ -380,6 +417,8 @@ internal sealed class TeamStore
         var removed = Doc.Bots.RemoveAll(b => string.Equals(b.Slug, slug, StringComparison.OrdinalIgnoreCase)) > 0;
         if (removed)
         {
+            if (string.Equals(Doc.LeadSlug, slug, StringComparison.OrdinalIgnoreCase)) Doc.LeadSlug = null;
+            Tasks.Current?.Items.RemoveAll(i => string.Equals(i.Bot, slug, StringComparison.OrdinalIgnoreCase));
             foreach (var dir in new[] { Path.Combine(BotsDir, slug), Path.Combine(LocalDir, "bots", slug) })
             {
                 try { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); }
@@ -414,9 +453,10 @@ internal sealed class TeamStore
 
     // ---- rendering --------------------------------------------------------
 
-    /// Rewrite every bot's system.md from its position's current brief.
-    /// Called after a brief changes or a bot joins; a running bot picks the
-    /// new file up at its next launch.
+    /// Rewrite every bot's system.md from its position's current brief (and
+    /// the lead role, for the lead). Called after a brief changes, a bot
+    /// joins, or the lead changes; a running bot picks the new file up at
+    /// its next launch.
     public void RenderSystemFiles(string projectName)
     {
         foreach (var bot in Doc.Bots)
@@ -425,17 +465,17 @@ internal sealed class TeamStore
             if (pos == null) continue;
             try
             {
-                var text = TeamRender.SystemPrompt(bot, pos, ReadBrief(pos.Slug), projectName, MemoryPathFor(bot.Slug));
+                var text = TeamRender.SystemPrompt(bot, pos, ReadBrief(pos.Slug), projectName, MemoryPathFor(bot.Slug), Doc.IsLead(bot));
                 AtomicFile.WriteAllText(SystemPathFor(bot.Slug), text);
             }
             catch (Exception ex) { Log.Error("TeamStore.RenderSystem", ex); }
         }
     }
 
-    /// Rewrite roster.md and every bot's context.md (the roster plus that
-    /// bot's memory — what the hook inlines into each of its prompts).
-    /// Cheap, so callers do it on every membership or presence change rather
-    /// than tracking dirtiness.
+    /// Rewrite roster.md and every bot's context.md (the roster, the task
+    /// board as it concerns that bot, and its memory — what the hook inlines
+    /// into each of its prompts). Cheap, so callers do it on every
+    /// membership, presence or task change rather than tracking dirtiness.
     public void RenderRoster(string projectName, IReadOnlyDictionary<string, string>? presence = null)
     {
         var roster = TeamRender.Roster(Doc, projectName, presence);
@@ -446,7 +486,8 @@ internal sealed class TeamStore
             try
             {
                 AtomicFile.WriteAllText(ContextPathFor(bot.Slug),
-                    TeamRender.Context(roster, bot, ReadMemory(bot.Slug), MemoryPathFor(bot.Slug)));
+                    TeamRender.Context(roster, bot, ReadMemory(bot.Slug), MemoryPathFor(bot.Slug),
+                        TeamRender.TaskBlock(Tasks, Doc, bot)));
             }
             catch (Exception ex) { Log.Error("TeamStore.RenderContext", ex); }
         }

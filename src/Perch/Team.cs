@@ -45,6 +45,14 @@ internal sealed class TeamDoc
     public int V { get; set; } = 1;
     public List<TeamPosition> Positions { get; set; } = new();
     public List<TeamBot> Bots { get; set; } = new();
+    /// The ONE bot that leads: sets the task with the owner, splits it,
+    /// tracks it, asks the owner to confirm it's done. Its system prompt
+    /// carries the lead role on top of its brief (TeamRender.LeadRole).
+    /// Null = no lead yet (the first bot in a lead-type position takes it).
+    public string? LeadSlug { get; set; }
+
+    public TeamBot? Lead => LeadSlug == null ? null : Bot(LeadSlug);
+    public bool IsLead(TeamBot bot) => LeadSlug != null && string.Equals(LeadSlug, bot.Slug, StringComparison.OrdinalIgnoreCase);
 
     public TeamPosition? Position(string slug) =>
         Positions.Find(p => string.Equals(p.Slug, slug, StringComparison.OrdinalIgnoreCase));

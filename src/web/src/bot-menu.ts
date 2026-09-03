@@ -68,6 +68,18 @@ export function showBotMenu(
     if (position) showBriefEditor(project, position);
   });
 
+  // One lead per team: it runs the task board (sets the task, splits it,
+  // asks you to confirm). The current lead's row says so; any other bot
+  // can take the role over.
+  if (project.team?.lead === bot.botId) {
+    const lead = item("Team lead", "runs the task board", () => {});
+    lead.disabled = true;
+  } else {
+    item("Make team lead", project.team?.lead ? "takes over from the current lead" : null, () => {
+      send({ type: "team.lead.set", projectId: project.id, botId: bot.botId });
+    });
+  }
+
   item("Remove from team…", null, () => {
     void confirmWithOption({
       title: `Remove ${bot.nickname} from the team?`,

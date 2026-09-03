@@ -1398,6 +1398,18 @@ if (view === "team" || view === "team-empty" || view.startsWith("team-sidebar") 
           { botId: "b-cy", nickname: "Cy", positionSlug: "designer", positionName: "Designer", sessionId: "s-cy", peerName: "cy-2",
             look: { hat: "beret", eyewear: "round", extra: "pencil", temper: "curious" } },
         ],
+        lead: "b-ada",
+        // The task pane under the roster: the lead has asked for a confirm.
+        task: {
+          id: "t1", title: "Ship the team room: faces in the roster, bots folded in the sidebar, no dropped posts",
+          status: "review", setBy: "Ada", reviewBy: "Ada", createdAtMs: Date.now() - 2 * 3600_000,
+          items: [
+            { botId: "b-ada", bot: "Ada", title: "Faces in the room and roster", status: "done", note: "harness shot is in", updatedAtMs: Date.now() - 600_000 },
+            { botId: "b-bo", bot: "Bo", title: "Ledger fan-out and the submit check", status: "done", note: "", updatedAtMs: Date.now() - 1200_000 },
+            { botId: "b-cy", bot: "Cy", title: "Empty-state mock", status: "blocked", note: "waiting on the copy", updatedAtMs: Date.now() - 300_000 },
+          ],
+          wrapping: [],
+        },
       },
     },
     { id: "p-gm", name: "home-tools", path: "C:\\dev\\home-tools", team: { positions: [], bots: [] } },

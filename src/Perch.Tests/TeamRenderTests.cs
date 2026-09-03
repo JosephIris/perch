@@ -138,6 +138,39 @@ public class TeamRenderTests
     }
 
     [Fact]
+    public void TaskBlock_SpeaksToTheLeadAndToAMember_WithAndWithoutATask()
+    {
+        var doc = Team(2);
+        doc.LeadSlug = "ada";
+        var tasks = new TaskDoc();
+
+        var leadEmpty = TeamRender.TaskBlock(tasks, doc, doc.Bots[0]);
+        Assert.Contains("(No task set yet. You are the lead", leadEmpty);
+        Assert.Contains("perch team task main", leadEmpty);
+        var memberEmpty = TeamRender.TaskBlock(tasks, doc, doc.Bots[1]);
+        Assert.Contains("Ada leads and will set one", memberEmpty);
+        Assert.DoesNotContain("perch team task done", memberEmpty);
+
+        tasks.Current = new TaskBoard
+        {
+            Id = "t1", Title = "Ship the sidebar", Status = "review", SetBy = "ada",
+            Items = { new TaskItem { Bot = "bo", Title = "API for the room", Status = "done", Note = "merged" } },
+        };
+        var member = TeamRender.TaskBlock(tasks, doc, doc.Bots[1]);
+        Assert.Contains("**Ship the sidebar** — review (waiting for Joseph to confirm)", member);
+        Assert.Contains("- Ada: no piece yet", member);
+        Assert.Contains("- Bo (you): [done] API for the room — merged", member);
+        Assert.Contains("Ada (`ada`) leads", member);
+        var lead = TeamRender.TaskBlock(tasks, doc, doc.Bots[0]);
+        Assert.Contains("perch team task assign", lead);
+
+        var system = TeamRender.SystemPrompt(doc.Bots[0], doc.Positions[0], "## Role\nYou own src/web.", "perch", null, isLead: true);
+        Assert.Contains("and the team lead on the perch team", system);
+        Assert.Contains("## You lead the team", system);
+        Assert.Contains("perch team task done", system);
+    }
+
+    [Fact]
     public void OneLine_FlattensAndCaps()
     {
         Assert.Equal("", TeamRender.OneLine("  \n ", 10));

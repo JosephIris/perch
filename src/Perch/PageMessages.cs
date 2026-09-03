@@ -549,6 +549,34 @@ internal sealed record TeamBotStartMsg
     public required string BotId { get; init; }
 }
 
+/// Make a bot the team's one lead (replacing the current one).
+internal sealed record TeamLeadSetMsg
+{
+    public required Guid ProjectId { get; init; }
+    public required string BotId { get; init; }
+}
+
+/// The owner sets (or renames) the current task from the room.
+internal sealed record TeamTaskSetMsg
+{
+    public required Guid ProjectId { get; init; }
+    public required string Title { get; init; }
+}
+
+/// The owner confirms the current task is done: bots wrap up and reset.
+internal sealed record TeamTaskConfirmMsg
+{
+    public required Guid ProjectId { get; init; }
+}
+
+/// The owner says the task is not done yet (after the lead asked): back to
+/// open, with a note the lead gets.
+internal sealed record TeamTaskRejectMsg
+{
+    public required Guid ProjectId { get; init; }
+    public string? Note { get; init; }
+}
+
 /// The dialog's "Browse…" for a reference folder. Answered with
 /// `team.reference.picked { requestId, path | null }`.
 internal sealed record TeamReferenceBrowseMsg

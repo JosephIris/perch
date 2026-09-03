@@ -168,18 +168,65 @@ internal static class Program
     private static int CmdTeam(string pipeName, string[] args)
     {
         // Usage: perch team post <text...>
-        // A note from a bot to the team room — for the user, pinging no
-        // teammate. (Bot-to-bot goes through Claude Code's own SendMessage;
+        //        perch team task main <title...>              (the lead sets/renames the task)
+        //        perch team task assign <bot> <title...>      (the lead gives a bot its piece)
+        //        perch team task mine <title...> [--status todo|doing|done|blocked] [--note <text>]
+        //        perch team task done                         (the lead asks the owner to confirm)
+        //
+        // `post` is a note from a bot to the team room — for the user, pinging
+        // no teammate. (Bot-to-bot goes through Claude Code's own SendMessage;
         // this is the "done, it's in src/x" that doesn't need a colleague's
-        // attention.) The host appends it to the room ledger; nothing else.
-        if (args.Length < 2 || args[1] != "post")
+        // attention.) `task` is the team's task board; the host decides who may
+        // do what (the lead runs the board, every bot keeps its own piece) and
+        // the room shows the result.
+        const string usage = "perch team: usage: perch team post <text...> | perch team task main|assign|mine|done …";
+        if (args.Length < 2) { Console.Error.WriteLine(usage); return 2; }
+        if (args[1] == "post")
         {
-            Console.Error.WriteLine("perch team: usage: perch team post <text...>");
-            return 2;
+            if (args.Length < 3) { Console.Error.WriteLine("perch team post: missing text"); return 2; }
+            var text = string.Join(' ', args, 2, args.Length - 2);
+            return Send(pipeName, new { type = "team.post", text });
         }
-        if (args.Length < 3) { Console.Error.WriteLine("perch team post: missing text"); return 2; }
-        var text = string.Join(' ', args, 2, args.Length - 2);
-        return Send(pipeName, new { type = "team.post", text });
+        if (args[1] == "task")
+        {
+            if (args.Length < 3) { Console.Error.WriteLine(usage); return 2; }
+            var op = args[2].ToLowerInvariant();
+            var rest = args.Skip(3).ToArray();
+            string? bot = null, status = null, note = null;
+            var words = new List<string>();
+            if (op == "assign")
+            {
+                if (rest.Length < 1) { Console.Error.WriteLine("perch team task assign: missing <bot>"); return 2; }
+                bot = rest[0];
+                rest = rest.Skip(1).ToArray();
+            }
+            for (var i = 0; i < rest.Length; i++)
+            {
+                if (rest[i] == "--status" && i + 1 < rest.Length) { status = rest[++i]; continue; }
+                if (rest[i] == "--note" && i + 1 < rest.Length) { note = rest[++i]; continue; }
+                words.Add(rest[i]);
+            }
+            var title = string.Join(' ', words).Trim();
+            switch (op)
+            {
+                case "main":
+                case "assign":
+                    if (title.Length == 0) { Console.Error.WriteLine($"perch team task {op}: missing title"); return 2; }
+                    break;
+                case "mine":
+                    if (title.Length == 0 && status == null && note == null)
+                    { Console.Error.WriteLine("perch team task mine: give a title, --status or --note"); return 2; }
+                    break;
+                case "done":
+                    break;
+                default:
+                    Console.Error.WriteLine(usage);
+                    return 2;
+            }
+            return Send(pipeName, new { type = "team.task", op, bot, title, status, note });
+        }
+        Console.Error.WriteLine(usage);
+        return 2;
     }
 
     private static int CmdTest(string[] args)
@@ -281,6 +328,7 @@ internal static class Program
         Console.WriteLine("  perch open [--name X] [--cwd path] [--cmd command]");
         Console.WriteLine("  perch agent <name>           (header badge; empty clears)");
         Console.WriteLine("  perch team post <text...>    (a note to the team room; pings nobody)");
+        Console.WriteLine("  perch team task main <title> | assign <bot> <title> | mine <title> [--status s] [--note n] | done");
         Console.WriteLine();
         Console.WriteLine("Outside a perch pane (no PERCH_PIPE set) every command is a silent no-op.");
     }

@@ -30,6 +30,8 @@ import { showNewBotDialog } from "./new-bot-dialog.js";
 import { showBotMenu } from "./bot-menu.js";
 import type { MentionTarget } from "./mention.js";
 import { createBotFace, normalizeLook, type BotFace, type FaceState } from "./bot-face.js";
+import { confirmDialog } from "./confirm.js";
+import type { TeamTaskView } from "./bridge.js";
 
 // ---- Pure rendering decisions ---------------------------------------------
 
@@ -70,9 +72,20 @@ export function recipientsLabel(to: TeamEntryView["to"]): string {
 export function systemTone(event: TeamEntryView["event"]): "calm" | "attention" | "error" {
   switch (event) {
     case "waiting":
-    case "permission": return "attention";
+    case "permission":
+    case "task.review": return "attention";   // the lead is asking you to confirm
     case "error": return "error";
     default: return "calm";
+  }
+}
+
+/** The word on the task pane's pill for a board status. */
+export function taskStatusWord(status: TeamTaskView["status"] | undefined): string {
+  switch (status) {
+    case "open": return "in progress";
+    case "review": return "confirm?";
+    case "done": return "wrapping up";
+    default: return "";
   }
 }
 
@@ -88,6 +101,14 @@ let truncEl: HTMLElement;
 let emptyEl: HTMLElement;
 let mainEl: HTMLElement;
 let composer: Composer | null = null;
+
+/* The task pane under the roster. */
+let taskStatusEl: HTMLElement;
+let taskEditBtn: HTMLButtonElement;
+let taskBodyEl: HTMLElement;
+/* Inline editors: setting/renaming the task, and the "not yet" note. */
+let taskEditorOpen = false;
+let rejectOpen = false;
 
 let projectId: string | null = null;
 let lastState: StateMessage | null = null;
@@ -230,6 +251,7 @@ export function applyTeamState(msg: StateMessage): void {
   } else {
     renderHead(project);
     renderRoster(project);
+    renderTasks(project);
     composer?.refresh();
   }
   schedulePoll();
@@ -318,6 +340,29 @@ function mount(): void {
   roster.appendChild(rHead);
   rosterListEl = el("div", "team-roster__list");
   roster.appendChild(rosterListEl);
+
+  // The task board: the right column's second pane. One task at a time,
+  // each bot's piece, and the confirm step that wraps everyone up.
+  const tasks = el("section", "team-tasks");
+  tasks.setAttribute("aria-label", "Task board");
+  const tHead = el("div", "team-tasks__head");
+  tHead.appendChild(el("span", "team-roster__label", "Task"));
+  taskStatusEl = el("span", "team-tasks__status");
+  tHead.appendChild(taskStatusEl);
+  taskEditBtn = document.createElement("button");
+  taskEditBtn.type = "button";
+  taskEditBtn.className = "team-roster__add";
+  taskEditBtn.textContent = "Set task";
+  taskEditBtn.addEventListener("click", () => {
+    taskEditorOpen = !taskEditorOpen;
+    rejectOpen = false;
+    render();
+  });
+  tHead.appendChild(taskEditBtn);
+  tasks.appendChild(tHead);
+  taskBodyEl = el("div", "team-tasks__body");
+  tasks.appendChild(taskBodyEl);
+  roster.appendChild(tasks);
   mainEl.appendChild(roster);
   root.appendChild(mainEl);
 
@@ -353,6 +398,8 @@ function unmount(immediate: boolean): void {
   }
   disposeFaces(feedFaces);
   disposeFaces(rosterFaces);
+  taskEditorOpen = false;
+  rejectOpen = false;
   composer?.dispose();
   composer = null;
   const node = root;
@@ -457,6 +504,7 @@ function render(): void {
   const bots = project?.team?.bots ?? [];
   renderHead(project);
   renderRoster(project);
+  renderTasks(project);
   composer?.refresh();
 
   const empty = roomEmptyState({ bots, entries: data?.entries ?? [], pending: !data || data.pending });
@@ -558,6 +606,146 @@ function renderRoster(project: ProjectView | null): void {
       showBotMenu(ev.clientX, ev.clientY, project, bot, () => closeTeamRoom());
     });
     rosterListEl.appendChild(row);
+  }
+}
+
+/** The task pane: the current task, every bot's piece, and the step the
+ *  owner owns — set it, confirm it's done, or say not yet. */
+function renderTasks(project: ProjectView | null): void {
+  if (!taskBodyEl) return;
+  const team = project?.team;
+  const t = team?.task ?? null;
+  const bots = team?.bots ?? [];
+  const lead = bots.find((b) => b.botId === team?.lead);
+  taskBodyEl.replaceChildren();
+  taskStatusEl.textContent = taskStatusWord(t?.status);
+  taskStatusEl.dataset.status = t?.status ?? "";
+  taskEditBtn.textContent = taskEditorOpen ? "Cancel" : t && t.status !== "done" ? "Change" : "Set task";
+  taskEditBtn.hidden = !project || bots.length === 0 || t?.status === "done";
+
+  if (!project) return;
+  if (taskEditorOpen) {
+    const form = el("form", "team-tasks__editor") as HTMLFormElement;
+    const input = document.createElement("textarea");
+    input.className = "team-tasks__input";
+    input.placeholder = "What does done look like?";
+    input.value = t && t.status !== "done" ? t.title : "";
+    input.rows = 2;
+    form.appendChild(input);
+    const actions = el("div", "team-tasks__actions");
+    const save = document.createElement("button");
+    save.type = "submit";
+    save.className = "projects-card__btn projects-card__btn--primary";
+    save.textContent = t && t.status !== "done" ? "Rename" : "Set task";
+    actions.appendChild(save);
+    form.appendChild(actions);
+    form.addEventListener("submit", (ev) => {
+      ev.preventDefault();
+      const title = input.value.trim();
+      if (!title) return;
+      send({ type: "team.task.set", projectId: project.id, title });
+      taskEditorOpen = false;
+      render();
+    });
+    input.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); form.requestSubmit(); }
+      if (ev.key === "Escape") { taskEditorOpen = false; render(); }
+    });
+    taskBodyEl.appendChild(form);
+    requestAnimationFrame(() => input.focus());
+    return;
+  }
+
+  if (!t) {
+    taskBodyEl.appendChild(el("p", "team-tasks__empty",
+      bots.length === 0 ? "Add a bot first."
+        : lead ? `No task yet. ${lead.nickname} leads and sets one with you, or set it here.`
+        : "No task yet. Set one here, or make a bot the team lead so it can."));
+    return;
+  }
+
+  taskBodyEl.appendChild(el("div", "team-tasks__title", t.title));
+  const meta = el("div", "team-tasks__meta");
+  meta.appendChild(document.createTextNode(`set by ${t.setBy === "you" ? "you" : t.setBy} · `));
+  meta.appendChild(agoSpan(t.createdAtMs, true));
+  taskBodyEl.appendChild(meta);
+
+  const list = el("ul", "team-tasks__items");
+  for (const bot of bots) {
+    const item = t.items.find((i) => i.botId === bot.botId);
+    const li = el("li", "task-item");
+    const dot = el("span", "task-item__dot");
+    dot.dataset.status = item?.status ?? "todo";
+    dot.setAttribute("aria-hidden", "true");
+    li.appendChild(dot);
+    const line = el("span", "task-item__line");
+    line.appendChild(el("span", "task-item__who", bot.nickname + (bot.botId === team?.lead ? " (lead)" : "") + " "));
+    line.appendChild(el("span", item ? "task-item__what" : "task-item__what task-item__what--none", item ? item.title : "no piece yet"));
+    li.appendChild(line);
+    if (item?.note) li.appendChild(el("span", "task-item__note", item.note));
+    list.appendChild(li);
+  }
+  taskBodyEl.appendChild(list);
+
+  const actions = el("div", "team-tasks__actions");
+  const btn = (label: string, primary: boolean, onClick: () => void) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "projects-card__btn" + (primary ? " projects-card__btn--primary" : "");
+    b.textContent = label;
+    b.addEventListener("click", onClick);
+    return b;
+  };
+  const confirmDone = () => {
+    void confirmDialog({
+      title: "Task done?",
+      body: `Every running bot writes what the next task needs into its memory, then its conversation is cleared. "${t.title}" moves to the archive.`,
+      confirmLabel: "Confirm done",
+    }).then((ok) => { if (ok) send({ type: "team.task.confirm", projectId: project.id }); });
+  };
+  if (t.status === "review") {
+    actions.appendChild(el("span", "team-tasks__say", `${t.reviewBy ?? "The lead"} says it's done.`));
+    actions.appendChild(btn("Confirm done", true, confirmDone));
+    actions.appendChild(btn("Not yet…", false, () => { rejectOpen = !rejectOpen; render(); }));
+    taskBodyEl.appendChild(actions);
+    if (rejectOpen) {
+      const form = el("form", "team-tasks__editor") as HTMLFormElement;
+      const input = document.createElement("textarea");
+      input.className = "team-tasks__input";
+      input.placeholder = "What's missing? (goes to the lead)";
+      input.rows = 2;
+      form.appendChild(input);
+      const a2 = el("div", "team-tasks__actions");
+      const sendBtn = document.createElement("button");
+      sendBtn.type = "submit";
+      sendBtn.className = "projects-card__btn projects-card__btn--primary";
+      sendBtn.textContent = "Send";
+      a2.appendChild(sendBtn);
+      form.appendChild(a2);
+      form.addEventListener("submit", (ev) => {
+        ev.preventDefault();
+        send({ type: "team.task.reject", projectId: project.id, note: input.value.trim() || undefined });
+        rejectOpen = false;
+        render();
+      });
+      input.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); form.requestSubmit(); }
+        if (ev.key === "Escape") { rejectOpen = false; render(); }
+      });
+      taskBodyEl.appendChild(form);
+      requestAnimationFrame(() => input.focus());
+    }
+  } else if (t.status === "open") {
+    actions.appendChild(btn("Mark done", false, confirmDone));
+    taskBodyEl.appendChild(actions);
+  } else if (t.status === "done") {
+    const wrap = el("div", "team-tasks__wrap");
+    wrap.appendChild(document.createTextNode("Wrapping up: "));
+    for (const bot of bots) {
+      const pending = t.wrapping.includes(bot.botId);
+      wrap.appendChild(el("span", pending ? "pending" : "", `${bot.nickname}${pending ? "…" : " ✓"}`));
+    }
+    taskBodyEl.appendChild(wrap);
   }
 }
 
