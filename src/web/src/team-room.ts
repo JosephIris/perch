@@ -162,6 +162,10 @@ const optimisticReactions = new Map<number, Set<string>>();
 
 /* Only rows newer than this animate in; the rest are a repaint. */
 let renderedSeq = 0;
+/** What the feed currently shows, so a poll that brought nothing new (or a
+ *  presence tick that only touched the roster) doesn't rebuild the rows —
+ *  every rebuild is a chance to lose the reader's place. */
+let renderedSig = "";
 
 /* Tool activity in the feed is off until you ask for it. Per machine. */
 let showActivity = readActivityPref();
@@ -896,6 +900,35 @@ function renderFeed(entries: TeamEntryView[], bots: TeamBotView[]): void {
     if (e.kind === "user" && e.clientId && pending.has(e.clientId)) pending.delete(e.clientId);
   }
 
+  // Nothing to redraw? Then don't. The poll answers every two seconds and
+  // the roster ticks on every presence change; neither is a reason to tear
+  // the rows down under a reader who scrolled up.
+  const last = entries.length > 0 ? entries[entries.length - 1].seq : 0;
+  const failed = [...pending.values()].filter((p) => p.failed).length;
+  const sig = `${entries.length}:${last}:${pending.size}:${failed}:${showActivity}:${optimisticReactions.size}:${bots.length}`;
+  if (sig === renderedSig && feedEl.childElementCount > 0) {
+    jumpEl.classList.toggle("inspector__jump--on", !isNearBottom(feedEl));
+    return;
+  }
+  renderedSig = sig;
+
+  // Scrolled up: remember which row sits at the top of the view and where,
+  // and put it back there after the rebuild. Restoring a pixel offset is
+  // not enough — anything above that grew or shrank would shift the reader.
+  let anchorSeq: string | null = null;
+  let anchorDelta = 0;
+  if (!pinned) {
+    const feedTop = feedEl.getBoundingClientRect().top;
+    for (const child of Array.from(feedEl.children) as HTMLElement[]) {
+      const r = child.getBoundingClientRect();
+      if (r.bottom > feedTop && child.dataset.seq) {
+        anchorSeq = child.dataset.seq;
+        anchorDelta = r.top - feedTop;
+        break;
+      }
+    }
+  }
+
   const shown = visibleEntries(entries, showActivity);
   disposeFaces(feedFaces);
   const rows = groupRows(foldFeed(shown));
@@ -913,7 +946,16 @@ function renderFeed(entries: TeamEntryView[], bots: TeamBotView[]): void {
   renderedSeq = maxSeq;
 
   if (pinned) feedEl.scrollTop = feedEl.scrollHeight;
-  else feedEl.scrollTop = prevTop;
+  else
+  {
+    const again = anchorSeq ? (feedEl.querySelector(`[data-seq="${anchorSeq}"]`) as HTMLElement | null) : null;
+    if (again) {
+      const feedTop = feedEl.getBoundingClientRect().top;
+      feedEl.scrollTop += (again.getBoundingClientRect().top - feedTop) - anchorDelta;
+    } else {
+      feedEl.scrollTop = prevTop;
+    }
+  }
   jumpEl.classList.toggle("inspector__jump--on", !isNearBottom(feedEl));
   if (isNearBottom(feedEl) && projectId) {
     const d = cachedTeam(projectId);
