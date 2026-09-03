@@ -568,7 +568,7 @@ function buildSkeleton(): void {
   sessions.appendChild(
     makeRow(
       "Bot faces in colour",
-      "Each team bot's bird and circle take the bot's colour. Off shows them in plain ink.",
+      "The bird itself takes the bot's colour. Off keeps the bird in plain ink; the circle behind it is always the bot's colour.",
       facesToggle,
     ),
   );

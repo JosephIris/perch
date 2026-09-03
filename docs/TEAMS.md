@@ -122,9 +122,14 @@ drawn at random when the bot is created (`TeamBot.Look`: eyewear, one extra
 item, a temperament; `TeamLooks.RandomLook`), both stored so every machine
 renders the same bot; documents from before faces get them filled in on
 load. Rendering is `src/web/src/bot-face.ts` (the setup-overlay rig, the
-three design-loop mockups folded into one); colour is a per-machine setting
-(`Settings.TeamFacesColor`, off = plain ink, on = the bot's tag hue),
-surfaced as "Bot faces in colour" in Settings and `prefs.teamFacesColor`.
+three design-loop mockups folded into one). The circle behind the face is
+ALWAYS the bot's tag colour (the letter avatar's tint and keyline), so bots
+are told apart in either mode; the per-machine setting
+(`Settings.TeamFacesColor`, "Bot faces in colour", `prefs.teamFacesColor`)
+only decides whether the bird itself is tinted (on) or plain ink (off, the
+default). The local renders (system.md, context.md, roster.md) are written
+when a team is first opened in a process and after a reload, because they
+are never committed and a marker at a missing system.md is dropped.
 
 ## Host ↔ CLI contract (all in `%TEMP%`, keyed by `PERCH_PANE_ID`)
 

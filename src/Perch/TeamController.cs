@@ -139,6 +139,7 @@ internal sealed class TeamController
                 {
                     Log.Info("Team.reload", $"project={projectId:N} team.json changed on disk");
                     cached.Reload();
+                    cached.RenderSystemFiles(proj.Name);
                     RefreshRoster(proj, cached);
                     _h.PushState();
                 }
@@ -147,7 +148,17 @@ internal sealed class TeamController
             _stores.Remove(projectId);
         }
         var store = TeamStore.Open(proj.Path);
-        if (store != null) _stores[projectId] = store;
+        if (store != null)
+        {
+            _stores[projectId] = store;
+            // First sight of this team in this process: render the local
+            // files now. They live under local/ (never committed), so a fresh
+            // clone, a pull, or the folder's migration leaves them missing —
+            // and a marker pointing at a missing system.md is dropped, which
+            // would launch the bot without its brief.
+            store.RenderSystemFiles(proj.Name);
+            RefreshRoster(proj, store);
+        }
         return store;
     }
 
