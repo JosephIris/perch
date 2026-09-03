@@ -23,7 +23,7 @@
 
 import {
   send, type StateMessage, type SessionView, type ProjectView,
-  type TeamBotView, type TeamDataMessage, type TeamEntryView, type PaneTreeView, type TeamTaskView, type TeamView,
+  type TeamBotView, type TeamDataMessage, type TeamEntryView, type TeamTaskView, type TeamView,
 } from "./bridge.js";
 import {
   requestTeam, subscribeTeam, cachedTeam, ingestTeamData, requestTeamImage,
@@ -630,21 +630,17 @@ function botByName(bots: TeamBotView[], from: string, botId?: string): TeamBotVi
   return bots.find((x) => x.nickname.toLowerCase() === from.toLowerCase());
 }
 
-function firstLeaf(node: PaneTreeView): Extract<PaneTreeView, { kind: "leaf" }> | null {
-  if (node.kind === "leaf") return node;
-  for (const c of node.children) {
-    const l = firstLeaf(c);
-    if (l) return l;
-  }
-  return null;
-}
-
-/** The bot's pane color, for its avatar. Falls back to a stable hash of the
- *  nickname when the tab is gone, so an offline bot keeps its hue. */
+/** A bot's colour: its place in the team, so the first six bots are six
+ *  different hues and each one's avatar, roster row and name in the chat
+ *  agree.
+ *
+ *  It used to come from the bot's TAB colour, and a tab is created with the
+ *  project's default — so three bots in a row wore the same hue and the
+ *  colour said nothing about who was speaking. */
 function colorIndexFor(bot: TeamBotView | undefined, name: string): number {
-  const s = bot ? sessionOf(bot) : undefined;
-  const leaf = s ? firstLeaf(s.rootPane) : null;
-  if (leaf) return leaf.colorIndex % 6;
+  const roster = projectId ? projectFor(projectId)?.team?.bots ?? [] : [];
+  const at = bot ? roster.findIndex((b) => b.botId === bot.botId) : -1;
+  if (at >= 0) return at % 6;
   let h = 0;
   for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
   return h % 6;
@@ -1361,11 +1357,19 @@ function renderRow(row: FeedRow, bots: TeamBotView[], names: string[]): HTMLElem
   const body = el("div", "tf-msg__body");
   if (!row.cont) {
     const head = el("div", "tf-msg__head");
-    head.appendChild(el("span", "tf-msg__name", displayName(e.from, bot)));
+    // A name wears its bot's colour — the same hue as its avatar and its
+    // roster row, so a glance down the feed says who is talking.
+    const named = (who: string, of: TeamBotView | undefined) => {
+      const span = el("span", "tf-msg__name", who);
+      if (of) span.dataset.colorIndex = String(colorIndexFor(of, who));
+      return span;
+    };
+    head.appendChild(named(displayName(e.from, bot), bot));
     if (e.kind === "peer") {
       head.appendChild(el("span", "tf-msg__arrow", "→"));
       const target = Array.isArray(e.to) ? e.to.join(", ") : e.to === "everyone" ? "everyone" : "";
-      head.appendChild(el("span", "tf-msg__name", target));
+      const toBot = Array.isArray(e.to) && e.to.length === 1 ? bots.find((b) => b.nickname === e.to![0]) : undefined;
+      head.appendChild(named(target, toBot));
       // The hand-off label the sender put in front: what this message IS.
       const label = handoffLabel(e.note);
       if (label) {

@@ -1077,7 +1077,13 @@ export function createBotFace(look: BotLook, colorIndex: number, state: FaceStat
     setState(s) {
       if (s === f.state) return;
       const t = now();
-      f.prev = f.last; f.switchAt = t; f.t0 = t; f.state = s;
+      // The clock is NOT reset. Restarting it made every act begin at its
+      // first frame again, and a bot that flips between working and idle every
+      // few seconds then only ever showed that opening — which reads as the
+      // animation being cut off. The face keeps one continuous clock; each
+      // state reads its own phase off it, so an act picks up where its own
+      // loop happens to be and gets seen whole.
+      f.prev = f.last; f.switchAt = t; f.state = s;
       svg.setAttribute("data-state", s);
       if (!raf) renderFace(f, t);
       ensureLoop();

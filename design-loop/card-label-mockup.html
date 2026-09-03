@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Room: card labels and bot colours</title>
+  <style>
+    @font-face {
+      font-family: "Inter Variable";
+      src: url("../src/web/fonts/InterVariable.woff2") format("woff2-variations");
+      font-weight: 100 900;
+      font-display: swap;
+    }
+  </style>
+  <!-- The real app stylesheet, so nothing here is a guess about type,
+       spacing or colour. -->
+  <link rel="stylesheet" href="./harness.css" />
+  <style>
+    html, body { margin: 0; background: #1f1f1f; }
+    .sheet { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; padding: 24px; }
+    .col > h2 {
+      margin: 0 0 12px;
+      font-family: var(--font-text);
+      font-size: var(--type-caption-size);
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--color-text-tertiary);
+    }
+    .col > p {
+      margin: 0 0 16px;
+      max-width: 46ch;
+      font-family: var(--font-text);
+      font-size: var(--type-caption-size);
+      line-height: 1.5;
+      color: var(--color-text-tertiary);
+    }
+    .feed { display: flex; flex-direction: column; padding: 8px 0; }
+
+    /* ── The proposal ─────────────────────────────────────────────────── */
+
+    /* The kind sits on the frame's own bottom line, right-hand side: the
+       colour tells you what a card is at a glance, and the word confirms it
+       where it costs no room above the text. */
+    .p .tf-sys--card { position: relative; padding-bottom: var(--sp-12); }
+    .p .tf-sys--card .tf-sys__kind {
+      position: absolute;
+      right: var(--sp-12);
+      bottom: calc(var(--sp-4) * -1 - 1px);
+      padding: 0 var(--sp-4);
+      background: var(--color-bg-app, #1f1f1f);
+      line-height: 1;
+    }
+    /* The time moves off that corner so the two never collide. */
+    .p .tf-sys--card .tf-sys__time { align-self: flex-start; }
+
+    /* A bot's name in the chat wears the bot's own colour — the same hue as
+       its avatar and its roster row. */
+    .p .tf-msg__name[data-color-index="0"] { color: var(--color-pane-tag-0); }
+    .p .tf-msg__name[data-color-index="1"] { color: var(--color-pane-tag-1); }
+    .p .tf-msg__name[data-color-index="2"] { color: var(--color-pane-tag-2); }
+    .p .tf-msg__name[data-color-index="3"] { color: var(--color-pane-tag-3); }
+    .p .tf-msg__name[data-color-index="4"] { color: var(--color-pane-tag-4); }
+    .p .tf-msg__name[data-color-index="5"] { color: var(--color-pane-tag-5); }
+
+    .avatar {
+      width: 28px; height: 28px; border-radius: 50%;
+      display: grid; place-items: center; flex: none;
+      font-family: var(--font-display); font-size: var(--type-caption-size); font-weight: 600;
+    }
+    .avatar[data-c="0"] { background: rgba(118,185,237,0.18); color: var(--color-pane-tag-0); }
+    .avatar[data-c="1"] { background: rgba(108,203,95,0.18);  color: var(--color-pane-tag-1); }
+    .avatar[data-c="2"] { background: rgba(252,225,0,0.16);   color: var(--color-pane-tag-2); }
+    .avatar[data-c="3"] { background: rgba(255,158,94,0.18);   color: var(--color-pane-tag-3); }
+    .avatar[data-c="4"] { background: rgba(255,153,164,0.18);  color: var(--color-pane-tag-4); }
+    .avatar[data-c="5"] { background: rgba(199,146,234,0.18);  color: var(--color-pane-tag-5); }
+  </style>
+</head>
+<body>
+<div class="sheet">
+
+  <!-- ─────────────── NOW ─────────────── -->
+  <section class="col">
+    <h2>Now</h2>
+    <p>The kind sits above the sentence on the left, and every bot's name is the same grey.</p>
+    <div class="feed">
+
+      <div class="tf-sys tf-sys--card" data-event="permission" data-tone="attention">
+        <span class="tf-sys__kind">permission</span>
+        <div class="tf-sys__body">
+          <span class="tf-sys__text tf-sys__text--wrap">anton wants to run Bash: git push origin HEAD:main</span>
+          <button class="tf-sys__more" type="button">details</button>
+          <div class="tf-sys__actions">
+            <button class="tf-sys__open tf-sys__open--primary" type="button">Allow</button>
+            <button class="tf-sys__open" type="button">Deny</button>
+            <button class="tf-sys__open" type="button">Open</button>
+          </div>
+        </div>
+        <span class="tf-sys__time">16:13</span>
+      </div>
+
+      <div class="tf-sys tf-sys--card" data-event="artefact" data-tone="calm">
+        <span class="tf-sys__kind">artefact</span>
+        <div class="tf-sys__body">
+          <span class="tf-sys__text tf-sys__text--wrap">joe — Draft ticket: bid-shading prepared table</span>
+          <span class="tf-arte__summary">Scope, columns, acceptance — for Galina, not created yet</span>
+          <div class="tf-sys__actions">
+            <button class="tf-sys__open tf-sys__open--primary" type="button">Open</button>
+            <span class="tf-sys__answered">document</span>
+          </div>
+        </div>
+        <span class="tf-sys__time">16:19</span>
+      </div>
+
+      <div class="tf-msg tf-msg--beat">
+        <div class="avatar" data-c="0">A</div>
+        <div class="tf-msg__body">
+          <div class="tf-msg__head">
+            <span class="tf-msg__name">anton</span>
+            <span class="tf-msg__pos">Lead Dev</span>
+            <span class="tf-msg__time">14:48</span>
+          </div>
+          <div class="tf-msg__text">Scope of both drafts matches the doc comments. Three fixes going in, then it is yours to decide: table name and retention.</div>
+        </div>
+      </div>
+
+      <div class="tf-msg tf-msg--beat">
+        <div class="avatar" data-c="1">J</div>
+        <div class="tf-msg__body">
+          <div class="tf-msg__head">
+            <span class="tf-msg__name">joe</span>
+            <span class="tf-msg__pos">Product Manager</span>
+            <span class="tf-msg__time">14:55</span>
+          </div>
+          <div class="tf-msg__text">Both Galina tickets are live, assigned to malkhanova@persona.ly, descriptions verified in Jira.</div>
+        </div>
+      </div>
+
+      <div class="tf-msg tf-msg--beat">
+        <div class="avatar" data-c="4">S</div>
+        <div class="tf-msg__body">
+          <div class="tf-msg__head">
+            <span class="tf-msg__name">shabtay</span>
+            <span class="tf-msg__pos">Senior Analyst</span>
+            <span class="tf-msg__time">14:56</span>
+          </div>
+          <div class="tf-msg__text">Reading joe's draft tickets, the Confluence page and the Java counter code, then checking the BigQuery schemas.</div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ─────────────── PROPOSED ─────────────── -->
+  <section class="col p">
+    <h2>Proposed</h2>
+    <p>The kind rides on the frame's bottom line, right-hand side. Each bot's name takes the bot's own colour — the same hue as its avatar and roster row.</p>
+    <div class="feed">
+
+      <div class="tf-sys tf-sys--card" data-event="permission" data-tone="attention">
+        <div class="tf-sys__body">
+          <span class="tf-sys__text tf-sys__text--wrap">anton wants to run Bash: git push origin HEAD:main</span>
+          <button class="tf-sys__more" type="button">details</button>
+          <div class="tf-sys__actions">
+            <button class="tf-sys__open tf-sys__open--primary" type="button">Allow</button>
+            <button class="tf-sys__open" type="button">Deny</button>
+            <button class="tf-sys__open" type="button">Open</button>
+          </div>
+        </div>
+        <span class="tf-sys__time">16:13</span>
+        <span class="tf-sys__kind">permission</span>
+      </div>
+
+      <div class="tf-sys tf-sys--card" data-event="artefact" data-tone="calm">
+        <div class="tf-sys__body">
+          <span class="tf-sys__text tf-sys__text--wrap">joe — Draft ticket: bid-shading prepared table</span>
+          <span class="tf-arte__summary">Scope, columns, acceptance — for Galina, not created yet</span>
+          <div class="tf-sys__actions">
+            <button class="tf-sys__open tf-sys__open--primary" type="button">Open</button>
+            <span class="tf-sys__answered">document</span>
+          </div>
+        </div>
+        <span class="tf-sys__time">16:19</span>
+        <span class="tf-sys__kind">artefact</span>
+      </div>
+
+      <div class="tf-msg tf-msg--beat">
+        <div class="avatar" data-c="0">A</div>
+        <div class="tf-msg__body">
+          <div class="tf-msg__head">
+            <span class="tf-msg__name" data-color-index="0">anton</span>
+            <span class="tf-msg__pos">Lead Dev</span>
+            <span class="tf-msg__time">14:48</span>
+          </div>
+          <div class="tf-msg__text">Scope of both drafts matches the doc comments. Three fixes going in, then it is yours to decide: table name and retention.</div>
+        </div>
+      </div>
+
+      <div class="tf-msg tf-msg--beat">
+        <div class="avatar" data-c="1">J</div>
+        <div class="tf-msg__body">
+          <div class="tf-msg__head">
+            <span class="tf-msg__name" data-color-index="1">joe</span>
+            <span class="tf-msg__pos">Product Manager</span>
+            <span class="tf-msg__time">14:55</span>
+          </div>
+          <div class="tf-msg__text">Both Galina tickets are live, assigned to malkhanova@persona.ly, descriptions verified in Jira.</div>
+        </div>
+      </div>
+
+      <div class="tf-msg tf-msg--beat">
+        <div class="avatar" data-c="4">S</div>
+        <div class="tf-msg__body">
+          <div class="tf-msg__head">
+            <span class="tf-msg__name" data-color-index="4">shabtay</span>
+            <span class="tf-msg__pos">Senior Analyst</span>
+            <span class="tf-msg__time">14:56</span>
+          </div>
+          <div class="tf-msg__text">Reading joe's draft tickets, the Confluence page and the Java counter code, then checking the BigQuery schemas.</div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+</div>
+</body>
+</html>

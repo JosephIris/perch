@@ -7316,6 +7316,9 @@ body.show-dashboard .dashboard { display: flex; }
   border-radius: var(--r-card);
   background: var(--color-flyout);
 }
+/* `display: flex` on a class beats the browser's own rule for [hidden], so the
+ * closed menu was an empty framed bar sitting under the panel's title. */
+.team-arte__menu[hidden] { display: none; }
 .team-arte__item {
   display: flex;
   flex-direction: column;
@@ -7649,8 +7652,9 @@ body.show-dashboard .dashboard { display: flex; }
   /* No horizontal margin: the feed is a flex column whose items stretch, and
    * side margins there push the row past the column and give the whole chat a
    * horizontal scrollbar. The frame sits on the column's own inset. */
-  margin: var(--sp-4) 0;
-  padding: var(--sp-8) var(--sp-12);
+  position: relative;   /* the kind label hangs on the bottom line */
+  margin: var(--sp-4) 0 var(--sp-8);
+  padding: var(--sp-8) var(--sp-12) var(--sp-12);
   border: 1px solid var(--card-hue, var(--color-stroke));
   border-left-width: 3px;
   border-radius: var(--r-card);
@@ -7672,16 +7676,33 @@ body.show-dashboard .dashboard { display: flex; }
 .tf-sys--card[data-event="artefact"]   { --card-hue: var(--team-card-artefact);   --card-tint: var(--team-card-artefact-faint); }
 .tf-sys--card[data-tone="error"]       { --card-hue: var(--team-card-error);      --card-tint: var(--team-card-error-faint); }
 
-/* The kind, spelled out, so the colour isn't the only carrier. */
+/* The kind, spelled out, so the colour isn't the only carrier — sitting ON the
+ * frame's bottom line at the right, where it labels the card without taking a
+ * line above the sentence. The patch behind it is the app ground plus the
+ * card's own tint, so the word breaks the line cleanly. */
 .tf-sys__kind {
-  align-self: flex-start;
+  position: absolute;
+  right: var(--sp-12);
+  bottom: -6px;
+  padding: 0 var(--sp-4);
+  background-color: var(--color-room-surface);
+  background-image: linear-gradient(var(--card-tint, transparent), var(--card-tint, transparent));
   font-family: var(--font-small);
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.02em;
+  line-height: 1;
   text-transform: lowercase;
   color: var(--card-hue, var(--color-text-tertiary));
 }
+
+/* A bot's name in the chat, in that bot's colour. */
+.tf-msg__name[data-color-index="0"] { color: var(--color-pane-tag-0); }
+.tf-msg__name[data-color-index="1"] { color: var(--color-pane-tag-1); }
+.tf-msg__name[data-color-index="2"] { color: var(--color-pane-tag-2); }
+.tf-msg__name[data-color-index="3"] { color: var(--color-pane-tag-3); }
+.tf-msg__name[data-color-index="4"] { color: var(--color-pane-tag-4); }
+.tf-msg__name[data-color-index="5"] { color: var(--color-pane-tag-5); }
 .tf-sys__body {
   min-width: 0;
   flex: 1;
