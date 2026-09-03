@@ -923,10 +923,52 @@ internal sealed class TeamController
         if (who.PaneId != Guid.Empty)
         {
             _permAnswered[who.PaneId] = DateTimeOffset.UtcNow;
+            // …but the hook may already have lost the race. Claude puts its own
+            // prompt on the bot's screen a few seconds after the hook starts
+            // waiting, and once that prompt is up it is the only thing that
+            // settles the tool call — a decision the hook prints afterwards is
+            // ignored, and the bot sits there for ever. (Joseph pressed Allow
+            // ten seconds in; anton never moved.) So: give the hook a moment,
+            // and if the pane is STILL on a prompt, answer that prompt where it
+            // is, with the keys a person would press.
+            var pane = who.PaneId;
+            _promptOnScreen[pane] = (allow, bot?.Nickname ?? "the bot", proj.Id);
+            _h.Delay(() => AnswerPromptOnScreen(pane), PromptFallbackWait);
             _h.ClearPrompt?.Invoke(who.PaneId);
         }
         if (bot?.SessionId is Guid sid && _parked.ContainsKey(sid)) FlushParked(sid, TimeSpan.FromSeconds(2));
         RefreshRoster(proj, store);
+        PostEntries(proj.Id, store, new[] { e });
+    }
+
+    /// Panes whose permission was answered from the room and that have not
+    /// been seen working since: pane → (allow, nickname, project).
+    private readonly Dictionary<Guid, (bool Allow, string Nick, Guid Project)> _promptOnScreen = new();
+
+    /// How long the hook's own answer is given before the room answers the
+    /// on-screen prompt instead. Long enough for a healthy hook (it polls four
+    /// times a second and the tool call resumes at once), short enough that a
+    /// stuck bot is unstuck while the owner is still looking at the room.
+    internal static readonly TimeSpan PromptFallbackWait = TimeSpan.FromSeconds(3);
+
+    /// The hook's decision did not settle it — Claude's own prompt is still on
+    /// the bot's screen. Press the keys a person would: Enter takes the
+    /// highlighted "yes", Esc refuses. Without this an Allow pressed in the
+    /// room ten seconds after the card appeared did nothing at all, and the
+    /// bot waited for ever.
+    private void AnswerPromptOnScreen(Guid paneId)
+    {
+        if (!_promptOnScreen.Remove(paneId, out var p)) return;   // the hook settled it
+        Log.Info("Team.perm.onscreen", $"pane={paneId:N} allow={p.Allow} — the hook's answer didn't take; answering the prompt itself");
+        _h.WriteRaw(paneId, p.Allow ? new byte[] { (byte)'\r' } : new byte[] { 0x1b });
+        var store = StoreFor(p.Project);
+        var proj = _h.ProjectById(p.Project);
+        if (store == null || proj == null) return;
+        var e = store.Ledger.Append(new RoomEntry
+        {
+            Kind = "system", From = "perch", Event = "permission.answered", PaneId = paneId.ToString("D"),
+            Text = $"{p.Nick} was still showing the question, so the answer was pressed there too",
+        });
         PostEntries(proj.Id, store, new[] { e });
     }
 
@@ -1099,6 +1141,10 @@ internal sealed class TeamController
     public void OnAgentStatus(Session sess, StatusMessage msg)
     {
         var state = StateProjection.ParseAgentState(msg.State);
+        // The bot moved on after a permission answered from the room, so the
+        // hook's decision took: no need to press anything on its screen.
+        if (state is AgentState.Working or AgentState.Done && _promptOnScreen.Count > 0)
+            foreach (var leaf in PaneTree.AllLeaves(sess.Root)) _promptOnScreen.Remove(leaf.Id);
         var isPostEcho = state == AgentState.Working && (msg.Detail ?? "").StartsWith(TeamRender.PostPrefix, StringComparison.Ordinal);
         if (isPostEcho && _submits.Remove(sess.Id, out var p))
             Log.Info("Team.submit", $"session={sess.Id:N} seq={p.Seq} confirmed");

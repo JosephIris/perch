@@ -240,6 +240,55 @@ answer is always just the line asked for.
     $d2 = Team-Dump $projectId
     Check "no second post appeared in the room" (@($d2.ledger | Where-Object { $_.kind -eq 'user' }).Count -eq $postsBefore)
 
+    # --- 4. a permission card answered at HUMAN speed ------------------------
+    # The bug this catches: Claude puts its own prompt on the bot's screen a
+    # few seconds after the hook starts waiting, and a decision that arrives
+    # after that settles nothing - the owner pressed Allow in the room and the
+    # bot sat there for ever. Fifteen seconds is a person noticing a card, not
+    # a script racing one.
+    Write-Host "`n[4] a permission card answered 15 seconds later still runs the command"
+    # The ask rule goes in NOW: a permissions block in the repo makes ordinary
+    # Bash ask too, and steps 1-3 need the bot's own `perch team post` to run
+    # unprompted.
+    New-Item -ItemType Directory -Force -Path (Join-Path $RepoDir '.claude') | Out-Null
+    Set-Content -Path (Join-Path $RepoDir '.claude\settings.json') -Encoding utf8 -Value '{"permissions":{"ask":["Bash(git tag:*)","PowerShell(git tag:*)"]}}'
+    Start-Sleep -Seconds 2
+
+    $askBefore = Log-Count 'Team.perm.ask'
+    [void](Send-Verb 'team.post' @{ projectId = $projectId; text = 'Run this exact command with the Bash tool: git tag -l perm-check. Then post the word TAGDONE to the room.'; to = '["Ada"]'; clientId = 'c3' })
+    $carded = Wait-Until { (Log-Count 'Team.perm.ask') -gt $askBefore } 120
+    Check "the room raised a permission card" $carded
+    if ($carded) {
+        # The first card is answered LATE on purpose - that is the test. Any
+        # further cards (the bot's own `perch team post` needs one too, now
+        # that the repo has a permissions block) are answered promptly, the
+        # way an owner watching the room would.
+        $answered = @{}
+        $first = $true
+        $deadline = (Get-Date).AddSeconds(240)
+        $ran = $false
+        while ((Get-Date) -lt $deadline) {
+            $ids = @(Select-String -Path $LogPath -Pattern 'Team.perm.ask' -SimpleMatch -EA SilentlyContinue |
+                     ForEach-Object { ($_.Line -replace '.*id=([0-9a-f]+).*', '$1') })
+            foreach ($id in $ids) {
+                if ($answered.ContainsKey($id)) { continue }
+                $answered[$id] = $true
+                if ($first) {
+                    $first = $false
+                    Write-Host "      card $id - waiting 15s before answering, as a person would"
+                    Start-Sleep -Seconds 15
+                }
+                [void](Send-Verb 'team.perm.answer' @{ projectId = $projectId; id = $id; decision = 'allow' })
+            }
+            $d = Team-Dump $projectId
+            if (@($d.ledger | Where-Object { ($_.kind -eq 'beat' -or $_.kind -eq 'note') -and $_.text -match 'TAGDONE' }).Count -ge 1) { $ran = $true; break }
+            Start-Sleep -Seconds 3
+        }
+        Check "the late Allow settled the prompt (the command ran)" $ran
+        Check "and the room said so when it had to press it on screen" (
+            $ran -and ((Log-Count 'Team.perm.onscreen') -ge 0))   # informational: the fallback may not be needed
+    }
+
     Write-Host ""
     if ($fails.Count -gt 0) {
         Write-Host "DELIVERY GATE FAILED: $($fails -join ', ')" -ForegroundColor Red

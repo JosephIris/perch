@@ -1525,6 +1525,10 @@ if (view === "team" || view === "team-activity" || view === "team-empty" || view
       + "| `avgUserClearPrice` | 66% | bid_event |\n| `pbundle_loss_fixed` | 91% | loss_event |\n\n"
       + "Two things follow:\n\n- the 66% column can't be a hard acceptance rule\n"
       + "- `loss_event` is the only source that covers every SSP\n" }),
+    // Auto mode's classifier refusing a command: information only, but it has
+    // to be VISIBLE — this is what Joseph could not find in the room.
+    row({ kind: "system", from: "Bo", botId: "b-bo", ts: at(1, 55), event: "denied",
+      text: "Bo: auto mode blocked Bash: nohup python services/pricing-agent-monitor/app.py --port 5108 > C:/tmp/pam-local.log 2>&1 & — Blocked by classifier" }),
     row({ kind: "system", from: "perch", ts: at(1, 50), text: "Copied to Ada for the board", event: "cc" }),
     row({ kind: "user", from: "you", ts: at(1, 30), to: ["Bo"], text: "@Bo hold the push until Ada's review is in; I'll allow it then." }),
     // Reactions: yours on Bo's hand-off (highlighted), Ada's on your post.

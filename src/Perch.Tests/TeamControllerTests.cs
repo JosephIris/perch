@@ -1175,6 +1175,31 @@ public class TeamControllerTests
             h.Ctrl.OnPermDenied(sess, sess.Root.Id, new PermDeniedMessage("Bash", "curl evil", "classifier"));
             Assert.Contains(h.Ledger, e => e.Event == "denied" && e.From == "ada" && e.Text.StartsWith("Ada: auto mode blocked Bash: curl evil"));
 
+            // The hook's answer didn't settle it: Claude's own prompt is on the
+            // bot's screen, so the answer is pressed there too. (Without this,
+            // an Allow given ten seconds after the card appeared did nothing
+            // and the bot waited for ever.)
+            h.Raw.Clear();
+            h.Ctrl.OnPermAsk(sess, sess.Root.Id, new PermAskMessage("p5", "Bash", "git tag -l x"));
+            h.Ctrl.OnPermAnswer(new TeamPermAnswerMsg { ProjectId = h.Project.Id, Id = "p5", Decision = "allow" });
+            var onScreen = h.Delayed[^1];
+            onScreen();
+            var (pane, keys) = Assert.Single(h.Raw);
+            Assert.Equal(sess.Root.Id, pane);
+            Assert.Equal(new byte[] { (byte)'\r' }, keys);   // Enter takes the highlighted "yes"
+            Assert.Contains(h.Ledger, e => e.Text.Contains("still showing the question"));
+            File.Delete(TeamPaths.PermAnswerPathFor("p5"));
+
+            // …and when the bot moves on by itself, nothing is pressed.
+            h.Raw.Clear();
+            h.Ctrl.OnPermAsk(sess, sess.Root.Id, new PermAskMessage("p6", "Bash", "git tag -l y"));
+            h.Ctrl.OnPermAnswer(new TeamPermAnswerMsg { ProjectId = h.Project.Id, Id = "p6", Decision = "allow" });
+            var stale = h.Delayed[^1];
+            h.Status(sess, "working");     // the tool call resumed: the hook's answer took
+            stale();
+            Assert.Empty(h.Raw);
+            File.Delete(TeamPaths.PermAnswerPathFor("p6"));
+
             // An answer that never comes: the hook gives up, Claude asks in the
             // bot's own terminal, and the room says so instead of leaving a
             // card whose Allow would now do nothing.

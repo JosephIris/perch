@@ -7674,6 +7674,7 @@ body.show-dashboard .dashboard { display: flex; }
 .tf-sys--card[data-event="ask"]        { --card-hue: var(--team-card-ask);        --card-tint: var(--team-card-ask-faint); }
 .tf-sys--card[data-event="task.review"]{ --card-hue: var(--team-card-review);     --card-tint: var(--team-card-review-faint); }
 .tf-sys--card[data-event="artefact"]   { --card-hue: var(--team-card-artefact);   --card-tint: var(--team-card-artefact-faint); }
+.tf-sys--card[data-event="denied"]     { --card-hue: var(--team-card-error);      --card-tint: var(--team-card-error-faint); }
 .tf-sys--card[data-tone="error"]       { --card-hue: var(--team-card-error);      --card-tint: var(--team-card-error-faint); }
 
 /* The kind, spelled out, so the colour isn't the only carrier — sitting ON the

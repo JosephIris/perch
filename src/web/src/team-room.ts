@@ -107,6 +107,7 @@ export function cardKind(event: TeamEntryView["event"]): string {
     case "ask": return "question";
     case "trust": return "trust";
     case "task.review": return "review";
+    case "denied": return "blocked";
     default: return "";
   }
 }
@@ -1712,7 +1713,8 @@ function renderSystem(e: TeamEntryView, bots: TeamBotView[]): HTMLElement {
     return node;
   }
 
-  node.appendChild(el("span", "tf-sys__text", e.text));
+  // A framed row wraps its sentence; a narration line still clips to one.
+  node.appendChild(el("span", kindWord ? "tf-sys__text tf-sys__text--wrap" : "tf-sys__text", e.text));
 
   // A start-up question ("trust this folder?") is answered right here: the
   // card carries the two answers until a later row says it was answered.
