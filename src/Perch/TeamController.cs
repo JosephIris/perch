@@ -697,7 +697,7 @@ internal sealed class TeamController
         var text = note.Length > 0 ? $"Not done yet: {note}" : "Not done yet — keep going and ask again when it is.";
         OnPost(new TeamPostMsg
         {
-            ProjectId = proj.Id, Text = text, ClientId = null,
+            ProjectId = proj.Id, Text = text, ClientId = "",   // no optimistic row to reconcile: the owner didn't type this
             To = lead == null ? null : JsonDocument.Parse($"[\"{lead.Nickname}\"]").RootElement.Clone(),
         });
     }
