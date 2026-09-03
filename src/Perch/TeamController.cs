@@ -23,6 +23,8 @@ internal sealed class TeamHost
     public required Func<Guid, string?, string?, InspectorData?> ReadTranscript { get; init; }
     /// Type one line into a session's running Claude pane (MainWindow.TypeToClaude).
     public required Func<Session, string, bool> TypeToClaude { get; init; }
+    /// Press Enter in that pane — the retry when a typed line didn't submit.
+    public required Func<Session, bool> PressEnter { get; init; }
     public required Action<Session> Wake { get; init; }
     /// Open a project tab for a bot: (project, name, worktree, model, ccName) → session.
     public required Func<Project, string, bool, string?, string, Task<Session?>> CreateTab { get; init; }
@@ -46,9 +48,20 @@ internal sealed class TeamHost
 /// `[Perch team]` — the documented way to talk to a session, read at the
 /// bot's next step even mid-turn, and carrying the owner's authority (unlike
 /// a peer message, which Claude Code tells the receiver came from another
-/// session). When no Claude is up in that tab — asleep, still booting, or
-/// exited — the line is parked and flushed a few seconds after the
-/// session-start hook says the agent is listening.
+/// session). A post that names nobody goes to everyone; the roster tells
+/// each bot to judge from the text whether it is for them.
+///
+/// Typing is not delivery. The line is only IN once Claude Code submits it,
+/// and the Enter that follows the text has been seen to vanish (a post sat
+/// in a bot's input box for three minutes until the owner pressed Enter by
+/// hand). So every typed line is held until the prompt-submit hook reports
+/// a `[Perch team]` prompt in that pane; if it doesn't, Enter is pressed
+/// again, twice, and then the room says the post is stuck.
+///
+/// A line is never typed into a pane that is showing a prompt of its own
+/// (permission, a question): the keystrokes would answer it. Such posts are
+/// parked, like posts for a Claude that isn't up yet, and flushed when the
+/// pane's state moves on.
 ///
 /// ## The room is one stream
 ///
@@ -58,40 +71,73 @@ internal sealed class TeamHost
 /// transcript as the page asks for the room. One ordered stream makes
 /// incremental fetch and unread counts trivial; the cost is a ledger that
 /// grows with the bots' work, which rotation bounds.
+///
+/// Not everything a bot says is for the owner. Its replies are copied in
+/// only for turns a room post started; a turn a teammate's message started
+/// shows the exchange itself (the sender's hook records it) and nothing
+/// else, and a `(no reply)` answer is dropped.
 internal sealed class TeamController
 {
     private readonly TeamHost _h;
 
     private readonly Dictionary<Guid, TeamStore> _stores = new();
-    /// Posts waiting for a Claude to come up in that session.
+    /// Posts waiting for a Claude to come up (or to be free) in that session.
     private readonly Dictionary<Guid, List<(long Seq, string Line, string Nick)>> _parked = new();
+    /// Sessions with a parked-flush already on the timer.
+    private readonly HashSet<Guid> _flushPending = new();
     private readonly Dictionary<string, CancellationTokenSource> _briefJobs = new(StringComparer.Ordinal);
     private readonly HashSet<Guid> _openRooms = new();
     /// Per pane: how many collapsed transcript events are already in the
-    /// ledger, and for which Claude session.
-    private readonly Dictionary<Guid, (string Session, int Count)> _ingested = new();
+    /// ledger, for which Claude session, and whether the bot's current turn
+    /// is answering a room post (its beats then belong in the room).
+    private readonly Dictionary<Guid, (string Session, int Count, bool Answering)> _ingested = new();
+
+    /// A typed line the prompt-submit hook hasn't reported yet, per session.
+    private sealed class PendingSubmit
+    {
+        public required long Seq { get; init; }
+        public required TeamBot Bot { get; init; }
+        public int Tries;
+    }
+    private readonly Dictionary<Guid, PendingSubmit> _submits = new();
+
+    /// After typing: how long to wait for the hook before pressing Enter
+    /// again (first two), and before giving up (last).
+    internal static readonly TimeSpan[] SubmitChecks =
+    {
+        TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(5),
+    };
 
     /// Multi-line posts: bracketed paste keeps the newlines but depends on the
     /// TUI honouring the sequence; off until the live check proves it, in
     /// which case posts are flattened to one line instead.
     internal static bool UseBracketedPaste = false;
 
-    /// Minimum router confidence to deliver without asking.
-    internal const double RouteThreshold = 0.6;
-
     public TeamController(TeamHost host) { _h = host; }
 
     // ---- stores -----------------------------------------------------------
 
-    /// The project's team, or null when it has none. Re-opened when the
-    /// folder vanished or team.json changed on disk (a hand edit, a sync).
+    /// The project's team, or null when it has none. Re-read when team.json
+    /// changed on disk (a pull, a sync, a hand edit) — a bot created on
+    /// another machine then appears here as "not running", ready to start —
+    /// and re-opened when the folder vanished.
     public TeamStore? StoreFor(Guid projectId)
     {
         var proj = _h.ProjectById(projectId);
         if (proj == null) return null;
         if (_stores.TryGetValue(projectId, out var cached))
         {
-            if (Directory.Exists(cached.Dir) && cached.RepoRoot == proj.Path) return cached;
+            if (Directory.Exists(cached.Dir) && cached.RepoRoot == proj.Path)
+            {
+                if (cached.StaleOnDisk())
+                {
+                    Log.Info("Team.reload", $"project={projectId:N} team.json changed on disk");
+                    cached.Reload();
+                    RefreshRoster(proj, cached);
+                    _h.PushState();
+                }
+                return cached;
+            }
             _stores.Remove(projectId);
         }
         var store = TeamStore.Open(proj.Path);
@@ -128,14 +174,27 @@ internal sealed class TeamController
         if (store == null || (store.Doc.Bots.Count == 0 && store.Doc.Positions.Count == 0)) return null;
         return new
         {
-            bots = store.Doc.Bots.Select(b => new
+            bots = store.Doc.Bots.Select(b =>
             {
-                botId = b.Slug,
-                nickname = b.Nickname,
-                positionSlug = b.PositionSlug,
-                positionName = store.Doc.Position(b.PositionSlug)?.Name ?? b.PositionSlug,
-                sessionId = b.SessionId?.ToString("D") ?? "",
-                peerName = b.CcName,
+                var pos = store.Doc.Position(b.PositionSlug);
+                var look = TeamLooks.Normalize(b.Look);
+                return new
+                {
+                    botId = b.Slug,
+                    nickname = b.Nickname,
+                    positionSlug = b.PositionSlug,
+                    positionName = pos?.Name ?? b.PositionSlug,
+                    sessionId = b.SessionId?.ToString("D") ?? "",
+                    peerName = b.CcName,
+                    // The face: hat from the position, the rest the bot's own.
+                    look = new
+                    {
+                        hat = TeamLooks.NormalizeHat(pos?.Hat, pos?.Name ?? b.PositionSlug),
+                        eyewear = look.Eyewear,
+                        extra = look.Extra,
+                        temper = look.Temper,
+                    },
+                };
             }).ToArray(),
             positions = store.Doc.Positions.Select(p =>
             {
@@ -150,6 +209,7 @@ internal sealed class TeamController
                     name = p.Name,
                     purpose = p.Purpose,
                     model = p.Model,
+                    hat = TeamLooks.NormalizeHat(p.Hat, p.Name),
                     hasBrief = brief.Trim().Length > 0,
                     brief,
                 };
@@ -169,7 +229,7 @@ internal sealed class TeamController
         {
             if (!pane.IsTerminal) continue;
             if (hit is { } h)
-                TeamMarkers.Publish(pane.Id, h.Store.SystemPathFor(h.Bot.Slug), h.Store.RosterPath);
+                TeamMarkers.Publish(pane.Id, h.Store.SystemPathFor(h.Bot.Slug), h.Store.ContextPathFor(h.Bot.Slug));
             else
                 TeamMarkers.Clear(pane.Id);
         }
@@ -215,20 +275,42 @@ internal sealed class TeamController
     /// The session-start hook fired in `sess`: a Claude is listening. Flush
     /// anything parked for it, after the same settle delay the pairing intro
     /// uses so the line lands in a painted input box.
-    public void OnAgentUp(Session sess)
+    public void OnAgentUp(Session sess) => FlushParked(sess.Id, TimeSpan.FromSeconds(4));
+
+    /// A hook status for one of `sess`'s panes, BEFORE the window applies it.
+    /// Two things to learn from it: the prompt-submit hook echoing a
+    /// `[Perch team]` prompt confirms the typed line went in; and a pane that
+    /// is no longer showing its own prompt can take what was parked for it.
+    public void OnAgentStatus(Session sess, StatusMessage msg)
     {
-        if (!_parked.ContainsKey(sess.Id)) return;
-        var sid = sess.Id;
+        var state = StateProjection.ParseAgentState(msg.State);
+        if (state == AgentState.Working && (msg.Detail ?? "").StartsWith(TeamRender.PostPrefix, StringComparison.Ordinal)
+            && _submits.Remove(sess.Id, out var p))
+            Log.Info("Team.submit", $"session={sess.Id:N} seq={p.Seq} confirmed");
+        if (state is not (AgentState.Permission or AgentState.Waiting) && _parked.ContainsKey(sess.Id))
+            FlushParked(sess.Id, TimeSpan.FromSeconds(1));
+    }
+
+    /// Type the session's parked lines once it can take them. Re-checked at
+    /// run time — the pane may have gone back to sleep or put up a prompt in
+    /// the meantime — and coalesced, since a working pane reports status many
+    /// times a second.
+    private void FlushParked(Guid sid, TimeSpan delay)
+    {
+        if (!_parked.ContainsKey(sid) || !_flushPending.Add(sid)) return;
         _h.Delay(() =>
         {
+            _flushPending.Remove(sid);
             var s = _h.SessionById(sid);
             if (s == null || !_parked.TryGetValue(sid, out var lines)) return;
             if (BotOfSession(sid) is not { } h) { _parked.Remove(sid); return; }
+            if (s.Dormant || Blocked(s)) return;   // not yet; the next state change tries again
             var delivered = new List<RoomEntry>();
             foreach (var (seq, line, nick) in lines.ToList())
             {
                 if (!_h.TypeToClaude(s, line)) break;
                 lines.Remove((seq, line, nick));
+                Expect(sid, h.Bot, seq);
                 delivered.Add(h.Store.Ledger.Append(new RoomEntry
                 {
                     Kind = "system", From = "perch", Event = "delivered",
@@ -238,7 +320,74 @@ internal sealed class TeamController
             }
             if (lines.Count == 0) _parked.Remove(sid);
             if (delivered.Count > 0) PostEntries(h.Project.Id, h.Store, delivered);
-        }, TimeSpan.FromSeconds(4));
+        }, delay);
+    }
+
+    /// The pane is showing a prompt of its own — a permission dialog, a
+    /// question — that keystrokes would answer. Nothing is typed into it.
+    private static bool Blocked(Session sess)
+        => PaneTree.AllLeaves(sess.Root).Any(p => p.IsTerminal && p.AgentState is AgentState.Permission or AgentState.Waiting);
+
+    private static bool Working(Session sess)
+        => PaneTree.AllLeaves(sess.Root).Any(p => p.IsTerminal && p.AgentState == AgentState.Working);
+
+    // ---- submit confirmation ----------------------------------------------
+
+    /// A line was just typed for post `seq`: wait for the prompt-submit hook,
+    /// and press Enter again if it doesn't come. One pending line per
+    /// session — a newer post supersedes the check for an older one.
+    private void Expect(Guid sid, TeamBot bot, long seq)
+    {
+        _submits[sid] = new PendingSubmit { Seq = seq, Bot = bot };
+        _h.Delay(() => CheckSubmitted(sid, seq), SubmitChecks[0]);
+    }
+
+    private void CheckSubmitted(Guid sid, long seq)
+    {
+        if (!_submits.TryGetValue(sid, out var p) || p.Seq != seq) return;   // confirmed, or superseded
+        var s = _h.SessionById(sid);
+        if (s == null || BotOfSession(sid) is not { } h) { _submits.Remove(sid); return; }
+        var nick = p.Bot.Nickname;
+        if (Blocked(s))
+        {
+            // Enter here would answer whatever Claude is asking. The line stays
+            // where it is; the owner answers the prompt and sends it by hand.
+            _submits.Remove(sid);
+            Log.Info("Team.submit", $"session={sid:N} seq={seq} blocked by a prompt in the pane");
+            Say(h, p.Bot, "waiting", seq,
+                $"{nick} is waiting on you in their terminal — answer there, then press Enter to send the post");
+            return;
+        }
+        p.Tries++;
+        if (p.Tries < SubmitChecks.Length)
+        {
+            var ok = _h.PressEnter(s);
+            Log.Info("Team.submit", $"session={sid:N} seq={seq} enter-again={p.Tries} ok={ok}");
+            _h.Delay(() => CheckSubmitted(sid, seq), SubmitChecks[p.Tries]);
+            return;
+        }
+        _submits.Remove(sid);
+        if (Working(s))
+        {
+            // Mid-turn the line is queued, and the hook reports it only when
+            // Claude gets to it. Not a failure, so nothing to say.
+            Log.Info("Team.submit", $"session={sid:N} seq={seq} unconfirmed, bot is working (queued)");
+            return;
+        }
+        Log.Info("Team.submit", $"session={sid:N} seq={seq} gave up");
+        Say(h, p.Bot, "undelivered", seq,
+            $"{nick} didn't take the post — it may be sitting in their terminal; open it and press Enter");
+    }
+
+    /// A system row about one bot, tied to a post. From = the bot, so the
+    /// page can offer its terminal.
+    private void Say((Project Project, TeamStore Store, TeamBot Bot) h, TeamBot bot, string ev, long seq, string text)
+    {
+        var e = h.Store.Ledger.Append(new RoomEntry
+        {
+            Kind = "system", From = bot.Slug, Event = ev, Note = seq.ToString(), Text = text,
+        });
+        PostEntries(h.Project.Id, h.Store, new[] { e });
     }
 
     public void OnSessionSlept(Session sess) => Lifecycle(sess, "asleep", b => $"{b.Nickname} is asleep");
@@ -256,6 +405,7 @@ internal sealed class TeamController
             Kind = "system", From = "perch", Event = "left", Text = $"{h.Bot.Nickname}'s tab was closed",
         });
         _parked.Remove(sess.Id);
+        _submits.Remove(sess.Id);
         RefreshRoster(h.Project, h.Store);
         PostEntries(h.Project.Id, h.Store, new[] { e });
     }
@@ -299,8 +449,8 @@ internal sealed class TeamController
         });
     }
 
-    /// The owner posted. Resolve the recipients the page named, or route an
-    /// unaddressed post; record it; deliver it.
+    /// The owner posted. Resolve the recipients the page named — nobody named
+    /// means everyone — record it; deliver it.
     public void OnPost(TeamPostMsg msg)
     {
         var proj = _h.ProjectById(msg.ProjectId);
@@ -308,31 +458,30 @@ internal sealed class TeamController
         var text = (msg.Text ?? "").Trim();
         if (proj == null || store == null || text.Length == 0) return;
 
-        var (targets, everyone, unaddressed) = ResolveRecipients(store, msg.To);
+        // No one named = everyone. The owner talks to the room, not to a
+        // picker; each bot judges from the text whether the post concerns it
+        // (the roster says how, and what to answer when it doesn't). Nothing
+        // sits between a post and its delivery.
+        var (targets, everyone) = ResolveRecipients(store, msg.To);
         if (everyone) targets = store.Doc.Bots.ToList();
+        if (targets.Count == 0)
+        {
+            Fallback(proj, store, "No bots on the team yet — add one first.");
+            return;
+        }
 
         var entry = new RoomEntry
         {
             Kind = "user", From = "you", Text = text, ClientId = msg.ClientId,
-            To = everyone ? new List<string> { TeamRender.Everyone }
-               : unaddressed ? null
-               : targets.Select(b => b.Slug).ToList(),
+            To = everyone ? new List<string> { TeamRender.Everyone } : targets.Select(b => b.Slug).ToList(),
         };
-        if (unaddressed)
-        {
-            // The router is async; the page needs the echo now.
-            store.Ledger.Append(entry);
-            PostEntries(proj.Id, store, new[] { entry });
-            _ = RouteAsync(proj, store, entry, text);
-            return;
-        }
         // Deliver FIRST, so the row lands with its verdict: "delivered" or
         // "waiting for the bot to wake" is a fact about this post, not a later
         // event the page has to reconcile.
         var attempts = Attempt(targets, text, everyone);
         entry.Delivered = attempts.All(a => a.Ok);
         store.Ledger.Append(entry);
-        var events = Record(store, entry, attempts, routed: null);
+        var events = Record(store, entry, attempts);
         PostEntries(proj.Id, store, new[] { entry }.Concat(events));
     }
 
@@ -379,6 +528,53 @@ internal sealed class TeamController
             Kind = "system", From = "perch", Event = "joined", Text = $"{nickname} joined as {pos.Name}",
         });
         Log.Info("Team.create", $"project={proj.Id:N} bot={bot.Slug} cc={ccName} session={sess.Id:N}");
+        _h.PushState();
+        PostEntries(proj.Id, store, new[] { e });
+    }
+
+    /// Start a bot that has no tab here: one that arrived with a pull from
+    /// another machine, or whose tab was closed. Same nickname, same position,
+    /// same face and memory; a fresh tab (and worktree, if the bot uses one)
+    /// on this machine. The address is kept unless something here already
+    /// answers to it.
+    public async Task OnBotStartAsync(TeamBotStartMsg msg)
+    {
+        var proj = _h.ProjectById(msg.ProjectId);
+        var store = StoreFor(msg.ProjectId);
+        var bot = store?.Doc.Bot(msg.BotId);
+        if (proj == null || store == null || bot == null) return;
+        if (bot.SessionId is Guid existing && _h.SessionById(existing) != null)
+        {
+            Toast($"{bot.Nickname} is already running.");
+            return;
+        }
+        var pos = store.Doc.Position(bot.PositionSlug);
+        if (pos == null) { Toast($"{bot.Nickname}'s position is missing from the team file."); return; }
+
+        var ccName = bot.CcName;
+        var takenByLivePane = _h.Sessions().Any(s => PaneTree.AllLeaves(s.Root)
+            .Any(p => ClaudePeerNames.Matches(p.PeerName ?? "", ccName) || ClaudePeerNames.Matches(p.PinnedPeerName ?? "", ccName)));
+        if (takenByLivePane)
+        {
+            ccName = MintCcName(bot.Nickname);
+            Log.Info("Team.start", $"bot={bot.Slug} address {bot.CcName} is taken here; now {ccName}");
+            bot.CcName = ccName;
+        }
+        var model = string.IsNullOrWhiteSpace(bot.Model) ? pos.Model : bot.Model;
+        store.RenderSystemFiles(proj.Name);
+        RefreshRoster(proj, store);
+
+        var sess = await _h.CreateTab(proj, bot.Nickname, bot.Worktree, model, ccName);
+        if (sess == null) return;   // CreateTab already toasted why
+        bot.SessionId = sess.Id;
+        store.Save();
+        PublishMarkers(sess);
+        RefreshRoster(proj, store);
+        var e = store.Ledger.Append(new RoomEntry
+        {
+            Kind = "system", From = "perch", Event = "joined", Text = $"{bot.Nickname} started here as {pos.Name}",
+        });
+        Log.Info("Team.start", $"project={proj.Id:N} bot={bot.Slug} cc={ccName} session={sess.Id:N}");
         _h.PushState();
         PostEntries(proj.Id, store, new[] { e });
     }
@@ -503,77 +699,6 @@ internal sealed class TeamController
     private void Progress(string jobId, string phase, long elapsedMs)
         => _h.Post(new { type = "team.brief.progress", jobId, phase, elapsedMs });
 
-    // ---- routing ----------------------------------------------------------
-
-    /// Decide who an unaddressed post is for. One bot: obviously them. Several:
-    /// a small, tool-less, budget-capped model call over the positions' purposes;
-    /// below the confidence bar the room says so and delivers nothing, because
-    /// a guess that lands on the wrong bot costs a whole turn.
-    private async Task RouteAsync(Project proj, TeamStore store, RoomEntry post, string text)
-    {
-        var bots = store.Doc.Bots;
-        if (bots.Count == 0)
-        {
-            Fallback(proj, store, "No bots on the team yet — add one first.");
-            return;
-        }
-        if (bots.Count == 1)
-        {
-            Log.Info("Team.route", $"seq={post.Seq} ok=true to={bots[0].Slug} conf=1.00 reason=the only bot on the team");
-            Routed(proj, store, post, bots.ToList(), text, "the only bot on the team");
-            return;
-        }
-        var prompt = TeamRender.RouterPrompt(store.Doc, text);
-        var r = await ClaudeHeadless.RunAsync(prompt, proj.Path, "haiku", "claude.headless.route",
-            new[] { "--tools", "", "--json-schema", TeamRender.RouterSchema, "--max-budget-usd", "0.05" },
-            timeoutMs: 20_000);
-        var verdict = ParseRoute(r, store.Doc);
-        Log.Info("Team.route", $"seq={post.Seq} ok={r.Ok} to={string.Join(",", verdict.To.Select(b => b.Slug))} conf={verdict.Confidence:F2} reason={verdict.Reason}");
-        if (!r.Ok || verdict.To.Count == 0 || verdict.Confidence < RouteThreshold)
-        {
-            var names = string.Join(", ", bots.Take(3).Select(b => "@" + b.Nickname));
-            Fallback(proj, store, $"Not sure who that's for — say {names} or @everyone.");
-            return;
-        }
-        Routed(proj, store, post, verdict.To, text, verdict.Reason);
-    }
-
-    /// Deliver a post the router (or the single-bot shortcut) addressed. The
-    /// post is already in the ledger; its Delivered flag is set in memory and
-    /// re-sent so the page's row flips from "unaddressed" to its verdict.
-    private void Routed(Project proj, TeamStore store, RoomEntry post, List<TeamBot> targets, string text, string reason)
-    {
-        var attempts = Attempt(targets, text, everyone: false);
-        post.Delivered = attempts.Count > 0 && attempts.All(a => a.Ok);
-        post.To = targets.Select(b => b.Slug).ToList();
-        var events = Record(store, post, attempts, routed: reason);
-        PostEntries(proj.Id, store, new[] { post }.Concat(events));
-    }
-
-    internal static (List<TeamBot> To, double Confidence, string Reason) ParseRoute(HeadlessResult r, TeamDoc doc)
-    {
-        var to = new List<TeamBot>();
-        if (!r.Ok) return (to, 0, r.Error ?? "");
-        var json = r.Structured ?? r.Text;
-        try
-        {
-            using var d = JsonDocument.Parse(json);
-            var root = d.RootElement;
-            var conf = root.TryGetProperty("confidence", out var c) && c.ValueKind == JsonValueKind.Number ? c.GetDouble() : 0;
-            var reason = root.TryGetProperty("reason", out var rs) && rs.ValueKind == JsonValueKind.String ? rs.GetString() ?? "" : "";
-            if (root.TryGetProperty("to", out var arr) && arr.ValueKind == JsonValueKind.Array)
-                foreach (var el in arr.EnumerateArray())
-                {
-                    var slug = el.ValueKind == JsonValueKind.String ? el.GetString() ?? "" : "";
-                    var bot = doc.Bot(slug) ?? doc.Bots.FirstOrDefault(b =>
-                        string.Equals(b.Nickname, slug, StringComparison.OrdinalIgnoreCase) || ClaudePeerNames.Matches(b.CcName, slug));
-                    if (bot != null && !to.Contains(bot)) to.Add(bot);
-                }
-            return (to, conf, reason);
-        }
-        catch (JsonException) { return (to, 0, "unreadable answer"); }
-    }
-
     private void Fallback(Project proj, TeamStore store, string text)
     {
         var e = store.Ledger.Append(new RoomEntry { Kind = "system", From = "perch", Event = "error", Text = text });
@@ -582,11 +707,13 @@ internal sealed class TeamController
 
     // ---- delivery ---------------------------------------------------------
 
-    private sealed record Attempted(TeamBot Bot, bool Ok, bool Missing, string Line, Guid? SessionId);
+    /// Ok = the line was typed; Missing = the bot has no tab at all; Blocked =
+    /// its pane is showing a prompt of its own; none of them = parked (asleep
+    /// or booting).
+    private sealed record Attempted(TeamBot Bot, bool Ok, bool Missing, bool Blocked, string Line, Guid? SessionId);
 
-    /// Try to type the post into each target's terminal now. Ok = it landed;
-    /// Missing = the bot has no tab at all; neither = parked (asleep or
-    /// booting), to be flushed by OnAgentUp.
+    /// Try to type the post into each target's terminal now. Anything not
+    /// typed is parked, to be flushed when the session is up and free.
     private List<Attempted> Attempt(List<TeamBot> targets, string text, bool everyone)
     {
         var results = new List<Attempted>();
@@ -594,31 +721,25 @@ internal sealed class TeamController
         {
             var line = DeliveryLine(text, everyone ? null : bot.Nickname);
             var sess = bot.SessionId is Guid id ? _h.SessionById(id) : null;
-            if (sess == null) { results.Add(new Attempted(bot, false, true, line, null)); continue; }
+            if (sess == null) { results.Add(new Attempted(bot, false, true, false, line, null)); continue; }
             if (sess.Dormant) _h.Wake(sess);
-            var ok = !sess.Dormant && _h.TypeToClaude(sess, line);
-            results.Add(new Attempted(bot, ok, false, line, sess.Id));
+            var blocked = !sess.Dormant && Blocked(sess);
+            var ok = !sess.Dormant && !blocked && _h.TypeToClaude(sess, line);
+            results.Add(new Attempted(bot, ok, false, blocked, line, sess.Id));
         }
         return results;
     }
 
-    /// Write the attempts into the ledger against the post's seq: a "routed"
-    /// line when a model chose the recipients, "undelivered" for a bot with no
-    /// tab, and parking (with a log line) for the rest. Successful deliveries
-    /// are recorded on the post itself (Delivered) rather than as rows — the
-    /// page shows them as the post's own status line, not as chatter.
-    private List<RoomEntry> Record(TeamStore store, RoomEntry post, List<Attempted> attempts, string? routed)
+    /// Write the attempts into the ledger against the post's seq: "undelivered"
+    /// for a bot with no tab, a "waiting" row (with the bot's terminal one
+    /// click away) for one whose pane is asking something, and parking (with
+    /// a log line) for those and the rest. Successful deliveries are recorded
+    /// on the post itself (Delivered) rather than as rows — the page shows
+    /// them as the post's own status line, not as chatter — and each typed
+    /// line is then held until the hook confirms it (Expect).
+    private List<RoomEntry> Record(TeamStore store, RoomEntry post, List<Attempted> attempts)
     {
         var events = new List<RoomEntry>();
-        if (routed != null)
-        {
-            events.Add(store.Ledger.Append(new RoomEntry
-            {
-                Kind = "system", From = "perch", Event = "routed", Note = post.Seq.ToString(),
-                To = attempts.Select(a => a.Bot.Slug).ToList(),
-                Text = $"Sent to {string.Join(", ", attempts.Select(a => a.Bot.Nickname))} — {routed}",
-            }));
-        }
         foreach (var a in attempts)
         {
             if (a.Missing)
@@ -632,12 +753,19 @@ internal sealed class TeamController
             else if (a.Ok)
             {
                 Log.Info("Team.deliver", $"session={a.SessionId:N} seq={post.Seq} bot={a.Bot.Slug}");
+                Expect(a.SessionId!.Value, a.Bot, post.Seq);
             }
             else if (a.SessionId is Guid sid)
             {
-                Log.Info("Team.parked", $"session={sid:N} seq={post.Seq} bot={a.Bot.Slug}");
+                Log.Info("Team.parked", $"session={sid:N} seq={post.Seq} bot={a.Bot.Slug}{(a.Blocked ? " (pane is asking something)" : "")}");
                 if (!_parked.TryGetValue(sid, out var list)) _parked[sid] = list = new();
                 list.Add((post.Seq, a.Line, a.Bot.Nickname));
+                if (a.Blocked)
+                    events.Add(store.Ledger.Append(new RoomEntry
+                    {
+                        Kind = "system", From = a.Bot.Slug, Event = "waiting", Note = post.Seq.ToString(),
+                        Text = $"{a.Bot.Nickname} is waiting on you in their terminal — this goes through once that's answered",
+                    }));
             }
         }
         return events;
@@ -659,29 +787,31 @@ internal sealed class TeamController
 
     // ---- helpers ----------------------------------------------------------
 
-    private (List<TeamBot> Targets, bool Everyone, bool Unaddressed) ResolveRecipients(TeamStore store, JsonElement? to)
+    /// Who the page named. Nobody it could name — null, an empty list, only
+    /// unknown names — is everyone.
+    private (List<TeamBot> Targets, bool Everyone) ResolveRecipients(TeamStore store, JsonElement? to)
     {
         var targets = new List<TeamBot>();
-        if (to is not { } el || el.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined) return (targets, false, true);
+        if (to is not { } el || el.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined) return (targets, true);
         if (el.ValueKind == JsonValueKind.String)
         {
             // "everyone", or a single nickname (what `perch test team.post
             // --to Ada` can express; the page always sends an array).
             var s = (el.GetString() ?? "").Trim();
-            if (string.Equals(s, "everyone", StringComparison.OrdinalIgnoreCase)) return (targets, true, false);
+            if (string.Equals(s, "everyone", StringComparison.OrdinalIgnoreCase)) return (targets, true);
             var one = store.Doc.Bots.FirstOrDefault(b =>
                 string.Equals(b.Nickname, s, StringComparison.OrdinalIgnoreCase)
                 || string.Equals(b.Slug, s, StringComparison.OrdinalIgnoreCase)
                 || ClaudePeerNames.Matches(b.CcName, s));
             if (one != null) targets.Add(one);
-            return targets.Count == 0 ? (targets, false, true) : (targets, false, false);
+            return (targets, targets.Count == 0);
         }
         if (el.ValueKind == JsonValueKind.Array)
         {
             foreach (var item in el.EnumerateArray())
             {
                 var name = item.ValueKind == JsonValueKind.String ? item.GetString() ?? "" : "";
-                if (string.Equals(name, "everyone", StringComparison.OrdinalIgnoreCase)) return (targets, true, false);
+                if (string.Equals(name, "everyone", StringComparison.OrdinalIgnoreCase)) return (targets, true);
                 var bot = store.Doc.Bots.FirstOrDefault(b =>
                     string.Equals(b.Nickname, name, StringComparison.OrdinalIgnoreCase)
                     || string.Equals(b.Slug, name, StringComparison.OrdinalIgnoreCase)
@@ -689,7 +819,7 @@ internal sealed class TeamController
                 if (bot != null && !targets.Contains(bot)) targets.Add(bot);
             }
         }
-        return targets.Count == 0 ? (targets, false, true) : (targets, false, false);
+        return (targets, targets.Count == 0);
     }
 
     /// A session name for a new bot: the nickname's slug, made unique against
@@ -737,6 +867,15 @@ internal sealed class TeamController
     /// Copy each bot's newest transcript rows into the ledger. A pane seen for
     /// the first time in this process skips its history — those rows were
     /// ledgered by the run that watched them happen (or predate the team).
+    ///
+    /// What started the bot's turn decides whether what it says belongs in
+    /// the room. A room post (a typed `[Perch team]` prompt) does: the reply
+    /// is for the owner. A teammate's message doesn't: the exchange itself is
+    /// already in the room from the sender's hook, and "Replied to Bo with a
+    /// hello" on top of it is narration nobody asked for. Anything else the
+    /// owner typed into the terminal is answered in the terminal. And a
+    /// `(no reply)` — the answer to a post that wasn't for this bot — is
+    /// dropped. Tool calls are kept regardless; they fold.
     private void IngestTranscripts(TeamStore store)
     {
         var added = new List<RoomEntry>();
@@ -761,35 +900,62 @@ internal sealed class TeamController
                     .Select(r => r.TsMs).DefaultIfEmpty(0).Max();
                 var start = 0;
                 while (start < events.Count && ParseTs(events[start].Ts) <= newest) start++;
-                _ingested[key] = (pane.ClaudeSessionId!, start);
+                _ingested[key] = (pane.ClaudeSessionId!, start, AnsweringAt(events, start));
                 seen = _ingested[key];
             }
+            var answering = seen.Answering;
             var from = Math.Min(seen.Count, events.Count);
             for (var i = from; i < events.Count; i++)
             {
                 var e = events[i];
-                RoomEntry? entry = e.Kind switch
+                RoomEntry? entry = null;
+                switch (e.Kind)
                 {
-                    "beat" when e.Text.Trim().Length > 0 => new RoomEntry
-                    {
-                        Kind = "beat", From = bot.Slug, Text = e.Text.Trim(), PaneId = pane.Id.ToString("D"),
-                        TsMs = ParseTs(e.Ts),
-                    },
-                    "work" or "skill" => new RoomEntry
-                    {
-                        Kind = "work", From = bot.Slug, Text = "", Verb = e.Verb, Target = e.Target,
-                        Note = string.IsNullOrEmpty(e.Note) ? null : e.Note, Repeat = e.Repeat,
-                        PaneId = pane.Id.ToString("D"), TsMs = ParseTs(e.Ts),
-                    },
-                    _ => null,
-                };
+                    case "prompt":
+                    case "peer":
+                        answering = StartsAnswer(e);
+                        break;
+                    case "beat" when answering && e.Text.Trim().Length > 0 && !IsNoReply(e.Text):
+                        entry = new RoomEntry
+                        {
+                            Kind = "beat", From = bot.Slug, Text = e.Text.Trim(), PaneId = pane.Id.ToString("D"),
+                            TsMs = ParseTs(e.Ts),
+                        };
+                        break;
+                    case "work":
+                    case "skill":
+                        entry = new RoomEntry
+                        {
+                            Kind = "work", From = bot.Slug, Text = "", Verb = e.Verb, Target = e.Target,
+                            Note = string.IsNullOrEmpty(e.Note) ? null : e.Note, Repeat = e.Repeat,
+                            PaneId = pane.Id.ToString("D"), TsMs = ParseTs(e.Ts),
+                        };
+                        break;
+                }
                 if (entry != null) added.Add(store.Ledger.Append(entry));
             }
-            _ingested[key] = (pane.ClaudeSessionId!, events.Count);
+            _ingested[key] = (pane.ClaudeSessionId!, events.Count, answering);
         }
         // Not posted separately: the caller is about to reply with everything
         // since the page's watermark, which includes these.
     }
+
+    /// Whether a turn-starting event is a room post — the one kind of turn
+    /// whose replies are for the owner.
+    private static bool StartsAnswer(InspectorEvent e)
+        => e.Kind == "prompt" && e.Text.StartsWith(TeamRender.PostPrefix, StringComparison.Ordinal);
+
+    /// The answering state as of `index`: what the last turn-starter before
+    /// it was. For a transcript first seen mid-way.
+    internal static bool AnsweringAt(IReadOnlyList<InspectorEvent> events, int index)
+    {
+        for (var i = Math.Min(index, events.Count) - 1; i >= 0; i--)
+            if (events[i].Kind is "prompt" or "peer") return StartsAnswer(events[i]);
+        return false;
+    }
+
+    internal static bool IsNoReply(string text)
+        => text.TrimStart().StartsWith(TeamRender.NoReply.TrimEnd(')'), StringComparison.OrdinalIgnoreCase);
 
     private static long ParseTs(string iso)
         => DateTimeOffset.TryParse(iso, null, System.Globalization.DateTimeStyles.AssumeUniversal, out var t)

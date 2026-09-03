@@ -24,12 +24,12 @@ import {
   type FeedRow, type Presence,
 } from "./team.js";
 import { appendRich, hhmm } from "./text.js";
-import { spinnerSpan } from "./spinner.js";
 import { elapsedSpan, agoSpan } from "./elapsed.js";
 import { buildComposer, type Composer } from "./mention-input.js";
 import { showNewBotDialog } from "./new-bot-dialog.js";
 import { showBotMenu } from "./bot-menu.js";
 import type { MentionTarget } from "./mention.js";
+import { createBotFace, normalizeLook, type BotFace, type FaceState } from "./bot-face.js";
 
 // ---- Pure rendering decisions ---------------------------------------------
 
@@ -57,13 +57,12 @@ export function avatarInitial(name: string): string {
   return String.fromCodePoint(cp).toUpperCase();
 }
 
-/** What a user row's recipients strip says: "to Ada, Bo" / "to everyone" /
- *  "routed to Ada" (the host decided) / "unaddressed" (nothing decided yet). */
-export function recipientsLabel(to: TeamEntryView["to"], routed: boolean): string {
-  if (to === undefined) return "unaddressed";
-  if (to === "everyone") return routed ? "routed to everyone" : "to everyone";
-  if (to.length === 0) return "unaddressed";
-  return (routed ? "routed to " : "to ") + to.join(", ");
+/** What a user row's recipients strip says: "to Ada, Bo", or "to everyone" —
+ *  which is also where a post naming nobody goes (each bot then decides
+ *  whether it's for them). */
+export function recipientsLabel(to: TeamEntryView["to"]): string {
+  if (to === undefined || to === "everyone" || to.length === 0) return "to everyone";
+  return "to " + to.join(", ");
 }
 
 /** The word next to a system row's dot. `event` is the host's label; the
@@ -109,6 +108,37 @@ const PENDING_TIMEOUT_MS = 20_000;
 
 /* Only rows newer than this animate in; the rest are a repaint. */
 let renderedSeq = 0;
+
+/* The animated faces the feed and the roster currently show. Each render
+ * rebuilds its DOM, so the faces it mounted last time are disposed first —
+ * a face keeps a slot on the shared ticker until then. */
+const feedFaces: BotFace[] = [];
+const rosterFaces: BotFace[] = [];
+
+function disposeFaces(list: BotFace[]): void {
+  for (const f of list) f.dispose();
+  list.length = 0;
+}
+
+/** The face's state for a bot's presence: the two "needs you" states share
+ *  the waiting act, a slept or absent bot sleeps, a finished one just idles. */
+export function faceStateOf(p: Presence): FaceState {
+  switch (p.state) {
+    case "working": return "working";
+    case "waiting":
+    case "permission": return "waiting";
+    case "dormant":
+    case "offline": return "asleep";
+    default: return "idle";
+  }
+}
+
+/** A stable per-bot phase so a roster never blinks in unison. */
+function faceSeed(bot: TeamBotView): number {
+  let h = 0;
+  for (const ch of bot.botId) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return h;
+}
 
 const POLL_MS = 2000;
 const NEAR_BOTTOM_PX = 24;
@@ -321,6 +351,8 @@ function unmount(immediate: boolean): void {
     const d = cachedTeam(projectId);
     if (d) markSeen(projectId, d.lastSeq);
   }
+  disposeFaces(feedFaces);
+  disposeFaces(rosterFaces);
   composer?.dispose();
   composer = null;
   const node = root;
@@ -475,6 +507,7 @@ function renderHead(project: ProjectView | null): void {
 }
 
 function renderRoster(project: ProjectView | null): void {
+  disposeFaces(rosterFaces);
   rosterListEl.replaceChildren();
   const count = root?.querySelector<HTMLElement>(".team-roster__count");
   const bots = project?.team?.bots ?? [];
@@ -485,20 +518,18 @@ function renderRoster(project: ProjectView | null): void {
     const p = presenceOf(s);
     const row = document.createElement("button");
     row.type = "button";
-    row.className = "roster-bot";
+    row.className = "roster-bot roster-bot--face";
     row.dataset.state = p.state;
-    row.title = bot.sessionId ? `Open ${bot.nickname}'s terminal` : `${bot.nickname} isn't running`;
+    row.title = bot.sessionId ? `Open ${bot.nickname}'s terminal` : `Start ${bot.nickname} on this machine`;
 
-    // The sidebar's own dot and spinner classes, so the roster and the row
-    // for the same session can never disagree on what a state looks like.
-    const lead = el("span", "roster-bot__lead");
-    if (p.state === "working") lead.appendChild(spinnerSpan("session-item__spinner roster-bot__spinner"));
-    else {
-      const dot = el("span", "session-item__dot roster-bot__dot");
-      dot.dataset.state = p.state;
-      dot.setAttribute("aria-hidden", "true");
-      lead.appendChild(dot);
-    }
+    // The bot's face carries its state (working, waiting, asleep are acts,
+    // not colours); the state word beside it says it in words. The face's
+    // circle takes the bot's tag hue in colour mode.
+    const lead = el("span", "roster-bot__lead roster-bot__lead--face");
+    lead.style.setProperty("--tag", `var(--color-pane-tag-${colorIndexFor(bot, bot.nickname)})`);
+    const face = createBotFace(normalizeLook(bot.look), colorIndexFor(bot, bot.nickname), faceStateOf(p), faceSeed(bot));
+    lead.appendChild(face.el);
+    rosterFaces.push(face);
     row.appendChild(lead);
 
     const text = el("span", "roster-bot__text");
@@ -512,7 +543,12 @@ function renderRoster(project: ProjectView | null): void {
     row.appendChild(stateLine(p, s));
 
     row.addEventListener("click", () => {
-      if (!bot.sessionId) return;
+      if (!bot.sessionId) {
+        // Came with a pull, or its tab was closed: start it here. The room
+        // stays; the join shows up in the feed.
+        send({ type: "team.bot.start", projectId: project.id, botId: bot.botId });
+        return;
+      }
       closeTeamRoom();
       send({ type: "session.select", id: bot.sessionId });
     });
@@ -553,6 +589,7 @@ function renderFeed(entries: TeamEntryView[], bots: TeamBotView[]): void {
   // own; only the parked→flushed case (OnAgentUp) writes one, and even that
   // reads as chatter next to the post it belongs to.
   const shown = entries.filter((e) => !(e.kind === "system" && e.event === "delivered"));
+  disposeFaces(feedFaces);
   const rows = groupRows(foldFeed(shown));
   const names = bots.map((b) => b.nickname);
   const frag = document.createDocumentFragment();
@@ -585,7 +622,17 @@ function avatar(bot: TeamBotView | undefined, name: string): HTMLElement {
     return a;
   }
   a.style.setProperty("--tag", `var(--color-pane-tag-${colorIndexFor(bot, name)})`);
-  a.textContent = avatarInitial(bot?.nickname ?? name);
+  if (bot) {
+    // The bot's face, in the state it is in right now — the feed is live, so
+    // a bot that is working is seen working next to what it said.
+    a.classList.add("tf-msg__avatar--face");
+    const face = createBotFace(normalizeLook(bot.look), colorIndexFor(bot, name),
+      faceStateOf(presenceOf(sessionOf(bot))), faceSeed(bot));
+    a.appendChild(face.el);
+    feedFaces.push(face);
+    return a;
+  }
+  a.textContent = avatarInitial(name);
   return a;
 }
 
@@ -645,9 +692,8 @@ function renderRow(row: FeedRow, bots: TeamBotView[], names: string[]): HTMLElem
   }
 
   if (e.kind === "user") {
-    const routed = e.to !== undefined && !(e.text.toLowerCase().includes("@"));
-    const strip = el("div", "tf-msg__to", recipientsLabel(e.to, routed));
-    if (e.delivered === false) strip.textContent += " · waiting for the bot to wake";
+    const strip = el("div", "tf-msg__to", recipientsLabel(e.to));
+    if (e.delivered === false) strip.textContent += " · waiting for the bot";
     body.appendChild(strip);
   }
   node.appendChild(body);
@@ -667,7 +713,7 @@ function renderPending(clientId: string, p: PendingPost, names: string[]): HTMLE
   appendRich(text, p.text, names);
   body.appendChild(text);
   const to = p.to === null ? undefined : p.to;
-  const strip = el("div", "tf-msg__to", p.failed ? "Not sent — the host didn't answer" : `${recipientsLabel(to, false)} · sending…`);
+  const strip = el("div", "tf-msg__to", p.failed ? "Not sent — the host didn't answer" : `${recipientsLabel(to)} · sending…`);
   body.appendChild(strip);
   node.appendChild(body);
   return node;
@@ -743,7 +789,9 @@ function renderSystem(e: TeamEntryView, bots: TeamBotView[]): HTMLElement {
   node.appendChild(dot);
   node.appendChild(el("span", "tf-sys__text", e.text));
   const bot = botByName(bots, e.from, e.botId);
-  if ((e.event === "waiting" || e.event === "permission") && bot?.sessionId) {
+  // Rows that need the owner IN the bot's terminal — it is asking something,
+  // or a typed post is sitting there unsent — carry the door to it.
+  if ((e.event === "waiting" || e.event === "permission" || e.event === "undelivered") && bot?.sessionId) {
     const open = document.createElement("button");
     open.type = "button";
     open.className = "tf-sys__open";

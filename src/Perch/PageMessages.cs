@@ -388,6 +388,9 @@ internal sealed record PrefsSetMsg
     /// Local panel "Perch only" filter — count/show only servers Perch started.
     /// Nullable so the page can update one pref without asserting the others.
     public bool? LocalPerchOnly { get; init; }
+    /// Bot faces in colour (the bird and its circle take the bot's tag hue)
+    /// rather than plain ink. Off by default.
+    public bool? TeamFacesColor { get; init; }
 }
 
 internal sealed record SettingsSaveMsg
@@ -396,6 +399,8 @@ internal sealed record SettingsSaveMsg
     public string? DefaultCwd { get; init; }
     public int? FontSize { get; init; }
     public bool? ResumeAgentsOnLaunch { get; init; }
+    /// Team bot faces in colour (see Settings.TeamFacesColor).
+    public bool? TeamFacesColor { get; init; }
     /// Where a new tab lands in its project: "top" or "bottom".
     public string? NewTabPosition { get; init; }
     /// Parent folders scanned one level deep for repos to offer as projects.
@@ -462,8 +467,9 @@ internal sealed record TeamRequestMsg
 }
 
 /// The owner's post. `to` is polymorphic on the wire — an array of nicknames,
-/// the string "everyone", or null for an unaddressed post the host routes —
-/// so it arrives as a raw JsonElement and TeamController interprets it.
+/// the string "everyone", or null for a post that names nobody (which goes to
+/// everyone) — so it arrives as a raw JsonElement and TeamController
+/// interprets it.
 internal sealed record TeamPostMsg
 {
     public required Guid ProjectId { get; init; }
@@ -533,6 +539,14 @@ internal sealed record TeamBotRemoveMsg
     public required string BotId { get; init; }
     public bool? CloseTab { get; init; }
     public bool? RemoveWorktree { get; init; }
+}
+
+/// Start a bot that has no tab on this machine — one that was created
+/// elsewhere and arrived with a pull, or whose tab was closed here.
+internal sealed record TeamBotStartMsg
+{
+    public required Guid ProjectId { get; init; }
+    public required string BotId { get; init; }
 }
 
 /// The dialog's "Browse…" for a reference folder. Answered with

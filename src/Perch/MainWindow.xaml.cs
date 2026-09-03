@@ -293,6 +293,7 @@ public partial class MainWindow : FluentWindow
             ResolveCwd = ResolvePaneCwd,
             ReadTranscript = (pane, sid, cwd) => _transcripts.Read(pane, sid, cwd),
             TypeToClaude = TypeToClaude,
+            PressEnter = PressEnterInClaude,
             Wake = WakeSession,
             CreateTab = (proj, name, worktree, model, ccName) =>
                 CreateProjectTabAsync(proj, name, "claude", worktree, model, ccName),
@@ -801,6 +802,7 @@ public partial class MainWindow : FluentWindow
         .Add<TeamBriefCancelMsg>("team.brief.cancel", m => _teamCtrl.OnBriefCancel(m))
         .Add<TeamPositionUpdateMsg>("team.position.update", m => _teamCtrl.OnPositionUpdate(m))
         .Add<TeamBotRemoveMsg>("team.bot.remove", m => _teamCtrl.OnBotRemove(m))
+        .Add<TeamBotStartMsg>("team.bot.start", m => _ = _teamCtrl.OnBotStartAsync(m))
         .Add<TeamReferenceBrowseMsg>("team.reference.browse", OnTeamReferenceBrowse)
         .Add<TeamRoomMsg>("team.room", m => _teamCtrl.OnRoom(m));
 
@@ -1351,6 +1353,10 @@ public partial class MainWindow : FluentWindow
     {
         var pane = FindPane(sess, paneId);
         if (pane == null) return;
+        // Before the coalescing below: the team controller reads the raw hook
+        // (a prompt-submit confirms a typed post; a state change frees a
+        // parked one), and a repeat it would skip can still be that.
+        _teamCtrl.OnAgentStatus(sess, msg);
         var prev = pane.AgentState;
         var newState  = StateProjection.ParseAgentState(msg.State);
         var newDetail = msg.Detail ?? "";
@@ -2628,12 +2634,15 @@ public partial class MainWindow : FluentWindow
         => AllLeaves(sess.Root).FirstOrDefault(p => p.IsTerminal && !string.IsNullOrEmpty(p.PeerName))?.PeerName
            ?? ClaudePeerNames.ForTitle(sess.Title);
 
+    /// The session's running Claude pane, or null when no Claude is up here.
+    private PaneNode? ClaudePaneOf(Session sess)
+        => AllLeaves(sess.Root).FirstOrDefault(p => p.IsTerminal && p.AgentType == "claude" && _panes.Has(p.Id));
+
     /// Type one line into the session's running Claude pane (the same PTY
     /// mechanism as the /model live switch). False when no running Claude.
     private bool TypeToClaude(Session sess, string line)
     {
-        var pane = AllLeaves(sess.Root)
-            .FirstOrDefault(p => p.IsTerminal && p.AgentType == "claude" && _panes.Has(p.Id));
+        var pane = ClaudePaneOf(sess);
         if (pane == null) return false;
         try
         {
@@ -2641,12 +2650,17 @@ public partial class MainWindow : FluentWindow
             // whole sentence landing in one write trips Claude Code's paste
             // detection, and an Enter inside a paste is a newline, not a
             // submit — the line just sat in the input box (seen with a team
-            // post; the pairing intro had the same exposure).
+            // post; the pairing intro had the same exposure). 150 ms was not
+            // always enough: two bots got the same post in the same instant,
+            // one submitted, the other's Enter vanished and the line sat there
+            // for three minutes. So the gap is wider, and the team controller
+            // watches the prompt-submit hook and presses Enter again if it
+            // has to (TeamController.CheckSubmitted).
             var paneId = pane.Id;
             _panes.Write(paneId, System.Text.Encoding.UTF8.GetBytes(line));
             var timer = new System.Windows.Threading.DispatcherTimer
             {
-                Interval = TimeSpan.FromMilliseconds(150),
+                Interval = TimeSpan.FromMilliseconds(400),
             };
             timer.Tick += (_, __) =>
             {
@@ -2660,6 +2674,22 @@ public partial class MainWindow : FluentWindow
         catch (Exception ex)
         {
             Log.Info("Pair", $"type into {pane.Id:N} failed: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// Press Enter in the session's running Claude pane: the retry for a typed
+    /// team post the prompt-submit hook never reported. Harmless on an empty
+    /// input box; the controller never calls it on a pane that is asking
+    /// something (Enter there would be an answer).
+    private bool PressEnterInClaude(Session sess)
+    {
+        var pane = ClaudePaneOf(sess);
+        if (pane == null) return false;
+        try { _panes.Write(pane.Id, new byte[] { (byte)'\r' }); return true; }
+        catch (Exception ex)
+        {
+            Log.Info("Team", $"enter into {pane.Id:N} failed: {ex.Message}");
             return false;
         }
     }
@@ -2920,6 +2950,11 @@ public partial class MainWindow : FluentWindow
         if (msg.LocalPerchOnly is bool perchOnly && _settings.LocalPerchOnly != perchOnly)
         {
             _settings.LocalPerchOnly = perchOnly;
+            dirty = true;
+        }
+        if (msg.TeamFacesColor is bool faces && _settings.TeamFacesColor != faces)
+        {
+            _settings.TeamFacesColor = faces;
             dirty = true;
         }
         if (dirty) _settings.Save();
@@ -3638,6 +3673,7 @@ public partial class MainWindow : FluentWindow
                 defaultCwdResolved = _settings.ResolveDefaultCwd(),
                 fontSize = _settings.FontSize,
                 resumeAgentsOnLaunch = _settings.ResumeAgentsOnLaunch,
+                teamFacesColor = _settings.TeamFacesColor,
                 newTabPosition = _settings.NewTabPosition,
                 projectScanRoots = _settings.ProjectScanRoots.ToArray(),
                 worktreeRoot = _settings.WorktreeRoot,
@@ -3690,6 +3726,11 @@ public partial class MainWindow : FluentWindow
         if (msg.ResumeAgentsOnLaunch is bool b && _settings.ResumeAgentsOnLaunch != b)
         {
             _settings.ResumeAgentsOnLaunch = b;
+            dirty = true;
+        }
+        if (msg.TeamFacesColor is bool faces && _settings.TeamFacesColor != faces)
+        {
+            _settings.TeamFacesColor = faces;
             dirty = true;
         }
         // Clamped like every other string enum here: an unknown value is
@@ -4564,7 +4605,8 @@ public partial class MainWindow : FluentWindow
             var snap = StateProjection.BuildSnapshot(
                 _store, _activePaneId, _settings.FontSize, _settings.OnboardingSeen,
                 _projects, _settings.SidebarMode, _usage?.CurrentLimits(), _settings.InspectorOpen,
-                _settings.WideLayout, _settings.LocalPerchOnly, _teamCtrl.ProjectTeamView);
+                _settings.WideLayout, _settings.LocalPerchOnly, _teamCtrl.ProjectTeamView,
+                teamFacesColor: _settings.TeamFacesColor);
             Web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(snap));
         }
         catch (Exception ex) { Log.Error("PushState", ex); }

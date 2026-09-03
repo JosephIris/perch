@@ -14,8 +14,9 @@ What a unit test cannot see, and this can:
 The fake claude sits FIRST on PATH after Perch's own tools dir, so the real
 shim resolves to it (BinResolver skips every perch dir). It fires the
 session-start hook like the real thing, then idles in `cmd /k` so the pane
-looks like a running agent. `claude -p` (the router) gets stdin closed and
-exits with nonsense, which is exactly the "router can't run" fallback.
+looks like a running agent. It never fires prompt-submit, so every typed post
+is "unconfirmed": the host's Enter-again retries and its give-up row are
+exactly what section 3 checks.
 
 ISOLATION / SAFETY (same rules as test-board.ps1):
   - Unique PERCH_DATA_DIR keyed to this shell's PID; CLAUDE_CONFIG_DIR isolated.
@@ -117,7 +118,9 @@ try {
     } finally { Pop-Location }
 
     # The fake claude: record argv, fire the session-start hook with the id the
-    # host minted, then idle like a running agent.
+    # host minted, then the stop hook (so the pane reads as an agent at rest,
+    # not one still working — a working bot's unconfirmed post is "queued",
+    # a resting one's is "stuck", and section 3 wants the latter), then idle.
     $fake = @"
 @echo off
 setlocal
@@ -134,6 +137,7 @@ echo not-json
 exit /b 0
 :done
 echo {"session_id":"%SID%","source":"startup"} | "$PerchExe" hooks claude session-start
+echo {"session_id":"%SID%"} | "$PerchExe" hooks claude stop
 cmd /k
 "@
     Set-Content -Path (Join-Path $FakeDir 'claude.cmd') -Value $fake -Encoding ascii
@@ -178,6 +182,9 @@ cmd /k
 {"v":1,"positions":[{"slug":"frontend-dev","name":"Frontend dev","purpose":"Owns src/web.","referenceRepo":"","model":"","createdAtMs":1,"briefGeneratedAtMs":0,"briefModel":""}],"bots":[]}
 '@
     Set-Content -Path (Join-Path $teamDir 'positions\frontend-dev\brief.md') -Value "## Role`nYou own src/web." -Encoding utf8
+    # A repo where boards have run already: Perch's boards-only .gitignore is
+    # there, and opening the team must rewrite it so the team folder travels.
+    Set-Content -Path (Join-Path $RepoDir '.perch\.gitignore') -Value "# Perch boards`n*" -Encoding ascii
 
     # --- 1. a bot joins: files, markers, and the launch argv ----------------
     Write-Host "`n[1] team.bot.create opens a tab whose claude gets the brief"
@@ -191,9 +198,13 @@ cmd /k
     Start-Sleep -Milliseconds 800
     $argv = if (Test-Path $Capture) { Get-Content $Capture -Raw } else { '' }
     Check "launched with --name ada" ($argv -match '--name ada\b') "- argv: $argv"
-    Check "launched with the brief appended" ($argv -match '--append-system-prompt-file "?[^"]*\\\.perch\\team\\bots\\ada\\system\.md') "- argv: $argv"
-    Check "system.md written" (Test-Path (Join-Path $teamDir 'bots\ada\system.md'))
-    Check "roster.md names the address" ((Get-Content (Join-Path $teamDir 'roster.md') -Raw) -match '`ada`')
+    Check "launched with the brief appended" ($argv -match '--append-system-prompt-file "?[^"]*\\\.perch\\team\\local\\bots\\ada\\system\.md') "- argv: $argv"
+    Check "system.md written (local)" (Test-Path (Join-Path $teamDir 'local\bots\ada\system.md'))
+    Check "roster.md names the address" ((Get-Content (Join-Path $teamDir 'local\roster.md') -Raw) -match '`ada`')
+    Check "the bot's context carries its memory" ((Get-Content (Join-Path $teamDir 'local\bots\ada\context.md') -Raw) -match '# Your memory')
+    Check "memory.md seeded in the shared folder" (Test-Path (Join-Path $teamDir 'bots\ada\memory.md'))
+    Check "team.json carries the face, not the session" ((Get-Content (Join-Path $teamDir 'team.json') -Raw) -match '"look"' -and -not ((Get-Content (Join-Path $teamDir 'team.json') -Raw) -match '"sessionId"'))
+    Check ".perch/.gitignore lets the team travel" ((Get-Content (Join-Path $RepoDir '.perch\.gitignore') -Raw) -match 'team/local/')
     $markers = Brief-Markers
     Check "exactly one brief marker points into the repo" ($markers.Count -eq 1) "- found $($markers.Count)"
     Check "session-start hook reached the host" (Wait-Until { (Log-Count 'type=session') -ge 1 } 15)
@@ -212,17 +223,29 @@ cmd /k
     $dump = Team-Dump $pid2
     $post = @($dump.ledger | Where-Object { $_.kind -eq 'user' }) | Select-Object -Last 1
     Check "the post is in the ledger with its clientId" ($post -and $post.clientId -eq 'c1')
-    Check "and a delivered event follows it" (@($dump.ledger | Where-Object { $_.event -eq 'delivered' }).Count -ge 1)
+    # Delivery is a fact on the post when Claude was already up; a "delivered"
+    # row follows only when the post had to wait for the session-start hook.
+    Check "and it is marked delivered" (($post -and $post.delivered -eq $true) -or
+        (@($dump.ledger | Where-Object { $_.event -eq 'delivered' }).Count -ge 1))
 
-    # --- 3. an unaddressed post with one bot goes to them -------------------
-    Write-Host "`n[3] an unaddressed post with a single bot is routed to it"
+    # --- 3. an untagged post goes to everyone; an unconfirmed submit is retried
+    Write-Host "`n[3] an untagged post goes to everyone (here: the one bot), and the submit is watched"
     $deliverBefore = Log-Count 'Team.deliver'
     [void](Send-Verb 'team.post' @{ projectId = $pid2; text = 'how is it going'; clientId = 'c2' })
-    Check "routed and delivered" (Wait-Until { (Log-Count 'Team.deliver') -gt $deliverBefore } 10)
-    Check "the routing reason was recorded" (Wait-Until { (Log-Count 'Team.route') -ge 1 } 5)
+    Check "delivered to everyone" (Wait-Until { (Log-Count 'Team.deliver') -gt $deliverBefore } 10)
+    $dump = Team-Dump $pid2
+    $post = @($dump.ledger | Where-Object { $_.kind -eq 'user' -and $_.clientId -eq 'c2' }) | Select-Object -Last 1
+    Check "the post is addressed to everyone" ($post -and $post.to -eq 'everyone')
+    Check "no router ran" ((Log-Count 'Team.route') -eq 0)
+    # The fake claude never submits anything, so the prompt-submit hook never
+    # echoes the line: Enter is pressed again twice, then the room is told.
+    Check "Enter was pressed again" (Wait-Until { (Log-Count 'enter-again=1') -ge 1 } 6)
+    Check "and again" (Wait-Until { (Log-Count 'enter-again=2') -ge 1 } 6)
+    Check "then the room says the post is stuck" (Wait-Until {
+        @((Team-Dump $pid2).ledger | Where-Object { $_.event -eq 'undelivered' -and $_.text -like "*didn't take the post*" }).Count -ge 1 } 10)
 
-    # --- 4. a second bot; everyone fans out; router fallback ----------------
-    Write-Host "`n[4] a second bot, @everyone, and the router's fallback"
+    # --- 4. a second bot; everyone fans out, tagged or not ------------------
+    Write-Host "`n[4] a second bot: @everyone and an untagged post both reach both"
     if (-not (Send-Verb 'team.bot.create' @{ projectId = $pid2; nickname = 'Bo'; positionSlug = 'frontend-dev'; worktree = 'false' })) {
         throw "second team.bot.create rejected"
     }
@@ -235,12 +258,15 @@ cmd /k
     Check "@everyone delivered twice" (Wait-Until { (Log-Count 'Team.deliver') -ge ($deliverBefore + 2) } 10) `
         "- deliveries went $deliverBefore -> $(Log-Count 'Team.deliver')"
 
-    # Unaddressed with two bots: the router runs `claude -p`, which the fake
-    # answers with nonsense, so the room asks rather than guessing.
+    # Untagged with two bots: no router, no guessing — both get it and each
+    # decides for itself (the roster says how).
+    $deliverBefore = Log-Count 'Team.deliver'
     [void](Send-Verb 'team.post' @{ projectId = $pid2; text = 'who owns the sidebar?'; clientId = 'c4' })
-    Check "the router ran" (Wait-Until { (Log-Count 'Team.route:') -ge 2 } 40)
+    Check "untagged post delivered twice" (Wait-Until { (Log-Count 'Team.deliver') -ge ($deliverBefore + 2) } 10) `
+        "- deliveries went $deliverBefore -> $(Log-Count 'Team.deliver')"
     $dump = Team-Dump $pid2
-    Check "and fell back to asking" (@($dump.ledger | Where-Object { $_.event -eq 'error' -and $_.text -like 'Not sure who*' }).Count -ge 1)
+    Check "and recorded as to everyone" (@($dump.ledger | Where-Object { $_.clientId -eq 'c4' -and $_.to -eq 'everyone' }).Count -eq 1)
+    Check "nothing asked the owner who it was for" (@($dump.ledger | Where-Object { $_.event -eq 'error' }).Count -eq 0)
 
     # --- 5. removing a bot -------------------------------------------------
     Write-Host "`n[5] team.bot.remove closes the tab and clears its markers"
@@ -251,7 +277,7 @@ cmd /k
     $dump = Team-Dump $pid2
     Check "one bot remains" ($dump.team.bots.Count -eq 1) "- $($dump.team.bots.Count)"
     Check "Bo's brief marker is gone" ((Brief-Markers).Count -eq ($markersBefore - 1)) "- $markersBefore -> $((Brief-Markers).Count)"
-    Check "roster no longer lists bo" (-not ((Get-Content (Join-Path $teamDir 'roster.md') -Raw) -match 'Bo \(session name'))
+    Check "roster no longer lists bo" (-not ((Get-Content (Join-Path $teamDir 'local\roster.md') -Raw) -match 'Bo \(session name'))
 
     Write-Host ""
     if ($fails.Count -eq 0) { Write-Host "RESULT: PASS" -ForegroundColor Green }

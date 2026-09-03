@@ -22,9 +22,13 @@ public class TeamControllerTests
         public readonly List<Session> Sessions = new();
         public readonly List<object> Posted = new();
         public readonly List<(Guid Session, string Line)> Typed = new();
+        /// Every Enter the controller pressed on its own (the submit retry).
+        public readonly List<Guid> Entered = new();
         public readonly List<Action> Delayed = new();
         public readonly List<Guid> Closed = new();
         public bool TypeOk = true;
+        /// What a bot's transcript reads as, per pane. Null = no transcript.
+        public Func<Guid, InspectorData?> Transcript = _ => null;
         public readonly TeamController Ctrl;
 
         public Harness()
@@ -39,8 +43,9 @@ public class TeamControllerTests
                 SessionById = id => Sessions.FirstOrDefault(s => s.Id == id),
                 Sessions = () => Sessions,
                 ResolveCwd = (s, p) => s.Cwd,
-                ReadTranscript = (pane, sid, cwd) => null,
+                ReadTranscript = (pane, sid, cwd) => Transcript(pane),
                 TypeToClaude = (s, line) => { if (!TypeOk) return false; Typed.Add((s.Id, line)); return true; },
+                PressEnter = s => { Entered.Add(s.Id); return true; },
                 Wake = s => s.Dormant = false,
                 CreateTab = (proj, name, wt, model, cc) =>
                 {
@@ -87,6 +92,20 @@ public class TeamControllerTests
 
         public List<RoomEntry> Ledger => Store.Ledger.ReadAll();
 
+        /// A hook status for the session's pane, as MainWindow relays it.
+        public void Status(Session s, string state, string? detail = null)
+            => Ctrl.OnAgentStatus(s, new StatusMessage(state, detail));
+
+        /// Run the newest timer callback (and drop it from the list).
+        public void RunLastDelayed()
+        {
+            var a = Delayed[^1];
+            Delayed.RemoveAt(Delayed.Count - 1);
+            a();
+        }
+
+        public void Request() => Ctrl.OnRequest(new TeamRequestMsg { ProjectId = Project.Id, SinceSeq = 0 });
+
         /// Every team.data payload posted so far, flattened to (kind, text).
         public List<(string Kind, string Text)> PostedEntries()
         {
@@ -121,7 +140,24 @@ public class TeamControllerTests
         Assert.Contains("You own src/web.", File.ReadAllText(store.SystemPathFor("ada")));
         Assert.Contains("`ada`", File.ReadAllText(store.RosterPath));
         Assert.Equal(store.SystemPathFor("ada"), File.ReadAllText(TeamMarkers.BriefPathFor(sess.Root.Id)).Trim());
-        Assert.Equal(store.RosterPath, File.ReadAllText(TeamMarkers.RosterPathFor(sess.Root.Id)).Trim());
+        // The per-prompt marker points at the bot's OWN context (roster +
+        // its memory), not the shared roster.
+        Assert.Equal(store.ContextPathFor("ada"), File.ReadAllText(TeamMarkers.RosterPathFor(sess.Root.Id)).Trim());
+        var context = File.ReadAllText(store.ContextPathFor("ada"));
+        Assert.Contains("# Team roster", context);
+        Assert.Contains("# Your memory", context);
+        Assert.Contains(store.MemoryPathFor("ada"), context);
+        // The face: a hat from the position's name, a look drawn once.
+        Assert.Equal("beanie", store.Doc.Positions.Single().Hat);
+        Assert.NotNull(bot.Look);
+        Assert.Contains(bot.Look!.Eyewear, TeamLooks.Eyewear);
+        Assert.Contains(bot.Look!.Extra, TeamLooks.Extras);
+        Assert.Contains(bot.Look!.Temper, TeamLooks.Tempers);
+        var faceView = JsonSerializer.SerializeToElement(h.Ctrl.ProjectTeamView(h.Project.Id)!);
+        var lookView = faceView.GetProperty("bots")[0].GetProperty("look");
+        Assert.Equal("beanie", lookView.GetProperty("hat").GetString());
+        Assert.Equal(bot.Look!.Eyewear, lookView.GetProperty("eyewear").GetString());
+        Assert.Equal("beanie", faceView.GetProperty("positions")[0].GetProperty("hat").GetString());
 
         var joined = Assert.Single(h.Ledger);
         Assert.Equal("system", joined.Kind);
@@ -232,9 +268,104 @@ public class TeamControllerTests
         Assert.Equal("[Perch team] Joseph → @Ada: hello?", line);
         Assert.Contains(h.Ledger, e => e.Event == "delivered" && e.Text == "Delivered to Ada");
 
-        // Nothing left parked: a second agent-up schedules nothing.
+        // Nothing left parked: a second agent-up schedules nothing (the one
+        // timer the flush added is the typed line's submit check).
+        Assert.Equal(2, h.Delayed.Count);
         h.Ctrl.OnAgentUp(sess);
+        Assert.Equal(2, h.Delayed.Count);
+        TeamMarkers.Clear(sess.Root.Id);
+    }
+
+    [Fact]
+    public async Task Post_IsConfirmedByThePromptSubmitHook_OrEnterIsPressedAgain()
+    {
+        var h = new Harness();
+        await h.CreateBot("Ada");
+        var sess = h.Sessions.Single();
+
+        // Typed, and one timer armed: the check for the hook's echo.
+        h.Post("hi", "[\"Ada\"]");
+        Assert.Single(h.Typed);
         Assert.Single(h.Delayed);
+        // The prompt-submit hook reports a [Perch team] prompt: the check is
+        // then a no-op — no Enter, no new timer, nothing in the ledger.
+        h.Status(sess, "working", "[Perch team] Joseph → @Ada: hi");
+        h.RunLastDelayed();
+        Assert.Empty(h.Entered);
+        Assert.Empty(h.Delayed);
+        Assert.DoesNotContain(h.Ledger, e => e.Kind == "system" && e.Event is "undelivered" or "waiting");
+
+        // No echo this time. Enter is pressed again, twice, each with a new
+        // check; the third check gives up and tells the room.
+        h.Post("still there?", "[\"Ada\"]", "c2");
+        h.RunLastDelayed();
+        Assert.Single(h.Entered);
+        h.RunLastDelayed();
+        Assert.Equal(2, h.Entered.Count);
+        h.RunLastDelayed();
+        Assert.Equal(2, h.Entered.Count);
+        Assert.Empty(h.Delayed);
+        var stuck = h.Ledger.Single(e => e.Event == "undelivered");
+        Assert.Equal("ada", stuck.From);
+        Assert.StartsWith("Ada didn't take the post", stuck.Text);
+        TeamMarkers.Clear(sess.Root.Id);
+    }
+
+    [Fact]
+    public async Task Post_IntoAWorkingBot_IsQueued_NotStuck()
+    {
+        var h = new Harness();
+        await h.CreateBot("Ada");
+        var sess = h.Sessions.Single();
+        sess.Root.AgentState = AgentState.Working;
+        h.Post("one more thing", "[\"Ada\"]");
+        Assert.Single(h.Typed);
+        // Mid-turn the line is queued and the hook only reports it later, so
+        // an unconfirmed submit is not a failure: Enter is retried (harmless
+        // on an empty box) but the room is told nothing.
+        h.RunLastDelayed();
+        h.RunLastDelayed();
+        h.RunLastDelayed();
+        Assert.Equal(2, h.Entered.Count);
+        Assert.DoesNotContain(h.Ledger, e => e.Event == "undelivered");
+        TeamMarkers.Clear(sess.Root.Id);
+    }
+
+    [Fact]
+    public async Task Post_ToABotThatIsAskingSomething_WaitsUntilItsAnswered()
+    {
+        var h = new Harness();
+        await h.CreateBot("Ada");
+        var sess = h.Sessions.Single();
+        sess.Root.AgentState = AgentState.Permission;
+
+        // Nothing is typed into a permission prompt: the keystrokes would
+        // answer it. The post parks, and the room says why.
+        h.Post("please fix the sidebar", "[\"Ada\"]");
+        Assert.Empty(h.Typed);
+        Assert.Empty(h.Delayed);
+        var held = h.Ledger.Single(e => e.Kind == "system" && e.Event == "waiting");
+        Assert.Equal("ada", held.From);
+        Assert.Contains("waiting on you", held.Text);
+        Assert.False(h.Ledger.Single(e => e.Kind == "user").Delivered);
+
+        // A status that isn't a prompt frees it: one flush is scheduled (not
+        // one per status), and it types once the pane really has moved on.
+        h.Status(sess, "working");
+        h.Status(sess, "working");
+        Assert.Single(h.Delayed);
+        sess.Root.AgentState = AgentState.Working;
+        h.RunLastDelayed();
+        var (_, line) = Assert.Single(h.Typed);
+        Assert.Equal("[Perch team] Joseph → @Ada: please fix the sidebar", line);
+        Assert.Contains(h.Ledger, e => e.Event == "delivered" && e.Text == "Delivered to Ada");
+
+        // Enter is never pressed on a pane that is asking something either.
+        h.Post("and the footer", "[\"Ada\"]", "c2");
+        sess.Root.AgentState = AgentState.Waiting;
+        h.RunLastDelayed();
+        Assert.Empty(h.Entered);
+        Assert.Equal(2, h.Ledger.Count(e => e.Event == "waiting"));
         TeamMarkers.Clear(sess.Root.Id);
     }
 
@@ -258,42 +389,125 @@ public class TeamControllerTests
     }
 
     [Fact]
-    public async Task Post_Unaddressed_WithOneBot_GoesToThem()
+    public async Task Post_NamingNobody_GoesToEveryone()
     {
-        var h = new Harness();
-        await h.CreateBot("Ada");
-        h.Post("how is it going", null);
-        // Routing is async even on the shortcut path; it completes synchronously
-        // here because nothing awaits, but give it a beat to be safe.
-        for (var i = 0; i < 50 && h.Typed.Count == 0; i++) await Task.Delay(20);
-        var (_, line) = Assert.Single(h.Typed);
-        Assert.Equal("[Perch team] Joseph → @Ada: how is it going", line);
-        Assert.Contains(h.Ledger, e => e.Event == "routed" && e.Text.StartsWith("Sent to Ada"));
-        var post = h.Ledger.Single(e => e.Kind == "user");
-        Assert.Null(post.To);
-        TeamMarkers.Clear(h.Sessions.Single().Root.Id);
-    }
-
-    [Fact]
-    public async Task Post_Unaddressed_WithSeveralBots_AndNoClaude_AsksInstead()
-    {
+        // The owner talks to the room; each bot decides from the text whether
+        // the post is for it. No model call, no "not sure who that's for".
         var h = new Harness();
         await h.CreateBot("Ada");
         await h.CreateBot("Bo", slug: "frontend-dev");
-        try
-        {
-            ClaudeHeadless.ResolveOverride = () => null;   // no claude → the router can't run
-            h.Post("who owns the sidebar?", null);
-            for (var i = 0; i < 100 && !h.Ledger.Any(e => e.Event == "error"); i++) await Task.Delay(50);
-        }
-        finally { ClaudeHeadless.ResolveOverride = null; }
-
-        Assert.Empty(h.Typed);
-        var ask = h.Ledger.Single(e => e.Event == "error");
-        Assert.StartsWith("Not sure who that's for", ask.Text);
-        Assert.Contains("@Ada", ask.Text);
-        Assert.Contains("@everyone", ask.Text);
+        h.Post("who owns the sidebar?", null);
+        Assert.Equal(2, h.Typed.Count);
+        Assert.All(h.Typed, t => Assert.Equal("[Perch team] Joseph → @everyone: who owns the sidebar?", t.Line));
+        var post = h.Ledger.Single(e => e.Kind == "user");
+        Assert.Equal(TeamRender.Everyone, Assert.Single(post.To!));
+        Assert.True(post.Delivered);
+        Assert.DoesNotContain(h.Ledger, e => e.Event is "routed" or "error");
         foreach (var s in h.Sessions) TeamMarkers.Clear(s.Root.Id);
+    }
+
+    [Fact]
+    public async Task Start_GivesABotWithoutATab_AFreshOne_UnderTheSameName()
+    {
+        // The bot came with a pull (or its tab was closed): no session here.
+        var h = new Harness();
+        var bot = await h.CreateBot("Ada");
+        var first = h.Sessions.Single();
+        h.Sessions.Clear();
+        h.Ctrl.OnSessionClosed(first);
+        Assert.Null(bot.SessionId);
+
+        await h.Ctrl.OnBotStartAsync(new TeamBotStartMsg { ProjectId = h.Project.Id, BotId = bot.Slug });
+        var sess = h.Sessions.Single();
+        Assert.Equal(sess.Id, bot.SessionId);
+        Assert.Equal("ada", sess.Root.PinnedPeerName);   // same address, nothing here took it
+        Assert.Equal(h.Store.SystemPathFor("ada"), File.ReadAllText(TeamMarkers.BriefPathFor(sess.Root.Id)).Trim());
+        Assert.Contains(h.Ledger, e => e.Event == "joined" && e.Text == "Ada started here as Frontend dev");
+        // The local file, not the shared one, records the tab.
+        Assert.Contains(sess.Id.ToString("D"), File.ReadAllText(h.Store.LocalJsonPath));
+        Assert.DoesNotContain("sessionId", File.ReadAllText(h.Store.JsonPath));
+
+        // Already running → nothing happens but a toast.
+        await h.Ctrl.OnBotStartAsync(new TeamBotStartMsg { ProjectId = h.Project.Id, BotId = bot.Slug });
+        Assert.Single(h.Sessions);
+        TeamMarkers.Clear(sess.Root.Id);
+    }
+
+    [Fact]
+    public async Task Post_WithNoBotsLeft_SaysSo()
+    {
+        var h = new Harness();
+        var bot = await h.CreateBot("Ada");
+        h.Ctrl.OnBotRemove(new TeamBotRemoveMsg { ProjectId = h.Project.Id, BotId = bot.Slug, CloseTab = true });
+        h.Post("anyone?", null);
+        Assert.Empty(h.Typed);
+        Assert.DoesNotContain(h.Ledger, e => e.Kind == "user");
+        Assert.Contains(h.Ledger, e => e.Event == "error" && e.Text.StartsWith("No bots on the team yet"));
+    }
+
+    [Fact]
+    public async Task Room_ShowsWhatABotSaysToTheOwner_NotItsAsidesToTeammates()
+    {
+        var h = new Harness();
+        await h.CreateBot("Ada");
+        var pane = h.Sessions.Single().Root;
+        static InspectorEvent Ev(string kind, string ts, string text = "", string verb = "", string target = "")
+            => new(kind, ts, text, verb, target, "", 1);
+        h.Transcript = _ => new InspectorData(new[]
+        {
+            // A room post: the reply is for the owner.
+            Ev("prompt", "2026-09-02T19:00:00Z", "[Perch team] Joseph → @Ada: say hey to Bo"),
+            Ev("work", "2026-09-02T19:00:05Z", verb: "SendMessage"),
+            Ev("beat", "2026-09-02T19:00:10Z", "Done, Bo has a hello from me."),
+            // Bo answers: the exchange is in the room already (Bo's hook put
+            // it there); what Ada says about it is narration, not a reply.
+            Ev("peer", "2026-09-02T19:01:00Z", "Hey Ada, Bo here.", "from", "bo"),
+            Ev("work", "2026-09-02T19:01:05Z", verb: "SendMessage"),
+            Ev("beat", "2026-09-02T19:01:10Z", "Replied to Bo with a hello. Nothing pending."),
+            // A post to everyone that isn't for Ada: the agreed answer is dropped.
+            Ev("prompt", "2026-09-02T19:02:00Z", "[Perch team] Joseph → @everyone: Bo, how's the API?"),
+            Ev("beat", "2026-09-02T19:02:05Z", "(no reply)"),
+            // Something the owner typed straight into the terminal is answered there.
+            Ev("prompt", "2026-09-02T19:03:00Z", "what model are you?"),
+            Ev("beat", "2026-09-02T19:03:05Z", "claude-fable-5-1"),
+            // And a post for Ada again.
+            Ev("prompt", "2026-09-02T19:04:00Z", "[Perch team] Joseph → @Ada: status?"),
+            Ev("beat", "2026-09-02T19:04:05Z", "Sidebar is done; footer next."),
+        }, null);
+        h.Request();
+
+        var beats = h.Ledger.Where(e => e.Kind == "beat").Select(e => e.Text).ToList();
+        Assert.Equal(new[] { "Done, Bo has a hello from me.", "Sidebar is done; footer next." }, beats);
+        // Tool calls are kept regardless — they fold in the room.
+        Assert.Equal(2, h.Ledger.Count(e => e.Kind == "work"));
+        // The turn-starter is remembered across polls: a beat arriving later
+        // in a teammate-started turn stays out too.
+        var more = new List<InspectorEvent>(h.Transcript(pane.Id)!.Events)
+        {
+            Ev("peer", "2026-09-02T19:05:00Z", "Thanks!", "from", "bo"),
+            Ev("beat", "2026-09-02T19:05:05Z", "Acknowledged Bo's thanks."),
+        };
+        h.Transcript = _ => new InspectorData(more, null);
+        h.Request();
+        Assert.Equal(2, h.Ledger.Count(e => e.Kind == "beat"));
+        TeamMarkers.Clear(pane.Id);
+    }
+
+    [Fact]
+    public void NoReply_IsRecognisedLoosely_AndAnsweringFollowsTheLastTurnStarter()
+    {
+        Assert.True(TeamController.IsNoReply("(no reply)"));
+        Assert.True(TeamController.IsNoReply("  (No reply.) "));
+        Assert.False(TeamController.IsNoReply("No reply needed from Bo; I'm on it."));
+        static InspectorEvent Ev(string kind, string text = "") => new(kind, "2026-09-02T19:00:00Z", text, "", "", "", 1);
+        var events = new[]
+        {
+            Ev("prompt", "[Perch team] Joseph → @Ada: hi"), Ev("beat", "hello"),
+            Ev("peer", "from bo"), Ev("beat", "ok"),
+        };
+        Assert.False(TeamController.AnsweringAt(events, 0));
+        Assert.True(TeamController.AnsweringAt(events, 2));
+        Assert.False(TeamController.AnsweringAt(events, 4));
     }
 
     [Fact]
@@ -383,34 +597,6 @@ public class TeamControllerTests
     {
         Assert.Equal("[Perch team] Joseph → @Ada: one ⏎ two", TeamController.DeliveryLine("one\r\ntwo\n", "Ada"));
         Assert.Equal("[Perch team] Joseph → @everyone: hi", TeamController.DeliveryLine("hi", null));
-    }
-
-    [Fact]
-    public void ParseRoute_ReadsStructuredOrText_AndDropsUnknownSlugs()
-    {
-        var doc = new TeamDoc();
-        doc.Bots.Add(new TeamBot { Slug = "ada", Nickname = "Ada", CcName = "ada" });
-        doc.Bots.Add(new TeamBot { Slug = "bo", Nickname = "Bo", CcName = "bo-2" });
-
-        var structured = new HeadlessResult(true, "prose", null, 0, 0, "", "{\"to\":[\"ada\",\"zed\"],\"confidence\":0.9,\"reason\":\"sidebar\"}");
-        var (to, conf, reason) = TeamController.ParseRoute(structured, doc);
-        Assert.Equal("ada", Assert.Single(to).Slug);
-        Assert.Equal(0.9, conf, 3);
-        Assert.Equal("sidebar", reason);
-
-        var text = new HeadlessResult(true, "{\"to\":[\"Bo\",\"bo-2\"],\"confidence\":0.5,\"reason\":\"r\"}", null, 0, 0, "");
-        var (to2, conf2, _) = TeamController.ParseRoute(text, doc);
-        Assert.Equal("bo", Assert.Single(to2).Slug);   // nickname and address both resolve, deduped
-        Assert.Equal(0.5, conf2, 3);
-
-        var (to3, conf3, why) = TeamController.ParseRoute(new HeadlessResult(true, "not json", null, 0, 0, ""), doc);
-        Assert.Empty(to3);
-        Assert.Equal(0, conf3);
-        Assert.Equal("unreadable answer", why);
-
-        var (to4, _, why4) = TeamController.ParseRoute(new HeadlessResult(false, "", "boom", 0, 0, ""), doc);
-        Assert.Empty(to4);
-        Assert.Equal("boom", why4);
     }
 
     [Fact]

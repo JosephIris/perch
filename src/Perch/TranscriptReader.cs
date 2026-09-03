@@ -10,12 +10,15 @@ using System.Windows.Media.Imaging;
 
 namespace Perch;
 
-/// One row in the Inspector's stream. Six kinds, one ordered list:
+/// One row in the Inspector's stream. Seven kinds, one ordered list:
 ///   "prompt"    — what YOU asked (a real user turn, slash-command noise stripped)
 ///   "beat"      — what the agent SAID (an assistant `text` block)
 ///   "work"      — what the agent DID (an assistant `tool_use` block)
 ///   "interrupt" — a turn YOU stopped (Esc / Ctrl-C); the rail paints it red
 ///   "skill"     — the agent invoked a Skill; its own kind, coloured violet
+///   "peer"      — a message from ANOTHER session arrived (cross-session
+///                 SendMessage). Target is the sender's name, Text the body.
+///                 A turn it starts wasn't yours; the team room relies on that.
 ///   "image"     — an image in the conversation. Verb says whose: "pasted"
 ///                 (you put it in a prompt) or "shared" (a tool handed it to
 ///                 the agent — a screenshot it took, an image file it read).
@@ -209,7 +212,17 @@ internal sealed class TranscriptReader
             // their prose. Absent metadata (older transcripts) reads as human, so
             // their prompts still show; UserPrompt's text filters stay as the
             // backstop for tool_results and slash-command scaffolding.
-            if (!IsInjected(root) && UserPrompt(msg) is { } prompt)
+            // A teammate's SendMessage arriving here. Claude Code injects it as
+            // a user row with origin.kind "peer" (isMeta, promptSource "system")
+            // and carries the sender's name and the body on the origin. It is
+            // not a prompt — the user typed nothing — but it starts or steers a
+            // turn, and the team room needs to know that a turn was a teammate's
+            // doing (a reply to Bo is not a reply to the owner).
+            if (PeerOrigin(root) is { } peer)
+            {
+                tail.Events.Add(new InspectorEvent("peer", ts, peer.Body, "from", peer.Name, Clip(peer.Body, 80), 1));
+            }
+            else if (!IsInjected(root) && UserPrompt(msg) is { } prompt)
             {
                 // An interrupt (Esc / Ctrl-C) is recorded as a "[Request interrupted
                 // …]" user turn — bare, or "…for tool use". It reads as an alarm, not
@@ -370,6 +383,20 @@ internal sealed class TranscriptReader
     {
         try { return ImageThumb.JpegBase64(Convert.FromBase64String(base64), 320); }
         catch { return null; }
+    }
+
+    /// The sender and body of a cross-session message row (origin.kind "peer"),
+    /// or null for any other user row. Shape captured from a real exchange on
+    /// cc 2.1.258: `origin: {kind:"peer", from:"uds:…", name:"shabtay",
+    /// body:"…", msg_id, hopChain, fromMode}`; the message content wraps the
+    /// same body in a &lt;cross-session-message&gt; element.
+    private static (string Name, string Body)? PeerOrigin(JsonElement root)
+    {
+        if (!root.TryGetProperty("origin", out var origin) || origin.ValueKind != JsonValueKind.Object) return null;
+        if (Str(origin, "kind") != "peer") return null;
+        var name = Str(origin, "name");
+        if (name.Length == 0) name = Str(origin, "from");
+        return (name, Str(origin, "body").Trim());
     }
 
     /// A `type:"user"` row the user did NOT type: an isMeta row (an image-paste

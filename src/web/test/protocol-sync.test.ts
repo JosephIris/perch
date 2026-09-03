@@ -81,6 +81,7 @@ const EXPECTED_TYPES = [
   "sidebar.reorder",
   "team.bot.create",
   "team.bot.remove",
+  "team.bot.start",
   "team.brief.cancel",
   "team.brief.generate",
   "team.position.update",

@@ -53,23 +53,55 @@ plus one **team room** where the owner reads everything and orchestrates.
 ## On disk
 
 ```
-<repo>\.perch\team\
-  team.json                     TeamDoc (positions + bots)
-  roster.md                     rendered; the prompt hook inlines it each turn
-  room.jsonl                    the room ledger (RoomLedger, append-only, seq)
-  positions\<slug>\brief.md     the position's standing brief
-  bots\<slug>\system.md         rendered: "# You are Ada, the Frontend dev …" + brief
+<repo>\.perch\team\                 SHARED: tracked in git, travels with a pull
+  team.json                         TeamDoc (positions + hats, bots + looks)
+  positions\<slug>\brief.md         the position's standing brief
+  bots\<slug>\memory.md             the bot's own notes (it edits them; ≤ 2 KB inlined)
+  local\                            LOCAL: this machine only, git-ignored
+    sessions.json                   slug → the tab (session id) running it here
+    room.jsonl                      the room ledger (RoomLedger, append-only, seq)
+    roster.md                       rendered, with this machine's presence
+    bots\<slug>\system.md           rendered: "# You are Ada, the Frontend dev …" + brief
+    bots\<slug>\context.md          rendered: roster + that bot's memory; inlined every prompt
 ```
 
-Rooted at the main checkout, never a worktree; `.perch` is gitignored by the
-same file boards use (delete it to share a team).
+Rooted at the main checkout, never a worktree. **The team travels with the
+repository**: positions, briefs, bots (nickname, address, position, face) and
+each bot's memory are committed; which tab runs a bot here, and the room's
+chat, stay local. `.perch/.gitignore` is Perch's own file (boards wrote `*`);
+opening or creating a team rewrites that boards-only form to
+`* / !.gitignore / !team/ / !team/** / team/local/` (`TeamStore.EnsureShareable`).
+A hand-written or deleted `.gitignore` is left alone. Pull on another PC →
+the room shows the bots as "not running"; clicking one (or "Start here" in
+its menu) sends `team.bot.start`, which opens a fresh tab under the same
+nickname, face and memory (`TeamController.OnBotStartAsync`; the address is
+kept unless a live pane here already answers to it). `team.json` changing on
+disk (a pull) is noticed on the next room request (`StaleOnDisk` → reload).
+
+**Memory.** `bots/<slug>/memory.md` is seeded with the bot's name and the
+rule; the system prompt names the path; every prompt's context carries the
+roster and then the memory (capped at 2 KB with a note). The roster asks bots
+to keep it short, current and replaced rather than appended. It is the one
+thing a bot writes that another machine reads.
+
+**Faces.** A bot's avatar is Monocle Guy with a HAT that means the position
+(`TeamPosition.Hat`, chosen from the position's name by `TeamLooks.HatFor`:
+lead → captain's cap, front → beanie, back/infra → hard hat, design → beret,
+QA → deerstalker, analyst/senior → top hat, else a stable hash) and a LOOK
+drawn at random when the bot is created (`TeamBot.Look`: eyewear, one extra
+item, a temperament; `TeamLooks.RandomLook`), both stored so every machine
+renders the same bot; documents from before faces get them filled in on
+load. Rendering is `src/web/src/bot-face.ts` (the setup-overlay rig, the
+three design-loop mockups folded into one); colour is a per-machine setting
+(`Settings.TeamFacesColor`, off = plain ink, on = the bot's tag hue),
+surfaced as "Bot faces in colour" in Settings and `prefs.teamFacesColor`.
 
 ## Host ↔ CLI contract (all in `%TEMP%`, keyed by `PERCH_PANE_ID`)
 
 | File | Writer → reader | Effect |
 |---|---|---|
 | `perch-claude-brief-<pane>.txt` | host `TeamMarkers.Publish` → `wrap-claude` | `--append-system-prompt-file <system.md>` (only an existing `.md` ≤ 256 KB under `\.perch\team\`) |
-| `perch-team-<pane>.txt` | host → `perch hooks claude prompt-submit` | roster.md contents (≤ 6 KB) joined into the ONE `additionalContext` object, after the board line |
+| `perch-team-<pane>.txt` | host → `perch hooks claude prompt-submit` | the bot's `local/bots/<slug>/context.md` (roster + its memory, ≤ 6 KB) joined into the ONE `additionalContext` object, after the board line |
 | `perch-claude-launched-name-<pane>.txt` | `wrap-claude` → hook | the effective `--name`, so the session-start hook reports the real address |
 
 Observed traffic back to the host (per-pane pipe): `peer.msg` now carries
@@ -78,16 +110,28 @@ Observed traffic back to the host (per-pane pipe): `peer.msg` now carries
 
 ## Room ledger (`RoomEntry.Kind`)
 
-`user` (owner's post; `To` = slugs, `["*"]` everyone, or null = routed) ·
-`beat` (what a bot said) · `work` (what it did; verb/target/repeat) · `peer`
-(bot→bot SendMessage as observed) · `note` (`perch team post`) · `system`
-(`Event`: joined, left, asleep, woke, routed, delivered, undelivered, error).
-Bots' `beat`/`work` rows are copied in from their transcripts (incrementally)
-whenever the room asks, so the room is one ordered stream.
+`user` (owner's post; `To` = slugs, or `["*"]` everyone — which is also
+where a post naming nobody goes) · `beat` (what a bot said to the owner) ·
+`work` (what it did; verb/target/repeat) · `peer` (bot→bot SendMessage as
+observed) · `note` (`perch team post`) · `system` (`Event`: joined, left,
+asleep, woke, delivered, undelivered, waiting, error; a `waiting` /
+`undelivered` row with `From` = a bot is about one post and offers its
+terminal). Bots' `beat`/`work` rows are copied in from their transcripts
+(incrementally) whenever the room asks, so the room is one ordered stream.
+
+**Which beats the room shows.** Only those of a turn a room post started (a
+typed `[Perch team]` prompt). A turn a teammate's message started — the
+reader emits a `peer` event for the receiver's `origin.kind:"peer"` row —
+contributes its tool calls (they fold) but not what the bot said: the
+exchange is already in the room from the sender's hook, and "Replied to Bo
+with a hello, nothing pending" on top of it was the noise that prompted the
+rule. A `(no reply)` beat is dropped. The roster asks bots to keep their room
+replies to outcomes, questions and blockers, and to use `perch team post`
+when the owner must know something from a teammate-started turn.
 
 ## Delivery of the owner's posts
 
-`TeamController.Deliver` types one line into the bot's Claude pane:
+`TeamController.Attempt` types one line into the bot's Claude pane:
 
 ```
 [Perch team] Joseph → @Ada: <text>        (or → @everyone:)
@@ -98,20 +142,43 @@ Multi-line text is flattened (` ⏎ `) until bracketed paste is proven
 → parked; flushed 4 s after the session-start hook (`OnAgentUp`). Dormant
 tabs are woken first.
 
-Unaddressed posts: one bot → them; several → a haiku run with
-`--tools "" --json-schema {to,confidence,reason} --max-budget-usd 0.05`;
-confidence < 0.6 → a system row "Not sure who that's for — say @ada, @bo or
-@everyone" and nothing is delivered.
+**A post naming nobody goes to everyone.** No router, no model call: the
+roster tells each bot that `→ @everyone` means "answer if it concerns your
+position or current work, otherwise reply exactly `(no reply)`", and the room
+drops that answer. (Cost: every bot spends a turn reading every unaddressed
+post. With 2–3 bots that's cents; with 10 it's the reason to tag.)
+
+**Typing is not delivery.** The text and the Enter are separate PTY writes
+400 ms apart (Claude Code's paste detection folds an Enter that arrives too
+soon into the paste as a newline — seen live: two bots got one post in the
+same instant, one submitted, the other's line sat in its input box for three
+minutes). After typing, the controller waits for the prompt-submit hook to
+report a `[Perch team]` prompt in that pane (`OnAgentStatus`); if it doesn't
+come in 2 s Enter is pressed again, again 3 s later, and 5 s after that the
+room gets a system row "Ada didn't take the post … open it and press Enter"
+(with the terminal one click away) — unless the bot is mid-turn, where the
+line is queued and the hook reports it later (`CheckSubmitted`).
+
+**Never into a prompt.** A pane in `Permission` or `Waiting` (a question) is
+not typed into and never gets a retry Enter — the keystrokes would answer it.
+The post parks with a "waiting on you" row, and flushes 1 s after the pane's
+state moves on.
+
+The reliable alternative — bots as headless `claude -p --input-format
+stream-json` processes fed by Perch, no keystrokes at all — is a milestone of
+its own: bots would have no terminal, so permissions, questions, resume and
+model switching would move into the room. See "Known limits".
 
 ## Page protocol
 
 Page → host: `team.request`, `team.post`, `team.bot.create`,
-`team.brief.generate`, `team.brief.cancel`, `team.position.update`,
-`team.bot.remove`, `team.reference.browse`, `team.room`. Host → page:
-`state.projects[].team {bots, positions}`, `team.data {entries, lastSeq,
-truncated}` (pushed on every append; polled by the room while a bot works),
-`team.brief.progress/result`, `team.reference.picked`. See `bridge.ts` and
-`PageMessages.cs` (four-file rule).
+`team.bot.start`, `team.brief.generate`, `team.brief.cancel`,
+`team.position.update`, `team.bot.remove`, `team.reference.browse`,
+`team.room`. Host → page: `state.projects[].team {bots[] {…, look {hat,
+eyewear, extra, temper}}, positions[] {…, hat}}`, `team.data {entries,
+lastSeq, truncated}` (pushed on every append; polled by the room while a bot
+works), `team.brief.progress/result`, `team.reference.picked`. See
+`bridge.ts` and `PageMessages.cs` (four-file rule).
 
 ## Verification
 
@@ -120,8 +187,9 @@ truncated}` (pushed on every append; polled by the room while a bot works),
   roster; the wrapper appends the brief flag only for a contained path.
 - `scripts/test-team.ps1` — a fake `claude` first on PATH: bot creation
   launches with `--name ada --append-system-prompt-file …\bots\ada\system.md`,
-  posts are typed once the session-start hook fires, @everyone fans out, the
-  router falls back when `claude -p` returns nonsense, removal clears markers.
+  posts are typed once the session-start hook fires, @everyone and an
+  untagged post fan out to every bot, an unconfirmed submit is retried and
+  reported, removal clears markers.
 - Manual E2E (real Claude): two positions with generated briefs, two bots in
   worktrees, `@everyone introduce yourselves`, "who's on your team?", Ada
   messages Bo, sleep/wake with a parked post, edit a brief and relaunch,
@@ -129,11 +197,22 @@ truncated}` (pushed on every append; polled by the room while a bot works),
 
 ## Known limits / open items
 
-- Received cross-session messages are dropped from the inspector journal by
-  `IsInjected` (non-human origin) — the `peer-in` carve-out needs the JSONL
-  shape captured from a real exchange first (Milestone B2). The e2e run's
-  3-second window after the send was too short to see the receiver's row;
-  extend the wait and grep the receiver's transcript for the payload.
+- **Bots are terminals, and the room types into them.** That is the only
+  door into an interactive Claude Code session, and it is a UI, not an API:
+  paste detection, autocomplete popups, permission dialogs and the trust
+  question all sit between the keystrokes and the model. The submit check
+  above makes it self-reporting, not immune. The proper fix is bots as
+  headless processes (`claude -p --input-format stream-json --output-format
+  stream-json`, or the Agent SDK): Perch feeds user messages as data and
+  reads replies, tool calls and permission requests as data; the room becomes
+  the bot's whole UI (permission cards, questions, resume, model). Decided
+  against for Milestone A because a terminal per bot came for free; worth
+  its own milestone now that the room is the intended way to work.
+- Received cross-session messages: the receiver's row shape is captured
+  (cc 2.1.258: `origin {kind:"peer", from, name, body, msg_id, hopChain,
+  fromMode}`, `isMeta`, `promptSource:"system"`) and the reader emits a
+  `peer` event for it, rendered as a quiet "message from <name>" row in the
+  journal.
 - Perch launched from inside a Claude Code session inherits that session's
   markers (`CLAUDE_CODE_CHILD_SESSION` and friends); every pane's `claude`
   then runs as a child with transcript saving off. `App` scrubs them at

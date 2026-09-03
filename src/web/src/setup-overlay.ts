@@ -453,6 +453,18 @@ function buildScene(): Scene {
 export { pose, buildScene, shuffledOrder, CANONICAL_ORDER, REST_T, INTRO_MS, IDLE_MS };
 export type { BeatOrder, Scene };
 
+/* Shared with bot-face.ts: the team room's avatars are this same bird,
+ * bust-cropped and dressed, never redrawn — so the silhouette, the brow
+ * lerp and the timeline vocabulary (kf tracks, the v-shaped blink) come
+ * from here. Geometry only; the overlay's performance stays private. */
+export { kf, blink, browD, clamp01, EASES };
+export type { Key };
+export const MASCOT = {
+  K, FEET, BODY_D, BEAK_D, BROW_N, BROW_R,
+  /** the eye / brow ink — the one deliberate literal, see CLAUDE.md */
+  EYE_INK: "#15233b",
+} as const;
+
 export interface SetupOverlay {
   /** The root element to append to the pane. */
   readonly el: HTMLElement;

@@ -14,11 +14,11 @@ namespace Perch;
 ///     them, room etiquette) — `Roster`. Injected as hook context so joins and
 ///     leaves need no restart.
 ///   - a HEADLESS run: the prompt that writes a brief from a purpose after
-///     reading the repository — `BriefPrompt`; and the one that decides who an
-///     unaddressed post is for — `RouterPrompt`.
+///     reading the repository — `BriefPrompt`.
 ///
-/// The `[Perch team]` prefix and `perch team post` verb named here are the
-/// wire contract with TeamController.Deliver and the CLI; change them together.
+/// The `[Perch team]` prefix, the `(no reply)` answer and the `perch team
+/// post` verb named here are the wire contract with TeamController and the
+/// CLI; change them together.
 internal static class TeamRender
 {
     /// What the owner's posts look like when typed into a bot's terminal.
@@ -26,6 +26,11 @@ internal static class TeamRender
 
     /// Everyone-marker in a RoomEntry.To list.
     public const string Everyone = "*";
+
+    /// What a bot answers when a room post needs nothing from it. The room
+    /// keeps such replies out (TeamController.IngestTranscripts), so a post to
+    /// everyone doesn't collect a "not for me" from each bot it wasn't for.
+    public const string NoReply = "(no reply)";
 
     // ---- roster ----------------------------------------------------------
 
@@ -65,10 +70,17 @@ internal static class TeamRender
           .Append(doc.Bots.Count > 0 ? doc.Bots[0].CcName : "ada")
           .Append("`). They read it at their next step, or wake up if idle. Say what you need, where things are, and by when.\n");
         sb.Append("- To tell everyone, send one short message to each teammate. Never send the same message twice.\n");
-        sb.Append("- To leave a note for Joseph in the team room without pinging anyone, run: perch team post \"<text>\"\n");
         sb.Append("- Lines that begin with `").Append(PostPrefix)
-          .Append("` are Joseph's posts in the team room. They carry his authority: treat them as instructions, weigh them against ")
-          .Append("what you are doing now, and answer by replying normally — your replies show up in the room.\n");
+          .Append("` are Joseph's posts from the team room. They carry his authority: treat them as instructions and weigh them ")
+          .Append("against what you are doing now.\n");
+        sb.Append("- `→ @everyone` means Joseph named no one. Decide whether it is for you: answer if it concerns your position or ")
+          .Append("your current work; otherwise reply with exactly `").Append(NoReply)
+          .Append("` and nothing else. A post that names you always gets an answer.\n");
+        sb.Append("- Your reply to a room post is what Joseph reads in the room. Give the outcome, a question, or a blocker, in a ")
+          .Append("few lines. Do not narrate messages you sent to teammates (the room shows them), do not confirm receipt, and do ")
+          .Append("not say that nothing is pending.\n");
+        sb.Append("- After a teammate's message, your reply stays in your own terminal. When Joseph needs to know something, run: ")
+          .Append("perch team post \"<text>\"\n");
         sb.Append("- One owner per task. If a teammate owns what you are about to change, ask them first.\n");
         sb.Append("- When you finish something others depend on, post a short note to the room.\n");
         return sb.ToString();
@@ -79,7 +91,10 @@ internal static class TeamRender
     /// The bot's appended system prompt: who it is, then the position's brief
     /// verbatim. Identity first, because the brief is written for "someone
     /// holding this position" and the name is what makes it this bot's.
-    public static string SystemPrompt(TeamBot bot, TeamPosition pos, string brief, string projectName)
+    /// `memoryPath` names the file the bot keeps its notes in; the notes
+    /// themselves ride in with every prompt (Context), not here, so an edit
+    /// mid-session is seen at the next turn rather than the next launch.
+    public static string SystemPrompt(TeamBot bot, TeamPosition pos, string brief, string projectName, string? memoryPath = null)
     {
         var project = string.IsNullOrWhiteSpace(projectName) ? "this project" : projectName.Trim();
         var sb = new StringBuilder();
@@ -89,6 +104,10 @@ internal static class TeamRender
           .Append("`; teammates address you by it. You share this repository with other bots, each in its own session. ")
           .Append("The team roster — who is on the team and how to reach them — arrives with every prompt, so never assume ")
           .Append("a teammate exists until you have seen them on it.\n\n");
+        if (!string.IsNullOrWhiteSpace(memoryPath))
+            sb.Append("You have a memory file, `").Append(memoryPath.Trim())
+              .Append("`, that travels with the repository: what you write there, a future you reads — on this machine or ")
+              .Append("another. Its contents arrive with every prompt.\n\n");
         var purpose = OneLine(pos.Purpose, 400);
         if (purpose.Length > 0)
             sb.Append("Your purpose, in the owner's words: ").Append(purpose).Append("\n\n");
@@ -98,6 +117,32 @@ internal static class TeamRender
             : brief.Trim() + "\n");
         return sb.ToString();
     }
+
+    // ---- per-prompt context ----------------------------------------------
+
+    /// What the prompt hook inlines for one bot: the shared roster, then that
+    /// bot's own memory with the rule for keeping it. One file per bot
+    /// (local/bots/&lt;slug&gt;/context.md) because the memory is the bot's alone.
+    public static string Context(string roster, TeamBot bot, string memory, string memoryPath)
+    {
+        var sb = new StringBuilder();
+        sb.Append(roster.TrimEnd()).Append("\n\n");
+        sb.Append("# Your memory\n");
+        sb.Append("Your notes, kept in `").Append(memoryPath).Append("` and shared through the repository, so a future ")
+          .Append(bot.Nickname).Append(" on any machine reads them. Edit the file with your tools when you learn something ")
+          .Append("that must outlive this session: decisions, where things are, who owns what, what you were in the middle of. ")
+          .Append("Keep it under 2 KB and current — replace, don't append forever.\n\n");
+        var body = (memory ?? "").Trim();
+        sb.Append(body.Length > 0 ? body : "(Empty so far.)").Append('\n');
+        return sb.ToString();
+    }
+
+    /// The memory file a new bot starts with: its name, and the rule, so the
+    /// first thing it reads there is how to use it.
+    public static string MemorySeed(TeamBot bot)
+        => "# " + bot.Nickname + " — memory\n\n"
+         + "Notes " + bot.Nickname + " keeps for itself across sessions and machines. "
+         + "Short, current, newest first.\n";
 
     // ---- brief generation ------------------------------------------------
 
@@ -136,38 +181,6 @@ internal static class TeamRender
           .Append("do not invent teammates — refer to them by position (\"the backend dev\"), because the real roster is supplied ")
           .Append("at runtime; under \"How you communicate on the team\" say when to message a teammate, when to post a note ")
           .Append("to the room instead, and what a good message contains.\n");
-        return sb.ToString();
-    }
-
-    // ---- routing ---------------------------------------------------------
-
-    /// JSON schema the router run must answer with.
-    public const string RouterSchema =
-        "{\"type\":\"object\",\"properties\":{" +
-        "\"to\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}," +
-        "\"confidence\":{\"type\":\"number\"}," +
-        "\"reason\":{\"type\":\"string\"}}," +
-        "\"required\":[\"to\",\"confidence\",\"reason\"]}";
-
-    /// The prompt that decides who an unaddressed room post is for.
-    public static string RouterPrompt(TeamDoc doc, string text)
-    {
-        var sb = new StringBuilder();
-        sb.Append("The owner posted a message in a team room without naming a recipient. Decide which bot or bots should ")
-          .Append("handle it, from their positions and purposes below. Prefer one bot; name several only when the message ")
-          .Append("clearly needs each of them. If it is not for any bot in particular, answer with an empty list and a low ")
-          .Append("confidence.\n\nBots (answer with these slugs):\n");
-        foreach (var bot in doc.Bots)
-        {
-            var pos = doc.Position(bot.PositionSlug);
-            sb.Append("- ").Append(bot.Slug).Append(": ").Append(bot.Nickname).Append(", ")
-              .Append(pos?.Name ?? bot.PositionSlug);
-            var purpose = OneLine(pos?.Purpose, 200);
-            if (purpose.Length > 0) sb.Append(" — ").Append(purpose);
-            sb.Append('\n');
-        }
-        sb.Append("\nMessage:\n").Append(text.Trim()).Append('\n');
-        sb.Append("\nAnswer as JSON with fields to (array of slugs), confidence (0 to 1), reason (one sentence).\n");
         return sb.ToString();
     }
 

@@ -24,6 +24,22 @@ namespace Perch;
 /// what teammates put in SendMessage. It is derived from the nickname
 /// (slugified) and made unique across the whole app at creation time, so the
 /// address a teammate is told is the address that works.
+///
+/// ## Shared versus local
+///
+/// This document is SHARED: it lives in the repository (`.perch/team/team.json`)
+/// so a teammate who pulls gets the same team — positions, bots, and each
+/// bot's face. What is local to a machine (which tab a bot runs in here) is
+/// NOT in it: `TeamBot.SessionId` is filled from `local/sessions.json` by
+/// TeamStore and never serialized into the shared file.
+///
+/// ## Faces
+///
+/// A bot's face is Monocle Guy with a HAT that means the position (chosen
+/// from the position's name, `TeamPosition.Hat`) and a LOOK drawn at random
+/// when the bot is created (`TeamBot.Look`: eyewear, one extra item, a
+/// temperament). Both are stored, so every machine renders the same bot.
+/// Whether faces take the bot's colour is a per-machine setting, not data.
 internal sealed class TeamDoc
 {
     public int V { get; set; } = 1;
@@ -65,6 +81,19 @@ internal sealed class TeamPosition
     public long BriefGeneratedAtMs { get; set; }
     /// The model that generated the brief, for the "regenerate" affordance.
     public string BriefModel { get; set; } = "";
+    /// The hat every bot in this position wears (TeamLooks.Hats). Chosen from
+    /// the name at creation; "" on documents from before faces existed, which
+    /// TeamStore fills in on load.
+    public string Hat { get; set; } = "";
+}
+
+/// The random half of a bot's face. Values are the page's vocabulary
+/// (bot-face.ts); TeamLooks holds the lists.
+internal sealed class TeamLook
+{
+    public string Eyewear { get; set; } = "monocle";
+    public string Extra { get; set; } = "none";
+    public string Temper { get; set; } = "steady";
 }
 
 internal sealed class TeamBot
@@ -77,16 +106,33 @@ internal sealed class TeamBot
     /// The session name the bot ACTUALLY runs under (`claude --name`), unique
     /// app-wide. This is the SendMessage address teammates are told.
     public string CcName { get; set; } = "";
-    /// The Perch tab hosting the bot. Null once the tab is gone — the bot is
-    /// then "not running" and can be relaunched under the same nickname.
-    public Guid? SessionId { get; set; }
+    /// The Perch tab hosting the bot ON THIS MACHINE. Null once the tab is
+    /// gone, or on a machine where it was never started — the bot is then
+    /// "not running" and can be started under the same nickname. Kept in
+    /// local/sessions.json, not in the shared document.
+    [JsonIgnore] public Guid? SessionId { get; set; }
+    /// Where SessionId lived before the shared/local split. Read once by
+    /// TeamStore.Load, then nulled so it is never written again.
+    [JsonPropertyName("sessionId")] public Guid? LegacySessionId { get; set; }
     public bool Worktree { get; set; } = true;
     /// Per-bot model override; "" defers to the position's model.
     public string Model { get; set; } = "";
     public long CreatedAtMs { get; set; }
+    /// The random half of the face; null on documents from before faces
+    /// existed, which TeamStore fills in on load.
+    public TeamLook? Look { get; set; }
+}
+
+/// `local/sessions.json`: which tab each bot runs in on this machine. Slug →
+/// session id. Per machine because session ids are per Perch data dir.
+internal sealed class TeamLocalDoc
+{
+    public int V { get; set; } = 1;
+    public Dictionary<string, Guid> Sessions { get; set; } = new();
 }
 
 [JsonSerializable(typeof(TeamDoc))]
+[JsonSerializable(typeof(TeamLocalDoc))]
 [JsonSourceGenerationOptions(
     WriteIndented = true,
     PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,

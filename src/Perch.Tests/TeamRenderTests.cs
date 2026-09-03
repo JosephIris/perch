@@ -48,6 +48,11 @@ public class TeamRenderTests
         Assert.Contains("[asleep]", roster);
         Assert.Contains("SendMessage", roster);
         Assert.Contains("perch team post", roster);
+        // A post to everyone is for whoever it concerns; the others say so
+        // in the one form the room knows to drop.
+        Assert.Contains("`→ @everyone`", roster);
+        Assert.Contains("`(no reply)`", roster);
+        Assert.Contains("Do not narrate messages you sent to teammates", roster);
         Assert.Contains(TeamRender.PostPrefix, roster);
         Assert.Contains("One owner per task", roster);
     }
@@ -106,13 +111,30 @@ public class TeamRenderTests
     }
 
     [Fact]
-    public void RouterPrompt_ListsSlugs_AndTheMessage()
+    public void Context_IsTheRosterThenTheBotsOwnMemory_WithTheRule()
     {
-        var prompt = TeamRender.RouterPrompt(Team(2), "the sidebar row is misaligned");
-        Assert.Contains("- ada: Ada, Frontend dev", prompt);
-        Assert.Contains("- bo: Bo, Backend dev", prompt);
-        Assert.Contains("the sidebar row is misaligned", prompt);
-        Assert.Contains("\"required\":[\"to\",\"confidence\",\"reason\"]", TeamRender.RouterSchema);
+        var doc = Team(2);
+        var roster = TeamRender.Roster(doc, "perch");
+        var bot = doc.Bots[0];
+        var path = @"C:\repo\.perch\team\bots\ada\memory.md";
+
+        var empty = TeamRender.Context(roster, bot, "", path);
+        Assert.StartsWith("# Team roster — perch", empty);
+        Assert.Contains("# Your memory", empty);
+        Assert.Contains("`" + path + "`", empty);
+        Assert.Contains("Keep it under 2 KB", empty);
+        Assert.EndsWith("(Empty so far.)\n", empty);
+
+        var full = TeamRender.Context(roster, bot, "- The sidebar is mine.\n- Bo owns the API.", path);
+        Assert.EndsWith("- The sidebar is mine.\n- Bo owns the API.\n", full);
+        Assert.DoesNotContain("(Empty so far.)", full);
+
+        var seed = TeamRender.MemorySeed(bot);
+        Assert.StartsWith("# Ada — memory", seed);
+
+        var system = TeamRender.SystemPrompt(bot, doc.Positions[0], "## Role\nYou own src/web.", "perch", path);
+        Assert.Contains("You have a memory file, `" + path + "`", system);
+        Assert.Contains("arrive with every prompt", system);
     }
 
     [Fact]

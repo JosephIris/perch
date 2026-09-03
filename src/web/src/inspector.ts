@@ -224,6 +224,9 @@ function eventText(e: InspectorEventView): string {
     // on a text clipboard, and its single click already opens the lightbox.
     case "image":
       return "";
+    // A teammate's message: the sender and the whole body.
+    case "peer":
+      return `${e.target}: ${e.text}`;
     default:
       // "Skill deep-research", "Edit GitProc.cs", "Bash dotnet test". Note is
       // the qualifier the row shows beside the target when it has one; the ×N
@@ -499,6 +502,22 @@ function renderEvent(e: InspectorEventView, i: number, canceled = false): HTMLEl
       btn.addEventListener("click", () => openImageLightbox(pane, e));
     }
     return row;
+  }
+
+  if (e.kind === "peer") {
+    // A teammate's message arriving. Quiet, in the work row's shape: it says
+    // why a turn started that you didn't; the body is a hover away and the
+    // team room shows the exchange in full.
+    const p = el("div", "work work--peer");
+    p.appendChild(elText("span", "work__time", hhmm(e.ts)));
+    p.appendChild(elText("span", "work__rail", "│"));
+    const what = el("span", "work__what");
+    what.appendChild(elText("span", "work__verb", "message from"));
+    what.appendChild(elText("span", "work__target", e.target));
+    p.appendChild(what);
+    if (e.note) p.appendChild(elText("span", "work__note", e.note));
+    p.title = e.text;
+    return p;
   }
 
   if (e.kind === "skill") {

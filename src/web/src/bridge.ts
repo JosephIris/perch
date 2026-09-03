@@ -158,7 +158,7 @@ export type OutMessage =
   /* User preferences (terminal font size, Inspector rail open/closed, wide
    * layout mode) — host persists to Settings.cs so they survive restart. Each
    * field is optional so the page can update one without asserting the others. */
-  | { type: "prefs.set"; fontSize?: number; inspectorOpen?: boolean; wideLayout?: boolean; localPerchOnly?: boolean }
+  | { type: "prefs.set"; fontSize?: number; inspectorOpen?: boolean; wideLayout?: boolean; localPerchOnly?: boolean; teamFacesColor?: boolean }
   /* Recap: page asks the host for the unpushed-commit list behind a pane's
    * "↑N" chip (the hover tooltip / lightbox open lazily fetch it). Host
    * replies with a commits.data message for the same paneId. */
@@ -190,6 +190,8 @@ export type OutMessage =
       defaultCwd?: string;
       fontSize?: number;
       resumeAgentsOnLaunch?: boolean;
+      /* Team bot faces in colour rather than plain ink. */
+      teamFacesColor?: boolean;
       newTabPosition?: NewTabPosition;
       projectScanRoots?: string[];
       worktreeRoot?: string;
@@ -295,6 +297,9 @@ export type OutMessage =
   /* Take a bot off the team. Its tab stays unless `closeTab`; the worktree
    * stays unless `removeWorktree` (same option the close dialog offers). */
   | { type: "team.bot.remove"; projectId: string; botId: string; closeTab: boolean; removeWorktree?: boolean }
+  /* Start a bot that has no tab on this machine (it came with a pull, or its
+   * tab was closed): a fresh tab under the same nickname, face and memory. */
+  | { type: "team.bot.start"; projectId: string; botId: string }
   /* Native folder picker for the reference repo; replies team.reference.picked. */
   | { type: "team.reference.browse"; requestId: string; projectId: string }
   /* Room opened/closed. While open the host pushes team.data on every new
@@ -535,6 +540,9 @@ export type StateMessage = {
     /* Local panel "Perch only" filter: count/show only servers Perch started,
      * hiding the "other" (started-outside-Perch) bucket. Off by default. */
     localPerchOnly?: boolean;
+    /* Team bot faces in colour (bird and circle in the bot's tag hue) rather
+     * than plain ink. Off by default. */
+    teamFacesColor?: boolean;
   };
   /* Account-wide Claude model rate limits — only the AT-LIMIT models appear, so
    * the model menu disables exactly these and annotates each with its reset
@@ -614,7 +622,9 @@ export type CommitsDataMessage = {
  * row ("Read perch.log ×6"). That's the thrash signal — the cheapest way to
  * see an agent spinning without reading a word. */
 export type InspectorEventView = {
-  kind: "prompt" | "beat" | "work" | "interrupt" | "skill" | "image";
+  /* "peer": a message from another session arrived (cross-session
+   * SendMessage) — target is the sender's name, text the body. */
+  kind: "prompt" | "beat" | "work" | "interrupt" | "skill" | "image" | "peer";
   ts: string;
   text: string;
   verb: string;
@@ -703,12 +713,17 @@ export type TeamBotView = {
   /* The Claude Code session name it answers to (what teammates put in
    * SendMessage). Normally the nickname's slug; shown when it differs. */
   peerName: string;
+  /* The face (bot-face.ts vocabulary): the hat means the position, the rest
+   * was drawn at random when the bot was created and is stored, so every
+   * machine renders the same bot. Absent on older hosts → defaults. */
+  look?: { hat?: string; eyewear?: string; extra?: string; temper?: string };
 };
 
 export type TeamView = { bots: TeamBotView[]; positions: TeamPositionView[] };
 
 /* One row of the room's ledger.
- *   user   — your post (from "you"; `to` is who it went to, absent = routed).
+ *   user   — your post (from "you"; `to` is who it went to — a post naming
+ *            nobody goes to everyone).
  *   beat   — what a bot SAID (an assistant text block from its transcript).
  *   work   — what a bot DID (a tool call; verb/target/repeat as in the journal).
  *   peer   — a bot messaged another bot (`to` = [nickname]).
@@ -735,8 +750,11 @@ export type TeamEntryView = {
   /* user rows only — the echo of team.post's clientId. */
   clientId?: string;
   /* system rows only. */
+  /* "waiting"/"undelivered" rows from a bot (botId set) are about one post
+   * (note = its seq): its pane is asking something, or the typed line never
+   * submitted. Both offer the bot's terminal. */
   event?: "joined" | "left" | "waiting" | "permission" | "done" | "asleep" | "woke" | "error"
-        | "routed" | "delivered" | "undelivered";
+        | "delivered" | "undelivered";
   /* user rows: false while the host is holding the post for a bot that has no
    * Claude up yet (asleep, still booting). Flips true when it lands. */
   delivered?: boolean;
@@ -793,6 +811,8 @@ export type SettingsDataMessage = {
   /* Whether the launch prompt to reopen previous Claude sessions is enabled
    * (Settings → "Resume Claude sessions on launch"). */
   resumeAgentsOnLaunch?: boolean;
+  /* Team bot faces in colour (Settings → "Bot faces in colour"). Absent → off. */
+  teamFacesColor?: boolean;
   /* Where a new tab is inserted in its project (Settings → "New tab position").
    * Absent → "top", matching the host's Settings.NewTabPosition default. */
   newTabPosition?: NewTabPosition;

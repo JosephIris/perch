@@ -19,6 +19,7 @@ import { Dropdown } from "./dropdown.js";
 import { showOnboarding } from "./onboarding.js";
 import { confirmDialog } from "./confirm.js";
 import { buildSettingsMascot } from "./settings-mascot.js";
+import { setFaceColorMode } from "./bot-face.js";
 
 let overlay: HTMLElement | null = null;
 let shellDropdown: Dropdown | null = null;
@@ -29,6 +30,7 @@ let seedsInput: HTMLTextAreaElement | null = null;
 let projectListEl: HTMLElement | null = null;
 let fontInput: HTMLInputElement | null = null;
 let resumeToggle: HTMLButtonElement | null = null;
+let facesToggle: HTMLButtonElement | null = null;
 let newTabDropdown: Dropdown | null = null;
 let updateCheckBtn: HTMLButtonElement | null = null;
 let updateStatusEl: HTMLElement | null = null;
@@ -58,6 +60,7 @@ export function closeSettings(): void {
   projectListEl = null;
   fontInput = null;
   resumeToggle = null;
+  facesToggle = null;
   newTabDropdown?.dispose();
   newTabDropdown = null;
   updateCheckBtn = null;
@@ -101,6 +104,8 @@ export function applySettingsData(msg: SettingsDataMessage): void {
   // Default the toggle ON when the host omits the flag — matches the
   // Settings.ResumeAgentsOnLaunch code default (resume is opt-out).
   setToggle(resumeToggle, msg.resumeAgentsOnLaunch ?? true);
+  // Faces default to plain ink; colour is the opt-in.
+  if (facesToggle) setToggle(facesToggle, msg.teamFacesColor ?? false);
 
   // Absent → "top", matching the host's Settings.NewTabPosition default.
   newTabDropdown?.setOptions(
@@ -282,6 +287,7 @@ function save(): void {
     defaultCwd: cwdInput.value.trim(),
     fontSize,
     resumeAgentsOnLaunch: resumeToggle ? getToggle(resumeToggle) : undefined,
+    teamFacesColor: facesToggle ? getToggle(facesToggle) : undefined,
     newTabPosition: newTabDropdown
       ? (newTabDropdown.value as NewTabPosition)
       : undefined,
@@ -551,6 +557,19 @@ function buildSkeleton(): void {
       "Resume Claude sessions on launch",
       "When Perch starts, offer to reopen the Claude conversations that were running.",
       resumeToggle,
+    ),
+  );
+
+  // Team bot faces: plain ink by default (the mascot as it is everywhere
+  // else); colour is the opt-in. Applied on the spot so the room shows the
+  // change while the dialog is still open; the host persists it on save.
+  facesToggle = makeToggle("Bot faces in colour");
+  facesToggle.addEventListener("click", () => setFaceColorMode(getToggle(facesToggle!)));
+  sessions.appendChild(
+    makeRow(
+      "Bot faces in colour",
+      "Each team bot's bird and circle take the bot's colour. Off shows them in plain ink.",
+      facesToggle,
     ),
   );
 

@@ -206,7 +206,7 @@ export function buildComposer(opts: ComposerOpts): Composer {
     const names = opts.roster().map((b) => b.nickname);
     const { to } = parseMentions(text, names);
     if (to === null) {
-      toRow.appendChild(el("span", "team-composer__route", "Unaddressed — Perch will route it to whoever should answer"));
+      toRow.appendChild(el("span", "team-composer__route", "No one tagged — goes to everyone; a bot answers only if it's for them"));
       return;
     }
     const chipFor = (label: string, nick: string | null) => {

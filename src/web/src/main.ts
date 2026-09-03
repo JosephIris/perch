@@ -25,7 +25,8 @@ import { initUtilityMini } from "./mini-mode.js";
 import { initInspector, toggleInspector, openInspectorSearch } from "./inspector.js";
 import { setModelLimits } from "./model-menu.js";
 import { initWebPaneSuppression } from "./webpane-suppress.js";
-import { applyTeamState, toggleTeamRoom, onTeamRoomChange } from "./team-room.js";
+import { applyTeamState, toggleTeamRoom, closeTeamRoom, onTeamRoomChange } from "./team-room.js";
+import { setFaceColorMode } from "./bot-face.js";
 import { teamProjectFor } from "./team.js";
 import { applyBriefProgress, applyBriefResult, applyReferencePicked } from "./new-bot-dialog.js";
 import type { PaneTreeView } from "./bridge.js";
@@ -209,6 +210,8 @@ onMessage((msg) => {
       // freshly-launched app opens at the right widths instead of flashing
       // Compact and then widening on the next tick.
       applyLayout(msg.prefs?.wideLayout ?? false);
+      // Bot faces: plain ink unless the owner opted into colour.
+      setFaceColorMode(msg.prefs?.teamFacesColor ?? false);
       // Account-wide model limits for the per-pane model menu (usually empty).
       setModelLimits(msg.modelLimits);
       maybeShowOnboarding(msg.prefs);
@@ -411,6 +414,7 @@ window.addEventListener("keydown", (ev) => {
       ev.preventDefault(); ev.stopPropagation();
       break;
     case "KeyT":
+      closeTeamRoom();   // a new tab is where you're going; the room lifts
       send({ type: "session.new" });
       ev.preventDefault(); ev.stopPropagation();
       break;

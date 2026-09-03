@@ -35,12 +35,11 @@ test("avatarInitial: first character, upper-cased, never empty", () => {
   assert.equal(avatarInitial(""), "?");
 });
 
-test("recipientsLabel: addressed, everyone, routed, unaddressed", () => {
-  assert.equal(recipientsLabel(["Ada", "Bo"], false), "to Ada, Bo");
-  assert.equal(recipientsLabel(["Ada"], true), "routed to Ada");
-  assert.equal(recipientsLabel("everyone", false), "to everyone");
-  assert.equal(recipientsLabel(undefined, false), "unaddressed");
-  assert.equal(recipientsLabel([], false), "unaddressed");
+test("recipientsLabel: addressed, everyone — and naming nobody is everyone", () => {
+  assert.equal(recipientsLabel(["Ada", "Bo"]), "to Ada, Bo");
+  assert.equal(recipientsLabel("everyone"), "to everyone");
+  assert.equal(recipientsLabel(undefined), "to everyone");
+  assert.equal(recipientsLabel([]), "to everyone");
 });
 
 test("systemTone: attention for waiting/permission, error for error, calm otherwise", () => {

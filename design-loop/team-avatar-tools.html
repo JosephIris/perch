@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Perch — team avatars · variant B: tools and wardrobe</title>
+<style>
+  body{margin:0;background:#141414;color:#e9eef4;font:14px/1.4 "Inter Variable","Inter","Segoe UI Variable Text","Segoe UI",sans-serif}
+  /* everything scoped under .av-tools so sibling variants can share one page */
+  .av-tools{--surface:#1f1f1f;--ink:#e9eef4;--ink-dim:#aab3bd;--eye:#15233b;--accent:#76B9ED;--tag:var(--accent);
+    --line:rgba(255,255,255,.08);max-width:1180px;margin:0 auto;padding:32px 24px 64px}
+  .av-tools h1{font-size:20px;font-weight:600;line-height:1.2;margin:0 0 4px}
+  .av-tools .sub{color:var(--ink-dim);font-size:13px;margin:0 0 24px;max-width:72ch}
+  .av-tools h2{font-size:16px;font-weight:600;margin:32px 0 12px}
+  .av-tools table{border-collapse:collapse;font-size:13px;width:100%}
+  .av-tools th{text-align:left;font-weight:500;color:var(--ink-dim);font-size:12px;padding:6px 12px 6px 0;border-bottom:1px solid var(--line)}
+  .av-tools td{padding:8px 12px 8px 0;border-bottom:1px solid var(--line);vertical-align:top}
+  .av-tools td.why{color:var(--ink-dim)}
+  .av-tools .sw{display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--tag);vertical-align:-1px;margin-right:6px}
+  /* the avatar: the room's 28px circle (tag tint + 1px tag keyline); the bird is currentColor = ink */
+  .av-tools .av{position:relative;flex:none;width:var(--s,28px);height:var(--s,28px);border-radius:50%;overflow:hidden;
+    color:var(--ink);background:color-mix(in srgb,var(--tag) 16%,var(--surface))}
+  .av-tools .av svg{display:block;width:100%;height:100%}
+  .av-tools .av::after{content:"";position:absolute;inset:0;border-radius:50%;pointer-events:none;
+    box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--tag) 32%,transparent)}
+  /* controls */
+  .av-tools .ctl{display:flex;align-items:center;gap:12px;font-size:12px;color:var(--ink-dim);margin:0 0 16px}
+  .av-tools .ctl button,.av-tools .ctl select{font:inherit;color:var(--ink);background:rgba(255,255,255,.07);
+    border:1px solid rgba(255,255,255,.1);border-radius:4px;padding:4px 12px;cursor:pointer}
+  .av-tools .ctl input[type=range]{flex:1}
+  .av-tools .ctl .readout{font-variant-numeric:tabular-nums;min-width:96px}
+  /* gallery: rows = positions, columns = states; each cell 96px for review + 28px as shipped */
+  .av-tools .gal{display:grid;grid-template-columns:150px repeat(4,1fr);gap:8px;align-items:center}
+  .av-tools .gal .hd{font-size:12px;color:var(--ink-dim);padding:0 0 4px 12px}
+  .av-tools .gal .lbl{font-size:13px;line-height:1.3}
+  .av-tools .gal .lbl small{display:block;color:var(--ink-dim);font-size:12px}
+  .av-tools .cell{display:flex;align-items:center;gap:12px;padding:12px;background:var(--surface);border-radius:8px;border:1px solid var(--line)}
+  /* room + roster mocks (mirrors .tf-msg / .roster-bot in style.css) */
+  .av-tools .ctx{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);gap:16px}
+  .av-tools .panel{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:8px}
+  .av-tools .msg{display:grid;grid-template-columns:28px minmax(0,1fr);column-gap:12px;padding:8px 12px;border-radius:8px}
+  .av-tools .msg .head{display:flex;align-items:baseline;gap:8px}
+  .av-tools .msg .name,.av-tools .ro .nick{font-weight:500}
+  .av-tools .msg .pos,.av-tools .ro .pos,.av-tools .ro .st{font-size:12px;color:rgba(255,255,255,.5)}
+  .av-tools .msg .text{font-size:13px;color:rgba(255,255,255,.72);margin-top:2px}
+  .av-tools .ro{display:grid;grid-template-columns:28px minmax(0,1fr);column-gap:8px;align-items:center;padding:8px;border-radius:6px}
+  .av-tools .ro:hover{background:rgba(255,255,255,.05)}
+  .av-tools .ro .tx{display:flex;align-items:baseline;gap:8px}
+  .av-tools .ro .st{display:block}
+  .av-tools .ro .st[data-state=waiting]{color:#FCE100}
+  .av-tools .note{font-size:12px;color:var(--ink-dim);margin-top:24px;max-width:80ch}
+  /* filmstrip mode: one row per position, no chrome */
+  .av-tools.strip{padding:12px;max-width:none}
+  .av-tools .strip-grid{display:grid;gap:6px;align-items:start}
+  .av-tools .strip-grid .lbl{font-size:12px;color:var(--ink-dim);align-self:center;line-height:1.3}
+  .av-tools .strip-grid .fr{display:flex;flex-direction:column;align-items:center;gap:3px}
+  .av-tools .strip-grid .tl{font-size:10px;color:var(--ink-dim);font-variant-numeric:tabular-nums}
+</style>
+</head>
+<body>
+<div class="av-tools" data-variant="tools"></div>
+<script>
+(function(){
+"use strict";
+const root=document.querySelector('[data-variant="tools"]');
+if(!root)return;
+const params=new URLSearchParams(location.search);
+
+/* ================================================================
+   Timeline vocabulary — copied from setup-overlay.ts so the acting
+   is written in the same words: kf() tracks with named eases, the
+   v-shaped blink(), and pose(t) as a pure function of time.
+   ================================================================ */
+const clamp01=u=>Math.min(1,Math.max(0,u));
+const clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
+const easeOutCubic=u=>1-Math.pow(1-u,3);
+const easeInOutCubic=u=>u<.5?4*u*u*u:1-Math.pow(-2*u+2,3)/2;
+const easeOutBack=u=>{const c=1.4;return 1+(c+1)*Math.pow(u-1,3)+c*Math.pow(u-1,2);};
+const EASES={lin:u=>u,in:u=>u*u*u,out:easeOutCubic,inout:easeInOutCubic,back:easeOutBack};
+function kf(t,keys){
+  if(t<=keys[0][0])return keys[0][1];
+  for(let i=1;i<keys.length;i++){
+    const [t1,v1,e]=keys[i],[t0,v0]=keys[i-1];
+    if(t<=t1){const u=EASES[e||"inout"](clamp01((t-t0)/(t1-t0)));return v0+(v1-v0)*u;}
+  }
+  return keys[keys.length-1][1];
+}
+function blink(t,at){const d=Math.abs(t-at);return d>70?1:Math.max(.12,d/70);}
+/* trapezoid envelope: ramps in over r ms after a, out over r ms before b */
+const env=(t,a,b,r=100)=>clamp01((t-a)/r)*clamp01((b-t)/r);
+const frac=v=>v-Math.floor(v);
+
+/* ---------- mascot geometry, verbatim ("Monocle Guy") ---------- */
+const K=2.5, FEET={x:12.35,y:15.7};
+const BODY_D="M19.9 10.0 C 19.5 7.9, 17.6 6.3, 15.4 6.5 C 13.9 6.5, 12.5 6.8, 11.4 7.4 C 9.4 7.6, 7.4 6.2, 5.7 6.7 C 5.1 6.9, 5.2 7.6, 5.9 8.1 C 7.0 8.9, 7.7 10.1, 8.5 11.1 C 9.6 12.7, 10.9 14.4, 12.6 14.4 C 14.0 14.4, 15.2 13.9, 16.1 13.0 C 17.1 12.4, 18.0 11.9, 18.6 11.2 C 19.1 10.9, 19.6 10.6, 19.9 10.0 Z";
+const BEAK_D="M17.4 9.4 L 21.9 10.3 L 18.2 11.35 Z";
+const BROW_N=[15.9,7.3,16.55,7.25,17.3,7.5,17.9,8.0];
+const BROW_R=[15.75,6.55,16.6,6.15,17.45,6.35,18.0,7.15];
+function browD(r){
+  const p=BROW_N.map((v,i)=>v+(BROW_R[i]-v)*r);
+  return `M${p[0].toFixed(2)} ${p[1].toFixed(2)} C ${p[2].toFixed(2)} ${p[3].toFixed(2)}, ${p[4].toFixed(2)} ${p[5].toFixed(2)}, ${p[6].toFixed(2)} ${p[7].toFixed(2)}`;
+}
+/* bust crop, in mascot units: head + monocle + beak + upper body; the
+   accessory zone above the crown and around the neck stays inside */
+const VIEW="9.7 3.3 13.6 13.6";
+const INK="var(--eye)", ACC="var(--accent)", TAG="var(--tag)";
+
+/* ---------- the six positions and what they wear ---------- */
+const POSITIONS=[
+  {id:"lead",name:"Team lead",nick:"Marlow",item:"Headset",tag:"#FF9E5E",
+   why:"On the call. Cup + band + boom read at 28px; the mic boom swings with follow-through on every head turn, and the beak talks."},
+  {id:"frontend",name:"Frontend dev",nick:"Juno",item:"Scarf, tag colour",tag:"#76B9ED",
+   why:"Wardrobe rather than a tool; the one item that carries the tag hue, so the row colour lives on the bird. Tails flutter while typing."},
+  {id:"backend",name:"Backend dev",nick:"Otto",item:"Spanner in the beak",tag:"#6CCB5F",
+   why:"The open jaw is a 2px notch that still reads. Tightening is a one-axis motion the beak can do: anticipate, torque, overshoot, reset."},
+  {id:"designer",name:"Designer",nick:"Wren",item:"Pencil behind the head",tag:"#C792EA",
+   why:"The sharpened tip poking up past the crown is the pencil's icon. Working, it comes out to the beak and draws on a pad; lines appear."},
+  {id:"qa",name:"QA",nick:"Pip",item:"Magnifying glass",tag:"#FCE100",
+   why:"Ring + handle is unmistakable at any size. Working, the lens comes up to the monocle eye and magnifies it, then sweeps the chest."},
+  {id:"analyst",name:"Senior analyst",nick:"Sable",item:"Spectacles",tag:"#FF99A4",
+   why:"The monocle grows into a pair: thick rim, temple arm with an ear hook, bridge hump over the beak, no chain. Working, they slide down the beak and get pushed back up with a nod."},
+];
+
+/* ================================================================
+   Pose channels. Everything the rig needs, plus item channels that
+   each position reads its own way (itemA/B/C), and `droop` (asleep).
+   ================================================================ */
+const NEUTRAL={bob:0,bodyRot:0,headTilt:0,headDX:0,headDY:0,crouch:.55,tailAng:4,blink:1,breathe:0,
+  brow:.25,slip:0,gaze:0,glint:0,beak:0,z1:0,z2:0,itemA:0,itemB:0,itemC:0,droop:0,scribble:0,pad:0,padFade:1};
+const ADD=new Set(["bob","bodyRot","headTilt","headDX","headDY","crouch","brow"]);
+/* position overlays ADD to the motion channels, replace item channels, and
+   can only close the eye further */
+function merge(p,o){
+  for(const k in o){ if(k==="blink")p.blink=Math.min(p.blink,o[k]); else if(ADD.has(k))p[k]+=o[k]; else p[k]=o[k]; }
+  return p;
+}
+
+/* ---------- per-position item acting (overlays on the state base) ---------- */
+const none=()=>({});
+const ACT={
+  lead:{idle:none,waiting:none,asleep:none,
+    working:τ=>{ const e=env(τ,120,900,80)+env(τ,1500,2300,80);          // two talk bursts
+      return {beak:e*(.5-.5*Math.cos(2*Math.PI*τ/150))*9, brow:.7,
+        headTilt:kf(τ,[[950,0],[1060,4,"back"],[1180,0,"out"],[1230,0],[1340,4,"back"],[1460,0,"out"]]), // "uh-huh"
+        headDX:kf(τ,[[2300,0],[2420,-.9,"back"],[2560,0,"inout"]])};}},   // glance aside; the mic swings
+  frontend:{
+    idle:τ=>({itemA:Math.sin(2*Math.PI*2*τ/5200)*2.5}),
+    waiting:τ=>({itemA:Math.sin(2*Math.PI*2*τ/3600)*2}),
+    asleep:none,
+    working:τ=>{ const e=env(τ,100,1300)+env(τ,1550,2450);               // typing bursts
+      return {itemA:Math.sin(2*Math.PI*7*τ/2600)*9, bob:-Math.abs(Math.sin(2*Math.PI*11*τ/2600))*.6*e,
+        headTilt:kf(τ,[[1300,0],[1420,-5,"back"],[1550,0,"inout"]]),       // glance at the screen
+        brow:kf(τ,[[1300,0],[1420,.9,"back"],[1550,0,"inout"]])};}},
+  backend:{idle:none,waiting:none,asleep:none,
+    working:τ=>{ const tq=kf(τ,[[130,0],[430,5,"back"],[800,5],[1000,0,"inout"],[1380,0],[1680,5,"back"],[2050,5],[2250,0,"inout"]]);
+      return {itemA:kf(τ,[[0,0],[130,-9,"out"],[430,60,"back"],[800,60,"lin"],[1000,0,"inout"],          // anticipate, torque
+                          [1250,0,"lin"],[1380,-9,"out"],[1680,60,"back"],[2050,60,"lin"],[2250,0,"inout"]]),
+        headTilt:tq, crouch:tq*.04, brow:-.2};}},
+  designer:{idle:none,waiting:none,asleep:none,
+    working:τ=>{ const e=env(τ,150,950)+env(τ,1350,2150); const jit=e*Math.sin(2*Math.PI*τ/110);
+      return {itemA:1, pad:1, itemB:kf(τ,[[150,-1],[950,1,"lin"],[1150,1],[1350,-1,"inout"],[2150,1,"lin"],[2300,1],[2500,-1,"inout"]]),
+        itemC:kf(τ,[[1150,0],[1350,1,"inout"],[2300,1],[2500,0,"inout"]]),
+        scribble:kf(τ,[[150,0],[950,.5,"lin"],[1350,.5],[2150,1,"lin"]]),
+        padFade:kf(τ,[[2250,1],[2480,0,"out"],[2600,0]]),                  // fresh sheet before the loop
+        headTilt:jit*1.6+kf(τ,[[950,0],[1150,-6,"back"],[1300,-6],[1450,0,"inout"]]),   // hmm… (looks up)
+        headDY:jit*.35, brow:kf(τ,[[950,0],[1150,1,"back"],[1300,1],[1450,0,"inout"],[2150,0],[2350,.7,"back"],[2600,0,"inout"]])};}},
+  qa:{idle:none,waiting:none,asleep:none,
+    working:τ=>{ const sw=kf(τ,[[0,0],[300,0,"lin"],[950,1,"inout"],[1350,1,"lin"],[1470,.8,"out"],[1620,1,"back"],[2200,0,"inout"]]);
+      return {itemA:1,itemB:sw,headTilt:sw*5,
+        brow:kf(τ,[[1350,0],[1470,.9,"back"],[1650,.9],[1850,0,"inout"]])};}},   // spotted something
+  analyst:{idle:none,waiting:none,asleep:none,
+    working:τ=>({headDX:kf(τ,[[80,-.6],[900,1,"inout"],[1000,-.6,"out"],[1800,1,"inout"],[1900,-.6,"out"]]),   // reading lines
+      gaze:kf(τ,[[80,-.4],[900,.9,"inout"],[1000,-.4,"out"],[1800,.9,"inout"],[1900,-.4,"out"]]),
+      slip:kf(τ,[[0,0],[1900,.55,"lin"],[2000,.55],[2140,-.12,"back"],[2350,0,"inout"]]),          // slide down, push up
+      headTilt:kf(τ,[[2000,0],[2110,-7,"back"],[2350,0,"inout"]])})},
+};
+
+/* ================================================================
+   The four states. Each is a seamless loop (ends where it starts);
+   the state's τ=0 pose is its "rest" pose, which the 300ms entry
+   blends into from whatever the bird was doing.
+   ================================================================ */
+const STATES={
+  idle:{ms:5200,at:(τ,pos)=>merge({...NEUTRAL,
+    breathe:Math.sin(2*Math.PI*2*τ/5200)*.012,
+    blink:Math.min(blink(τ,900),blink(τ,2600),blink(τ,2790),blink(τ,4300)),      // one, a double, one
+    gaze:kf(τ,[[1000,0],[1160,.7,"out"],[1900,.7,"lin"],[2100,0,"inout"],
+               [3100,0],[3400,-.6,"back"],[4000,-.6,"lin"],[4500,0,"inout"]]),
+    headTilt:kf(τ,[[3100,0],[3400,-9,"back"],[4000,-9,"lin"],[4500,0,"inout"]]), // chin-up glance aside
+    headDX:kf(τ,[[3100,0],[3400,-.7,"back"],[4000,-.7,"lin"],[4500,0,"inout"]]),
+    headDY:kf(τ,[[3100,0],[3400,-.5,"back"],[4000,-.5,"lin"],[4500,0,"inout"]]),
+    brow:kf(τ,[[3100,.25],[3400,.8,"back"],[4000,.8,"lin"],[4500,.25,"inout"]]),
+    glint:(τ-1450)/500,
+  },ACT[pos.id].idle(τ))},
+
+  working:{ms:2600,at:(τ,pos)=>merge({...NEUTRAL,
+    breathe:Math.sin(2*Math.PI*2*τ/2600)*.012,
+    headTilt:8,headDY:.9,headDX:.6,bodyRot:2.5,brow:-.2,                          // head down, focused
+    blink:blink(τ,1150),
+  },ACT[pos.id].working(τ))},
+
+  waiting:{ms:3600,at:(τ,pos)=>merge({...NEUTRAL,
+    breathe:Math.sin(2*Math.PI*2*τ/3600)*.015,
+    headTilt:kf(τ,[[1450,-7],[1580,-3,"out"],[1660,-12,"back"],[1900,-9,"lin"],[2250,-7,"inout"]]),
+    headDX:1.3,headDY:-.3,bodyRot:3.5,gaze:.5,                                    // lean-in, eye front
+    blink:Math.min(1.06,blink(τ,800),blink(τ,2900)),                              // wide
+    brow:kf(τ,[[1400,1],[1500,.6,"out"],[1620,1.2,"back"],[2400,1,"inout"]]),
+    /* the attention beat: squat, hop, land; the monocle pops on the landing */
+    crouch:kf(τ,[[1450,.55],[1580,.95,"out"],[1660,.2,"out"],[1820,.3,"lin"],[1900,.85,"out"],[2250,.55,"inout"]]),
+    bob:kf(τ,[[1600,0],[1660,-3.6,"out"],[1760,-3.9,"lin"],[1880,0,"in"]]),
+    slip:kf(τ,[[1880,0],[1960,-.7,"back"],[2300,0,"inout"]]),
+    beak:kf(τ,[[1880,0],[1940,9,"out"],[2060,0,"inout"]]),                        // a chirp
+  },ACT[pos.id].waiting(τ))},
+
+  asleep:{ms:6400,at:(τ,pos)=>{ const sway=env(τ,1500,5200,300)*Math.sin(2*Math.PI*(τ-1500)/1100)*.04;
+    return merge({...NEUTRAL,
+    breathe:Math.sin(2*Math.PI*1.5*τ/6400)*.024,
+    blink:kf(τ,[[0,.45],[1500,.2,"inout"],[3600,.12,"lin"],[5200,.12],[5700,.1,"lin"],[5850,.5,"back"],[6100,.45,"lin"]])+sway,
+    headTilt:kf(τ,[[0,8],[1500,12,"inout"],[3600,14,"lin"],[5200,14],[5700,19,"out"],[5850,7,"back"],[6400,8,"inout"]]),  // nod-off, jerk
+    headDY:kf(τ,[[0,1.4],[1500,2.2,"inout"],[5200,2.6,"lin"],[5700,3,"out"],[5850,1.2,"back"],[6400,1.4,"inout"]]),
+    headDX:kf(τ,[[0,.5],[1500,.9,"inout"],[5700,1.1,"lin"],[5850,.4,"back"],[6400,.5,"inout"]]),
+    bodyRot:kf(τ,[[0,2],[1500,3.5,"inout"],[5700,4,"lin"],[5850,1.5,"back"],[6400,2,"inout"]]),
+    crouch:kf(τ,[[0,.75],[1500,.85,"inout"],[5700,.9,"lin"],[5850,.7,"back"],[6400,.75,"inout"]]),
+    brow:kf(τ,[[0,-.3],[1500,-.45,"inout"],[5700,-.45],[5850,.1,"back"],[6400,-.3,"inout"]]),
+    slip:kf(τ,[[0,.6],[1500,.9,"inout"],[5200,1,"lin"],[5850,.5,"back"],[6400,.6,"inout"]]),
+    droop:kf(τ,[[0,.6],[1500,1,"inout"],[5700,1],[5850,.55,"back"],[6400,.6,"inout"]]),
+    z1:frac((τ-600)/3200)*1.8, z2:frac((τ-1600)/3200)*1.8,
+  },ACT[pos.id].asleep(τ));}},
+};
+
+/* entry: 300ms from `from` (the last pose before the switch; NEUTRAL when
+   frozen by ?t) into the state's rest pose. Item + head channels take the
+   back ease for a beat of overshoot; the rest ease out. */
+const ENTRY=300;
+const BACK=new Set(["itemA","itemB","itemC","droop","headTilt","headDX","headDY","brow","slip","bob"]);
+function core(t,state,pos,from){
+  if(t<=0)return {...from};
+  const st=STATES[state];
+  if(t<ENTRY){
+    const tgt=st.at(0,pos),u=t/ENTRY,o={};
+    for(const k in NEUTRAL){const e=(BACK.has(k)?easeOutBack:easeOutCubic)(u);o[k]=from[k]+(tgt[k]-from[k])*e;}
+    return o;
+  }
+  return st.at((t-ENTRY)%st.ms,pos);
+}
+/* follow-through, pure in t: the items answer the trunk's angular and
+   vertical velocity through a damped-oscillator kernel (350ms window), so a
+   head turn drags them behind, they overshoot once, and settle */
+const DT=35,TAPS=10;
+function lagOf(t,state,pos,from){
+  let lr=0,ly=0,prev=core(t,state,pos,from);
+  for(let k=0;k<TAPS;k++){
+    const nxt=core(t-(k+1)*DT,state,pos,from);
+    const h=Math.exp(-k*DT/150)*Math.cos(2*Math.PI*k*DT/300);
+    lr+=h*((prev.bodyRot+prev.headTilt*.55)-(nxt.bodyRot+nxt.headTilt*.55));
+    ly+=h*((prev.bob+prev.crouch*2.2)-(nxt.bob+nxt.crouch*2.2));
+    prev=nxt;
+  }
+  return {rot:clamp(-lr,-16,16),y:clamp(-ly*.25,-1.2,1.2)};
+}
+function pose(t,state,pos,from=NEUTRAL){const p=core(t,state,pos,from);p.lag=lagOf(t,state,pos,from);return p;}
+
+/* ================================================================
+   Rig. Same construction as buildScene() in setup-overlay.ts, minus
+   the wire, cropped to a bust, with a behind-layer and a front-layer
+   for the accessory inside the breathing group so it rides the trunk.
+   ================================================================ */
+const NS="http://www.w3.org/2000/svg";
+const el=(n,at)=>{const e=document.createElementNS(NS,n);for(const k in at)e.setAttribute(k,at[k]);return e;};
+const stroke=(d,c,w,extra={})=>el("path",{d,fill:"none",stroke:c,"stroke-width":w,"stroke-linecap":"round","stroke-linejoin":"round",...extra});
+const R=(a,x,y)=>{const r=a*Math.PI/180,c=Math.cos(r),s=Math.sin(r);return [x*c-y*s,x*s+y*c];};
+const f2=v=>v.toFixed(2);
+
+/* ---------- the items ---------- */
+const ITEMS={
+  /* headset: ink cup on the cheek, ink band up to the crown, boom (light
+     underlay + ink core so it reads over the head AND the dark ground) */
+  lead(L){
+    const BOOM="M14.6 10.3 C 15.3 11.9, 17.3 12.65, 19.2 12.35";
+    const boom=el("g",{});
+    boom.append(stroke(BOOM,"currentColor",.9),stroke(BOOM,INK,.34),
+      el("circle",{cx:19.75,cy:12.3,r:.66,fill:"currentColor"}),el("circle",{cx:19.75,cy:12.3,r:.32,fill:INK}));
+    L.front.append(stroke("M14.55 8.75 C 14.35 7.75, 14.75 6.85, 15.6 6.45 C 15.9 6.32, 16.2 6.32, 16.5 6.4",INK,.5),
+      el("rect",{x:13.6,y:8.35,width:1.5,height:2.1,rx:.6,fill:INK}),boom);
+    return {apply(p){boom.setAttribute("transform",`translate(0 ${f2(p.lag.y*.3)}) rotate(${f2(p.lag.rot*1.6+p.droop*30)} 14.5 10.2)`);}};
+  },
+  /* scarf: the one tag-coloured item; band across the neck, knot at the
+     back, two tails that flutter and lag */
+  frontend(L){
+    const t1=el("path",{d:"M11.9 10.6 L9.9 9.5 L10.35 10.8 Z",fill:TAG});
+    const t2=el("path",{d:"M11.9 11.0 L9.8 11.8 L10.65 12.2 Z",fill:TAG});
+    L.front.append(t1,t2,
+      el("path",{d:"M11.8 10.3 C 13.3 11.6, 15.3 12.4, 17.7 12.3 C 17.3 12.9, 16.7 13.35, 16.0 13.55 C 13.9 13.25, 12.4 12.35, 11.3 11.3 Z",fill:TAG,stroke:INK,"stroke-width":.16}),
+      el("circle",{cx:11.9,cy:10.8,r:.62,fill:TAG,stroke:INK,"stroke-width":.16}));
+    return {apply(p){const l=p.lag.rot,y=f2(p.lag.y*.35);
+      t1.setAttribute("transform",`translate(0 ${y}) rotate(${f2(p.itemA+l*2.2+p.droop*26)} 11.9 10.65)`);
+      t2.setAttribute("transform",`translate(0 ${y}) rotate(${f2(-p.itemA*.7+l*1.8+p.droop*18)} 11.9 10.95)`);}};
+  },
+  /* spanner: open jaw up, ring end down, gripped mid-handle by the beak;
+     one currentColor fill with an ink keyline */
+  backend(L){
+    const D="M-.33 -2.9 L-.33 -1.9 L.33 -1.9 L.33 -2.9 A.95 .95 0 1 1 -.33 -2.9 Z M-.36 -1.1 H.36 V2.1 H-.36 Z"+
+      " M-.68 2.75 a.68 .68 0 1 0 1.36 0 a.68 .68 0 1 0 -1.36 0 Z M-.27 2.75 a.27 .27 0 1 1 .54 0 a.27 .27 0 1 1 -.54 0 Z";
+    const g=el("g",{});
+    g.append(el("path",{d:D,fill:"currentColor",stroke:INK,"stroke-width":.2,"stroke-linejoin":"round"}));
+    L.front.append(g);
+    return {apply(p){g.setAttribute("transform",`translate(${f2(20.3)} ${f2(10.6+p.droop*.6+p.lag.y*.3)}) rotate(${f2(-28+p.itemA+p.lag.rot*1.2+p.droop*88)}) scale(1.1)`);}};
+  },
+  /* pencil: tucked behind the head (tip up past the crown); pulled out to
+     the beak when working and used on a pad that rises at the chest */
+  designer(L){
+    const mk=()=>{const g=el("g",{});g.append(
+      el("rect",{x:-2.7,y:-.47,width:4.6,height:.94,rx:.18,fill:"currentColor",stroke:INK,"stroke-width":.2}),
+      el("path",{d:"M1.9 -.47 L2.95 0 L1.9 .47 Z",fill:"currentColor",stroke:INK,"stroke-width":.2,"stroke-linejoin":"round"}),
+      el("path",{d:"M2.55 -.17 L2.95 0 L2.55 .17 Z",fill:INK}),
+      stroke("M-2.15 -.47 V.47 M-1.85 -.47 V.47",INK,.16));return g;};
+    const tucked=mk(),held=mk();
+    L.behind.append(tucked);L.front.append(held);
+    const pad=el("g",{}),ink={fill:"none",stroke:INK,"stroke-linecap":"round","stroke-width":.34,pathLength:"1","stroke-dasharray":"1","stroke-dashoffset":"1"};
+    const l1=el("path",{...ink,d:"M18.45 13.15 C 18.9 12.75, 19.3 13.45, 19.8 13.1 C 20.25 12.8, 20.6 13.4, 21.05 13.15"});
+    const l2=el("path",{...ink,d:"M18.45 14.05 C 18.9 13.65, 19.3 14.35, 19.75 14.05 C 20.0 13.9, 20.2 14.15, 20.4 14.05"});
+    pad.append(el("rect",{x:17.9,y:12.15,width:4.6,height:3.1,rx:.3,fill:"currentColor",opacity:.92}),l1,l2);
+    L.stage.append(pad);
+    return {apply(p){const u=p.itemA;
+      const x=15.6+(21.3-15.6)*u+p.itemB*u*1.0, y=5.95+p.droop*.7+(10.7+p.itemC*.9-5.95)*u, a=-40+p.droop*26+(125+40)*u+p.lag.rot*.35*(1-u);
+      const out=u>.35; tucked.style.visibility=out?"hidden":"visible"; held.style.visibility=out?"visible":"hidden";
+      (out?held:tucked).setAttribute("transform",`translate(${f2(x)} ${f2(y)}) rotate(${f2(a)}) scale(1.2)`);
+      pad.style.visibility=p.pad>.01?"visible":"hidden";
+      pad.setAttribute("transform",`translate(0 ${f2((1-p.pad)*3)})`);pad.style.opacity=f2(p.pad);
+      l1.setAttribute("stroke-dashoffset",f2(1-clamp01(p.scribble*2)));l2.setAttribute("stroke-dashoffset",f2(1-clamp01(p.scribble*2-1)));
+      l1.style.opacity=l2.style.opacity=f2(p.padFade);}};
+  },
+  /* magnifier: lens + handle, handle end in the beak. Hangs at rest; comes
+     up over the monocle when working (the eye magnifies under it) */
+  qa(L){
+    const g=el("g",{});
+    /* light rim + ink inner line so the glass reads over the chest as well as the ground */
+    g.append(el("circle",{cx:0,cy:0,r:2.1,fill:"currentColor","fill-opacity":.12,stroke:"currentColor","stroke-width":.6}),
+      el("circle",{cx:0,cy:0,r:2.1,fill:"none",stroke:INK,"stroke-width":.2}),
+      stroke("M1.55 1.55 L2.6 2.6","currentColor",.9),stroke("M1.55 1.55 L2.6 2.6",INK,.3));
+    L.front.append(g);
+    const HANG=[17.5,12.7,-80],UP=[17.1,9.05,-20],CHEST=[18.6,12.6,-65];
+    return {apply(p){
+      const q=HANG.map((v,i)=>v+(UP[i]-v)*p.itemA+(CHEST[i]-UP[i])*p.itemB);      // lens centre + angle
+      const [hx,hy]=R(q[2],2.6,2.6),gx=q[0]+hx,gy=q[1]+hy;                          // the grip (handle end)
+      g.setAttribute("transform",`rotate(${f2(p.lag.rot*1.4+p.droop*28)} ${f2(gx)} ${f2(gy)}) translate(${f2(q[0])} ${f2(q[1]+p.droop*.4)}) rotate(${f2(q[2])})`);
+      const d=Math.hypot(q[0]-(17+p.gaze*.4+p.headDX*.35),q[1]-(9+p.headDY*.35));
+      return 1+.5*clamp01(1.3-d/1.3);}};                                            // eye scale under the lens
+  },
+  /* spectacles: the monocle's twin. Thicker rim, temple arm to the back,
+     bridge + far rim past the beak; the chain goes */
+  analyst(L){
+    L.chain.style.display="none";L.ring.setAttribute("stroke-width",".9");
+    const g=el("g",{});
+    g.append(stroke("M15.1 8.7 C 14.3 8.45, 13.3 8.3, 12.4 8.45 C 12.05 8.5, 11.9 8.85, 12.1 9.3",ACC,.7),   // temple + ear hook
+      stroke("M18.9 8.7 C 19.3 8.1, 19.95 8.15, 20.4 8.75",ACC,.7));                                   // bridge hump
+    L.face.append(g);
+    return {apply(p){const t=`translate(${f2(p.slip*.25)} ${f2(p.slip*.55)}) rotate(${f2(p.droop*9)} 17 9)`;
+      g.setAttribute("transform",t);L.ring.setAttribute("transform",t);}};
+  },
+};
+
+function buildAvatar(pos){
+  const svg=el("svg",{viewBox:VIEW,"aria-hidden":"true"});
+  const trunk=el("g",{}),breatheG=el("g",{}),behind=el("g",{}),front=el("g",{}),stage=el("g",{});
+  const body=el("path",{d:BODY_D,fill:"currentColor"});
+  const beak=el("path",{d:BEAK_D,fill:"currentColor"});
+  const face=el("g",{});
+  const brow=stroke(browD(0),INK,.75);
+  const eye=el("ellipse",{cx:17,cy:9,rx:.95,ry:.95,fill:INK});
+  const ring=el("circle",{cx:17,cy:9,r:1.95,fill:"none",stroke:ACC,"stroke-width":".6"});
+  const chain=stroke("M17.6 10.8 C 17.8 11.7, 17.5 12.5, 16.9 13.1",ACC,.5);
+  const glint=el("circle",{cx:17,cy:9,r:1.95,fill:"none",stroke:"#fff","stroke-width":".7","stroke-linecap":"round",
+    pathLength:"1","stroke-dasharray":"0.12 0.88",transform:"rotate(-165 17 9)"});
+  face.append(brow,eye,ring,chain,glint);
+  breatheG.append(behind,body,beak,face,front);
+  trunk.appendChild(breatheG);
+  svg.append(trunk,stage);
+  const zs=[2.6,2.0].map(fs=>{const z=el("text",{"font-size":fs,"font-style":"italic","font-weight":"600",fill:"currentColor","text-anchor":"middle"});
+    z.textContent="z";z.style.visibility="hidden";stage.appendChild(z);return z;});
+  const item=ITEMS[pos.id]({behind,front,stage,face,ring,chain});
+
+  function apply(p){
+    const dy=(p.bob+p.crouch*2.2)/K;
+    const tilt=p.bodyRot+p.headTilt*.55-p.tailAng*.12;
+    trunk.setAttribute("transform",`translate(0 ${dy.toFixed(3)}) rotate(${f2(tilt)} 13 11.5)`);
+    breatheG.setAttribute("transform",`translate(${FEET.x} ${FEET.y}) scale(1 ${(1+p.breathe).toFixed(4)}) translate(${-FEET.x} ${-FEET.y})`);
+    face.setAttribute("transform",`translate(${f2(p.headDX*.35)} ${f2(p.headDY*.35)})`);
+    brow.setAttribute("d",browD(p.brow));
+    beak.setAttribute("transform",`rotate(${f2(p.beak)} 17.5 10.4)`);
+    const slipT=`translate(${f2(p.slip*.25)} ${f2(p.slip*.55)})`;
+    ring.setAttribute("transform",slipT);chain.setAttribute("transform",slipT);
+    const es=item.apply(p)||1;                                   // items may magnify the eye
+    eye.setAttribute("cx",f2(17+p.gaze*.4));
+    eye.setAttribute("rx",f2(.95*es));eye.setAttribute("ry",f2(.95*es*p.blink));
+    if(p.glint>0&&p.glint<1){glint.style.visibility="visible";glint.setAttribute("stroke-dashoffset",f2(-p.glint*.38));
+      glint.style.opacity=f2(Math.sin(Math.PI*p.glint)*.9);}else glint.style.visibility="hidden";
+    /* z's drift up-right off the crown and fade at the rim */
+    zs.forEach((z,i)=>{const ph=i?p.z2:p.z1;
+      if(ph>0&&ph<1){z.style.visibility="visible";z.setAttribute("x",f2(18.4+ph*1.8));z.setAttribute("y",f2(6.9-ph*2.4));
+        z.style.opacity=f2(Math.sin(Math.PI*ph)*.75);}else z.style.visibility="hidden";});
+  }
+  const holder=document.createElement("div");
+  holder.className="av";holder.style.setProperty("--tag",pos.tag);holder.appendChild(svg);
+  return {el:holder,apply};
+}
+
+/* ================================================================
+   Page. ?strip=1&state=working&n=12 renders a filmstrip; ?t=ms
+   freezes everything at t; otherwise the gallery + context strip.
+   ================================================================ */
+const STATE_NAMES=["idle","working","waiting","asleep"];
+const avatarAt=(pos,size)=>{const a=buildAvatar(pos);a.el.style.setProperty("--s",size+"px");return a;};
+
+if(params.has("strip")){
+  root.classList.add("strip");
+  const state=STATE_NAMES.includes(params.get("state"))?params.get("state"):"idle";
+  const n=Math.max(2,+params.get("n")||12);
+  const span=ENTRY+STATES[state].ms;                              // entry + one full loop
+  const only=params.get("pos");
+  const grid=document.createElement("div");grid.className="strip-grid";
+  grid.style.gridTemplateColumns=`110px repeat(${n},96px)`;
+  for(const pos of POSITIONS){
+    if(only&&pos.id!==only)continue;
+    const lbl=document.createElement("div");lbl.className="lbl";lbl.innerHTML=`${pos.name}<br>${pos.item}<br>${state}`;grid.appendChild(lbl);
+    for(let i=0;i<n;i++){
+      const t=span*i/n,p=pose(t,state,pos);
+      const fr=document.createElement("div");fr.className="fr";
+      const big=avatarAt(pos,96),small=avatarAt(pos,28);big.apply(p);small.apply(p);
+      const tl=document.createElement("div");tl.className="tl";tl.textContent=(t/1000).toFixed(2)+"s";
+      fr.append(big.el,small.el,tl);grid.appendChild(fr);
+    }
+  }
+  root.appendChild(grid);
+  return;
+}
+
+root.insertAdjacentHTML("beforeend",`
+  <h1>Team avatars · B: tools and wardrobe</h1>
+  <p class="sub">Monocle Guy, bust-cropped into the room's 28px circle, told apart by what he wears or holds. The item is part of the rig: it lags the head with follow-through, takes part in the working beat, and droops asleep. Every cell is pose(t, state): scrub, freeze with ?t=, filmstrip with ?strip=1&amp;state=working&amp;n=12.</p>
+  <table><thead><tr><th>Position</th><th>Item</th><th>Why</th></tr></thead><tbody>
+  ${POSITIONS.map(p=>`<tr><td><span class="sw" style="--tag:${p.tag}"></span>${p.name}</td><td>${p.item}</td><td class="why">${p.why}</td></tr>`).join("")}
+  </tbody></table>
+  <h2>Gallery</h2>
+  <div class="ctl">
+    <select id="avt-state"><option value="col">state by column</option>${STATE_NAMES.map(s=>`<option value="${s}">all ${s}</option>`).join("")}</select>
+    <button id="avt-play">Pause</button>
+    <input id="avt-scrub" type="range" min="0" max="8000" step="10" value="0">
+    <span class="readout" id="avt-ro">0.00s</span>
+  </div>
+  <div class="gal" id="avt-gal"><div></div>${STATE_NAMES.map(s=>`<div class="hd">${s}</div>`).join("")}</div>
+  <h2>In context</h2>
+  <div class="ctx"><div class="panel" id="avt-room"></div><div class="panel" id="avt-roster"></div></div>
+  <p class="note">Crop: viewBox ${VIEW} in mascot units, so the eye sits a touch above centre and the beak reaches the right edge. Silhouette is currentColor (ink here, whatever the row sets in the app); the monocle ring is the accent; the tag hue lives in the circle tint, its keyline, and the frontend scarf.</p>`);
+
+const cells=[];
+function addCell(parent,pos,state,size,mode){
+  const av=avatarAt(pos,size);parent.appendChild(av.el);
+  const c={pos,state,col:state,avs:[av],switchT:0,from:NEUTRAL,last:NEUTRAL,mode};cells.push(c);return c;
+}
+const gal=root.querySelector("#avt-gal");
+for(const pos of POSITIONS){
+  const lbl=document.createElement("div");lbl.className="lbl";lbl.innerHTML=`<span class="sw" style="--tag:${pos.tag}"></span>${pos.name}<small>${pos.item}</small>`;gal.appendChild(lbl);
+  for(const s of STATE_NAMES){
+    const cell=document.createElement("div");cell.className="cell";gal.appendChild(cell);
+    const c=addCell(cell,pos,s,96,"gal");
+    const small=avatarAt(pos,28);cell.appendChild(small.el);c.avs.push(small);
+  }
+}
+/* room rows + roster, at the real 28px next to real text */
+const room=root.querySelector("#avt-room");
+[["designer","working","Moved the empty state's illustration up 8px and gave the caption the tertiary colour; the card now breathes."],
+ ["qa","waiting","Two of the three checkout flows pass. The third needs a decision from you: keep the legacy coupon path or drop it?"],
+ ["backend","idle","Migration 0042 is in. The session table has the new index; p95 on the list query went from 140ms to 9ms."]].forEach(([id,state,text])=>{
+  const pos=POSITIONS.find(p=>p.id===id);
+  const row=document.createElement("div");row.className="msg";
+  const c=addCell(row,pos,state,28,"ctx");
+  row.insertAdjacentHTML("beforeend",`<div><div class="head"><span class="name">${pos.nick}</span><span class="pos">${pos.name}</span></div><div class="text">${text}</div></div>`);
+  room.appendChild(row);
+});
+const roster=root.querySelector("#avt-roster");
+const ROSTER=["working","idle","asleep","working","waiting","idle"];
+POSITIONS.forEach((pos,i)=>{
+  const row=document.createElement("div");row.className="ro";
+  addCell(row,pos,ROSTER[i],28,"ctx");
+  row.insertAdjacentHTML("beforeend",`<div><div class="tx"><span class="nick">${pos.nick}</span><span class="pos">${pos.name}</span></div><span class="st" data-state="${ROSTER[i]}">${ROSTER[i]}</span></div>`);
+  roster.appendChild(row);
+});
+
+/* ---------- player ---------- */
+const sel=root.querySelector("#avt-state"),playBtn=root.querySelector("#avt-play"),scrub=root.querySelector("#avt-scrub"),ro=root.querySelector("#avt-ro");
+let playing=!params.has("t"),T=+params.get("t")||0,last=performance.now();
+if(STATE_NAMES.includes(params.get("state")))sel.value=params.get("state");
+function setState(v){for(const c of cells){if(c.mode!=="gal")continue;const s=v==="col"?c.col:v;if(s===c.state)continue;
+  c.from={...c.last};c.switchT=T;c.state=s;}}
+setState(sel.value);
+function frame(now){
+  const dt=now-last;last=now;if(playing)T+=dt;
+  for(const c of cells){const p=pose(Math.max(0,T-c.switchT),c.state,c.pos,c.from);c.last=p;for(const a of c.avs)a.apply(p);}
+  scrub.value=Math.min(T,8000);ro.textContent=(T/1000).toFixed(2)+"s";
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+sel.onchange=()=>setState(sel.value);
+playBtn.onclick=()=>{playing=!playing;playBtn.textContent=playing?"Pause":"Play";};
+scrub.oninput=()=>{playing=false;playBtn.textContent="Play";T=+scrub.value;for(const c of cells){c.switchT=0;c.from=NEUTRAL;}};
+addEventListener("keydown",e=>{
+  if(e.key===" "){e.preventDefault();playBtn.onclick();}
+  if(e.key==="ArrowRight"||e.key==="ArrowLeft"){playing=false;playBtn.textContent="Play";T+=(e.key==="ArrowRight"?1:-1)*(e.shiftKey?10:50);}
+});
+})();
+</script>
+</body>
+</html>

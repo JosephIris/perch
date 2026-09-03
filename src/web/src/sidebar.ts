@@ -282,6 +282,18 @@ export class Sidebar {
   /** Same one-render opt-in as `justToggled`, for the Idle chevron. */
   private justToggledIdle: string | null = null;
 
+  /** Projects whose "Bots" drawer is open. Not persisted, like `idleOpen`:
+   *  the room is where you talk to the team, so the drawer starts shut every
+   *  launch. It does open by itself when a bot's tab becomes the active one
+   *  (the room's roster sent you there), so the selection isn't invisible. */
+  private readonly botsOpen = new Set<string>();
+
+  /** Same one-render opt-in as `justToggled`, for the Bots chevron. */
+  private justToggledBots: string | null = null;
+
+  /** The active tab as of the last render — to notice it MOVING to a bot. */
+  private lastActiveId = "";
+
   /** Whether the "Hidden" drawer (hidden projects) is unfolded. NOT persisted,
    *  same reasoning as `idleOpen`: hidden is the resting state you chose, and a
    *  peek that outlived the session would just be the full list again, one
@@ -332,6 +344,7 @@ export class Sidebar {
     this.closedEl = closedEl;
 
     this.newSessionBtn.addEventListener("click", () => {
+      closeTeamRoom();   // the new tab is where you're going
       send({ type: "session.new" });
     });
 
@@ -451,6 +464,11 @@ export class Sidebar {
     for (const p of projects)
       for (const bot of p.team?.bots ?? [])
         if (bot.sessionId) this.botBySession.set(bot.sessionId, { bot, project: p });
+    if (activeId !== this.lastActiveId) {
+      this.lastActiveId = activeId;
+      const b = this.botBySession.get(activeId);
+      if (b) this.botsOpen.add(b.project.id);
+    }
     this.renderClosed(closed);
     this.markRegrouped(sessions);
     const modeChanged = this.lastMode !== null && mode !== this.lastMode;
@@ -715,6 +733,7 @@ export class Sidebar {
 
     this.justToggled = null;   // one render only
     this.justToggledIdle = null;
+    this.justToggledBots = null;
     this.justToggledHidden = false;
 
     // A PERMANENT way to add another project. This used to live only in the
@@ -750,13 +769,22 @@ export class Sidebar {
     // still name the session — and an agent that needs you can't hide, because
     // the header wears its group's state as a dot.
     if (!collapsed && tabs.length) {
+      // A bot's tab lives under the team row, behind a "Bots" chevron that
+      // starts shut: the room is where you talk to the team, and a row per
+      // bot in the main list invites focusing on one — the opposite of the
+      // point. Slept bots fold in there too, not in Idle.
+      const botTabs = tabs.filter((t) => this.botBySession.has(t.id));
+      const own = tabs.filter((t) => !this.botBySession.has(t.id));
       // Tabs you deliberately slept live in their own drawer at the foot of
       // the branch, so the active list only ever shows work in progress.
       // Both partitions are stable, so each keeps the host's order — which
       // for these two runs already means newest-first (see PlaceAtProjectTop
       // / PlaceAtDormantTop).
-      const live = tabs.filter((t) => !t.dormant);
-      const idle = tabs.filter((t) => t.dormant);
+      const live = own.filter((t) => !t.dormant);
+      const idle = own.filter((t) => t.dormant);
+
+      if (botTabs.length)
+        frag.appendChild(this.botsGroup(project.id, botTabs, activeId, live.length + idle.length > 0));
 
       if (live.length) {
         const list = this.sessionList(live, activeId, true);
@@ -1099,6 +1127,69 @@ export class Sidebar {
       const list = this.sessionList(idle, activeId, true);
       list.classList.add("session-list--idle");
       if (this.justToggledIdle === projectId) list.classList.add("session-list--enter");
+      wrap.appendChild(list);
+    }
+    return wrap;
+  }
+
+  /** A project's "Bots" drawer: the team's tabs, folded under the team row.
+   *  Same drawer as Idle (same classes, same chevron), shut by default. When
+   *  ordinary tabs follow it (`continues`) the tree's trunk runs on through.
+   *
+   *  Shut, the head wears the bots' most urgent state as a dot — folding
+   *  them away must never hide one that's blocked on you. */
+  private botsGroup(
+    projectId: string,
+    bots: SessionView[],
+    activeId: string,
+    continues: boolean
+  ): HTMLElement {
+    const open = this.botsOpen.has(projectId);
+    const wrap = document.createElement("div");
+    wrap.className = "idle-group idle-group--bots" + (continues ? " idle-group--mid" : "");
+
+    const head = document.createElement("button");
+    head.type = "button";
+    head.className = "idle-group__head";
+    head.setAttribute("aria-expanded", String(open));
+    head.title = open ? "Hide the bots' tabs" : "Show the bots' tabs";
+
+    const chev = chevronSvg("idle-group__chev");
+    chev.dataset.open = String(open);
+    if (this.justToggledBots === projectId) chev.classList.add("idle-group__chev--turning");
+    head.appendChild(chev);
+
+    const label = document.createElement("span");
+    label.textContent = "Bots";
+    head.appendChild(label);
+
+    const count = document.createElement("span");
+    count.className = "idle-group__count";
+    count.textContent = String(bots.length);
+    head.appendChild(count);
+
+    const state = aggregateState(bots);
+    if (!open && state !== "idle") {
+      const dot = document.createElement("span");
+      dot.className = "idle-group__state";
+      dot.dataset.state = state;
+      dot.title = `Bots: ${state}`;
+      head.appendChild(dot);
+    }
+
+    head.addEventListener("click", () => {
+      if (open) this.botsOpen.delete(projectId);
+      else this.botsOpen.add(projectId);
+      this.justToggledBots = projectId;
+      this.rerender?.();
+    });
+    wrap.appendChild(head);
+
+    if (open) {
+      const list = this.sessionList(bots, activeId, true);
+      list.classList.add("session-list--bots");
+      if (continues) list.classList.add("session-list--continues");
+      if (this.justToggledBots === projectId) list.classList.add("session-list--enter");
       wrap.appendChild(list);
     }
     return wrap;
@@ -1543,6 +1634,9 @@ export class Sidebar {
     item.appendChild(close);
 
     item.addEventListener("click", () => {
+      // The tab is where you're going: the team room (if it's up) lifts so
+      // the workspace under it shows, even when this tab is already active.
+      closeTeamRoom();
       if (!active) send({ type: "session.select", id: s.id });
     });
 

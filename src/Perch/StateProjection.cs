@@ -81,7 +81,7 @@ internal static class StateProjection
         ProjectStore? projects = null, string sidebarMode = "sessions",
         IReadOnlyList<ModelUsageLimit>? modelLimits = null, bool inspectorOpen = true,
         bool wideLayout = false, bool localPerchOnly = false,
-        Func<Guid, object?>? teamOf = null)
+        Func<Guid, object?>? teamOf = null, bool teamFacesColor = false)
     {
         return new
         {
@@ -92,7 +92,7 @@ internal static class StateProjection
             // Code abbreviates the home dir in its file recaps) into a real
             // file:// URL for the HTML-file link menu.
             homeDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            prefs = new { fontSize, onboardingSeen, sidebarMode, inspectorOpen, wideLayout, localPerchOnly },
+            prefs = new { fontSize, onboardingSeen, sidebarMode, inspectorOpen, wideLayout, localPerchOnly, teamFacesColor },
             // Account-wide model rate limits (usually empty — the endpoint 429s).
             // Only the AT-LIMIT models ship: the picker disables exactly these
             // and annotates each with its reset time. Empty / absent → every

@@ -49,16 +49,19 @@ export function showBotMenu(
     return btn;
   };
 
-  const first = item(
-    "Open terminal",
-    bot.sessionId ? null : "not running",
-    () => {
-      if (!bot.sessionId) return;
+  if (bot.sessionId) {
+    item("Open terminal", null, () => {
       onOpenTerminal?.();
       send({ type: "session.select", id: bot.sessionId });
-    },
-  );
-  if (!bot.sessionId) first.disabled = true;
+    });
+  } else {
+    // No tab on this machine: the bot came with a pull, or its tab was
+    // closed. Starting it opens a fresh tab under the same nickname, face
+    // and memory.
+    item("Start here", "not running", () => {
+      send({ type: "team.bot.start", projectId: project.id, botId: bot.botId });
+    });
+  }
 
   item("Edit brief…", bot.positionName, () => {
     const position = project.team?.positions.find((p) => p.slug === bot.positionSlug);

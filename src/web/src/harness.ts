@@ -31,6 +31,8 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { createSetupOverlay } from "./setup-overlay.js";
 import { initInspector } from "./inspector.js";
+import { createBotFace, setFaceColorMode, faceColorMode, freezeFaces, FACE_HATS, FACE_EYEWEAR, FACE_EXTRAS, FACE_TEMPERS, FACE_STATES } from "./bot-face.js";
+import type { BotLook, FaceHat, FaceState, FaceTemper } from "./bot-face.js";
 import "@xterm/xterm/css/xterm.css";
 
 type Leaf = Extract<PaneTreeView, { kind: "leaf" }>;
@@ -179,7 +181,14 @@ const sessions: SessionView[] = [
   },
 ];
 
-const view = location.hash.replace("#", "") || "sidebar";
+// The view is the hash. A `?k=v` tail on it (or the page's own search string)
+// carries view options — e.g. #botfaces?t=1200&color=1 — so a capture can pin
+// a frame by number without a second HTML shell.
+const hashRaw = location.hash.replace("#", "");
+const hashQ = hashRaw.indexOf("?");
+const view = (hashQ < 0 ? hashRaw : hashRaw.slice(0, hashQ)) || "sidebar";
+const viewParams = new URLSearchParams(location.search);
+if (hashQ >= 0) new URLSearchParams(hashRaw.slice(hashQ + 1)).forEach((v, k) => viewParams.set(k, v));
 
 // Live tickers, same as main.ts — the harness should breathe like the app
 // (elapsed labels count, working spinners spin) so captures look real.
@@ -803,6 +812,135 @@ if (view === "hero") {
 // case — and Fable at its weekly limit, disabled with a reset hint). The left
 // menu is a DOM clone of the real flyout (the module allows one live menu at a
 // time); the right one is live, so opening this page in a browser is clickable.
+// #botfaces — the team room's avatars (bot-face.ts). The six hats down the
+// rows and the four states across; then every eyewear and every extra on a
+// beanie (idle + working, so the tools act); the six temperaments; and a
+// colour-mode toggle. ?t=<ms> pins every face at that loop time (freezeFaces)
+// so a capture is a frame by number; ?color=1 opens in colour mode. The 96 px
+// cell is for review, the 28 px twin beside it is the real size in the room.
+if (view === "botfaces") {
+  document.getElementById("app")!.classList.add("app--inspector-collapsed");   // the grid wants the width
+  const stage = document.getElementById("workspace")!;
+  // Opaque stage on purpose: the workspace is transparent for Mica, and a
+  // headless capture drops everything drawn over that region (CLAUDE.md, "both
+  // capture methods lie"). The room's surface is what the faces sit on anyway.
+  stage.style.cssText = "display:block;overflow:auto;padding:24px 32px 48px;border-radius:var(--r-card);background:var(--color-terminal-bg);color:var(--color-text-primary);font:13px/1.4 var(--font-text)";
+  const css = document.createElement("style");
+  css.textContent = `
+    .bfh h2{font-size:16px;font-weight:600;line-height:1.2;margin:32px 0 12px}
+    .bfh h2:first-of-type{margin-top:0}
+    .bfh .grid{display:grid;gap:8px 12px;align-items:center}
+    .bfh .grid .hd{font-size:12px;color:var(--color-text-tertiary);padding-bottom:4px}
+    .bfh .grid .rl{font-size:14px;font-weight:500}
+    .bfh .grid .rl small{display:block;font-size:12px;font-weight:400;color:var(--color-text-tertiary)}
+    .bfh .cell{display:flex;align-items:flex-end;gap:16px;padding:12px;border-radius:8px;background:var(--color-layer);border:1px solid var(--color-stroke)}
+    .bfh .av{flex:none;display:block}
+    .bfh .cell .av--28{margin-bottom:8px}
+    .bfh .ctl{display:flex;align-items:center;gap:12px;margin:0 0 16px;font-size:12px;color:var(--color-text-tertiary)}
+    .bfh .ctl button{font:inherit;color:var(--color-text-primary);background:var(--color-subtle-tertiary);border:1px solid var(--color-stroke);border-radius:4px;padding:4px 12px;cursor:pointer}`;
+  stage.append(css);
+  const root = document.createElement("div");
+  root.className = "bfh";
+  stage.append(root);
+
+  // The positions the hats mean, with the temperament and tag each wore in
+  // its mockup (character variant's cast; hats variant's palette order).
+  const CAST: { hat: FaceHat; pos: string; temper: FaceTemper; tag: number }[] = [
+    { hat: "captain", pos: "Team lead", temper: "lead", tag: 0 },
+    { hat: "beanie", pos: "Frontend dev", temper: "quick", tag: 1 },
+    { hat: "hardhat", pos: "Backend dev", temper: "steady", tag: 3 },
+    { hat: "beret", pos: "Designer", temper: "curious", tag: 5 },
+    { hat: "deerstalker", pos: "QA", temper: "wary", tag: 2 },
+    { hat: "tophat", pos: "Senior analyst", temper: "keen", tag: 4 },
+  ];
+  const HAT_NAME: Record<FaceHat, string> = { captain: "captain's cap", beanie: "beanie", hardhat: "hard hat", beret: "beret", deerstalker: "deerstalker", tophat: "top hat" };
+
+  const cell = (look: BotLook, state: FaceState, tag: number): HTMLElement => {
+    const c = document.createElement("div");
+    c.className = "cell";
+    for (const sz of [96, 28]) {
+      const box = document.createElement("div");
+      box.className = `av av--${sz}`;
+      box.style.cssText = `width:${sz}px;height:${sz}px;--tag:var(--color-pane-tag-${tag})`;
+      box.append(createBotFace(look, tag, state, 0).el);
+      c.append(box);
+    }
+    return c;
+  };
+  const grid = (cols: string[], colWidth: string): HTMLElement => {
+    const g = document.createElement("div");
+    g.className = "grid";
+    g.style.gridTemplateColumns = `168px repeat(${cols.length}, ${colWidth})`;
+    g.insertAdjacentHTML("beforeend", `<div class="hd"></div>${cols.map((s) => `<div class="hd">${s}</div>`).join("")}`);
+    return g;
+  };
+  const rowLabel = (g: HTMLElement, title: string, sub: string) =>
+    g.insertAdjacentHTML("beforeend", `<div class="rl">${title}<small>${sub}</small></div>`);
+
+  // controls
+  const ctl = document.createElement("div");
+  ctl.className = "ctl";
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  const label = () => { toggle.textContent = faceColorMode() ? "Colour: on" : "Colour: off"; };
+  toggle.onclick = () => { setFaceColorMode(!faceColorMode()); label(); };
+  ctl.append(toggle);
+  const note = document.createElement("span");
+  note.textContent = "?t=<ms> pins a frame; ?color=1 opens in colour";
+  ctl.append(note);
+  root.append(ctl);
+
+  // 1. the hats × the states
+  root.insertAdjacentHTML("beforeend", `<h2>Hats (the position) × states</h2>`);
+  const g1 = grid([...FACE_STATES], "1fr");
+  for (const m of CAST) {
+    rowLabel(g1, m.pos, `${HAT_NAME[m.hat]} · ${m.temper}`);
+    for (const s of FACE_STATES) g1.append(cell({ hat: m.hat, eyewear: "monocle", extra: "none", temper: m.temper }, s, m.tag));
+  }
+  root.append(g1);
+
+  // 2. every eyewear, every extra — on a beanie, idle and working
+  root.insertAdjacentHTML("beforeend", `<h2>Eyewear, on a beanie</h2>`);
+  const g2 = grid(["idle", "working", "waiting"], "1fr");
+  FACE_EYEWEAR.forEach((e, i) => {
+    rowLabel(g2, e, "steady · none");
+    for (const s of ["idle", "working", "waiting"] as const) g2.append(cell({ hat: "beanie", eyewear: e, extra: "none", temper: "steady" }, s, i % 6));
+  });
+  root.append(g2);
+  root.insertAdjacentHTML("beforeend", `<h2>Extras, on a beanie</h2>`);
+  const g3 = grid(["idle", "working", "asleep"], "1fr");
+  FACE_EXTRAS.forEach((x, i) => {
+    rowLabel(g3, x, "steady · monocle");
+    for (const s of ["idle", "working", "asleep"] as const) g3.append(cell({ hat: "beanie", eyewear: "monocle", extra: x, temper: "steady" }, s, i % 6));
+  });
+  root.append(g3);
+
+  // 3. the temperaments — same bird, six different people
+  root.insertAdjacentHTML("beforeend", `<h2>Temperaments, on a beanie</h2>`);
+  const g4 = grid([...FACE_STATES], "1fr");
+  FACE_TEMPERS.forEach((t, i) => {
+    rowLabel(g4, t, "monocle · none");
+    for (const s of FACE_STATES) g4.append(cell({ hat: "beanie", eyewear: "monocle", extra: "none", temper: t }, s, i % 6));
+  });
+  root.append(g4);
+  void FACE_HATS;
+
+  // ?only=hats|eyewear|extras|tempers keeps one block, so a capture fits a window
+  const only = viewParams.get("only");
+  if (only) {
+    const keep: Record<string, HTMLElement> = { hats: g1, eyewear: g2, extras: g3, tempers: g4 };
+    for (const [k, g] of Object.entries(keep)) {
+      if (k === only) continue;
+      g.previousElementSibling?.remove();   // its heading
+      g.remove();
+    }
+  }
+
+  if (viewParams.get("color") === "1") setFaceColorMode(true);
+  label();
+  if (viewParams.has("t")) freezeFaces(+viewParams.get("t")! || 0);
+}
+
 if (view === "modelmenu") {
   const stage = document.getElementById("workspace")!;
   stage.style.cssText = "display:flex;gap:32px;padding:24px;align-items:flex-start;";
@@ -1236,10 +1374,13 @@ if (view === "dashboard") {
 //                  "older messages aren't shown" banner.
 // #team-empty    — a project with a team folder but no bots yet.
 // #team-sidebar  — the sidebar alone: the team row (with an unread count) and
-//                  the bots' rows wearing their position tags.
+//                  the Bots drawer open (a bot's tab is active), its rows
+//                  wearing their position tags.
+// #team-sidebar-shut — the same with an ordinary tab active: the drawer as
+//                  it starts, shut, wearing the bots' most urgent state.
 // #newbot*       — the dialog: fresh / mid-generation / reviewing the brief /
 //                  the failure recovery / the existing-position path.
-if (view === "team" || view === "team-empty" || view === "team-sidebar" || view.startsWith("newbot")) {
+if (view === "team" || view === "team-empty" || view.startsWith("team-sidebar") || view.startsWith("newbot")) {
   const teamProjects: ProjectView[] = [
     {
       id: "p-ptp", name: "storefront-web", path: "C:\\dev\\storefront-web",
@@ -1250,9 +1391,12 @@ if (view === "team" || view === "team-empty" || view === "team-sidebar" || view.
           { slug: "designer", name: "Designer", purpose: "Keeps every surface on the constitution; mocks new surfaces before code.", model: "", hasBrief: false },
         ],
         bots: [
-          { botId: "b-ada", nickname: "Ada", positionSlug: "frontend-dev", positionName: "Frontend dev", sessionId: "s-ada", peerName: "ada" },
-          { botId: "b-bo", nickname: "Bo", positionSlug: "backend-dev", positionName: "Backend dev", sessionId: "s-bo", peerName: "bo" },
-          { botId: "b-cy", nickname: "Cy", positionSlug: "designer", positionName: "Designer", sessionId: "s-cy", peerName: "cy-2" },
+          { botId: "b-ada", nickname: "Ada", positionSlug: "frontend-dev", positionName: "Frontend dev", sessionId: "s-ada", peerName: "ada",
+            look: { hat: "beanie", eyewear: "monocle", extra: "scarf", temper: "quick" } },
+          { botId: "b-bo", nickname: "Bo", positionSlug: "backend-dev", positionName: "Backend dev", sessionId: "s-bo", peerName: "bo",
+            look: { hat: "hardhat", eyewear: "rect", extra: "spanner", temper: "steady" } },
+          { botId: "b-cy", nickname: "Cy", positionSlug: "designer", positionName: "Designer", sessionId: "s-cy", peerName: "cy-2",
+            look: { hat: "beret", eyewear: "round", extra: "pencil", temper: "curious" } },
         ],
       },
     },
@@ -1338,7 +1482,7 @@ if (view === "team" || view === "team-empty" || view === "team-sidebar" || view.
   const emptyFixture: TeamDataMessage = { type: "team.data", projectId: "p-gm", entries: [], lastSeq: 0 };
 
   // #team-sidebar wants an unread count: pretend you last looked three rows ago.
-  if (view === "team-sidebar") {
+  if (view.startsWith("team-sidebar")) {
     try { localStorage.setItem("perch.team.seen", JSON.stringify({ "p-ptp": seq - 3 })); } catch { /* file:// */ }
     feedTeamFixture(fixture);
   }
@@ -1351,7 +1495,8 @@ if (view === "team" || view === "team-empty" || view === "team-sidebar" || view.
   });
 
   const sb = new Sidebar(list, newBtn, closedEl);
-  sb.rerender = () => sb.render(teamSessions, "s-ada", [], teamProjects, "projects");
+  const activeTab = view === "team-sidebar-shut" ? "s-plain" : "s-ada";
+  sb.rerender = () => sb.render(teamSessions, activeTab, [], teamProjects, "projects");
   sb.rerender();
   onTeamRoomChange(() => sb.rerender?.());
   applyTeamState(teamState);

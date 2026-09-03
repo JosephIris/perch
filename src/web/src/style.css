@@ -3011,6 +3011,30 @@ button.pane__chip--ports:hover {
 .session-list--idle > .session-item--nested::after { left: 29px; }
 .session-list--idle .session-item__title { color: var(--color-text-secondary); }
 
+/* The Bots drawer: the same drawer, right under the team row. Its rows sit
+ * one step in like Idle's but keep their full title colour — these are live
+ * agents, not tabs you put away. With ordinary tabs following it the trunk
+ * runs on through the head instead of closing the branch. */
+.idle-group--bots { margin-bottom: 0; }
+.idle-group--mid > .idle-group__head::before { height: 100%; }
+.session-list--bots > .session-item--nested { padding-left: 40px; }
+.session-list--bots > .session-item--nested::before,
+.session-list--bots > .session-item--nested::after { left: 29px; }
+/* Shut, the head wears the bots' most urgent state (same dot as the Hidden
+ * drawer): a bot blocked on you can't be folded out of sight. */
+.idle-group__state {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  margin-left: auto;
+  border-radius: 50%;
+  background: var(--color-state-idle);
+}
+.idle-group__state[data-state="working"]    { background: var(--color-state-working); }
+.idle-group__state[data-state="waiting"]    { background: var(--color-state-waiting); }
+.idle-group__state[data-state="permission"] { background: var(--color-state-permission); }
+.idle-group__state[data-state="done"]       { background: var(--color-state-done); }
+
 /* ── The Hidden drawer ─────────────────────────────────────────────────────
  * Projects you've hidden, folded into one quiet row at the foot of the list.
  * Same voice as the Idle drawer, but top-level: it groups whole projects, not
@@ -6902,6 +6926,15 @@ body.show-dashboard .dashboard { display: flex; }
   background: transparent;
   box-shadow: inset 0 0 0 1px var(--color-rail-faint);
 }
+/* A bot's face draws its own circle (bot-face.ts), so the letter-avatar's
+ * fill and ring come off and the ink colour goes back to the text colour. */
+.tf-msg__avatar--face {
+  background: transparent;
+  box-shadow: none;
+  color: var(--color-text-primary);
+  overflow: hidden;
+}
+.tf-msg__avatar--face > svg { width: 100%; height: 100%; display: block; }
 /* Continuation rows swap the avatar for a hover-revealed time in the same
  * column, so a run of messages reads as one voice without losing the stamp. */
 .tf-msg .tf-msg__time--cont {
@@ -7170,6 +7203,17 @@ body.show-dashboard .dashboard { display: flex; }
   background: transparent;
   box-shadow: inset 0 0 0 1px var(--color-text-disabled);
 }
+/* Roster rows lead with the bot's face instead of the 10 px dot: the
+ * column widens to the face and the two text rows centre on it. */
+.roster-bot--face { grid-template-columns: 28px minmax(0, 1fr); }
+.roster-bot__lead--face {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  overflow: hidden;
+  color: var(--color-text-primary);
+}
+.roster-bot__lead--face > svg { width: 100%; height: 100%; display: block; }
 .roster-bot__text {
   display: flex;
   align-items: baseline;
@@ -7511,4 +7555,56 @@ body.show-dashboard .dashboard { display: flex; }
   .tf-msg.row-enter,
   .tf-work.row-enter,
   .tf-sys.row-enter { animation: none; }
+}
+
+/* ---- bot faces ---- */
+/* The team room's avatars (bot-face.ts): Monocle Guy bust-cropped into the
+ * room's circle, dressed for the position. The SVG fills its host and OWNS
+ * the circle — background, keyline, clip — so the colour mode is one class
+ * swap on the face root and nothing writes colour per frame.
+ *   off (default): the plain ink mascot, exactly the setup overlay's bird, on
+ *     a quiet neutral circle; the monocle ring (and any neckwear) in the accent.
+ *   on (.bot-face--color): bird and circle take the bot's tag — the host's
+ *     --tag if it sets one, else the face's own colour index — and the
+ *     signature items stay accent, or fall back to ink where the tag IS the
+ *     accent hue (index 0), so they never vanish into the bird.
+ * --bf-ink is set by the rig itself: the eye ink, the one hex the bird owns. */
+.bot-face {
+  --bf-ring: var(--color-accent);
+  --bf-item: var(--color-accent);
+  --bf-tag: var(--color-text-tertiary);
+  display: block;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  border-radius: 50%;
+  overflow: hidden;
+  color: var(--color-text-primary);
+  background: var(--color-subtle-secondary);
+  box-shadow: inset 0 0 0 1px var(--color-rail-faint);
+  user-select: none;
+  pointer-events: none;
+}
+.bot-face[data-color-index="0"] { --bf-tag: var(--color-pane-tag-0); }
+.bot-face[data-color-index="1"] { --bf-tag: var(--color-pane-tag-1); }
+.bot-face[data-color-index="2"] { --bf-tag: var(--color-pane-tag-2); }
+.bot-face[data-color-index="3"] { --bf-tag: var(--color-pane-tag-3); }
+.bot-face[data-color-index="4"] { --bf-tag: var(--color-pane-tag-4); }
+.bot-face[data-color-index="5"] { --bf-tag: var(--color-pane-tag-5); }
+.bot-face--color {
+  color: var(--tag, var(--bf-tag));
+  background: color-mix(in srgb, var(--tag, var(--bf-tag)) 16%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tag, var(--bf-tag)) 32%, transparent);
+}
+/* the accent-coloured tag would swallow an accent monocle: ink there */
+.bot-face--color[data-color-index="0"] {
+  --bf-ring: var(--bf-ink);
+  --bf-item: var(--bf-ink);
+}
+/* A message-row avatar that holds a face hands its tint and keyline over to
+ * it (the face draws its own circle); the initial it would have shown is
+ * simply not rendered by the room. */
+.tf-msg__avatar:has(> .bot-face) {
+  background: transparent;
+  box-shadow: none;
 }
