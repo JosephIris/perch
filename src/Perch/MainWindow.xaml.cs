@@ -320,6 +320,28 @@ public partial class MainWindow : FluentWindow
                 PushState();
             },
             SetPaneModel = (paneId, alias) => OnPaneModel(new PaneModelMsg { PaneId = paneId, Model = alias }),
+            HasPty = paneId => _panes.Has(paneId),
+            EnsureRunning = sess =>
+            {
+                // The lazy spawn only fires when the page lays the pane out,
+                // which never happens for a restored tab nobody has opened.
+                // Arm its resume exactly as waking does, then spawn its
+                // terminals now; the page's first pane.resize just resizes.
+                var cold = AllLeaves(sess.Root).Where(p => p.IsTerminal && !_panes.Has(p.Id)).ToList();
+                if (cold.Count == 0) return;
+                foreach (var p in cold) CancelPendingShutdown(p.Id);
+                if (_settings.ResumeAgentsOnLaunch)
+                {
+                    var resumable = cold
+                        .Where(p => !string.IsNullOrEmpty(p.ClaudeSessionId)
+                                    && ClaudeTranscripts.Exists(p.ClaudeSessionId!, ResolvePaneCwd(sess, p)))
+                        .ToList();
+                    foreach (var p in resumable) _armedResumePanes.Add(p.Id);
+                    if (resumable.Count > 0) BeginRestoreProgress(resumable.Select(p => p.Id).ToList());
+                }
+                foreach (var p in cold) SpawnPty(sess, p);
+                Log.Info("Team.start", $"session={sess.Id:N} spawned {cold.Count} cold pane(s) for a room post");
+            },
         });
         WireBoardController();
         _router = BuildRouter();

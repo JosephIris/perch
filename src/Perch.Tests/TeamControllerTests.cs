@@ -27,6 +27,9 @@ public class TeamControllerTests
         public readonly List<Action> Delayed = new();
         public readonly List<(Guid Pane, byte[] Bytes)> Raw = new();
         public readonly List<Guid> Cleared = new();
+        public readonly List<Guid> Started = new();
+        /// Panes the fake host reports as having NO terminal (never spawned).
+        public readonly HashSet<Guid> NoPty = new();
         public readonly List<(Guid Pane, string Model)> ModelSet = new();
         public readonly List<Guid> Closed = new();
         public bool TypeOk = true;
@@ -65,6 +68,8 @@ public class TeamControllerTests
                 Delay = (a, t) => Delayed.Add(a),
                 WriteRaw = (p, b) => Raw.Add((p, b)),
                 ClearPrompt = id => Cleared.Add(id),
+                HasPty = id => !NoPty.Contains(id),
+                EnsureRunning = s => Started.Add(s.Id),
                 SetPaneModel = (p, m) => ModelSet.Add((p, m)),
             });
         }
@@ -1112,5 +1117,28 @@ public class TeamControllerTests
         Assert.Equal("haiku", TeamController.AliasFromModelId("claude-haiku-4-5-20251001"));
         Assert.Null(TeamController.AliasFromModelId("gpt-9"));
         foreach (var s in h.Sessions) TeamMarkers.Clear(s.Root.Id);
+    }
+
+    /// A tab restored after a restart but never opened has no terminal: a
+    /// post to that bot must start it (the host arms the resume and spawns),
+    /// and the roster must say so rather than "idle".
+    [Fact]
+    public async Task Post_ToABotWhoseTabNeverStarted_StartsIt()
+    {
+        var h = new Harness();
+        await h.CreateBot("Ada");
+        var sess = h.Sessions.Single();
+        h.NoPty.Add(sess.Root.Id);
+        h.Ctrl.OnRequest(new TeamRequestMsg { ProjectId = h.Project.Id });
+        Assert.Contains("[not started]", File.ReadAllText(h.Store.RosterPath));
+
+        h.Post("are you there?", "[\"Ada\"]");
+        Assert.Equal(sess.Id, Assert.Single(h.Started));
+
+        // Once the terminal is up, presence is back to normal.
+        h.NoPty.Clear();
+        h.Ctrl.OnRequest(new TeamRequestMsg { ProjectId = h.Project.Id });
+        Assert.DoesNotContain("[not started]", File.ReadAllText(h.Store.RosterPath));
+        TeamMarkers.Clear(sess.Root.Id);
     }
 }

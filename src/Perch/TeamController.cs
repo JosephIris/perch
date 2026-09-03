@@ -45,6 +45,12 @@ internal sealed class TeamHost
     /// Change a pane's Claude model (the `pane.model` path: persists the
     /// alias and types `/model <alias>` live). "" = the account default.
     public Action<Guid, string> SetPaneModel { get; init; } = (_, _) => { };
+    /// Does this pane have a live terminal (PaneManager.Has)? Null = assume yes.
+    public Func<Guid, bool>? HasPty { get; init; }
+    /// Start the terminals of a session whose panes never spawned — a tab
+    /// restored but not looked at since the restart — arming its resume first
+    /// so its Claude comes back with its conversation. Optional.
+    public Action<Session>? EnsureRunning { get; init; }
 }
 
 /// The team feature's host-side brain: per-project team stores, the marker
@@ -1656,6 +1662,10 @@ internal sealed class TeamController
             var sess = bot.SessionId is Guid id ? _h.SessionById(id) : null;
             if (sess == null) { results.Add(new Attempted(bot, false, true, false, line, null)); continue; }
             if (sess.Dormant) _h.Wake(sess);
+            // A tab restored after a restart but never looked at has no
+            // terminal yet — a post to it must start it, or it sits parked
+            // until the owner happens to click the tab.
+            else if (!SessionRunning(sess)) { Log.Info("Team.start.needed", $"session={sess.Id:N} bot={bot.Slug}"); _h.EnsureRunning?.Invoke(sess); }
             var blocked = !sess.Dormant && Blocked(sess);
             var ok = !sess.Dormant && !blocked && _h.TypeToClaude(sess, line);
             results.Add(new Attempted(bot, ok, false, blocked, line, sess.Id));
@@ -1789,6 +1799,11 @@ internal sealed class TeamController
     private void RefreshRoster(Project proj, TeamStore store)
         => store.RenderRoster(proj.Name, Presence(store), ModelLimitsLine());
 
+    /// Does any terminal pane of the session have a live PTY? A session whose
+    /// tab was restored but never viewed has none — its Claude isn't up.
+    private bool SessionRunning(Session sess)
+        => _h.HasPty == null || PaneTree.AllLeaves(sess.Root).Any(p => p.IsTerminal && _h.HasPty(p.Id));
+
     private Dictionary<string, string> Presence(TeamStore store)
     {
         var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -1797,6 +1812,7 @@ internal sealed class TeamController
             var sess = bot.SessionId is Guid id ? _h.SessionById(id) : null;
             if (sess == null) { map[bot.Slug] = "not running"; continue; }
             if (sess.Dormant) { map[bot.Slug] = "asleep"; continue; }
+            if (!SessionRunning(sess)) { map[bot.Slug] = "not started"; continue; }
             if (_awaitingTrust.ContainsKey(bot.Slug)) { map[bot.Slug] = "waiting for the owner to answer its start-up question"; continue; }
             if (_awaitingPerm.Values.Any(v => string.Equals(v.Slug, bot.Slug, StringComparison.OrdinalIgnoreCase)))
             { map[bot.Slug] = "waiting for your permission"; continue; }
