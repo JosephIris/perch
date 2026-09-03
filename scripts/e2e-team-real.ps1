@@ -99,6 +99,10 @@ JSON over REST). Build: `npm run build` in each folder. Tests: `npm test`.
 '@
     Set-Content -Path (Join-Path $RepoDir 'src\web\app.ts') -Encoding utf8 -Value "export function render(notes: string[]) { return notes.map(n => '<li>' + n + '</li>').join(''); }`n"
     Set-Content -Path (Join-Path $RepoDir 'src\api\server.js') -Encoding utf8 -Value "const notes = []; module.exports = { list: () => notes, add: (n) => notes.push(n) };`n"
+    # An ask rule in the project's own settings: auto mode still prompts for
+    # it, and that prompt is what step [6] expects to see as a room card.
+    New-Item -ItemType Directory -Force -Path (Join-Path $RepoDir '.claude') | Out-Null
+    Set-Content -Path (Join-Path $RepoDir '.claude\settings.json') -Encoding utf8 -Value '{"permissions":{"ask":["Bash(git tag*)"]}}'
     Push-Location $RepoDir
     try {
         & git init --quiet 2>$null
@@ -224,6 +228,61 @@ JSON over REST). Build: `npm run build` in each folder. Tests: `npm test`.
     foreach ($r in $rows | Select-Object -First 2) {
         $trim = if ($r.Length -gt 900) { $r.Substring(0, 900) + '…' } else { $r }
         Write-Host "      INBOUND ROW: $trim"
+    }
+
+    # --- 5. a bot asks the owner from the room (ask card) ---------------------
+    Write-Host "`n[5] perch team ask puts a card in the room; the answer reaches the bot as a post"
+    [void](Send-Verb 'team.post' @{ projectId = $pid2; text = 'Run exactly this command and nothing else, then reply done: perch team ask --choices "Approve|Changes" "Ship the notes list as is?"'; to = 'Bo'; clientId = 'e3' })
+    $ask = $null
+    Check "an ask card appeared" (Wait-Until {
+        $d = Team-Dump $pid2
+        $script:ask = @($d.ledger | Where-Object { $_.event -eq 'ask' }) | Select-Object -Last 1
+        $null -ne $script:ask
+    } 180)
+    $ask = $script:ask
+    if ($ask) {
+        Write-Host "      ask: $($ask.text)  choices: $($ask.choices -join '|')"
+        [void](Send-Verb 'team.ask.answer' @{ projectId = $pid2; id = [string]$ask.note; answer = 'Approve' })
+        Check "the answer was delivered to Bo" (Wait-Until { (Log-Count 'Team.deliver') -ge 4 } 20)
+        Check "and the room recorded it" (Wait-Until { @((Team-Dump $pid2).ledger | Where-Object { $_.event -eq 'ask.answered' }).Count -ge 1 } 20)
+    }
+
+    # --- 6. a permission prompt becomes a card (auto mode, ask rule) ---------
+    Write-Host "`n[6] a command under an ask rule shows a permission card; Allow lets it run"
+    # The scratch repo's project settings hold an ask rule, so even auto mode
+    # prompts for it — and the PermissionRequest hook routes that prompt here.
+    [void](Send-Verb 'team.post' @{ projectId = $pid2; text = 'Run exactly: git tag -l perm-check. Then reply done.'; to = 'Ada'; clientId = 'e4' })
+    $perm = $null
+    Check "a permission card appeared" (Wait-Until {
+        $d = Team-Dump $pid2
+        $script:perm = @($d.ledger | Where-Object { $_.event -eq 'permission' }) | Select-Object -Last 1
+        $null -ne $script:perm
+    } 180)
+    $perm = $script:perm
+    if ($perm) {
+        Write-Host "      permission: $($perm.text)"
+        [void](Send-Verb 'team.perm.answer' @{ projectId = $pid2; id = [string]$perm.note; decision = 'allow' })
+        Check "the hook returned the decision" (Wait-Until { (Log-Count 'Team.perm.answer') -ge 1 } 20)
+        Check "the room recorded the answer" (Wait-Until { @((Team-Dump $pid2).ledger | Where-Object { $_.event -eq 'permission.answered' }).Count -ge 1 } 30)
+    }
+
+    # --- 7. a screenshot in the room -----------------------------------------
+    Write-Host "`n[7] perch team post --image attaches a picture to a note"
+    $png = Join-Path $RepoDir 'shot.png'
+    [IO.File]::WriteAllBytes($png, [Convert]::FromBase64String('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='))
+    [void](Send-Verb 'team.post' @{ projectId = $pid2; text = "Run exactly this command and nothing else, then reply done: perch team post --image `"$png`" `"the notes list`""; to = 'Bo'; clientId = 'e5' })
+    Check "a note with an image landed" (Wait-Until { @((Team-Dump $pid2).ledger | Where-Object { $_.kind -eq 'note' -and $_.image }).Count -ge 1 } 180)
+
+    # --- 8. reactions both ways ------------------------------------------------
+    Write-Host "`n[8] a bot reacts to a post; the owner reacts to a bot's message and the bot is told"
+    [void](Send-Verb 'team.post' @{ projectId = $pid2; text = 'React to this post with the eyes emoji using perch team react, and nothing else.'; to = 'Ada'; clientId = 'e6' })
+    Check "Ada's reaction landed as a pill, not a row" (Wait-Until { @((Team-Dump $pid2).ledger | Where-Object { $_.kind -eq 'reaction' -and $_.from -eq 'Ada' }).Count -ge 1 } 180)
+    $lastBeat = @((Team-Dump $pid2).ledger | Where-Object { $_.kind -eq 'beat' -and $_.from -eq 'Bo' }) | Select-Object -Last 1
+    if ($lastBeat) {
+        $deliverBefore = Log-Count 'Team.deliver'
+        [void](Send-Verb 'team.react' @{ projectId = $pid2; seq = [string]$lastBeat.seq; emoji = ([char]0x2705).ToString() })
+        Check "your reaction is recorded from you" (Wait-Until { @((Team-Dump $pid2).ledger | Where-Object { $_.kind -eq 'reaction' -and $_.from -eq 'you' }).Count -ge 1 } 10)
+        Check "and Bo was told in one line" (Wait-Until { (Log-Count 'Team.deliver') -gt $deliverBefore } 15)
     }
 
     Write-Host ""

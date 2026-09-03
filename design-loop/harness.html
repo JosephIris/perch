@@ -63,6 +63,27 @@
             fx.entries.push(row); fx.lastSeq = seq;
             reply({ type: "team.data", projectId: msg.projectId, entries: [row], lastSeq: seq }, 400);
           }
+          // A shared screenshot: answer team.image with a tiny picture (a 4×3
+          // PNG scaled by the thumbnail's CSS), so the thumb and the lightbox
+          // render without a host.
+          if (msg.type === "team.image") {
+            reply({ type: "team.image.data", projectId: msg.projectId, path: msg.path, mediaType: "image/png",
+              data: "iVBORw0KGgoAAAANSUhEUgAAAAQAAAADCAIAAAA7ljmRAAAAF0lEQVQIW2NkYPjPwMDAwMDAyMDA8B8ACg8CAyeB8x4AAAAASUVORK5CYII=" }, 120);
+          }
+          // Reactions and card answers echo back as ledger rows, the way the
+          // host records them.
+          function echo(row) {
+            var fx = window.__teamFixture;
+            if (!fx) return;
+            row.seq = ++fx.lastSeq;
+            row.ts = new Date().toISOString();
+            fx.entries.push(row);
+            reply({ type: "team.data", projectId: msg.projectId, entries: [row], lastSeq: fx.lastSeq }, 250);
+          }
+          if (msg.type === "team.react") echo({ kind: "reaction", from: "you", text: msg.emoji, note: String(msg.seq) });
+          if (msg.type === "team.perm.answer") echo({ kind: "system", from: "perch", event: "permission.answered", note: msg.id,
+            text: (msg.decision === "allow" ? "You allowed " : "You denied ") + "Bo's command" });
+          if (msg.type === "team.ask.answer") echo({ kind: "system", from: "perch", event: "ask.answered", note: msg.id, text: "You answered Cy: " + msg.answer });
           // Brief generation: progress ticks, then a result (or an error for
           // the #newbot-error view).
           if (msg.type === "team.brief.generate") {

@@ -179,7 +179,7 @@ cmd /k
     $teamDir = Join-Path $RepoDir '.perch\team'
     New-Item -ItemType Directory -Force -Path (Join-Path $teamDir 'positions\frontend-dev') | Out-Null
     Set-Content -Path (Join-Path $teamDir 'team.json') -Encoding utf8 -Value @'
-{"v":1,"positions":[{"slug":"frontend-dev","name":"Frontend dev","purpose":"Owns src/web.","referenceRepo":"","model":"","createdAtMs":1,"briefGeneratedAtMs":0,"briefModel":""}],"bots":[]}
+{"v":1,"positions":[{"slug":"frontend-dev","name":"Frontend dev","purpose":"Owns src/web.","referenceRepo":"","model":"","createdAtMs":1,"briefGeneratedAtMs":0,"briefModel":""},{"slug":"lead-dev","name":"Lead dev","purpose":"Runs the board.","referenceRepo":"","model":"","createdAtMs":1,"briefGeneratedAtMs":0,"briefModel":"","hat":"captain"}],"bots":[]}
 '@
     Set-Content -Path (Join-Path $teamDir 'positions\frontend-dev\brief.md') -Value "## Role`nYou own src/web." -Encoding utf8
     # A repo where boards have run already: Perch's boards-only .gitignore is
@@ -278,6 +278,73 @@ cmd /k
     Check "one bot remains" ($dump.team.bots.Count -eq 1) "- $($dump.team.bots.Count)"
     Check "Bo's brief marker is gone" ((Brief-Markers).Count -eq ($markersBefore - 1)) "- $markersBefore -> $((Brief-Markers).Count)"
     Check "roster no longer lists bo" (-not ((Get-Content (Join-Path $teamDir 'local\roster.md') -Raw) -match 'Bo \(session name'))
+
+    # --- 6. milestone B: a lead with task ids, a permission card, an ask card,
+    #        reactions — all through the same CLI a bot uses, from Lee's pane env.
+    Write-Host "`n[6] the lead opens tasks by id; a permission prompt and a question are cards; reactions"
+    [void](Send-Verb 'team.bot.create' @{ projectId = $pid2; nickname = 'Lee'; positionSlug = 'lead-dev'; worktree = 'false' })
+    Check "Lee's session started" (Wait-Until { (Log-Count 'type=session') -ge 3 } 30)
+    $dump = Team-Dump $pid2
+    Check "Lee leads (first bot in the lead-type position)" ($dump.team.lead -eq 'lee') "- lead=$($dump.team.lead)"
+    # Lee's pane id: the brief marker that points at Lee's system.md is named by it.
+    $leeMarker = Get-ChildItem -Path $env:TEMP -Filter 'perch-claude-brief-*.txt' -EA SilentlyContinue |
+        Where-Object { (Get-Content $_.FullName -Raw -EA SilentlyContinue) -like "*\bots\lee\system.md*" } | Select-Object -First 1
+    if (-not $leeMarker) { throw "no brief marker for Lee" }
+    $leePane = $leeMarker.BaseName.Substring('perch-claude-brief-'.Length)
+    $env:PERCH_PIPE = "\\.\pipe\perch\$leePane"
+    $env:PERCH_PANE_ID = $leePane
+
+    $taskId = ((& $PerchExe team task new "Dark footer" 2>$null) | Out-String).Trim()
+    Check "task new printed the task id" ($taskId -match '^[0-9a-f]{8}$') "- got '$taskId'"
+    & $PerchExe team task assign $taskId ada "the CSS" *> $null
+    & $PerchExe team task mine $taskId "review Ada's CSS" --status doing *> $null
+    $dump = Team-Dump $pid2
+    $card = @($dump.tasks | Where-Object { $_.id -eq $taskId }) | Select-Object -First 1
+    Check "the card has Ada's piece and Lee's" ($card -and $card.items.Count -eq 2) "- items=$(if($card){$card.items.Count}else{'none'})"
+    $secondId = ((& $PerchExe team task new "Yearly tab" 2>$null) | Out-String).Trim()
+    Check "a second card can be open at the same time" ((Team-Dump $pid2).tasks.Count -eq 2)
+
+    # An ask card: Lee asks, the owner answers from the room, the answer lands
+    # in Lee's terminal as a numbered post.
+    & $PerchExe team ask --choices "Ship it|Hold" "Ship the dark footer?" *> $null
+    Check "the ask card appeared" (Wait-Until { @((Team-Dump $pid2).ledger | Where-Object { $_.event -eq 'ask' }).Count -ge 1 } 10)
+    $ask = @((Team-Dump $pid2).ledger | Where-Object { $_.event -eq 'ask' }) | Select-Object -Last 1
+    Check "with its choices" (($ask.choices -join '|') -eq 'Ship it|Hold') "- $($ask.choices -join '|')"
+    $deliverBefore = Log-Count 'Team.deliver'
+    [void](Send-Verb 'team.ask.answer' @{ projectId = $pid2; id = $ask.note; answer = 'Ship it' })
+    Check "the answer was delivered to Lee" (Wait-Until { (Log-Count 'Team.deliver') -gt $deliverBefore } 10)
+    Check "and the card is marked answered" (@((Team-Dump $pid2).ledger | Where-Object { $_.event -eq 'ask.answered' -and $_.note -eq $ask.note }).Count -eq 1)
+
+    # A permission prompt: the real hook holds it while the room answers.
+    $stdin = '{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"echo hi"},"permission_suggestions":[{"rule":"Bash(echo *)","suggestion_type":"addRules"}]}'
+    $job = Start-Job -ScriptBlock {
+        param($exe, $pipe, $pane, $json)
+        $env:PERCH_PIPE = $pipe; $env:PERCH_PANE_ID = $pane
+        $json | & $exe hooks claude permission-request
+    } -ArgumentList $PerchExe, $env:PERCH_PIPE, $leePane, $stdin
+    Check "the permission card appeared" (Wait-Until { (Log-Count 'Team.perm.ask') -ge 1 } 20)
+    $perm = @((Team-Dump $pid2).ledger | Where-Object { $_.event -eq 'permission' }) | Select-Object -Last 1
+    Check "it says what Lee wants to run" ($perm -and $perm.text -eq 'Lee wants to run Bash: echo hi') "- $($perm.text)"
+    [void](Send-Verb 'team.perm.answer' @{ projectId = $pid2; id = $perm.note; decision = 'allow' })
+    $finished = Wait-Job -Job $job -Timeout 20
+    $out = (Receive-Job -Job $job -EA SilentlyContinue | Out-String)
+    Remove-Job -Job $job -Force -EA SilentlyContinue
+    Check "the hook returned once answered" ($null -ne $finished)
+    Check "and printed the allow decision" ($out -match '"decision":"allow"') "- stdout: $($out.Trim())"
+    Check "the answer file was consumed" (-not (Test-Path (Join-Path $env:TEMP "perch-perm-$($perm.note).txt")))
+    Check "the room recorded the answer" (@((Team-Dump $pid2).ledger | Where-Object { $_.event -eq 'permission.answered' }).Count -ge 1)
+
+    # Reactions: Lee reacts to the owner's first post by its number; the
+    # owner reacts to Lee's note and Lee is told.
+    $post = @((Team-Dump $pid2).ledger | Where-Object { $_.kind -eq 'user' -and $_.clientId -eq 'c1' }) | Select-Object -First 1
+    & $PerchExe team react "#$($post.seq)" "👀" *> $null
+    Check "Lee's reaction is in the room" (Wait-Until { @((Team-Dump $pid2).ledger | Where-Object { $_.kind -eq 'reaction' -and $_.from -eq 'Lee' -and $_.note -eq "$($post.seq)" }).Count -eq 1 } 10)
+    & $PerchExe team post "Footer is live on staging." *> $null
+    $note = @((Team-Dump $pid2).ledger | Where-Object { $_.kind -eq 'note' -and $_.from -eq 'Lee' }) | Select-Object -Last 1
+    [void](Send-Verb 'team.react' @{ projectId = $pid2; seq = "$($note.seq)"; emoji = '✅' })
+    Check "the owner's reaction reached Lee" (Wait-Until { (Log-Count 'Team.react') -ge 1 } 10)
+    Check "and is one row, not two, when sent twice" ((Send-Verb 'team.react' @{ projectId = $pid2; seq = "$($note.seq)"; emoji = '✅' }) -and (@((Team-Dump $pid2).ledger | Where-Object { $_.kind -eq 'reaction' -and $_.from -eq 'you' }).Count -eq 1))
+    Remove-Item Env:PERCH_PIPE, Env:PERCH_PANE_ID -EA SilentlyContinue
 
     Write-Host ""
     if ($fails.Count -eq 0) { Write-Host "RESULT: PASS" -ForegroundColor Green }

@@ -52,16 +52,28 @@ public class TeamRenderTests
         // in the one form the room knows to drop.
         Assert.Contains("`→ @everyone`", roster);
         Assert.Contains("`(no reply)`", roster);
-        Assert.Contains("Do not narrate messages you sent to teammates", roster);
         Assert.Contains(TeamRender.PostPrefix, roster);
-        Assert.Contains("One owner per task", roster);
+        Assert.Contains("One owner per piece", roster);
+        // Milestone B: explicit handoffs, one-note intros, reactions, asks,
+        // screenshots, the memory rule — the verbs the room understands.
+        foreach (var k in new[] { "`HANDOFF:`", "`REPORT:`", "`QUESTION:`", "`ANSWER:`", "`FYI:`" }) Assert.Contains(k, roster);
+        Assert.Contains("post ONE note to the room of at most two lines", roster);
+        Assert.Contains("Never introduce yourself by messaging teammates", roster);
+        Assert.Contains("at most six lines", roster);
+        Assert.Contains("perch team react #<n> <emoji>", roster);
+        Assert.Contains("perch team react @<nick> <emoji>", roster);
+        foreach (var e in new[] { "✅", "👀", "✏️", "👋" }) Assert.Contains(e, roster);
+        Assert.Contains("perch team ask \"<question>\" [--choices \"A|B\"]", roster);
+        Assert.Contains("perch team post --image <path>", roster);
+        Assert.Contains("`#<n>` after the prefix is that post's number", roster);
+        Assert.Contains("details below a `---` line", roster);
     }
 
     [Fact]
     public void Roster_StaysSmall_ForAFiveBotTeam()
     {
         var roster = TeamRender.Roster(Team(5), "perch");
-        Assert.True(Encoding.UTF8.GetByteCount(roster) < 3072, $"roster is {roster.Length} chars");
+        Assert.True(Encoding.UTF8.GetByteCount(roster) < 4096, $"roster is {Encoding.UTF8.GetByteCount(roster)} bytes");
     }
 
     [Fact]
@@ -122,7 +134,7 @@ public class TeamRenderTests
         Assert.StartsWith("# Team roster — perch", empty);
         Assert.Contains("# Your memory", empty);
         Assert.Contains("`" + path + "`", empty);
-        Assert.Contains("Keep it under 2 KB", empty);
+        Assert.Contains("Keep a short summary on top and the details below a line that is exactly `---`", empty);
         Assert.EndsWith("(Empty so far.)\n", empty);
 
         var full = TeamRender.Context(roster, bot, "- The sidebar is mine.\n- Bo owns the API.", path);
@@ -145,29 +157,35 @@ public class TeamRenderTests
         var tasks = new TaskDoc();
 
         var leadEmpty = TeamRender.TaskBlock(tasks, doc, doc.Bots[0]);
-        Assert.Contains("(No task set yet. You are the lead", leadEmpty);
-        Assert.Contains("perch team task main", leadEmpty);
+        Assert.Contains("(No task open. You are the lead", leadEmpty);
+        Assert.Contains("perch team task new", leadEmpty);
         var memberEmpty = TeamRender.TaskBlock(tasks, doc, doc.Bots[1]);
-        Assert.Contains("Ada leads and will set one", memberEmpty);
+        Assert.Contains("Ada leads and opens tasks", memberEmpty);
         Assert.DoesNotContain("perch team task done", memberEmpty);
 
-        tasks.Current = new TaskBoard
+        tasks.Open.Add(new TaskBoard
         {
             Id = "t1", Title = "Ship the sidebar", Status = "review", SetBy = "ada",
             Items = { new TaskItem { Bot = "bo", Title = "API for the room", Status = "done", Note = "merged" } },
-        };
+        });
+        tasks.Open.Add(new TaskBoard { Id = "t2", Title = "Dark footer", Status = "open", SetBy = "you" });
         var member = TeamRender.TaskBlock(tasks, doc, doc.Bots[1]);
-        Assert.Contains("**Ship the sidebar** — review (waiting for Joseph to confirm)", member);
-        Assert.Contains("- Ada: no piece yet", member);
-        Assert.Contains("- Bo (you): [done] API for the room — merged", member);
+        Assert.Contains("- Task t1: **Ship the sidebar** — review (waiting for Joseph to confirm)", member);
+        Assert.Contains("  - Bo (you): [done] API for the room — merged", member);
+        Assert.Contains("- Task t2: **Dark footer** — open", member);
+        Assert.Contains("  - (no pieces yet)", member);
         Assert.Contains("Ada (`ada`) leads", member);
+        Assert.Contains("perch team task mine <id>", member);
         var lead = TeamRender.TaskBlock(tasks, doc, doc.Bots[0]);
-        Assert.Contains("perch team task assign", lead);
+        Assert.Contains("perch team task assign <id> <session name>", lead);
+        Assert.Contains("perch team task done <id>", lead);
 
         var system = TeamRender.SystemPrompt(doc.Bots[0], doc.Positions[0], "## Role\nYou own src/web.", "perch", null, isLead: true);
         Assert.Contains("and the team lead on the perch team", system);
         Assert.Contains("## You lead the team", system);
-        Assert.Contains("perch team task done", system);
+        Assert.Contains("perch team task done <id>", system);
+        Assert.Contains("Never wait for him to agree first", system);
+        Assert.Contains("several may be open at once", system);
     }
 
     [Fact]

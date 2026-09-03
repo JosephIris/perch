@@ -88,7 +88,9 @@ internal sealed class TeamStore
             var doc = JsonSerializer.Deserialize(File.ReadAllText(TasksPath), TaskJsonContext.Default.TaskDoc);
             if (doc == null) return new TaskDoc();
             doc.Done ??= new();
-            if (doc.Current != null) doc.Current.Items ??= new();
+            doc.Open ??= new();
+            doc.Migrate();   // a v1 file's single `current` becomes the first open board
+            foreach (var b in doc.Open) b.Items ??= new();
             return doc;
         }
         catch (Exception ex)
@@ -418,7 +420,8 @@ internal sealed class TeamStore
         if (removed)
         {
             if (string.Equals(Doc.LeadSlug, slug, StringComparison.OrdinalIgnoreCase)) Doc.LeadSlug = null;
-            Tasks.Current?.Items.RemoveAll(i => string.Equals(i.Bot, slug, StringComparison.OrdinalIgnoreCase));
+            foreach (var board in Tasks.Open)
+                board.Items.RemoveAll(i => string.Equals(i.Bot, slug, StringComparison.OrdinalIgnoreCase));
             foreach (var dir in new[] { Path.Combine(BotsDir, slug), Path.Combine(LocalDir, "bots", slug) })
             {
                 try { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); }
@@ -428,21 +431,39 @@ internal sealed class TeamStore
         return removed;
     }
 
-    /// The bot's memory as it stands (it edits the file itself), capped for
-    /// the prompt. "" when there is none yet.
+    /// The part of the bot's memory that rides in with every prompt (it edits
+    /// the file itself): everything above a line that is exactly `---` when
+    /// there is one within the cap, else the first MemoryMaxBytes. The rest
+    /// stays on disk for the bot to Read when it needs it — a memory the bot
+    /// had to keep cutting to fit was the wrong rule. "" when there is none yet.
     public string ReadMemory(string botSlug)
     {
         var path = MemoryPathFor(botSlug);
         if (!File.Exists(path)) return "";
-        try
-        {
-            var text = File.ReadAllText(path).Trim();
-            if (System.Text.Encoding.UTF8.GetByteCount(text) <= MemoryMaxBytes) return text;
-            var cut = Math.Min(text.Length, MemoryMaxBytes);
-            while (cut > 0 && System.Text.Encoding.UTF8.GetByteCount(text.AsSpan(0, cut)) > MemoryMaxBytes) cut--;
-            return text[..cut].TrimEnd() + "\n[memory truncated — keep it under 2 KB]";
-        }
+        try { return InlineMemory(File.ReadAllText(path)); }
         catch (Exception ex) { Log.Error("TeamStore.ReadMemory", ex); return ""; }
+    }
+
+    /// The cut rule, on its own so it can be tested without a file.
+    internal static string InlineMemory(string raw)
+    {
+        var text = (raw ?? "").Replace("\r\n", "\n").Trim();
+        const string suffix = "\n[the rest is in the file — Read it when you need it]";
+        // The marker is a line that is exactly `---`; probe with a trailing
+        // newline so one at the very end still counts.
+        var probe = text + "\n";
+        var marker = probe.IndexOf("\n---\n", StringComparison.Ordinal);
+        if (probe.StartsWith("---\n", StringComparison.Ordinal)) marker = 0;
+        if (marker >= 0 && System.Text.Encoding.UTF8.GetByteCount(text.AsSpan(0, marker)) <= MemoryMaxBytes)
+        {
+            var top = text[..marker].TrimEnd();
+            var restStart = marker + 5;
+            return restStart >= text.Length ? top : top + suffix;
+        }
+        if (System.Text.Encoding.UTF8.GetByteCount(text) <= MemoryMaxBytes) return text;
+        var cut = Math.Min(text.Length, MemoryMaxBytes);
+        while (cut > 0 && System.Text.Encoding.UTF8.GetByteCount(text.AsSpan(0, cut)) > MemoryMaxBytes) cut--;
+        return text[..cut].TrimEnd() + suffix;
     }
 
     public void WriteMemory(string botSlug, string text)
@@ -476,9 +497,9 @@ internal sealed class TeamStore
     /// board as it concerns that bot, and its memory — what the hook inlines
     /// into each of its prompts). Cheap, so callers do it on every
     /// membership, presence or task change rather than tracking dirtiness.
-    public void RenderRoster(string projectName, IReadOnlyDictionary<string, string>? presence = null)
+    public void RenderRoster(string projectName, IReadOnlyDictionary<string, string>? presence = null, string? modelLimits = null)
     {
-        var roster = TeamRender.Roster(Doc, projectName, presence);
+        var roster = TeamRender.Roster(Doc, projectName, presence, modelLimits);
         try { AtomicFile.WriteAllText(RosterPath, roster); }
         catch (Exception ex) { Log.Error("TeamStore.RenderRoster", ex); }
         foreach (var bot in Doc.Bots)

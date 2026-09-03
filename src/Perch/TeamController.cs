@@ -38,6 +38,9 @@ internal sealed class TeamHost
     /// Raw bytes into a pane's PTY (PaneManager.Write) — for answering a
     /// dialog with keys, as opposed to typing a line for Claude to read.
     public required Action<Guid, byte[]> WriteRaw { get; init; }
+    /// Change a pane's Claude model (the `pane.model` path: persists the
+    /// alias and types `/model <alias>` live). "" = the account default.
+    public Action<Guid, string> SetPaneModel { get; init; } = (_, _) => { };
 }
 
 /// The team feature's host-side brain: per-project team stores, the marker
@@ -111,7 +114,115 @@ internal sealed class TeamController
     /// project, and whether the wrap-up post was seen submitted. A bot is
     /// reset (its context cleared) when its turn ends AFTER that post went
     /// in — a Done from the turn it was busy with doesn't count.
-    private readonly Dictionary<Guid, (Guid Project, bool Confirmed)> _wrapping = new();
+    private readonly Dictionary<Guid, (Guid Project, string TaskId, bool Confirmed)> _wrapping = new();
+
+    /// Permission requests a bot's hook is holding for the room: id → (bot
+    /// slug, pane). The hook polls for the answer file; the owner's click
+    /// writes it (OnPermAnswer).
+    private readonly Dictionary<string, (string Slug, Guid PaneId)> _awaitingPerm = new(StringComparer.OrdinalIgnoreCase);
+
+    /// Ask cards not yet answered: id → the asking bot's slug.
+    private readonly Dictionary<string, string> _asks = new(StringComparer.OrdinalIgnoreCase);
+
+    /// Model rate limits as last reported; bots moved off a limited model,
+    /// slug → the alias they were on; and when each bot was last switched
+    /// (a limit list refreshes often, a bot is moved at most once a minute).
+    private IReadOnlyList<ModelUsageLimit> _limits = Array.Empty<ModelUsageLimit>();
+    private readonly Dictionary<string, string> _modelSwitched = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, DateTimeOffset> _modelActedAt = new(StringComparer.OrdinalIgnoreCase);
+    internal static readonly string[] ModelFallback = { "fable", "opus", "sonnet", "haiku" };
+    internal static readonly TimeSpan ModelDebounce = TimeSpan.FromSeconds(60);
+    /// The clock, swappable so a test can step past the debounce.
+    internal Func<DateTimeOffset> Now = () => DateTimeOffset.UtcNow;
+
+    // ---- model limits -------------------------------------------------------
+
+    /// The account's rate limits changed. A running bot whose model is at
+    /// its limit is moved to the first free one in fable → opus → sonnet →
+    /// haiku and told so in the room; when its model comes back, it is moved
+    /// back. A bot whose model Perch can't tell (no alias set, transcript not
+    /// yet naming one) is left alone.
+    public void OnModelLimits(IReadOnlyList<ModelUsageLimit> limits)
+    {
+        _limits = limits ?? Array.Empty<ModelUsageLimit>();
+        bool Limited(string alias) => _limits.Any(l => l.AtLimit && string.Equals(l.Alias, alias, StringComparison.OrdinalIgnoreCase));
+        var now = Now();
+        foreach (var proj in _h.Projects())
+        {
+            var store = StoreFor(proj.Id);
+            if (store == null) continue;
+            var rows = new List<RoomEntry>();
+            foreach (var bot in store.Doc.Bots)
+            {
+                var sess = bot.SessionId is Guid id ? _h.SessionById(id) : null;
+                var pane = sess == null ? null : PaneTree.AllLeaves(sess.Root).FirstOrDefault(p => p.IsTerminal);
+                if (sess == null || pane == null || sess.Dormant) continue;
+                if (_modelActedAt.TryGetValue(bot.Slug, out var last) && now - last < ModelDebounce) continue;
+
+                if (_modelSwitched.TryGetValue(bot.Slug, out var original))
+                {
+                    // Moved off `original` earlier: back the moment it is free.
+                    if (Limited(original)) continue;
+                    _modelSwitched.Remove(bot.Slug);
+                    _modelActedAt[bot.Slug] = now;
+                    _h.SetPaneModel(pane.Id, original);
+                    Log.Info("Team.model", $"bot={bot.Slug} back to {original}");
+                    rows.Add(store.Ledger.Append(new RoomEntry
+                    {
+                        Kind = "system", From = "perch", Event = "model", To = new List<string> { bot.Slug },
+                        Text = $"{original} is back — {bot.Nickname} switched back",
+                    }));
+                    continue;
+                }
+
+                var current = EffectiveModel(sess, pane);
+                if (current == null || !Limited(current)) continue;
+                var next = ModelFallback.FirstOrDefault(a => !Limited(a));
+                if (next == null || string.Equals(next, current, StringComparison.OrdinalIgnoreCase)) continue;
+                _modelSwitched[bot.Slug] = current;
+                _modelActedAt[bot.Slug] = now;
+                _h.SetPaneModel(pane.Id, next);
+                var until = ResetWord(_limits.First(l => l.AtLimit && string.Equals(l.Alias, current, StringComparison.OrdinalIgnoreCase)));
+                Log.Info("Team.model", $"bot={bot.Slug} {current} at limit{until} → {next}");
+                rows.Add(store.Ledger.Append(new RoomEntry
+                {
+                    Kind = "system", From = "perch", Event = "model", To = new List<string> { bot.Slug },
+                    Text = $"{current} is at its limit{until} — {bot.Nickname} switched to {next}",
+                }));
+            }
+            RefreshRoster(proj, store);
+            if (rows.Count > 0) PostEntries(proj.Id, store, rows);
+        }
+    }
+
+    /// The alias a bot is on: the pane's setting, else what its transcript
+    /// says the model actually is; null when neither is known.
+    private string? EffectiveModel(Session sess, PaneNode pane)
+    {
+        if (!string.IsNullOrWhiteSpace(pane.Model)) return pane.Model.Trim().ToLowerInvariant();
+        if (string.IsNullOrEmpty(pane.ClaudeSessionId)) return null;
+        var data = _h.ReadTranscript(pane.Id, pane.ClaudeSessionId, _h.ResolveCwd(sess, pane));
+        return AliasFromModelId(data?.Vitals?.Model);
+    }
+
+    /// "claude-fable-5-1" → "fable"; null when the id names none of the aliases.
+    internal static string? AliasFromModelId(string? modelId)
+    {
+        if (string.IsNullOrWhiteSpace(modelId)) return null;
+        var m = modelId.ToLowerInvariant();
+        return ModelFallback.FirstOrDefault(a => m.Contains(a));
+    }
+
+    /// " until 14:05" (local time) when the limit says when it lifts, else "".
+    private static string ResetWord(ModelUsageLimit l)
+        => l.ResetsAtMs is long ms ? $" until {DateTimeOffset.FromUnixTimeMilliseconds(ms).ToLocalTime():HH:mm}" : "";
+
+    /// The roster's "Model limits right now" line, or null when none is active.
+    private string? ModelLimitsLine()
+    {
+        var active = _limits.Where(l => l.AtLimit).Select(l => l.Alias + ResetWord(l)).ToList();
+        return active.Count == 0 ? null : "Model limits right now: " + string.Join(", ", active);
+    }
 
     /// After typing: how long to wait for the hook before pressing Enter
     /// again (first two), and before giving up (last).
@@ -198,7 +309,7 @@ internal sealed class TeamController
         return new
         {
             lead = store.Doc.LeadSlug,
-            task = TaskView(projectId, store),
+            tasks = TasksView(projectId, store),
             bots = store.Doc.Bots.Select(b =>
             {
                 var pos = store.Doc.Position(b.PositionSlug);
@@ -242,29 +353,29 @@ internal sealed class TeamController
         };
     }
 
-    /// The current task for the page: the board, every piece by nickname,
-    /// and which bots are still wrapping up after a confirm.
-    private object? TaskView(Guid projectId, TeamStore store)
+    /// The open tasks for the page, open ones first: each board, every piece
+    /// by nickname, and which bots are still wrapping up after its confirm.
+    private object[] TasksView(Guid projectId, TeamStore store)
     {
-        var b = store.Tasks.Current;
-        if (b == null) return null;
         string Nick(string slug) => slug == "you" ? "you" : store.Doc.Bot(slug)?.Nickname ?? slug;
-        return new
-        {
-            id = b.Id,
-            title = b.Title,
-            status = b.Status,
-            setBy = Nick(b.SetBy),
-            reviewBy = b.ReviewBy == null ? null : Nick(b.ReviewBy),
-            createdAtMs = b.CreatedAtMs,
-            doneAtMs = b.DoneAtMs,
-            items = b.Items.Select(i => new
+        return store.Tasks.Open
+            .OrderBy(b => b.Status == "done" ? 1 : 0).ThenBy(b => b.CreatedAtMs)
+            .Select(b => (object)new
             {
-                botId = i.Bot, bot = Nick(i.Bot), title = i.Title, status = i.Status, note = i.Note, updatedAtMs = i.UpdatedAtMs,
-            }).ToArray(),
-            wrapping = _wrapping.Where(kv => kv.Value.Project == projectId)
-                .Select(kv => store.Doc.BotBySession(kv.Key)?.Slug).Where(s => s != null).ToArray(),
-        };
+                id = b.Id,
+                title = b.Title,
+                status = b.Status,
+                setBy = Nick(b.SetBy),
+                reviewBy = b.ReviewBy == null ? null : Nick(b.ReviewBy),
+                createdAtMs = b.CreatedAtMs,
+                doneAtMs = b.DoneAtMs,
+                items = b.Items.Select(i => new
+                {
+                    botId = i.Bot, bot = Nick(i.Bot), title = i.Title, status = i.Status, note = i.Note, updatedAtMs = i.UpdatedAtMs,
+                }).ToArray(),
+                wrapping = _wrapping.Where(kv => kv.Value.Project == projectId && kv.Value.TaskId == b.Id)
+                    .Select(kv => store.Doc.BotBySession(kv.Key)?.Slug).Where(s => s != null).ToArray(),
+            }).ToArray();
     }
 
     // ---- markers ----------------------------------------------------------
@@ -294,30 +405,305 @@ internal sealed class TeamController
         if ((msg.Phase ?? "") != "sent") return;
         if (BotOfSession(sess.Id) is not { } h) return;
         var target = (msg.Target ?? "").Trim();
-        var tbot = h.Store.Doc.Bots.FirstOrDefault(b => ClaudePeerNames.Matches(b.CcName, target));
+        var tbot = ResolvePeerTarget(h.Store, target);
+        var (label, body) = SplitHandoff(msg.Message ?? msg.Text ?? "");
         var entry = h.Store.Ledger.Append(new RoomEntry
         {
             Kind = "peer",
             From = h.Bot.Slug,
-            To = new List<string> { tbot?.Slug ?? target },
-            Text = msg.Message ?? msg.Text ?? "",
+            To = new List<string> { tbot?.Slug ?? "(another session)" },
+            Text = body,
             Summary = msg.Summary,
             Ok = msg.Ok,
+            Note = label,
         });
+        if (tbot == null) Log.Info("Team.peer", $"unresolved target '{TeamRender.OneLine(target, 80)}' from {h.Bot.Slug}");
         PostEntries(h.Project.Id, h.Store, new[] { entry });
     }
 
-    /// `perch team post` from a bot: a note for the owner, pinging nobody.
+    /// The bot a SendMessage target names. Bots address each other by session
+    /// name, but a reply often goes to the ADDRESS the message came with
+    /// (`uds:\\.\pipe\…`), and cc disambiguates a shared name with a bracketed
+    /// id (`ada [7d217e]`); all of those must land on the same roster row.
+    internal TeamBot? ResolvePeerTarget(TeamStore store, string target)
+    {
+        if (string.IsNullOrWhiteSpace(target)) return null;
+        var t = target.Trim();
+        // "name [7d217e]" → "name"
+        var bracket = t.LastIndexOf(" [", StringComparison.Ordinal);
+        if (bracket > 0 && t.EndsWith("]", StringComparison.Ordinal)) t = t[..bracket].Trim();
+        var byName = store.Doc.Bots.FirstOrDefault(b =>
+            string.Equals(b.Nickname, t, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(b.Slug, t, StringComparison.OrdinalIgnoreCase)
+            || ClaudePeerNames.Matches(b.CcName, t));
+        if (byName != null) return byName;
+        // A reply address: match a pane's own inbox socket, with or without
+        // the `uds:` prefix and regardless of slash direction.
+        static string Norm(string s)
+        {
+            s = s.Trim();
+            if (s.StartsWith("uds:", StringComparison.OrdinalIgnoreCase)) s = s[4..];
+            return s.Replace('/', '\\').TrimEnd('\\').ToLowerInvariant();
+        }
+        var want = Norm(t);
+        if (want.Length == 0) return null;
+        foreach (var bot in store.Doc.Bots)
+        {
+            var sess = bot.SessionId is Guid id ? _h.SessionById(id) : null;
+            if (sess == null) continue;
+            foreach (var p in PaneTree.AllLeaves(sess.Root))
+                if (!string.IsNullOrEmpty(p.MessagingSocket) && Norm(p.MessagingSocket!) == want) return bot;
+        }
+        return null;
+    }
+
+    /// The handoff kind a teammate message starts with (`HANDOFF:`,
+    /// `REPORT:`, `QUESTION:`, `ANSWER:`, `FYI:`), lower-cased, and the text
+    /// without it. No prefix → (null, text).
+    internal static (string? Label, string Text) SplitHandoff(string text)
+    {
+        var t = (text ?? "").TrimStart();
+        foreach (var k in new[] { "handoff", "report", "question", "answer", "fyi" })
+        {
+            if (t.Length > k.Length + 1 && t.StartsWith(k, StringComparison.OrdinalIgnoreCase) && t[k.Length] == ':')
+                return (k, t[(k.Length + 1)..].TrimStart());
+        }
+        return (null, text ?? "");
+    }
+
+    /// `perch team post` from a bot: a note for the owner, pinging nobody —
+    /// with a picture when it attached one.
     public void OnTeamPost(Session sess, Guid paneId, TeamPostMessage msg)
     {
         if (BotOfSession(sess.Id) is not { } h) return;
         var text = (msg.Text ?? "").Trim();
-        if (text.Length == 0) return;
+        var image = (msg.Image ?? "").Trim();
+        if (image.Length > 0 && !(IsImagePath(image) && File.Exists(image))) image = "";
+        if (text.Length == 0 && image.Length == 0) return;
         var entry = h.Store.Ledger.Append(new RoomEntry
         {
             Kind = "note", From = h.Bot.Slug, To = new List<string> { TeamRender.Everyone }, Text = text,
+            Image = image.Length > 0 ? image : null,
         });
         PostEntries(h.Project.Id, h.Store, new[] { entry });
+    }
+
+    /// `perch team ask` from a bot: a card the owner answers.
+    public void OnTeamAsk(Session sess, Guid paneId, TeamAskMessage msg)
+    {
+        if (BotOfSession(sess.Id) is not { } h) return;
+        var text = (msg.Text ?? "").Trim();
+        if (text.Length == 0) return;
+        var id = string.IsNullOrWhiteSpace(msg.Id) ? Guid.NewGuid().ToString("N")[..8] : msg.Id!.Trim();
+        _asks[id] = h.Bot.Slug;
+        var choices = (msg.Choices ?? Array.Empty<string>()).Select(c => c.Trim()).Where(c => c.Length > 0).Take(6).ToList();
+        var entry = h.Store.Ledger.Append(new RoomEntry
+        {
+            Kind = "system", From = "perch", Event = "ask", Note = id, To = new List<string> { h.Bot.Slug },
+            Text = text, Choices = choices.Count > 0 ? choices : null,
+        });
+        Log.Info("Team.ask", $"bot={h.Bot.Slug} id={id}");
+        RefreshRoster(h.Project, h.Store);
+        PostEntries(h.Project.Id, h.Store, new[] { entry });
+    }
+
+    /// The owner answered an ask card: the answer goes to the asking bot as a
+    /// post, and the card is marked answered.
+    public void OnAskAnswer(TeamAskAnswerMsg msg)
+    {
+        var proj = _h.ProjectById(msg.ProjectId);
+        var store = StoreFor(msg.ProjectId);
+        var answer = (msg.Answer ?? "").Trim();
+        if (proj == null || store == null || answer.Length == 0) return;
+        if (!_asks.Remove(msg.Id, out var slug))
+        {
+            // Not in memory (a restart): find the card in the ledger.
+            slug = store.Ledger.ReadAll().LastOrDefault(e => e.Event == "ask" && e.Note == msg.Id)?.To?.FirstOrDefault();
+        }
+        var bot = slug == null ? null : store.Doc.Bot(slug);
+        if (bot == null) return;
+        var done = store.Ledger.Append(new RoomEntry
+        {
+            Kind = "system", From = "perch", Event = "ask.answered", Note = msg.Id, To = new List<string> { bot.Slug },
+            Text = $"You answered {bot.Nickname}: {TeamRender.OneLine(answer, 120)}",
+        });
+        PostEntries(proj.Id, store, new[] { done });
+        RefreshRoster(proj, store);
+        OnPost(new TeamPostMsg
+        {
+            ProjectId = proj.Id, Text = answer, ClientId = "",
+            To = JsonDocument.Parse($"[{JsonSerializer.Serialize(bot.Nickname)}]").RootElement.Clone(),
+        });
+    }
+
+    /// A bot's PermissionRequest hook is holding a permission prompt for the
+    /// room: a card with what it wants to run.
+    public void OnPermAsk(Session sess, Guid paneId, PermAskMessage msg)
+    {
+        if (BotOfSession(sess.Id) is not { } h) return;
+        var id = (msg.Id ?? "").Trim();
+        if (id.Length == 0) return;
+        _awaitingPerm[id] = (h.Bot.Slug, paneId);
+        var tool = (msg.Tool ?? "tool").Trim();
+        var summary = TeamRender.OneLine(msg.Summary, 300);
+        var entry = h.Store.Ledger.Append(new RoomEntry
+        {
+            Kind = "system", From = "perch", Event = "permission", Note = id, To = new List<string> { h.Bot.Slug },
+            Text = $"{h.Bot.Nickname} wants to run {tool}: {summary}",
+            Summary = msg.Input,
+            PaneId = paneId.ToString("D"),
+        });
+        Log.Info("Team.perm.ask", $"bot={h.Bot.Slug} id={id} tool={tool}");
+        RefreshRoster(h.Project, h.Store);
+        PostEntries(h.Project.Id, h.Store, new[] { entry });
+    }
+
+    /// The owner answered a permission card: write the decision where the
+    /// hook is polling, and say so in the room.
+    public void OnPermAnswer(TeamPermAnswerMsg msg)
+    {
+        var proj = _h.ProjectById(msg.ProjectId);
+        var store = StoreFor(msg.ProjectId);
+        if (proj == null || store == null) return;
+        var allow = string.Equals(msg.Decision, "allow", StringComparison.OrdinalIgnoreCase);
+        TeamPaths.Write(TeamPaths.PermAnswerPathFor(msg.Id), allow ? "allow" : "deny");
+        _awaitingPerm.Remove(msg.Id, out var who);
+        var bot = store.Doc.Bot(who.Slug ?? "");
+        if (bot == null)
+            bot = store.Doc.Bot(store.Ledger.ReadAll().LastOrDefault(e => e.Event == "permission" && e.Note == msg.Id)?.To?.FirstOrDefault() ?? "");
+        var e = store.Ledger.Append(new RoomEntry
+        {
+            Kind = "system", From = "perch", Event = "permission.answered", Note = msg.Id,
+            To = bot == null ? null : new List<string> { bot.Slug },
+            Text = allow ? $"You allowed {bot?.Nickname ?? "the bot"}" : $"You denied {bot?.Nickname ?? "the bot"}",
+        });
+        Log.Info("Team.perm.answer", $"id={msg.Id} allow={allow}");
+        RefreshRoster(proj, store);
+        PostEntries(proj.Id, store, new[] { e });
+    }
+
+    /// Auto mode's classifier blocked a bot's tool call: information for the
+    /// room, with the bot's terminal one click away.
+    public void OnPermDenied(Session sess, Guid paneId, PermDeniedMessage msg)
+    {
+        if (BotOfSession(sess.Id) is not { } h) return;
+        var tool = (msg.Tool ?? "tool").Trim();
+        var e = h.Store.Ledger.Append(new RoomEntry
+        {
+            Kind = "system", From = h.Bot.Slug, Event = "denied", PaneId = paneId.ToString("D"),
+            Text = $"{h.Bot.Nickname}: auto mode blocked {tool}: {TeamRender.OneLine(msg.Summary, 200)}"
+                 + (string.IsNullOrWhiteSpace(msg.Reason) ? "" : $" — {TeamRender.OneLine(msg.Reason, 200)}"),
+        });
+        PostEntries(h.Project.Id, h.Store, new[] { e });
+    }
+
+    /// The room asking for a picture's bytes.
+    public void OnImage(TeamImageMsg msg)
+    {
+        var path = (msg.Path ?? "").Trim();
+        string? error = null;
+        string mediaType = "", data = "";
+        try
+        {
+            if (!IsImagePath(path)) error = "Not an image file.";
+            else if (!File.Exists(path)) error = "The file is gone.";
+            else
+            {
+                var info = new FileInfo(path);
+                if (info.Length > 8 * 1024 * 1024) error = "The image is over 8 MB.";
+                else
+                {
+                    data = Convert.ToBase64String(File.ReadAllBytes(path));
+                    mediaType = Path.GetExtension(path).ToLowerInvariant() switch
+                    {
+                        ".png" => "image/png", ".gif" => "image/gif", ".webp" => "image/webp", _ => "image/jpeg",
+                    };
+                }
+            }
+        }
+        catch (Exception ex) { error = ex.Message; }
+        if (error != null)
+            _h.Post(new { type = "team.image.data", projectId = msg.ProjectId.ToString("D"), path, error });
+        else
+            _h.Post(new { type = "team.image.data", projectId = msg.ProjectId.ToString("D"), path, mediaType, data });
+    }
+
+    internal static bool IsImagePath(string path)
+        => !string.IsNullOrWhiteSpace(path) && Path.IsPathRooted(path)
+           && Path.GetExtension(path).ToLowerInvariant() is ".png" or ".jpg" or ".jpeg" or ".gif" or ".webp";
+
+    // ---- reactions ----------------------------------------------------------
+
+    /// `perch team react` from a bot.
+    public void OnTeamReact(Session sess, Guid paneId, TeamReactMessage msg)
+    {
+        if (BotOfSession(sess.Id) is not { } h) return;
+        var target = ResolveReactionTarget(h.Store, msg.Target ?? "");
+        if (target == null) { Fallback(h.Project, h.Store, $"{h.Bot.Nickname} reacted to something the room doesn't have ({TeamRender.OneLine(msg.Target, 40)})"); return; }
+        React(h.Project, h.Store, h.Bot.Slug, target, msg.Emoji ?? "");
+    }
+
+    /// The owner reacting from the room. A bot whose row it was hears about it.
+    public void OnReact(TeamReactMsg msg)
+    {
+        var proj = _h.ProjectById(msg.ProjectId);
+        var store = StoreFor(msg.ProjectId);
+        if (proj == null || store == null) return;
+        var target = store.Ledger.ReadAll().FirstOrDefault(e => e.Seq == msg.Seq);
+        if (target == null) return;
+        if (!React(proj, store, "you", target, msg.Emoji ?? "")) return;
+        var bot = store.Doc.Bot(target.From);
+        if (bot == null) return;   // the owner's own row, or the app's
+        var line = ReactionLine(msg.Seq, (msg.Emoji ?? "").Trim(), target.Text);
+        var attempts = Attempt(new List<TeamBot> { bot }, line, everyone: false, seq: 0, raw: true);
+        Log.Info("Team.react", $"seq={msg.Seq} bot={bot.Slug} delivered={attempts.All(a => a.Ok)}");
+        var post = new RoomEntry
+        {
+            Kind = "system", From = "perch", Event = "delivered", Note = msg.Seq.ToString(),
+            To = new List<string> { bot.Slug }, Text = $"Told {bot.Nickname} about your reaction",
+            Delivered = attempts.All(a => a.Ok),
+        };
+        if (!attempts.All(a => a.Ok)) { store.Ledger.Append(post); Record(store, post, attempts); }
+    }
+
+    /// The line typed into a bot's terminal when the owner reacts to its row.
+    internal static string ReactionLine(long seq, string emoji, string text)
+    {
+        var snippet = TeamRender.OneLine(text, 60);
+        return $"{TeamRender.PostPrefix} Joseph reacted {emoji} to #{seq} \"{snippet}\"";
+    }
+
+    /// `#<seq>` → that row; `@<nick>` → that bot's latest beat/peer/note row.
+    internal RoomEntry? ResolveReactionTarget(TeamStore store, string target)
+    {
+        var t = target.Trim();
+        if (t.StartsWith('#') && long.TryParse(t[1..], out var seq))
+            return store.Ledger.ReadAll().FirstOrDefault(e => e.Seq == seq);
+        if (t.StartsWith('@'))
+        {
+            var name = t[1..];
+            var bot = store.Doc.Bots.FirstOrDefault(b =>
+                string.Equals(b.Nickname, name, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(b.Slug, name, StringComparison.OrdinalIgnoreCase)
+                || ClaudePeerNames.Matches(b.CcName, name));
+            if (bot == null) return null;
+            return store.Ledger.ReadAll().LastOrDefault(e => e.From == bot.Slug && e.Kind is "beat" or "peer" or "note");
+        }
+        return null;
+    }
+
+    /// Append a reaction row unless the same one is already there. `from` is
+    /// a bot slug or "you".
+    private bool React(Project proj, TeamStore store, string from, RoomEntry target, string emoji)
+    {
+        emoji = emoji.Trim();
+        if (emoji.Length == 0 || emoji.Length > 8) return false;
+        var seq = target.Seq.ToString();
+        if (store.Ledger.ReadAll().Any(e => e.Kind == "reaction" && e.From == from && e.Note == seq && e.Text == emoji))
+            return false;   // the same reaction twice is one reaction
+        var e = store.Ledger.Append(new RoomEntry { Kind = "reaction", From = from, Note = seq, Text = emoji });
+        PostEntries(proj.Id, store, new[] { e });
+        return true;
     }
 
     // ---- lifecycle --------------------------------------------------------
@@ -343,8 +729,8 @@ internal sealed class TeamController
         // turn end fires it.
         if (_wrapping.TryGetValue(sess.Id, out var w))
         {
-            if (isPostEcho && !w.Confirmed) _wrapping[sess.Id] = (w.Project, true);
-            else if (w.Confirmed && state == AgentState.Done) ResetBot(sess, w.Project);
+            if (isPostEcho && !w.Confirmed) _wrapping[sess.Id] = (w.Project, w.TaskId, true);
+            else if (w.Confirmed && state == AgentState.Done) ResetBot(sess, w.Project, w.TaskId);
         }
     }
 
@@ -591,11 +977,34 @@ internal sealed class TeamController
         };
         // Deliver FIRST, so the row lands with its verdict: "delivered" or
         // "waiting for the bot to wake" is a fact about this post, not a later
-        // event the page has to reconcile.
-        var attempts = Attempt(targets, text, everyone);
+        // event the page has to reconcile. The row's number is known before
+        // it exists (appends are single-threaded), so the typed line carries
+        // it and a bot can react to `#<n>`.
+        var seq = store.Ledger.NextSeq;
+        var attempts = Attempt(targets, text, everyone, seq);
         entry.Delivered = attempts.All(a => a.Ok);
         store.Ledger.Append(entry);
         var events = Record(store, entry, attempts);
+
+        // The lead keeps the board. Work handed straight to a teammate that
+        // no open task covers is copied to the lead, so a card appears without
+        // anyone having to ask for one.
+        var lead = store.Doc.Lead;
+        if (lead != null && !everyone && !targets.Contains(lead)
+            && !targets.All(t => store.Tasks.Active.Any(b => b.ItemOf(t.Slug) != null)))
+        {
+            var names = string.Join(", ", targets.Select(t => "@" + t.Nickname));
+            var cc = $"{TeamRender.PostPrefix} #{seq} Joseph → {names} (cc {lead.Nickname} for the board): {Flatten(text)}";
+            var ccAttempt = Attempt(new List<TeamBot> { lead }, cc, everyone: false, seq, raw: true);
+            events.Add(store.Ledger.Append(new RoomEntry
+            {
+                Kind = "system", From = "perch", Event = "cc", Note = seq.ToString(), To = new List<string> { lead.Slug },
+                Text = $"Copied to {lead.Nickname} for the board",
+                Delivered = ccAttempt.All(a => a.Ok),
+            }));
+            var parkedEvents = Record(store, entry, ccAttempt);
+            events.AddRange(parkedEvents);
+        }
         PostEntries(proj.Id, store, new[] { entry }.Concat(events));
     }
 
@@ -695,15 +1104,33 @@ internal sealed class TeamController
         string NotLead(string what) => leadNick == null
             ? $"{h.Bot.Nickname} tried to {what}, but there is no lead yet — Joseph does that from the room"
             : $"{h.Bot.Nickname} tried to {what}; only the lead ({leadNick}) or Joseph can";
+        TaskBoard? Named(string what)
+        {
+            var id = (msg.TaskId ?? "").Trim();
+            if (id.Length == 0)
+            {
+                Refuse(h.Project, h.Store, $"{h.Bot.Nickname} tried to {what} without saying which task (the id is on the board)");
+                return null;
+            }
+            var b = h.Store.Tasks.Board(id);
+            if (b == null) Refuse(h.Project, h.Store, $"{h.Bot.Nickname} tried to {what} task {id}, which isn't on the board");
+            return b;
+        }
         switch (op)
         {
+            case "new":
             case "main":
-                if (!isLead) { Refuse(h.Project, h.Store, NotLead("set the task")); return; }
-                if (title.Length == 0) { Refuse(h.Project, h.Store, $"{h.Bot.Nickname} set an empty task title"); return; }
-                SetTask(h.Project, h.Store, title, h.Bot.Slug);
+                if (!isLead) { Refuse(h.Project, h.Store, NotLead("open a task")); return; }
+                if (title.Length == 0) { Refuse(h.Project, h.Store, $"{h.Bot.Nickname} opened a task with no title"); return; }
+                var created = CreateTask(h.Project, h.Store, title, h.Bot.Slug);
+                // The pipe runs one way; the CLI reads the new id from this file.
+                TeamPaths.Write(TeamPaths.TaskReplyPathFor(paneId), created.Id);
                 break;
             case "assign":
+            {
                 if (!isLead) { Refuse(h.Project, h.Store, NotLead("assign a piece")); return; }
+                var board = Named("assign a piece on");
+                if (board == null) return;
                 var name = (msg.Bot ?? "").Trim();
                 var target = h.Store.Doc.Bots.FirstOrDefault(b =>
                     string.Equals(b.Slug, name, StringComparison.OrdinalIgnoreCase)
@@ -711,38 +1138,81 @@ internal sealed class TeamController
                     || ClaudePeerNames.Matches(b.CcName, name));
                 if (target == null) { Refuse(h.Project, h.Store, $"{h.Bot.Nickname} assigned a piece to \"{name}\", who isn't on the team"); return; }
                 if (title.Length == 0) { Refuse(h.Project, h.Store, $"{h.Bot.Nickname} assigned {target.Nickname} an empty piece"); return; }
-                UpsertItem(h.Project, h.Store, target, title, null, null, h.Bot);
+                UpsertItem(h.Project, h.Store, board, target, title, null, null, h.Bot);
                 break;
+            }
             case "mine":
-                UpsertItem(h.Project, h.Store, h.Bot, title, msg.Status, msg.Note, h.Bot);
+            {
+                TaskBoard? board;
+                if (!string.IsNullOrWhiteSpace(msg.TaskId)) { board = Named("report a piece on"); if (board == null) return; }
+                else
+                {
+                    // No id: the bot's one open piece, or the one open task.
+                    var mine = h.Store.Tasks.Active.Where(b => b.ItemOf(h.Bot.Slug) != null).ToList();
+                    var active = h.Store.Tasks.Active.ToList();
+                    board = mine.Count == 1 ? mine[0] : mine.Count == 0 && active.Count == 1 ? active[0] : null;
+                    if (board == null)
+                    {
+                        Refuse(h.Project, h.Store, active.Count == 0
+                            ? $"{h.Bot.Nickname} reported a piece, but there is no task open — the lead opens one first"
+                            : $"{h.Bot.Nickname} reported a piece without saying which task (say `perch team task mine <id> …`)");
+                        return;
+                    }
+                }
+                UpsertItem(h.Project, h.Store, board, h.Bot, title, msg.Status, msg.Note, h.Bot);
                 break;
+            }
             case "done":
-                if (!isLead) { Refuse(h.Project, h.Store, NotLead("close the task")); return; }
-                AskConfirm(h.Project, h.Store, h.Bot);
+            {
+                if (!isLead) { Refuse(h.Project, h.Store, NotLead("close a task")); return; }
+                var board = Named("close");
+                if (board == null) return;
+                AskConfirm(h.Project, h.Store, board, h.Bot);
                 break;
+            }
             default:
                 Log.Info("Team.task", $"unknown op '{op}' from {h.Bot.Slug}");
                 break;
         }
     }
 
-    /// The owner sets or renames the task from the room.
+    /// The owner opens a task from the room.
     public void OnTaskSet(TeamTaskSetMsg msg)
     {
         var proj = _h.ProjectById(msg.ProjectId);
         var store = StoreFor(msg.ProjectId);
         var title = (msg.Title ?? "").Trim();
         if (proj == null || store == null || title.Length == 0) return;
-        SetTask(proj, store, title, "you");
+        CreateTask(proj, store, title, "you");
     }
 
-    /// The owner confirms: the task is done, bots wrap up and reset.
+    /// The owner renames an open task.
+    public void OnTaskRename(TeamTaskRenameMsg msg)
+    {
+        var proj = _h.ProjectById(msg.ProjectId);
+        var store = StoreFor(msg.ProjectId);
+        var title = (msg.Title ?? "").Trim();
+        var board = store?.Tasks.Board(msg.TaskId);
+        if (proj == null || store == null || board == null || title.Length == 0 || board.Status == "done") return;
+        board.Title = title;
+        store.SaveTasks();
+        RefreshRoster(proj, store);
+        var e = store.Ledger.Append(new RoomEntry
+        {
+            Kind = "system", From = "perch", Event = "task", TaskId = board.Id, Text = $"Joseph renamed the task: {title}",
+        });
+        _h.PushState();
+        PostEntries(proj.Id, store, new[] { e });
+    }
+
+    /// The owner confirms: the task is done, its bots wrap up and reset.
     public void OnTaskConfirm(TeamTaskConfirmMsg msg)
     {
         var proj = _h.ProjectById(msg.ProjectId);
         var store = StoreFor(msg.ProjectId);
-        if (proj == null || store == null) return;
-        CompleteTask(proj, store);
+        var board = store?.Tasks.Board(msg.TaskId);
+        if (proj == null || store == null || board == null) return;
+        CompleteTask(proj, store, board);
     }
 
     /// The owner says not yet: the board goes back to open and the lead
@@ -751,7 +1221,7 @@ internal sealed class TeamController
     {
         var proj = _h.ProjectById(msg.ProjectId);
         var store = StoreFor(msg.ProjectId);
-        var board = store?.Tasks.Current;
+        var board = store?.Tasks.Board(msg.TaskId);
         if (proj == null || store == null || board == null || board.Status != "review") return;
         board.Status = "open";
         board.ReviewBy = null;
@@ -761,61 +1231,46 @@ internal sealed class TeamController
         var note = (msg.Note ?? "").Trim();
         var e = store.Ledger.Append(new RoomEntry
         {
-            Kind = "system", From = "perch", Event = "task", Text = "Not done yet — the task is open again",
+            Kind = "system", From = "perch", Event = "task", TaskId = board.Id,
+            Text = $"Not done yet — \"{TeamRender.OneLine(board.Title, 60)}\" is open again",
         });
         _h.PushState();
         PostEntries(proj.Id, store, new[] { e });
         var lead = store.Doc.Lead;
-        var text = note.Length > 0 ? $"Not done yet: {note}" : "Not done yet — keep going and ask again when it is.";
+        var text = note.Length > 0 ? $"Not done yet (task {board.Id}): {note}" : $"Not done yet (task {board.Id}) — keep going and ask again when it is.";
         OnPost(new TeamPostMsg
         {
             ProjectId = proj.Id, Text = text, ClientId = "",   // no optimistic row to reconcile: the owner didn't type this
-            To = lead == null ? null : JsonDocument.Parse($"[\"{lead.Nickname}\"]").RootElement.Clone(),
+            To = lead == null ? null : JsonDocument.Parse($"[{JsonSerializer.Serialize(lead.Nickname)}]").RootElement.Clone(),
         });
     }
 
-    private void SetTask(Project proj, TeamStore store, string title, string setBy)
+    private TaskBoard CreateTask(Project proj, TeamStore store, string title, string setBy)
     {
-        var tasks = store.Tasks;
         var who = setBy == "you" ? "Joseph" : store.Doc.Bot(setBy)?.Nickname ?? setBy;
-        RoomEntry row;
-        if (tasks.Current is { } cur && cur.Status != "done")
+        var board = new TaskBoard
         {
-            var old = cur.Title;
-            cur.Title = title;
-            if (cur.Status == "review") { cur.Status = "open"; cur.ReviewBy = null; cur.ReviewAtMs = null; }
-            row = store.Ledger.Append(new RoomEntry
-            {
-                Kind = "system", From = "perch", Event = "task",
-                Text = old == title ? $"Task set by {who}: {title}" : $"{who} renamed the task: {title}",
-            });
-        }
-        else
-        {
-            if (tasks.Current != null) Archive(store, tasks.Current);   // a done board still wrapping: a new task supersedes it
-            tasks.Current = new TaskBoard
-            {
-                Id = Guid.NewGuid().ToString("N")[..8], Title = title, SetBy = setBy,
-                CreatedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            };
-            row = store.Ledger.Append(new RoomEntry
-            {
-                Kind = "system", From = "perch", Event = "task", Text = $"Task set by {who}: {title}",
-            });
-        }
+            Id = TaskDoc.NewId(), Title = title, SetBy = setBy,
+            CreatedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        };
+        store.Tasks.Open.Add(board);
         store.SaveTasks();
         RefreshRoster(proj, store);
-        Log.Info("Team.task", $"project={proj.Id:N} set by={setBy} title={TeamRender.OneLine(title, 80)}");
+        var row = store.Ledger.Append(new RoomEntry
+        {
+            Kind = "system", From = "perch", Event = "task", TaskId = board.Id, Text = $"Task opened by {who}: {title}",
+        });
+        Log.Info("Team.task", $"project={proj.Id:N} new id={board.Id} by={setBy} title={TeamRender.OneLine(title, 80)}");
         _h.PushState();
         PostEntries(proj.Id, store, new[] { row });
+        return board;
     }
 
-    private void UpsertItem(Project proj, TeamStore store, TeamBot bot, string title, string? status, string? note, TeamBot by)
+    private void UpsertItem(Project proj, TeamStore store, TaskBoard board, TeamBot bot, string title, string? status, string? note, TeamBot by)
     {
-        var board = store.Tasks.Current;
-        if (board == null || board.Status == "done")
+        if (board.Status == "done")
         {
-            Refuse(proj, store, $"{by.Nickname} reported a piece, but there is no task open — the lead sets one first");
+            Refuse(proj, store, $"{by.Nickname} reported a piece on task {board.Id}, but it is done");
             return;
         }
         var item = board.ItemOf(bot.Slug);
@@ -832,17 +1287,16 @@ internal sealed class TeamController
         var text = by.Slug == bot.Slug
             ? $"{bot.Nickname}: {item.Status} — {TeamRender.OneLine(item.Title, 120)}" + (item.Note.Length > 0 ? $" ({TeamRender.OneLine(item.Note, 120)})" : "")
             : $"{by.Nickname} gave {bot.Nickname}: {TeamRender.OneLine(item.Title, 120)}";
-        var e = store.Ledger.Append(new RoomEntry { Kind = "system", From = "perch", Event = "task", Text = text });
+        var e = store.Ledger.Append(new RoomEntry { Kind = "system", From = "perch", Event = "task", TaskId = board.Id, Text = text });
         _h.PushState();
         PostEntries(proj.Id, store, new[] { e });
     }
 
-    private void AskConfirm(Project proj, TeamStore store, TeamBot lead)
+    private void AskConfirm(Project proj, TeamStore store, TaskBoard board, TeamBot lead)
     {
-        var board = store.Tasks.Current;
-        if (board == null || board.Status != "open")
+        if (board.Status != "open")
         {
-            Refuse(proj, store, board == null ? $"{lead.Nickname} closed a task, but none is set" : $"{lead.Nickname} closed the task, but it is already {board.Status}");
+            Refuse(proj, store, $"{lead.Nickname} closed task {board.Id}, but it is already {board.Status}");
             return;
         }
         board.Status = "review";
@@ -852,21 +1306,22 @@ internal sealed class TeamController
         RefreshRoster(proj, store);
         var e = store.Ledger.Append(new RoomEntry
         {
-            Kind = "system", From = "perch", Event = "task.review",
-            Text = $"{lead.Nickname} says the task is done — confirm it in the board, or say not yet",
+            Kind = "system", From = "perch", Event = "task.review", TaskId = board.Id,
+            Text = $"{lead.Nickname} says \"{TeamRender.OneLine(board.Title, 60)}\" is done — confirm it on the card, or say not yet",
         });
-        Log.Info("Team.task", $"project={proj.Id:N} review by={lead.Slug}");
+        Log.Info("Team.task", $"project={proj.Id:N} review id={board.Id} by={lead.Slug}");
         _h.PushState();
         PostEntries(proj.Id, store, new[] { e });
     }
 
-    /// The owner confirmed. The board is done; every running bot is told to
-    /// wrap up (memory first, then one line), and each is reset when that
-    /// turn ends. Bots that aren't running have nothing to clear.
-    private void CompleteTask(Project proj, TeamStore store)
+    /// The owner confirmed. The board is done; the running bots whose open
+    /// pieces are ALL on it are told to wrap up (memory first, then one line)
+    /// and each is reset when that turn ends. A bot with a piece on another
+    /// open task is told and carries on; bots that aren't running have
+    /// nothing to clear.
+    private void CompleteTask(Project proj, TeamStore store, TaskBoard board)
     {
-        var board = store.Tasks.Current;
-        if (board == null || board.Status == "done") return;
+        if (board.Status == "done") return;
         board.Status = "done";
         board.DoneAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         store.SaveTasks();
@@ -875,66 +1330,98 @@ internal sealed class TeamController
         {
             store.Ledger.Append(new RoomEntry
             {
-                Kind = "system", From = "perch", Event = "task.done", Text = $"Task done: {board.Title} — the team is wrapping up",
+                Kind = "system", From = "perch", Event = "task.done", TaskId = board.Id,
+                Text = $"Task done: {board.Title} — its bots are wrapping up",
             }),
         };
-        var text = $"The task \"{board.Title}\" is done. Wrap up now: update your memory file with what the next task will need " +
-                   "(decisions, where things stand, unfinished threads), then reply with one line. Your context is cleared after that reply.";
-        var attempts = Attempt(store.Doc.Bots.ToList(), text, everyone: true);
-        var post = new RoomEntry
+        var others = store.Tasks.Active.Where(b => b.Id != board.Id).ToList();
+        bool Elsewhere(TeamBot b) => others.Any(o => o.ItemOf(b.Slug) != null);
+        var resetting = store.Doc.Bots.Where(b => !Elsewhere(b)).ToList();
+        var staying = store.Doc.Bots.Where(Elsewhere).ToList();
+
+        if (resetting.Count > 0)
         {
-            Kind = "user", From = "you", Text = text, To = new List<string> { TeamRender.Everyone },
-            Delivered = attempts.All(a => a.Ok),
-        };
-        store.Ledger.Append(post);
-        rows.Add(post);
-        rows.AddRange(Record(store, post, attempts));
-        foreach (var a in attempts)
-            if (a.Ok && a.SessionId is Guid sid) _wrapping[sid] = (proj.Id, false);
-        Log.Info("Team.task", $"project={proj.Id:N} done; wrapping={_wrapping.Count(kv => kv.Value.Project == proj.Id)}");
+            var text = $"The task \"{board.Title}\" is done. Wrap up now: update your memory file with what the next task will need " +
+                       "(decisions, where things stand, unfinished threads), then reply with one line. Your context is cleared after that reply.";
+            var seq = store.Ledger.NextSeq;
+            var attempts = Attempt(resetting, text, everyone: true, seq);
+            var post = new RoomEntry
+            {
+                Kind = "user", From = "you", Text = text, To = new List<string> { TeamRender.Everyone },
+                Delivered = attempts.All(a => a.Ok), TaskId = board.Id,
+            };
+            store.Ledger.Append(post);
+            rows.Add(post);
+            rows.AddRange(Record(store, post, attempts));
+            foreach (var a in attempts)
+                if (a.Ok && a.SessionId is Guid sid) _wrapping[sid] = (proj.Id, board.Id, false);
+        }
+        if (staying.Count > 0)
+        {
+            var text = $"The task \"{board.Title}\" is done. You still have a piece on another open task, so you carry on; " +
+                       "update your memory file with anything from this one worth keeping.";
+            var seq = store.Ledger.NextSeq;
+            var attempts = Attempt(staying, text, everyone: false, seq);
+            var post = new RoomEntry
+            {
+                Kind = "user", From = "you", Text = text, To = staying.Select(b => b.Slug).ToList(),
+                Delivered = attempts.All(a => a.Ok), TaskId = board.Id,
+            };
+            store.Ledger.Append(post);
+            rows.Add(post);
+            rows.AddRange(Record(store, post, attempts));
+        }
+        Log.Info("Team.task", $"project={proj.Id:N} done id={board.Id}; wrapping={_wrapping.Count(kv => kv.Value.TaskId == board.Id)} staying={staying.Count}");
         _h.PushState();
         PostEntries(proj.Id, store, rows);
-        MaybeArchive(proj.Id);
+        MaybeArchive(proj.Id, board.Id);
     }
 
     /// A wrapping bot's turn ended after the wrap-up post went in: clear its
     /// context. `/clear` re-fires the session-start hook, so the brief is
     /// re-applied and the next prompt carries the roster and its memory.
-    private void ResetBot(Session sess, Guid projectId)
+    private void ResetBot(Session sess, Guid projectId, string taskId)
     {
         _wrapping.Remove(sess.Id);
-        if (BotOfSession(sess.Id) is not { } h) { MaybeArchive(projectId); return; }
+        if (BotOfSession(sess.Id) is not { } h) { MaybeArchive(projectId, taskId); return; }
         var ok = _h.TypeToClaude(sess, "/clear");
         Log.Info("Team.reset", $"session={sess.Id:N} bot={h.Bot.Slug} ok={ok}");
         var e = h.Store.Ledger.Append(new RoomEntry
         {
-            Kind = "system", From = h.Bot.Slug, Event = ok ? "reset" : "undelivered",
+            Kind = "system", From = h.Bot.Slug, Event = "reset", TaskId = taskId,
             Text = ok ? $"{h.Bot.Nickname} reset for the next task"
                       : $"{h.Bot.Nickname} couldn't be reset — open its terminal and run /clear",
         });
+        if (!ok) e.Event = "undelivered";
         PostEntries(h.Project.Id, h.Store, new[] { e });
-        MaybeArchive(projectId);
+        MaybeArchive(projectId, taskId);
     }
 
-    /// Once nobody is left wrapping, a done board moves to the archive and
-    /// the room is ready for the next task.
-    private void MaybeArchive(Guid projectId)
+    /// Once nobody is left wrapping for a done board, it moves to the archive.
+    /// With no task named, every done board is checked.
+    private void MaybeArchive(Guid projectId, string? taskId = null)
     {
-        if (_wrapping.Any(kv => kv.Value.Project == projectId)) return;
         var proj = _h.ProjectById(projectId);
         var store = StoreFor(projectId);
-        var board = store?.Tasks.Current;
-        if (proj == null || store == null || board == null || board.Status != "done") return;
-        Archive(store, board);
-        store.Tasks.Current = null;
+        if (proj == null || store == null) return;
+        var done = store.Tasks.Open.Where(b => b.Status == "done" && (taskId == null || b.Id == taskId)).ToList();
+        var rows = new List<RoomEntry>();
+        foreach (var board in done)
+        {
+            if (_wrapping.Any(kv => kv.Value.Project == projectId && kv.Value.TaskId == board.Id)) continue;
+            Archive(store, board);
+            store.Tasks.Open.Remove(board);
+            rows.Add(store.Ledger.Append(new RoomEntry
+            {
+                Kind = "system", From = "perch", Event = "task", TaskId = board.Id,
+                Text = $"\"{TeamRender.OneLine(board.Title, 60)}\" is wrapped up" + (store.Tasks.Active.Any() ? "" : " — ready for the next task"),
+            }));
+        }
+        if (rows.Count == 0) return;
         store.SaveTasks();
         RefreshRoster(proj, store);
-        var e = store.Ledger.Append(new RoomEntry
-        {
-            Kind = "system", From = "perch", Event = "task", Text = "Everyone is reset — ready for the next task",
-        });
         _h.PushState();
-        PostEntries(proj.Id, store, new[] { e });
+        PostEntries(proj.Id, store, rows);
     }
 
     private static void Archive(TeamStore store, TaskBoard board)
@@ -1132,12 +1619,12 @@ internal sealed class TeamController
 
     /// Try to type the post into each target's terminal now. Anything not
     /// typed is parked, to be flushed when the session is up and free.
-    private List<Attempted> Attempt(List<TeamBot> targets, string text, bool everyone)
+    private List<Attempted> Attempt(List<TeamBot> targets, string text, bool everyone, long seq = 0, bool raw = false)
     {
         var results = new List<Attempted>();
         foreach (var bot in targets)
         {
-            var line = DeliveryLine(text, everyone ? null : bot.Nickname);
+            var line = raw ? text : DeliveryLine(text, everyone ? null : bot.Nickname, seq);
             var sess = bot.SessionId is Guid id ? _h.SessionById(id) : null;
             if (sess == null) { results.Add(new Attempted(bot, false, true, false, line, null)); continue; }
             if (sess.Dormant) _h.Wake(sess);
@@ -1189,10 +1676,18 @@ internal sealed class TeamController
         return events;
     }
 
-    /// The line typed into a bot's terminal for one of the owner's posts.
-    internal static string DeliveryLine(string text, string? nickname)
+    /// The line typed into a bot's terminal for one of the owner's posts. The
+    /// post's room number rides along (`#12`) so the bot can react to it.
+    internal static string DeliveryLine(string text, string? nickname, long seq = 0)
     {
         var who = nickname == null ? "@everyone" : "@" + nickname;
+        var num = seq > 0 ? $" #{seq}" : "";
+        return $"{TeamRender.PostPrefix}{num} Joseph → {who}: {Flatten(text)}";
+    }
+
+    /// A post's text as one typed line (or a bracketed paste, when enabled).
+    internal static string Flatten(string text)
+    {
         var body = text.Replace("\r\n", "\n").Trim();
         if (body.Contains('\n'))
         {
@@ -1200,7 +1695,7 @@ internal sealed class TeamController
                 ? "\x1b[200~" + body + "\x1b[201~"
                 : body.Replace("\n", " ⏎ ");
         }
-        return $"{TeamRender.PostPrefix} Joseph → {who}: {body}";
+        return body;
     }
 
     // ---- helpers ----------------------------------------------------------
@@ -1264,7 +1759,7 @@ internal sealed class TeamController
            && !new[] { "everyone", "all", "you", "perch", "me" }.Contains(nick.ToLowerInvariant());
 
     private void RefreshRoster(Project proj, TeamStore store)
-        => store.RenderRoster(proj.Name, Presence(store));
+        => store.RenderRoster(proj.Name, Presence(store), ModelLimitsLine());
 
     private Dictionary<string, string> Presence(TeamStore store)
     {
@@ -1275,6 +1770,10 @@ internal sealed class TeamController
             if (sess == null) { map[bot.Slug] = "not running"; continue; }
             if (sess.Dormant) { map[bot.Slug] = "asleep"; continue; }
             if (_awaitingTrust.ContainsKey(bot.Slug)) { map[bot.Slug] = "waiting for the owner to answer its start-up question"; continue; }
+            if (_awaitingPerm.Values.Any(v => string.Equals(v.Slug, bot.Slug, StringComparison.OrdinalIgnoreCase)))
+            { map[bot.Slug] = "waiting for your permission"; continue; }
+            if (_asks.Values.Any(s => string.Equals(s, bot.Slug, StringComparison.OrdinalIgnoreCase)))
+            { map[bot.Slug] = "waiting for your answer"; continue; }
             var leaves = PaneTree.AllLeaves(sess.Root).Where(p => p.IsTerminal).ToList();
             map[bot.Slug] = leaves.Any(p => p.AgentState is AgentState.Waiting or AgentState.Permission) ? "waiting for the owner"
                           : leaves.Any(p => p.AgentState == AgentState.Working) ? "working"
@@ -1414,6 +1913,9 @@ internal sealed class TeamController
         Put("delivered", e.Delivered);
         Put("ok", e.Ok);
         Put("summary", e.Summary);
+        Put("image", e.Image);
+        Put("taskId", e.TaskId);
+        Put("choices", e.Choices);
         return view;
     }
 
@@ -1443,9 +1945,12 @@ internal sealed class TeamController
             {
                 positions = store.Doc.Positions.Select(p => new { p.Slug, p.Name, p.Purpose, p.Model, brief = store.ReadBrief(p.Slug).Length }),
                 bots = store.Doc.Bots.Select(b => new { b.Slug, b.Nickname, b.PositionSlug, b.CcName, sessionId = b.SessionId?.ToString("D"), b.Worktree }),
+                lead = store.Doc.LeadSlug,
             },
+            tasks = TasksView(projectId, store),
             ledger = store.Ledger.Tail(50).Select(e => EntryView(store, e)),
             parked = _parked.Sum(kv => kv.Value.Count),
+            awaitingPerm = _awaitingPerm.Keys.ToArray(),
         });
     }
 }

@@ -60,6 +60,10 @@ internal sealed class PaneManager : IDisposable
     public event Action<Session, Guid, PeerMsgMessage>? PeerMsg;
     public event Action<Session, Guid, TeamPostMessage>? TeamPost;
     public event Action<Session, Guid, TeamTaskMessage>? TeamTask;
+    public event Action<Session, Guid, TeamAskMessage>? TeamAsk;
+    public event Action<Session, Guid, TeamReactMessage>? TeamReact;
+    public event Action<Session, Guid, PermAskMessage>? PermAsk;
+    public event Action<Session, Guid, PermDeniedMessage>? PermDenied;
 
     public bool Has(Guid paneId) => _ptys.ContainsKey(paneId);
 
@@ -142,6 +146,10 @@ internal sealed class PaneManager : IDisposable
         ipc.OnPeerMsg += msg => PeerMsg?.Invoke(sess, paneId, msg);
         ipc.OnTeamPost += msg => TeamPost?.Invoke(sess, paneId, msg);
         ipc.OnTeamTask += msg => TeamTask?.Invoke(sess, paneId, msg);
+        ipc.OnTeamAsk += msg => TeamAsk?.Invoke(sess, paneId, msg);
+        ipc.OnTeamReact += msg => TeamReact?.Invoke(sess, paneId, msg);
+        ipc.OnPermAsk += msg => PermAsk?.Invoke(sess, paneId, msg);
+        ipc.OnPermDenied += msg => PermDenied?.Invoke(sess, paneId, msg);
         ipc.Start();
         _paneIpc[paneId] = ipc;
 

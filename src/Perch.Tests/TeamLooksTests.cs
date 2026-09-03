@@ -146,10 +146,20 @@ public class TeamLooksTests
         Assert.Contains("- Checkout flow 3 is flaky on Fridays.", context);
         Assert.Contains("# Team roster", context);
 
+        // The prompt gets the top of the file: everything above a `---` line
+        // when there is one, else the first 4 KB; the rest stays on disk.
+        store.WriteMemory(bot.Slug, "Summary: checkout is flaky.\n---\n" + new string('x', 5000));
+        var split = store.ReadMemory(bot.Slug);
+        Assert.StartsWith("Summary: checkout is flaky.", split);
+        Assert.DoesNotContain("xxxx", split);
+        Assert.EndsWith("[the rest is in the file — Read it when you need it]", split);
+
         store.WriteMemory(bot.Slug, new string('x', 5000));
         var capped = store.ReadMemory(bot.Slug);
-        Assert.True(System.Text.Encoding.UTF8.GetByteCount(capped) < 2200);
-        Assert.EndsWith("[memory truncated — keep it under 2 KB]", capped);
+        Assert.True(System.Text.Encoding.UTF8.GetByteCount(capped) < 4200);
+        Assert.EndsWith("[the rest is in the file — Read it when you need it]", capped);
+        Assert.Equal("top only", TeamStore.InlineMemory("top only\n---\n"));
+        Assert.Equal("short", TeamStore.InlineMemory("short"));
 
         // Removing the bot removes both its shared and its local folder.
         store.RemoveBot(bot.Slug);

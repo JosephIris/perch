@@ -42,6 +42,13 @@ internal sealed class RoomEntry
     public int? Repeat { get; set; }
     public string? Event { get; set; }
     public string? PaneId { get; set; }
+    /// An attached picture (absolute path) on a `note` or `user` row; the
+    /// page fetches its bytes through `team.image`.
+    public string? Image { get; set; }
+    /// The board a task event is about.
+    public string? TaskId { get; set; }
+    /// The buttons an `ask` card offers.
+    public List<string>? Choices { get; set; }
 }
 
 [JsonSerializable(typeof(RoomEntry))]
@@ -87,6 +94,11 @@ internal sealed class RoomLedger
 
     /// The newest sequence number on disk (0 for an empty room).
     public long LastSeq { get { lock (_gate) return _lastSeq; } }
+
+    /// The number the next Append will assign. Appends run on one thread
+    /// (the UI's), so a caller may bake it into what it writes before the
+    /// row exists — the delivered post carries its own number.
+    public long NextSeq { get { lock (_gate) return _lastSeq + 1; } }
 
     /// Append one entry, assigning its `Seq` and `TsMs` (when unset). Returns
     /// the entry for convenience so callers can push its seq to the page.

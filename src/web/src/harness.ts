@@ -1380,7 +1380,7 @@ if (view === "dashboard") {
 //                  it starts, shut, wearing the bots' most urgent state.
 // #newbot*       — the dialog: fresh / mid-generation / reviewing the brief /
 //                  the failure recovery / the existing-position path.
-if (view === "team" || view === "team-empty" || view.startsWith("team-sidebar") || view.startsWith("newbot")) {
+if (view === "team" || view === "team-activity" || view === "team-empty" || view.startsWith("team-sidebar") || view.startsWith("newbot")) {
   const teamProjects: ProjectView[] = [
     {
       id: "p-ptp", name: "storefront-web", path: "C:\\dev\\storefront-web",
@@ -1399,17 +1399,29 @@ if (view === "team" || view === "team-empty" || view.startsWith("team-sidebar") 
             look: { hat: "beret", eyewear: "round", extra: "pencil", temper: "curious" } },
         ],
         lead: "b-ada",
-        // The task pane under the roster: the lead has asked for a confirm.
-        task: {
-          id: "t1", title: "Ship the team room: faces in the roster, bots folded in the sidebar, no dropped posts",
-          status: "review", setBy: "Ada", reviewBy: "Ada", createdAtMs: Date.now() - 2 * 3600_000,
-          items: [
-            { botId: "b-ada", bot: "Ada", title: "Faces in the room and roster", status: "done", note: "harness shot is in", updatedAtMs: Date.now() - 600_000 },
-            { botId: "b-bo", bot: "Bo", title: "Ledger fan-out and the submit check", status: "done", note: "", updatedAtMs: Date.now() - 1200_000 },
-            { botId: "b-cy", bot: "Cy", title: "Empty-state mock", status: "blocked", note: "waiting on the copy", updatedAtMs: Date.now() - 300_000 },
-          ],
-          wrapping: [],
-        },
+        // The task column: two cards — one the lead has asked to confirm, one
+        // still moving.
+        tasks: [
+          {
+            id: "t2", title: "Loading states for KPI Performance: skeleton cards and charts, buttons disabled while data loads",
+            status: "open", setBy: "Ada", createdAtMs: Date.now() - 35 * 60_000,
+            items: [
+              { botId: "b-ada", bot: "Ada", title: "Gate: review the diff, then merge and push", status: "todo", note: "", updatedAtMs: Date.now() - 1800_000 },
+              { botId: "b-bo", bot: "Bo", title: "Template + harness for the loading states", status: "doing", note: "template patched, shooting now", updatedAtMs: Date.now() - 240_000 },
+            ],
+            wrapping: [],
+          },
+          {
+            id: "t1", title: "Ship the team room: faces in the roster, bots folded in the sidebar, no dropped posts",
+            status: "review", setBy: "Ada", reviewBy: "Ada", createdAtMs: Date.now() - 2 * 3600_000,
+            items: [
+              { botId: "b-ada", bot: "Ada", title: "Faces in the room and roster", status: "done", note: "harness shot is in", updatedAtMs: Date.now() - 600_000 },
+              { botId: "b-bo", bot: "Bo", title: "Ledger fan-out and the submit check", status: "done", note: "", updatedAtMs: Date.now() - 1200_000 },
+              { botId: "b-cy", bot: "Cy", title: "Empty-state mock", status: "blocked", note: "waiting on the copy", updatedAtMs: Date.now() - 300_000 },
+            ],
+            wrapping: [],
+          },
+        ],
       },
     },
     { id: "p-gm", name: "home-tools", path: "C:\\dev\\home-tools", team: { positions: [], bots: [] } },
@@ -1485,13 +1497,33 @@ if (view === "team" || view === "team-empty" || view.startsWith("team-sidebar") 
     row({ kind: "user", from: "you", ts: at(6), to: ["Ada"], text: "Ada — ship the row fix and post when the harness shot is in." }),
     row({ kind: "beat", from: "Ada", botId: "b-ada", ts: at(5, 30), text: "On it. Running the harness now; shot lands in `design-loop/team-sidebar.png`." }),
     row({ kind: "beat", from: "Ada", botId: "b-ada", ts: at(4), text: "Typecheck and tests are green. Taking the screenshot." }),
-    row({ kind: "system", from: "perch", ts: at(3), text: "Bo needs your permission — `npm install` in the worktree", event: "permission", botId: "b-bo" }),
-    row({ kind: "user", from: "you", ts: at(2), to: ["Bo"], text: "@Bo hold on the install until Ada's done; I'll approve it then." }),
+    // A hand-off, labelled: what the message IS, not just who it's for.
+    row({ kind: "peer", from: "Bo", botId: "b-bo", ts: at(3, 40), to: ["Ada"], note: "handoff", text: "Template and harness for the loading states are on branch bo (dad7d54e). Review the diff and merge when you're happy; I stopped the local server on 5103." }),
+    row({ kind: "peer", from: "Ada", botId: "b-ada", ts: at(3, 20), to: ["Bo"], note: "question", text: "Does the skeleton fall back to the plain spinner when the chart lib isn't loaded yet?" }),
+    // A screenshot shared to the room (the path becomes a thumbnail).
+    row({ kind: "note", from: "Bo", botId: "b-bo", ts: at(3), text: "Loading state, dark theme — the skeleton cards and the disabled buttons. Full set in the harness at http://localhost:5103/harness#kpi-loading", image: "C:\\dev\\storefront-web\\design-loop\\kpi-loading-bdm-dark.png" }),
+    // A permission card: Bo wants to run something auto mode won't approve.
+    row({ kind: "system", from: "perch", ts: at(2, 30), to: ["Bo"], note: "perm-7a1c", event: "permission",
+      text: "Bo wants to run Bash: git push origin bo",
+      summary: JSON.stringify({ command: "git push origin bo", description: "Push the loading-states branch", timeout: 120000 }) }),
+    // A question card with choices.
+    row({ kind: "system", from: "Cy", botId: "b-cy", ts: at(2), to: ["Cy"], note: "ask-3f9e", event: "ask",
+      text: "Which empty state should I build?", choices: ["Centered card", "Inline line"] }),
+    row({ kind: "system", from: "perch", ts: at(1, 50), text: "Copied to Ada for the board", event: "cc" }),
+    row({ kind: "user", from: "you", ts: at(1, 30), to: ["Bo"], text: "@Bo hold the push until Ada's review is in; I'll allow it then." }),
+    // Reactions: yours on Bo's hand-off (highlighted), Ada's on your post.
+    row({ kind: "reaction", from: "you", ts: at(1, 20), text: "👀", note: String(seq - 6) }),
+    row({ kind: "reaction", from: "Ada", botId: "b-ada", ts: at(1, 10), text: "✅", note: String(seq - 7) }),
+    row({ kind: "reaction", from: "Ada", botId: "b-ada", ts: at(1), text: "👋", note: String(seq - 2) }),
   ];
   const fixture: TeamDataMessage = { type: "team.data", projectId: "p-ptp", entries, lastSeq: seq, truncated: true };
   (window as unknown as { __teamFixture: TeamDataMessage }).__teamFixture = fixture;
   // Nothing for home-tools yet: an empty, non-truncated ledger.
   const emptyFixture: TeamDataMessage = { type: "team.data", projectId: "p-gm", entries: [], lastSeq: 0 };
+
+  // The shot shows the room the way it opens: tool activity off (the header's
+  // toggle brings it back).
+  try { localStorage.setItem("perch.team.activity", view === "team-activity" ? "1" : "0"); } catch { /* file:// */ }
 
   // #team-sidebar wants an unread count: pretend you last looked three rows ago.
   if (view.startsWith("team-sidebar")) {
@@ -1513,7 +1545,7 @@ if (view === "team" || view === "team-empty" || view.startsWith("team-sidebar") 
   onTeamRoomChange(() => sb.rerender?.());
   applyTeamState(teamState);
 
-  if (view === "team") {
+  if (view === "team" || view === "team-activity") {
     feedTeamFixture(fixture);
     openTeamRoom("p-ptp");
   } else if (view === "team-empty") {

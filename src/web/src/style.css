@@ -6850,10 +6850,12 @@ body.show-dashboard .dashboard { display: flex; }
 .team-room__close:hover { background: var(--color-subtle-secondary); color: var(--color-text-primary); }
 .team-room__close:focus-visible { outline: 1px solid var(--color-accent); outline-offset: -1px; }
 
-/* ── Main: feed + roster ────────────────────────────────────────────────── */
+/* ── Main: feed · task cards · roster ───────────────────────────────────── */
+/* Three columns. The feed takes what's left; the task column is one card per
+ * task on the board and scrolls on its own; the roster keeps its rail. */
 .team-room__main {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) var(--team-roster-width);
+  grid-template-columns: minmax(0, 1fr) var(--team-tasks-width) var(--team-roster-width);
   min-height: 0;
 }
 .team-room__main[hidden] { display: none; }
@@ -7204,54 +7206,85 @@ body.show-dashboard .dashboard { display: flex; }
   box-shadow: inset 0 0 0 1px var(--color-text-disabled);
 }
 /* ── Task board ────────────────────────────────────────────────────────── */
-/* The second pane of the room's right column, under the roster: the one
- * task the team is on, each bot's piece, and the confirm step. The roster
- * keeps the top; this takes what it needs (capped) and scrolls inside. */
+/* The middle column: one card per task on the board — what needs you first,
+ * then what's moving, then what's wrapping up. Cards read like roster rows
+ * (14px/500 title, 12px tertiary meta) and are separated by hairlines, never
+ * framed: a card inside a column inside a room would be card-in-card. */
 .team-roster__list { flex: 1 1 auto; }
 .team-tasks {
-  flex: 0 1 auto;
-  max-height: 62%;
   display: flex;
   flex-direction: column;
   min-height: 0;
-  border-top: 1px solid var(--color-stroke);
+  min-width: 0;
+  border-left: 1px solid var(--color-stroke);
 }
 .team-tasks__head {
   display: flex;
   align-items: center;
   gap: var(--sp-8);
-  padding: var(--sp-12) var(--sp-12) var(--sp-4) var(--sp-16);
+  padding: var(--sp-16) var(--sp-12) var(--sp-8) var(--sp-16);
 }
-.team-tasks__status {
+.team-tasks__body {
+  overflow-y: auto;
+  min-height: 0;
+  padding: 0 0 var(--sp-12);
+  display: flex;
+  flex-direction: column;
+  font-size: var(--type-caption-size);
+}
+.team-tasks__body > .team-tasks__editor { padding: var(--sp-4) var(--sp-16) var(--sp-12); }
+.team-tasks__empty { margin: 0; padding: var(--sp-4) var(--sp-16); color: var(--color-text-tertiary); line-height: 1.4; }
+.task-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-8);
+  padding: var(--sp-12) var(--sp-16);
+  border-top: 1px solid var(--color-stroke);
+}
+.task-card:first-of-type { border-top: 0; }
+.task-card__head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-8);
+  min-width: 0;
+}
+.task-card__head > .team-tasks__editor { flex: 1; }
+.task-card__title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-family: var(--font-text);
+  font-size: var(--type-body-size);
+  font-weight: 500;
+  color: var(--color-text-primary);
+  line-height: 1.35;
+  text-align: left;
+  text-wrap: balance;
+  cursor: text;
+}
+.task-card[data-status="done"] .task-card__title { cursor: default; color: var(--color-text-secondary); }
+.task-card__title:hover { color: var(--color-text-primary); }
+.task-card__title:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 2px; border-radius: 2px; }
+.task-card__status {
+  flex: none;
+  margin-top: 2px;
   font-family: var(--font-small);
   font-size: 11px;
   color: var(--color-text-tertiary);
   padding: 1px 6px;
   border-radius: var(--r-pill);
   background: var(--color-subtle-secondary);
+  white-space: nowrap;
 }
-.team-tasks__status:empty { display: none; }
-.team-tasks__status[data-status="review"] { color: var(--color-state-waiting); }
-.team-tasks__status[data-status="done"] { color: var(--color-state-done); }
-.team-tasks__body {
-  overflow-y: auto;
-  min-height: 0;
-  padding: 0 var(--sp-16) var(--sp-12);
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-8);
-  font-size: var(--type-caption-size);
-}
-.team-tasks__empty { margin: 0; color: var(--color-text-tertiary); line-height: 1.4; }
-.team-tasks__title {
-  font-size: var(--type-body-size);
-  font-weight: 500;
-  color: var(--color-text-primary);
-  line-height: 1.35;
-  text-wrap: balance;
-}
-.team-tasks__meta { color: var(--color-text-tertiary); }
+.task-card__status:empty { display: none; }
+.task-card__status[data-status="review"] { color: var(--color-state-waiting); }
+.task-card__status[data-status="done"] { color: var(--color-state-done); }
+.task-card__meta { color: var(--color-text-tertiary); }
 .team-tasks__items { display: flex; flex-direction: column; gap: var(--sp-4); margin: 0; padding: 0; list-style: none; }
+.task-item--none { display: block; color: var(--color-text-tertiary); }
 .task-item {
   display: grid;
   grid-template-columns: 8px minmax(0, 1fr);
@@ -7272,7 +7305,7 @@ body.show-dashboard .dashboard { display: flex; }
 .task-item__what--none { color: var(--color-text-tertiary); font-style: normal; }
 .task-item__note { grid-column: 2; color: var(--color-text-tertiary); }
 .team-tasks__actions { display: flex; gap: var(--sp-8); flex-wrap: wrap; align-items: center; }
-.team-tasks__say { color: var(--color-text-secondary); }
+.team-tasks__say { flex-basis: 100%; color: var(--color-text-secondary); }
 .team-tasks__editor { display: flex; flex-direction: column; gap: var(--sp-8); }
 .team-tasks__input {
   width: 100%;
@@ -7337,6 +7370,209 @@ body.show-dashboard .dashboard { display: flex; }
 .roster-bot__state[data-state="permission"] { color: var(--color-state-permission); }
 .roster-bot__dotsep { color: var(--color-text-disabled); }
 
+/* ── Activity toggle ────────────────────────────────────────────────────── */
+/* Tool calls are texture, off by default; the header's toggle brings the
+ * folds back for whoever wants to see what a bot actually did. */
+.team-room__activity {
+  padding: 4px var(--sp-8);
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--r-input);
+  background: transparent;
+  font-family: var(--font-text);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.team-room__activity:hover { background: var(--color-subtle-secondary); color: var(--color-text-primary); }
+.team-room__activity[aria-pressed="true"] { background: var(--color-subtle-tertiary); color: var(--color-text-primary); }
+.team-room__activity:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 1px; }
+
+/* ── Hand-off chips ─────────────────────────────────────────────────────── */
+/* What a bot-to-bot message IS, from the prefix the sender put on it. A
+ * quiet fill; a question wears the caution colour because it waits on
+ * someone. */
+.tf-chip {
+  flex: none;
+  padding: 0 6px;
+  border-radius: var(--r-pill);
+  background: var(--color-subtle-secondary);
+  font-family: var(--font-small);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  text-transform: lowercase;
+  letter-spacing: 0.2px;
+}
+.tf-chip[data-kind="question"] { color: var(--color-caution); }
+.tf-chip[data-kind="hand-off"] { color: var(--color-mention); background: var(--color-mention-faint); }
+.tf-chip[data-kind="report"] { color: var(--color-state-done); }
+
+/* ── Links, paths, pictures ─────────────────────────────────────────────── */
+.tf-link {
+  color: var(--color-accent);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--color-accent) 40%, transparent);
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+}
+.tf-link:hover { text-decoration-color: var(--color-accent); }
+.tf-path {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+  padding: 0 4px;
+  border-radius: var(--r-input);
+  background: var(--color-subtle-secondary);
+}
+.tf-thumbs { display: flex; flex-wrap: wrap; gap: var(--sp-8); margin-top: var(--sp-4); }
+.tf-thumb {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  max-width: 320px;
+  cursor: zoom-in;
+}
+.tf-thumb__img {
+  display: block;
+  max-width: 320px;
+  max-height: 200px;
+  min-width: 96px;
+  min-height: 48px;
+  border-radius: var(--r-input);
+  box-shadow: inset 0 0 0 1px var(--color-rail-faint);
+  background: var(--color-subtle-secondary);
+  object-fit: contain;
+}
+.tf-thumb--missing { cursor: default; }
+.tf-thumb--missing .tf-thumb__img { display: none; }
+.tf-thumb__caption {
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Reactions ──────────────────────────────────────────────────────────── */
+/* Pills under a row: the emoji and how many; names on hover. Yours is
+ * highlighted (accent-faint fill, accent keyline) so your feedback stands
+ * out from the bots'. The bar appears on hover or focus, in the row's own
+ * top-right corner, and never takes space in the flow. */
+.tf-msg { position: relative; }
+.tf-react { display: flex; flex-wrap: wrap; gap: var(--sp-4); margin-top: 2px; }
+.tf-react[hidden] { display: none; }
+.tf-react__pill {
+  padding: 1px var(--sp-8);
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--r-pill);
+  background: var(--color-subtle-secondary);
+  font-family: var(--font-small);
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  line-height: 18px;
+}
+.tf-react__pill:hover { background: var(--color-subtle-tertiary); color: var(--color-text-primary); }
+.tf-react__pill--mine {
+  background: var(--color-mention-faint);
+  border-color: var(--color-mention);
+  color: var(--color-text-primary);
+}
+.tf-reactbar {
+  position: absolute;
+  top: -12px;
+  right: var(--sp-12);
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--r-pill);
+  background: var(--color-room-surface);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-fast) var(--ease-entry);
+}
+.tf-msg:hover .tf-reactbar,
+.tf-msg:focus-within .tf-reactbar { opacity: 1; pointer-events: auto; }
+.tf-reactbar__btn {
+  width: 26px;
+  height: 22px;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: transparent;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.tf-reactbar__btn:hover { background: var(--color-subtle-tertiary); }
+.tf-reactbar__btn:focus-visible { outline: 1px solid var(--color-accent); outline-offset: -1px; }
+
+/* ── Cards ──────────────────────────────────────────────────────────────── */
+/* A system row you answer here: the permission prompt, a bot's question.
+ * Still a system row (dot, caption type), grown a body with its buttons. */
+.tf-sys--card { align-items: flex-start; }
+.tf-sys--card .tf-sys__dot { margin-top: 5px; }
+.tf-sys__body {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-8);
+  padding: var(--sp-4) 0;
+}
+.tf-sys__text--wrap { white-space: normal; overflow: visible; text-overflow: clip; color: var(--color-text-secondary); font-size: var(--type-caption-size); line-height: var(--type-body-line); }
+.tf-sys[data-tone="attention"] .tf-sys__text--wrap { color: var(--color-text-primary); }
+.tf-sys__more {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.tf-sys__more:hover { color: var(--color-text-secondary); }
+.tf-sys__details {
+  margin: 0;
+  padding: var(--sp-8);
+  max-width: 100%;
+  overflow-x: auto;
+  border-radius: var(--r-input);
+  background: var(--color-subtle-secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--color-text-secondary);
+  white-space: pre;
+}
+.tf-sys__details[hidden] { display: none; }
+.tf-sys__actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-8); }
+.tf-sys__open--primary { border-color: var(--color-accent); color: var(--color-text-primary); }
+.tf-sys__open--primary:hover { background: var(--color-mention-faint); }
+.tf-sys__open:disabled { opacity: 0.5; cursor: default; }
+.tf-sys__answered { font-family: var(--font-small); font-size: 11px; color: var(--color-text-disabled); }
+.tf-sys__form { display: flex; gap: var(--sp-8); align-items: center; flex: 1; min-width: 0; }
+.tf-sys__input {
+  flex: 1;
+  min-width: 160px;
+  padding: 4px var(--sp-8);
+  border-radius: var(--r-input);
+  border: 1px solid var(--color-stroke);
+  background: var(--color-subtle-secondary);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: var(--type-caption-size);
+}
+.tf-sys__input:focus-visible { outline: 1px solid var(--color-accent); outline-offset: -1px; }
+.tf-sys[data-event="cc"] { color: var(--color-text-disabled); }
+.tf-sys[data-event="denied"] .tf-sys__text { color: var(--color-text-secondary); }
+
 /* ── Empty state ────────────────────────────────────────────────────────── */
 /* Centered — the one place the constitution allows it. */
 .team-room__empty {
@@ -7376,12 +7612,18 @@ body.show-dashboard .dashboard { display: flex; }
 }
 
 /* ── Composer ───────────────────────────────────────────────────────────── */
+/* Spans the feed and the task column; the roster's rail continues down its
+ * right edge, so the room reads as two regions: the conversation and its
+ * board, and the people. */
 .team-composer {
   display: flex;
   flex-direction: column;
   gap: var(--sp-8);
+  width: calc(100% - var(--team-roster-width));
+  box-sizing: border-box;
   padding: var(--sp-12) var(--sp-24) var(--sp-16);
   border-top: 1px solid var(--color-stroke);
+  border-right: 1px solid var(--color-stroke);
 }
 .team-composer[hidden] { display: none; }
 .team-composer__to {

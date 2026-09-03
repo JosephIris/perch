@@ -308,6 +308,7 @@ public partial class MainWindow : FluentWindow
                 timer.Start();
             },
             WriteRaw = (paneId, bytes) => { if (_panes.Has(paneId)) _panes.Write(paneId, bytes); },
+            SetPaneModel = (paneId, alias) => OnPaneModel(new PaneModelMsg { PaneId = paneId, Model = alias }),
         });
         WireBoardController();
         _router = BuildRouter();
@@ -331,11 +332,21 @@ public partial class MainWindow : FluentWindow
         _panes.PeerMsg += (s, p, m) => _teamCtrl.OnPeerMsg(s, p, m);
         _panes.TeamPost += (s, p, m) => _teamCtrl.OnTeamPost(s, p, m);
         _panes.TeamTask += (s, p, m) => _teamCtrl.OnTeamTask(s, p, m);
+        _panes.TeamAsk += (s, p, m) => _teamCtrl.OnTeamAsk(s, p, m);
+        _panes.TeamReact += (s, p, m) => _teamCtrl.OnTeamReact(s, p, m);
+        _panes.PermAsk += (s, p, m) => _teamCtrl.OnPermAsk(s, p, m);
+        _panes.PermDenied += (s, p, m) => _teamCtrl.OnPermDenied(s, p, m);
         // Usage poller for the model picker. Subscribe once here; a new snapshot
         // marshals back to the UI thread and re-pushes state so the menu picks
         // up freshly-disabled models. PushState guards on the webview being up.
         _usage = new UsageService();
-        _usage.Updated += () => Dispatcher.BeginInvoke(new Action(PushState));
+        _usage.Updated += () => Dispatcher.BeginInvoke(new Action(() =>
+        {
+            // Bots move off a model that hit its limit (and back when it lifts).
+            try { _teamCtrl.OnModelLimits(_usage.CurrentLimits()); }
+            catch (Exception ex) { Log.Error("Team.model", ex); }
+            PushState();
+        }));
         // Cloud resources. Inert unless gcloud is installed and authenticated.
         // LookupPaneState is the ONLY thing that decides orphan-vs-live: a machine
         // whose agent session no longer maps to a live pane is one nothing is
@@ -807,8 +818,13 @@ public partial class MainWindow : FluentWindow
         .Add<TeamBotStartMsg>("team.bot.start", m => _ = _teamCtrl.OnBotStartAsync(m))
         .Add<TeamLeadSetMsg>("team.lead.set", m => _teamCtrl.OnLeadSet(m))
         .Add<TeamTaskSetMsg>("team.task.set", m => _teamCtrl.OnTaskSet(m))
+        .Add<TeamTaskRenameMsg>("team.task.rename", m => _teamCtrl.OnTaskRename(m))
         .Add<TeamTaskConfirmMsg>("team.task.confirm", m => _teamCtrl.OnTaskConfirm(m))
         .Add<TeamTaskRejectMsg>("team.task.reject", m => _teamCtrl.OnTaskReject(m))
+        .Add<TeamPermAnswerMsg>("team.perm.answer", m => _teamCtrl.OnPermAnswer(m))
+        .Add<TeamAskAnswerMsg>("team.ask.answer", m => _teamCtrl.OnAskAnswer(m))
+        .Add<TeamImageMsg>("team.image", m => _teamCtrl.OnImage(m))
+        .Add<TeamReactMsg>("team.react", m => _teamCtrl.OnReact(m))
         .Add<TeamReferenceBrowseMsg>("team.reference.browse", OnTeamReferenceBrowse)
         .Add<TeamRoomMsg>("team.room", m => _teamCtrl.OnRoom(m))
         .Add<TeamBotAnswerMsg>("team.bot.answer", m => _teamCtrl.OnBotAnswer(m));
@@ -1643,6 +1659,9 @@ public partial class MainWindow : FluentWindow
             pane.PeerName = msg.Name;
             _store.Save();
         }
+        // The session's inbox address — what a teammate's reply may be sent
+        // to instead of the name. Transient; a new launch binds a new one.
+        if (!string.IsNullOrWhiteSpace(msg.Socket)) pane.MessagingSocket = msg.Socket!.Trim();
         // A pairing made while this tab's Claude was down: deliver the parked
         // introduction now. A few seconds' delay so the TUI has painted and
         // the typed line lands in a real input box, not the boot noise.

@@ -7,23 +7,31 @@
 // and come straight back. So the room sits in #app's grid, spanning columns
 // two and three, and the sidebar stays exactly where it was.
 //
+// Three columns: the feed, the task cards (one per open task, the lead keeps
+// them current, you confirm), and the roster. Everything you have to decide —
+// a bot's permission prompt, its question, its start-up question, a task's
+// confirm — is a card in the feed with buttons, so you never go to a terminal
+// to answer.
+//
 // Data comes from team.ts (the ledger, merged by seq); every rendering decision
-// — folding tool calls, continuation rows, presence — is a pure function there,
-// pinned by tests. This module owns the DOM and the scroll position.
+// — folding tool calls, continuation rows, presence, which cards are answered —
+// is a pure function there, pinned by tests. This module owns the DOM and the
+// scroll position.
 //
 // Self-wiring like the inspector: it registers its own host listener and
 // main.ts only calls applyTeamState() on each state push and toggles it.
 
 import {
   send, type StateMessage, type SessionView, type ProjectView,
-  type TeamBotView, type TeamDataMessage, type TeamEntryView, type PaneTreeView,
+  type TeamBotView, type TeamDataMessage, type TeamEntryView, type PaneTreeView, type TeamTaskView, type TeamView,
 } from "./bridge.js";
 import {
-  requestTeam, subscribeTeam, cachedTeam, ingestTeamData,
+  requestTeam, subscribeTeam, cachedTeam, ingestTeamData, requestTeamImage,
   foldFeed, groupRows, presenceOf, rosterSort, anyWorking, unreadCount, teamSummary, roomEmptyState,
-  type FeedRow, type Presence,
+  visibleEntries, reactionsFor, taskOrder, answeredSet, handoffLabel, REACTIONS,
+  type FeedRow, type Presence, type ReactionPill,
 } from "./team.js";
-import { appendRich, hhmm } from "./text.js";
+import { appendRich, hhmm, imageLabel } from "./text.js";
 import { elapsedSpan, agoSpan } from "./elapsed.js";
 import { buildComposer, type Composer } from "./mention-input.js";
 import { showNewBotDialog } from "./new-bot-dialog.js";
@@ -31,7 +39,6 @@ import { showBotMenu } from "./bot-menu.js";
 import type { MentionTarget } from "./mention.js";
 import { createBotFace, normalizeLook, type BotFace, type FaceState } from "./bot-face.js";
 import { confirmDialog } from "./confirm.js";
-import type { TeamTaskView } from "./bridge.js";
 
 // ---- Pure rendering decisions ---------------------------------------------
 
@@ -46,6 +53,7 @@ export function feedRowClass(row: FeedRow, pending = false, failed = false): str
   const cls = ["tf-msg", `tf-msg--${e.kind}`];
   if (row.cont) cls.push("tf-msg--cont");
   if (e.kind === "user" && e.delivered === false) cls.push("tf-msg--held");
+  if (e.kind === "peer" && handoffLabel(e.note) === "question") cls.push("tf-msg--question");
   if (pending) cls.push("tf-msg--pending");
   if (failed) cls.push("tf-msg--failed");
   return cls.join(" ");
@@ -67,20 +75,23 @@ export function recipientsLabel(to: TeamEntryView["to"]): string {
   return "to " + to.join(", ");
 }
 
-/** The word next to a system row's dot. `event` is the host's label; the
- *  text carries the sentence, so this only picks the tone. */
+/** The tone of a system row. `event` is the host's label; the text carries
+ *  the sentence, so this only picks the tone: attention for anything that
+ *  waits on you, error for what went wrong, calm for the rest. */
 export function systemTone(event: TeamEntryView["event"]): "calm" | "attention" | "error" {
   switch (event) {
     case "waiting":
-    case "permission":
+    case "permission":                         // a bot's permission prompt, answered from the card
+    case "ask":                                // a bot's question, answered from the card
     case "trust":                              // a bot's start-up question, answered from the card
     case "task.review": return "attention";   // the lead is asking you to confirm
-    case "error": return "error";
+    case "error":
+    case "denied": return "error";            // auto mode blocked the bot
     default: return "calm";
   }
 }
 
-/** The word on the task pane's pill for a board status. */
+/** The word on a task card's pill for a board status. */
 export function taskStatusWord(status: TeamTaskView["status"] | undefined): string {
   switch (status) {
     case "open": return "in progress";
@@ -90,6 +101,18 @@ export function taskStatusWord(status: TeamTaskView["status"] | undefined): stri
   }
 }
 
+/** The permission card's details: the tool input as JSON, prettified, at most
+ *  `maxLines` lines (the rest folded into a last "…" line). Unparseable input
+ *  is shown as it came. */
+export function permissionDetails(summary: string | undefined, maxLines = 8): string {
+  if (!summary) return "";
+  let text = summary;
+  try { text = JSON.stringify(JSON.parse(summary), null, 2); } catch { /* not JSON: show as-is */ }
+  const lines = text.split("\n");
+  if (lines.length <= maxLines) return text;
+  return lines.slice(0, maxLines - 1).join("\n") + "\n…";
+}
+
 // ---- Module state ----------------------------------------------------------
 
 let root: HTMLElement | null = null;
@@ -97,19 +120,22 @@ let feedEl: HTMLElement;
 let rosterListEl: HTMLElement;
 let countsEl: HTMLElement;
 let titleEl: HTMLElement;
+let activityBtn: HTMLButtonElement;
 let jumpEl: HTMLButtonElement;
 let truncEl: HTMLElement;
 let emptyEl: HTMLElement;
 let mainEl: HTMLElement;
 let composer: Composer | null = null;
 
-/* The task pane under the roster. */
-let taskStatusEl: HTMLElement;
-let taskEditBtn: HTMLButtonElement;
+/* The task column. */
+let taskCountEl: HTMLElement;
+let newTaskBtn: HTMLButtonElement;
 let taskBodyEl: HTMLElement;
-/* Inline editors: setting/renaming the task, and the "not yet" note. */
-let taskEditorOpen = false;
-let rejectOpen = false;
+/* Inline editors, by task id: renaming a card, the "not yet" note; plus the
+ * new-task editor at the top of the column. */
+let renameFor: string | null = null;
+let rejectFor: string | null = null;
+let newTaskOpen = false;
 
 let projectId: string | null = null;
 let lastState: StateMessage | null = null;
@@ -121,6 +147,7 @@ let closing = false;
  * the ledger is append-only). */
 const openFolds = new Set<number>();
 const openBeats = new Set<number>();
+const openDetails = new Set<number>();
 
 /* Optimistic user rows: sent, not yet echoed back with a seq. Keyed by the
  * clientId the composer minted. */
@@ -128,8 +155,21 @@ type PendingPost = { text: string; to: MentionTarget; sentAt: number; failed: bo
 const pending = new Map<string, PendingPost>();
 const PENDING_TIMEOUT_MS = 20_000;
 
+/* Reactions you clicked that the host hasn't echoed yet: seq → emoji set. */
+const optimisticReactions = new Map<number, Set<string>>();
+
 /* Only rows newer than this animate in; the rest are a repaint. */
 let renderedSeq = 0;
+
+/* Tool activity in the feed is off until you ask for it. Per machine. */
+let showActivity = readActivityPref();
+
+function readActivityPref(): boolean {
+  try { return localStorage.getItem("perch.team.activity") === "1"; } catch { return false; }
+}
+function writeActivityPref(on: boolean): void {
+  try { localStorage.setItem("perch.team.activity", on ? "1" : "0"); } catch { /* blocked storage */ }
+}
 
 /* The animated faces the feed and the roster currently show. Each render
  * rebuilds its DOM, so the faces it mounted last time are disposed first —
@@ -235,7 +275,8 @@ export function toggleTeamRoom(id: string): void {
 }
 
 /** Every state push lands here. Presence and the roster are DERIVED from the
- *  session list, so the room re-renders whenever a bot's session moved. */
+ *  session list, so the room re-renders whenever a bot's session moved; the
+ *  task cards ride in the same push. */
 export function applyTeamState(msg: StateMessage): void {
   const prev = lastState;
   lastState = msg;
@@ -267,19 +308,38 @@ function el(tag: string, cls: string, text?: string): HTMLElement {
   return e;
 }
 
+function button(cls: string, label: string, onClick: () => void, title?: string): HTMLButtonElement {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = cls;
+  b.textContent = label;
+  if (title) b.title = title;
+  b.addEventListener("click", (ev) => { ev.stopPropagation(); onClick(); });
+  return b;
+}
+
 function mount(): void {
   const app = document.getElementById("app");
   if (!app) return;
+  showActivity = readActivityPref();   // per machine; read when the room opens, not at load
   root = el("section", "team-room");
   root.setAttribute("role", "region");
   root.setAttribute("aria-label", "Team room");
 
-  // Header: project · Team room · counts · close.
+  // Header: project · Team room · counts · activity toggle · close.
   const head = el("header", "team-room__head");
   titleEl = el("h1", "team-room__title");
   head.appendChild(titleEl);
   countsEl = el("div", "team-room__counts");
   head.appendChild(countsEl);
+  activityBtn = button("team-room__activity", "", () => {
+    showActivity = !showActivity;
+    writeActivityPref(showActivity);
+    renderedSeq = Number.MAX_SAFE_INTEGER;   // a toggle is a repaint, not new rows
+    render();
+    renderedSeq = cachedTeam(projectId ?? "")?.lastSeq ?? 0;
+  });
+  head.appendChild(activityBtn);
   const close = document.createElement("button");
   close.type = "button";
   close.className = "team-room__close";
@@ -290,7 +350,7 @@ function mount(): void {
   head.appendChild(close);
   root.appendChild(head);
 
-  // Empty state (no bots / nothing yet) swaps in for the whole main area.
+  // Empty state (no bots at all) swaps in for the whole main area.
   emptyEl = el("div", "team-room__empty");
   emptyEl.hidden = true;
   root.appendChild(emptyEl);
@@ -323,47 +383,39 @@ function mount(): void {
   feedWrap.appendChild(jumpEl);
   mainEl.appendChild(feedWrap);
 
+  // The task column: one card per task on the board. The lead keeps the
+  // pieces current; you open a task, confirm it done, or say not yet.
+  const tasks = el("section", "team-tasks");
+  tasks.setAttribute("aria-label", "Task board");
+  const tHead = el("div", "team-tasks__head");
+  tHead.appendChild(el("span", "team-roster__label", "Tasks"));
+  taskCountEl = el("span", "team-roster__count");
+  tHead.appendChild(taskCountEl);
+  newTaskBtn = button("team-roster__add", "New task", () => {
+    newTaskOpen = !newTaskOpen;
+    renameFor = null;
+    rejectFor = null;
+    render();
+  });
+  tHead.appendChild(newTaskBtn);
+  tasks.appendChild(tHead);
+  taskBodyEl = el("div", "team-tasks__body scroll");
+  tasks.appendChild(taskBodyEl);
+  mainEl.appendChild(tasks);
+
   const roster = el("aside", "team-roster");
   roster.setAttribute("aria-label", "Team members");
   const rHead = el("div", "team-roster__head");
   rHead.appendChild(el("span", "team-roster__label", "Team"));
   const rCount = el("span", "team-roster__count");
   rHead.appendChild(rCount);
-  const add = document.createElement("button");
-  add.type = "button";
-  add.className = "team-roster__add";
-  add.textContent = "Add bot";
-  add.addEventListener("click", () => {
+  rHead.appendChild(button("team-roster__add", "Add bot", () => {
     const p = projectId ? projectFor(projectId) : null;
     if (p) showNewBotDialog(p);
-  });
-  rHead.appendChild(add);
+  }));
   roster.appendChild(rHead);
   rosterListEl = el("div", "team-roster__list");
   roster.appendChild(rosterListEl);
-
-  // The task board: the right column's second pane. One task at a time,
-  // each bot's piece, and the confirm step that wraps everyone up.
-  const tasks = el("section", "team-tasks");
-  tasks.setAttribute("aria-label", "Task board");
-  const tHead = el("div", "team-tasks__head");
-  tHead.appendChild(el("span", "team-roster__label", "Task"));
-  taskStatusEl = el("span", "team-tasks__status");
-  tHead.appendChild(taskStatusEl);
-  taskEditBtn = document.createElement("button");
-  taskEditBtn.type = "button";
-  taskEditBtn.className = "team-roster__add";
-  taskEditBtn.textContent = "Set task";
-  taskEditBtn.addEventListener("click", () => {
-    taskEditorOpen = !taskEditorOpen;
-    rejectOpen = false;
-    render();
-  });
-  tHead.appendChild(taskEditBtn);
-  tasks.appendChild(tHead);
-  taskBodyEl = el("div", "team-tasks__body");
-  tasks.appendChild(taskBodyEl);
-  roster.appendChild(tasks);
   mainEl.appendChild(roster);
   root.appendChild(mainEl);
 
@@ -399,8 +451,9 @@ function unmount(immediate: boolean): void {
   }
   disposeFaces(feedFaces);
   disposeFaces(rosterFaces);
-  taskEditorOpen = false;
-  rejectOpen = false;
+  renameFor = null;
+  rejectFor = null;
+  newTaskOpen = false;
   composer?.dispose();
   composer = null;
   const node = root;
@@ -481,6 +534,13 @@ function presenceChanged(prev: StateMessage | null, next: StateMessage, bots: Te
 
 const isNearBottom = (e: HTMLElement) => e.scrollHeight - e.scrollTop - e.clientHeight < NEAR_BOTTOM_PX;
 
+/** Jump to a bot's terminal and come back later. */
+function openTerminal(bot: TeamBotView): void {
+  if (!bot.sessionId) return;
+  closeTeamRoom();
+  send({ type: "session.select", id: bot.sessionId });
+}
+
 // ---- Polling ---------------------------------------------------------------
 
 function schedulePoll(): void {
@@ -553,6 +613,10 @@ function renderHead(project: ProjectView | null): void {
   titleEl.appendChild(el("span", "team-room__sep", "·"));
   titleEl.appendChild(el("span", "team-room__name", "Team room"));
 
+  activityBtn.textContent = showActivity ? "Hide activity" : "Show activity";
+  activityBtn.setAttribute("aria-pressed", String(showActivity));
+  activityBtn.title = showActivity ? "Hide the bots' tool calls" : "Show the bots' tool calls between messages";
+
   countsEl.replaceChildren();
   if (!project?.team || !lastState) return;
   const bots = project.team.bots;
@@ -571,7 +635,7 @@ function renderHead(project: ProjectView | null): void {
 function renderRoster(project: ProjectView | null): void {
   disposeFaces(rosterFaces);
   rosterListEl.replaceChildren();
-  const count = root?.querySelector<HTMLElement>(".team-roster__count");
+  const count = root?.querySelector<HTMLElement>(".team-roster .team-roster__count");
   const bots = project?.team?.bots ?? [];
   if (count) count.textContent = bots.length > 0 ? String(bots.length) : "";
   if (!lastState || !project) return;
@@ -596,9 +660,9 @@ function renderRoster(project: ProjectView | null): void {
 
     const text = el("span", "roster-bot__text");
     text.appendChild(el("span", "roster-bot__nick", bot.nickname));
-    const pos = el("span", "roster-bot__pos", bot.positionName);
+    const pos = el("span", "roster-bot__pos", bot.positionName + (bot.botId === project.team?.lead ? " · lead" : ""));
     if (bot.peerName && bot.peerName.toLowerCase() !== bot.nickname.toLowerCase())
-      pos.textContent = `${bot.positionName} · ${bot.peerName}`;
+      pos.textContent += ` · ${bot.peerName}`;
     text.appendChild(pos);
     row.appendChild(text);
 
@@ -611,8 +675,7 @@ function renderRoster(project: ProjectView | null): void {
         send({ type: "team.bot.start", projectId: project.id, botId: bot.botId });
         return;
       }
-      closeTeamRoom();
-      send({ type: "session.select", id: bot.sessionId });
+      openTerminal(bot);
     });
     row.addEventListener("contextmenu", (ev) => {
       ev.preventDefault();
@@ -623,144 +686,153 @@ function renderRoster(project: ProjectView | null): void {
   }
 }
 
-/** The task pane: the current task, every bot's piece, and the step the
- *  owner owns — set it, confirm it's done, or say not yet. */
+// ---- Task cards ------------------------------------------------------------
+
+/** A one-field editor (new task title, a rename, the "not yet" note). */
+function editor(placeholder: string, initial: string, submitLabel: string,
+  onSubmit: (value: string) => void, onCancel: () => void, allowEmpty = false): HTMLFormElement {
+  const form = el("form", "team-tasks__editor") as HTMLFormElement;
+  const input = document.createElement("textarea");
+  input.className = "team-tasks__input";
+  input.placeholder = placeholder;
+  input.value = initial;
+  input.rows = 2;
+  form.appendChild(input);
+  const actions = el("div", "team-tasks__actions");
+  const save = document.createElement("button");
+  save.type = "submit";
+  save.className = "projects-card__btn projects-card__btn--primary";
+  save.textContent = submitLabel;
+  actions.appendChild(save);
+  actions.appendChild(button("projects-card__btn", "Cancel", onCancel));
+  form.appendChild(actions);
+  form.addEventListener("submit", (ev) => {
+    ev.preventDefault();
+    const value = input.value.trim();
+    if (!value && !allowEmpty) return;
+    onSubmit(value);
+  });
+  input.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); form.requestSubmit(); }
+    if (ev.key === "Escape") { ev.stopPropagation(); onCancel(); }
+  });
+  requestAnimationFrame(() => input.focus());
+  return form;
+}
+
+/** The task column: one card per task on the board, what needs you first. */
 function renderTasks(project: ProjectView | null): void {
   if (!taskBodyEl) return;
   const team = project?.team;
-  const t = team?.task ?? null;
   const bots = team?.bots ?? [];
-  const lead = bots.find((b) => b.botId === team?.lead);
+  const tasks = taskOrder(team?.tasks ?? []);
   taskBodyEl.replaceChildren();
-  taskStatusEl.textContent = taskStatusWord(t?.status);
-  taskStatusEl.dataset.status = t?.status ?? "";
-  taskEditBtn.textContent = taskEditorOpen ? "Cancel" : t && t.status !== "done" ? "Change" : "Set task";
-  taskEditBtn.hidden = !project || bots.length === 0 || t?.status === "done";
-
+  taskCountEl.textContent = tasks.length > 0 ? String(tasks.length) : "";
+  newTaskBtn.textContent = newTaskOpen ? "Cancel" : "New task";
+  newTaskBtn.hidden = !project || bots.length === 0;
   if (!project) return;
-  if (taskEditorOpen) {
-    const form = el("form", "team-tasks__editor") as HTMLFormElement;
-    const input = document.createElement("textarea");
-    input.className = "team-tasks__input";
-    input.placeholder = "What does done look like?";
-    input.value = t && t.status !== "done" ? t.title : "";
-    input.rows = 2;
-    form.appendChild(input);
-    const actions = el("div", "team-tasks__actions");
-    const save = document.createElement("button");
-    save.type = "submit";
-    save.className = "projects-card__btn projects-card__btn--primary";
-    save.textContent = t && t.status !== "done" ? "Rename" : "Set task";
-    actions.appendChild(save);
-    form.appendChild(actions);
-    form.addEventListener("submit", (ev) => {
-      ev.preventDefault();
-      const title = input.value.trim();
-      if (!title) return;
-      send({ type: "team.task.set", projectId: project.id, title });
-      taskEditorOpen = false;
-      render();
-    });
-    input.addEventListener("keydown", (ev) => {
-      if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); form.requestSubmit(); }
-      if (ev.key === "Escape") { taskEditorOpen = false; render(); }
-    });
-    taskBodyEl.appendChild(form);
-    requestAnimationFrame(() => input.focus());
+
+  if (newTaskOpen) {
+    taskBodyEl.appendChild(editor("What does done look like?", "", "Set task",
+      (title) => { send({ type: "team.task.set", projectId: project.id, title }); newTaskOpen = false; render(); },
+      () => { newTaskOpen = false; render(); }));
+  }
+  if (tasks.length === 0) {
+    if (!newTaskOpen) {
+      const lead = bots.find((b) => b.botId === team?.lead);
+      taskBodyEl.appendChild(el("p", "team-tasks__empty",
+        bots.length === 0 ? "Add a bot first."
+          : lead ? `No tasks yet. Set one here, or ${lead.nickname} will.`
+          : "No tasks yet. Set one here, or make a bot the team lead so it can."));
+    }
     return;
   }
+  for (const t of tasks) taskBodyEl.appendChild(taskCard(project, team!, t));
+}
 
-  if (!t) {
-    taskBodyEl.appendChild(el("p", "team-tasks__empty",
-      bots.length === 0 ? "Add a bot first."
-        : lead ? `No task yet. ${lead.nickname} leads and sets one with you, or set it here.`
-        : "No task yet. Set one here, or make a bot the team lead so it can."));
-    return;
+function taskCard(project: ProjectView, team: TeamView, t: TeamTaskView): HTMLElement {
+  const bots = team.bots;
+  const card = el("article", "task-card");
+  card.dataset.status = t.status;
+  card.dataset.taskId = t.id;
+
+  // Head: the title (click to rename while it's open) and the status pill.
+  const head = el("div", "task-card__head");
+  if (renameFor === t.id) {
+    head.appendChild(editor("Task title", t.title, "Rename",
+      (title) => { send({ type: "team.task.rename", projectId: project.id, taskId: t.id, title }); renameFor = null; render(); },
+      () => { renameFor = null; render(); }));
+  } else {
+    const title = button("task-card__title", t.title, () => {
+      if (t.status === "done") return;
+      renameFor = t.id; rejectFor = null; newTaskOpen = false; render();
+    }, t.status === "done" ? undefined : "Rename this task");
+    head.appendChild(title);
+    const pill = el("span", "task-card__status", taskStatusWord(t.status));
+    pill.dataset.status = t.status;
+    head.appendChild(pill);
   }
+  card.appendChild(head);
 
-  taskBodyEl.appendChild(el("div", "team-tasks__title", t.title));
-  const meta = el("div", "team-tasks__meta");
-  meta.appendChild(document.createTextNode(`set by ${t.setBy === "you" ? "you" : t.setBy} · `));
+  const meta = el("div", "task-card__meta");
+  meta.appendChild(document.createTextNode(`set by ${t.setBy} · `));
   meta.appendChild(agoSpan(t.createdAtMs, true));
-  taskBodyEl.appendChild(meta);
+  card.appendChild(meta);
 
+  // Pieces: one line per bot that has one on this card.
   const list = el("ul", "team-tasks__items");
-  for (const bot of bots) {
-    const item = t.items.find((i) => i.botId === bot.botId);
+  const items = t.items.filter((i) => i.title);
+  for (const item of items) {
+    const bot = bots.find((b) => b.botId === item.botId);
     const li = el("li", "task-item");
     const dot = el("span", "task-item__dot");
-    dot.dataset.status = item?.status ?? "todo";
+    dot.dataset.status = item.status;
     dot.setAttribute("aria-hidden", "true");
     li.appendChild(dot);
     const line = el("span", "task-item__line");
-    line.appendChild(el("span", "task-item__who", bot.nickname + (bot.botId === team?.lead ? " (lead)" : "") + " "));
-    line.appendChild(el("span", item ? "task-item__what" : "task-item__what task-item__what--none", item ? item.title : "no piece yet"));
+    line.appendChild(el("span", "task-item__who", (bot?.nickname ?? item.bot) + (item.botId === team.lead ? " (lead)" : "") + " "));
+    line.appendChild(el("span", "task-item__what", item.title));
     li.appendChild(line);
-    if (item?.note) li.appendChild(el("span", "task-item__note", item.note));
+    if (item.note) li.appendChild(el("span", "task-item__note", item.note));
     list.appendChild(li);
   }
-  taskBodyEl.appendChild(list);
+  if (items.length === 0) list.appendChild(el("li", "task-item task-item--none", "No pieces yet — the lead splits it."));
+  card.appendChild(list);
 
   const actions = el("div", "team-tasks__actions");
-  const btn = (label: string, primary: boolean, onClick: () => void) => {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "projects-card__btn" + (primary ? " projects-card__btn--primary" : "");
-    b.textContent = label;
-    b.addEventListener("click", onClick);
-    return b;
-  };
   const confirmDone = () => {
     void confirmDialog({
       title: "Task done?",
-      body: `Every running bot writes what the next task needs into its memory, then its conversation is cleared. "${t.title}" moves to the archive.`,
+      body: `The bots on "${t.title}" write what the next task needs into their memory, then their conversation is cleared. The card moves to the archive.`,
       confirmLabel: "Confirm done",
-    }).then((ok) => { if (ok) send({ type: "team.task.confirm", projectId: project.id }); });
+    }).then((ok) => { if (ok) send({ type: "team.task.confirm", projectId: project.id, taskId: t.id }); });
   };
   if (t.status === "review") {
     actions.appendChild(el("span", "team-tasks__say", `${t.reviewBy ?? "The lead"} says it's done.`));
-    actions.appendChild(btn("Confirm done", true, confirmDone));
-    actions.appendChild(btn("Not yet…", false, () => { rejectOpen = !rejectOpen; render(); }));
-    taskBodyEl.appendChild(actions);
-    if (rejectOpen) {
-      const form = el("form", "team-tasks__editor") as HTMLFormElement;
-      const input = document.createElement("textarea");
-      input.className = "team-tasks__input";
-      input.placeholder = "What's missing? (goes to the lead)";
-      input.rows = 2;
-      form.appendChild(input);
-      const a2 = el("div", "team-tasks__actions");
-      const sendBtn = document.createElement("button");
-      sendBtn.type = "submit";
-      sendBtn.className = "projects-card__btn projects-card__btn--primary";
-      sendBtn.textContent = "Send";
-      a2.appendChild(sendBtn);
-      form.appendChild(a2);
-      form.addEventListener("submit", (ev) => {
-        ev.preventDefault();
-        send({ type: "team.task.reject", projectId: project.id, note: input.value.trim() || undefined });
-        rejectOpen = false;
-        render();
-      });
-      input.addEventListener("keydown", (ev) => {
-        if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); form.requestSubmit(); }
-        if (ev.key === "Escape") { rejectOpen = false; render(); }
-      });
-      taskBodyEl.appendChild(form);
-      requestAnimationFrame(() => input.focus());
+    const ok = button("projects-card__btn projects-card__btn--primary", "Confirm done", confirmDone);
+    actions.appendChild(ok);
+    actions.appendChild(button("projects-card__btn", "Not yet…", () => { rejectFor = rejectFor === t.id ? null : t.id; renameFor = null; render(); }));
+    card.appendChild(actions);
+    if (rejectFor === t.id) {
+      card.appendChild(editor("What's missing? (goes to the lead)", "", "Send",
+        (note) => { send({ type: "team.task.reject", projectId: project.id, taskId: t.id, note: note || undefined }); rejectFor = null; render(); },
+        () => { rejectFor = null; render(); }, true));
     }
   } else if (t.status === "open") {
-    actions.appendChild(btn("Mark done", false, confirmDone));
-    taskBodyEl.appendChild(actions);
+    actions.appendChild(button("projects-card__btn", "Mark done", confirmDone));
+    card.appendChild(actions);
   } else if (t.status === "done") {
     const wrap = el("div", "team-tasks__wrap");
     wrap.appendChild(document.createTextNode("Wrapping up: "));
-    for (const bot of bots) {
-      const pending = t.wrapping.includes(bot.botId);
-      wrap.appendChild(el("span", pending ? "pending" : "", `${bot.nickname}${pending ? "…" : " ✓"}`));
+    const on = bots.filter((b) => t.wrapping.includes(b.botId) || items.some((i) => i.botId === b.botId));
+    for (const bot of on) {
+      const pendingWrap = t.wrapping.includes(bot.botId);
+      wrap.appendChild(el("span", pendingWrap ? "pending" : "", `${bot.nickname}${pendingWrap ? "…" : " ✓"}`));
     }
-    taskBodyEl.appendChild(wrap);
+    if (on.length === 0) wrap.appendChild(el("span", "", "done"));
+    card.appendChild(wrap);
   }
+  return card;
 }
 
 /** "working · 2m" / "waiting for you" / "idle · 4m" / "asleep". */
@@ -778,16 +850,22 @@ function stateLine(p: Presence, s: SessionView | undefined): HTMLElement {
   return line;
 }
 
-/** Nicknames whose start-up question has been answered (a later trusted /
- *  exited row), so their trust card renders without its buttons. Rebuilt on
- *  every feed render from the rows themselves — no second source of truth. */
-const answeredTrust = new Set<string>();
+// ---- Feed ------------------------------------------------------------------
+
+/* Per-render lookups the row renderers read: which cards are answered, and
+ * the reactions hanging under each row. Rebuilt from the rows themselves on
+ * every render — no second source of truth. */
+let answered = answeredSet([]);
+let reactions = new Map<number, ReactionPill[]>();
 
 function renderFeed(entries: TeamEntryView[], bots: TeamBotView[]): void {
-  answeredTrust.clear();
-  for (const e of entries) {
-    if (e.kind === "system" && (e.event === "trusted" || e.event === "exited") && Array.isArray(e.to))
-      for (const n of e.to) answeredTrust.add(n);
+  answered = answeredSet(entries);
+  reactions = reactionsFor(entries);
+  // Drop the optimistic reactions the host has echoed.
+  for (const [seq, emojis] of optimisticReactions) {
+    const pills = reactions.get(seq) ?? [];
+    for (const emoji of [...emojis]) if (pills.some((p) => p.emoji === emoji && p.who.includes("you"))) emojis.delete(emoji);
+    if (emojis.size === 0) optimisticReactions.delete(seq);
   }
   const pinned = isNearBottom(feedEl) || feedEl.childElementCount === 0;
   const prevTop = feedEl.scrollTop;
@@ -797,10 +875,7 @@ function renderFeed(entries: TeamEntryView[], bots: TeamBotView[]): void {
     if (e.kind === "user" && e.clientId && pending.has(e.clientId)) pending.delete(e.clientId);
   }
 
-  // A successful delivery is the post's own status line, not a row of its
-  // own; only the parked→flushed case (OnAgentUp) writes one, and even that
-  // reads as chatter next to the post it belongs to.
-  const shown = entries.filter((e) => !(e.kind === "system" && e.event === "delivered"));
+  const shown = visibleEntries(entries, showActivity);
   disposeFaces(feedFaces);
   const rows = groupRows(foldFeed(shown));
   const names = bots.map((b) => b.nickname);
@@ -876,6 +951,13 @@ function renderRow(row: FeedRow, bots: TeamBotView[], names: string[]): HTMLElem
       head.appendChild(el("span", "tf-msg__arrow", "→"));
       const target = Array.isArray(e.to) ? e.to.join(", ") : e.to === "everyone" ? "everyone" : "";
       head.appendChild(el("span", "tf-msg__name", target));
+      // The hand-off label the sender put in front: what this message IS.
+      const label = handoffLabel(e.note);
+      if (label) {
+        const chip = el("span", "tf-chip", label);
+        chip.dataset.kind = label;
+        head.appendChild(chip);
+      }
     } else if (bot && e.kind !== "user") {
       head.appendChild(el("span", "tf-msg__pos", bot.positionName));
     }
@@ -885,14 +967,16 @@ function renderRow(row: FeedRow, bots: TeamBotView[], names: string[]): HTMLElem
   }
 
   const text = el("div", "tf-msg__text");
-  appendRich(text, e.text, names);
+  const images = appendRich(text, e.text, names);
   body.appendChild(text);
+  if (e.image && !images.includes(e.image)) images.push(e.image);
+  if (images.length > 0) body.appendChild(renderThumbs(images, hhmm(e.ts)));
   if (e.kind === "beat") {
     // Long beats clamp; click opens in place. Keyed by seq so the disclosure
     // survives the next poll's repaint.
     if (openBeats.has(e.seq)) node.classList.add("tf-msg--open");
     node.addEventListener("click", (ev) => {
-      if ((ev.target as HTMLElement).closest("button, a")) return;
+      if ((ev.target as HTMLElement).closest("button, a, img")) return;
       if (!node.classList.contains("tf-msg--expandable")) return;
       const open = node.classList.toggle("tf-msg--open");
       if (open) openBeats.add(e.seq); else openBeats.delete(e.seq);
@@ -908,8 +992,110 @@ function renderRow(row: FeedRow, bots: TeamBotView[], names: string[]): HTMLElem
     if (e.delivered === false) strip.textContent += " · waiting for the bot";
     body.appendChild(strip);
   }
+
+  body.appendChild(renderReactions(e.seq));
   node.appendChild(body);
+  node.appendChild(reactBar(e.seq));
   return node;
+}
+
+/** The pills under a row: each emoji once, with who put it there. Your own
+ *  pill is highlighted so your feedback stands out from the bots'. */
+function renderReactions(seq: number): HTMLElement {
+  const wrap = el("div", "tf-react");
+  const pills = [...(reactions.get(seq) ?? [])];
+  for (const emoji of optimisticReactions.get(seq) ?? []) {
+    const pill = pills.find((p) => p.emoji === emoji);
+    if (pill) { if (!pill.who.includes("you")) pill.who = [...pill.who, "you"]; }
+    else pills.push({ emoji, who: ["you"] });
+  }
+  for (const p of pills) {
+    const mine = p.who.includes("you");
+    const b = button("tf-react__pill" + (mine ? " tf-react__pill--mine" : ""), `${p.emoji} ${p.who.length}`,
+      () => react(seq, p.emoji), p.who.map((w) => (w === "you" ? "You" : w)).join(", "));
+    b.setAttribute("aria-label", `${p.emoji} from ${p.who.join(", ")}`);
+    wrap.appendChild(b);
+  }
+  wrap.hidden = pills.length === 0;
+  return wrap;
+}
+
+/** The hover/focus bar with the room's four reactions. */
+function reactBar(seq: number): HTMLElement {
+  const bar = el("div", "tf-reactbar");
+  bar.setAttribute("role", "group");
+  bar.setAttribute("aria-label", "React");
+  for (const emoji of REACTIONS) bar.appendChild(button("tf-reactbar__btn", emoji, () => react(seq, emoji), `React ${emoji}`));
+  return bar;
+}
+
+function react(seq: number, emoji: string): void {
+  if (!projectId) return;
+  let set = optimisticReactions.get(seq);
+  if (!set) { set = new Set(); optimisticReactions.set(seq, set); }
+  set.add(emoji);
+  send({ type: "team.react", projectId, seq, emoji });
+  render();
+}
+
+/** Thumbnails for the pictures a row refers to; click opens the full size. */
+function renderThumbs(paths: string[], time: string): HTMLElement {
+  const wrap = el("div", "tf-thumbs");
+  const pid = projectId ?? "";
+  for (const path of paths) {
+    const fig = el("figure", "tf-thumb");
+    const img = document.createElement("img");
+    img.className = "tf-thumb__img";
+    img.alt = imageLabel(path);
+    img.loading = "lazy";
+    fig.appendChild(img);
+    const cap = el("figcaption", "tf-thumb__caption", imageLabel(path));
+    cap.title = path;
+    fig.appendChild(cap);
+    fig.addEventListener("click", (ev) => { ev.stopPropagation(); if (img.src) openImageLightbox(img.src, `${imageLabel(path)} · ${time}`); });
+    void requestTeamImage(pid, path).then((src) => {
+      if (src) { img.src = src; fig.classList.add("tf-thumb--loaded"); }
+      else { fig.classList.add("tf-thumb--missing"); cap.textContent = `${imageLabel(path)} — couldn't load`; }
+    });
+    wrap.appendChild(fig);
+  }
+  return wrap;
+}
+
+/* Same overlay surface as the journal's image lightbox (.settings-overlay /
+ * .settings-card.image-lightbox), which also enrolls it in the web-pane
+ * suppression for free. */
+let lightboxOpen = false;
+function openImageLightbox(src: string, caption: string): void {
+  if (lightboxOpen) return;
+  lightboxOpen = true;
+  const overlay = el("div", "settings-overlay");
+  const card = el("div", "settings-card image-lightbox");
+  card.setAttribute("role", "dialog");
+  card.setAttribute("aria-modal", "true");
+  const img = document.createElement("img");
+  img.className = "image-lightbox__img";
+  img.src = src;
+  img.alt = caption;
+  card.appendChild(img);
+  card.appendChild(el("div", "image-lightbox__caption", caption));
+  overlay.appendChild(card);
+  document.body.appendChild(overlay);
+  let settled = false;
+  const finish = () => {
+    if (settled) return;
+    settled = true;
+    lightboxOpen = false;
+    window.removeEventListener("keydown", onKey, true);
+    overlay.classList.add("settings-overlay--closing");
+    overlay.addEventListener("animationend", () => overlay.remove(), { once: true });
+    window.setTimeout(() => overlay.remove(), 260);
+  };
+  function onKey(ev: KeyboardEvent) {
+    if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); finish(); }
+  }
+  overlay.addEventListener("mousedown", (ev) => { if (ev.target === overlay) finish(); });
+  window.addEventListener("keydown", onKey, true);
 }
 
 function renderPending(clientId: string, p: PendingPost, names: string[]): HTMLElement {
@@ -956,16 +1142,7 @@ function renderFold(row: Extract<FeedRow, { kind: "workfold" }>, bots: TeamBotVi
   line.appendChild(summary);
   line.appendChild(el("span", "tf-work__time", hhmm(row.entries[row.entries.length - 1].ts)));
   if (bot?.sessionId) {
-    const openBtn = document.createElement("button");
-    openBtn.type = "button";
-    openBtn.className = "tf-work__open";
-    openBtn.textContent = "Open journal";
-    openBtn.title = `Go to ${bot.nickname}'s terminal`;
-    openBtn.addEventListener("click", () => {
-      closeTeamRoom();
-      send({ type: "session.select", id: bot.sessionId });
-    });
-    line.appendChild(openBtn);
+    line.appendChild(button("tf-work__open", "Open journal", () => openTerminal(bot), `Go to ${bot.nickname}'s terminal`));
   }
   node.appendChild(line);
 
@@ -991,6 +1168,10 @@ function renderWork(e: TeamEntryView): HTMLElement {
   return w;
 }
 
+// ---- System rows and cards -------------------------------------------------
+
+/** A system row: one quiet line, or — for anything you answer here — a card
+ *  with its buttons. The buttons go once a later row says it was answered. */
 function renderSystem(e: TeamEntryView, bots: TeamBotView[]): HTMLElement {
   const node = el("div", "tf-sys");
   node.dataset.seq = String(e.seq);
@@ -999,55 +1180,122 @@ function renderSystem(e: TeamEntryView, bots: TeamBotView[]): HTMLElement {
   const dot = el("span", "tf-sys__dot");
   dot.setAttribute("aria-hidden", "true");
   node.appendChild(dot);
-  node.appendChild(el("span", "tf-sys__text", e.text));
   const bot = botByName(bots, e.from, e.botId);
-  // A start-up question ("trust this folder?") is answered right here: the
-  // card carries the two answers until a later row says it was answered.
+  const project = projectId ? projectFor(projectId) : null;
   const asked = Array.isArray(e.to) ? e.to[0] : undefined;
   const askedBot = asked ? bots.find((b) => b.nickname === asked) : undefined;
-  if (e.event === "trust" && askedBot && !answeredTrust.has(askedBot.nickname)) {
-    const project = projectId ? projectFor(projectId) : null;
-    const answer = (choice: "trust" | "exit", label: string, title: string) => {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.className = "tf-sys__open";
-      b.textContent = label;
-      b.title = title;
-      b.addEventListener("click", () => {
-        if (!project) return;
-        send({ type: "team.bot.answer", projectId: project.id, botId: askedBot.botId, answer: choice });
-        node.querySelectorAll("button").forEach((x) => { (x as HTMLButtonElement).disabled = true; });
+  const target = askedBot ?? bot;
+  const openBtn = (b: TeamBotView | undefined) =>
+    b?.sessionId ? button("tf-sys__open", "Open", () => openTerminal(b), `Go to ${b.nickname}'s terminal`) : null;
+  const disableAll = () => node.querySelectorAll("button").forEach((x) => { (x as HTMLButtonElement).disabled = true; });
+
+  // A permission prompt: the tool and what it wants, the raw input behind a
+  // details line, Allow / Deny. The host hands the answer to Claude Code's
+  // hook; the terminal never has to be visited.
+  if (e.event === "permission" && e.note && project) {
+    const id = e.note;
+    node.classList.add("tf-sys--card");
+    const body = el("div", "tf-sys__body");
+    body.appendChild(el("span", "tf-sys__text tf-sys__text--wrap", e.text));
+    if (e.summary) {
+      const details = el("pre", "tf-sys__details", permissionDetails(e.summary));
+      details.hidden = !openDetails.has(e.seq);
+      const more = button("tf-sys__more", details.hidden ? "details" : "hide details", () => {
+        details.hidden = !details.hidden;
+        more.textContent = details.hidden ? "details" : "hide details";
+        if (details.hidden) openDetails.delete(e.seq); else openDetails.add(e.seq);
       });
-      return b;
-    };
-    node.appendChild(answer("trust", "Trust folder", `Answer "Yes, I trust this folder" for ${askedBot.nickname}`));
-    node.appendChild(answer("exit", "Don't", `Answer "No, exit" for ${askedBot.nickname}`));
-    if (askedBot.sessionId) {
-      const open = document.createElement("button");
-      open.type = "button";
-      open.className = "tf-sys__open";
-      open.textContent = "Open";
-      open.title = `Go to ${askedBot.nickname}'s terminal`;
-      open.addEventListener("click", () => {
-        closeTeamRoom();
-        send({ type: "session.select", id: askedBot.sessionId });
-      });
-      node.appendChild(open);
+      body.appendChild(more);
+      body.appendChild(details);
     }
+    if (!answered.perms.has(id)) {
+      const actions = el("div", "tf-sys__actions");
+      actions.appendChild(button("tf-sys__open tf-sys__open--primary", "Allow", () => {
+        send({ type: "team.perm.answer", projectId: project.id, id, decision: "allow" }); disableAll();
+      }, "Let it run this once"));
+      actions.appendChild(button("tf-sys__open", "Deny", () => {
+        send({ type: "team.perm.answer", projectId: project.id, id, decision: "deny" }); disableAll();
+      }, "Don't let it run"));
+      const o = openBtn(target);
+      if (o) actions.appendChild(o);
+      body.appendChild(actions);
+    } else {
+      body.appendChild(el("span", "tf-sys__answered", "answered"));
+    }
+    node.appendChild(body);
+    node.appendChild(el("span", "tf-sys__time", hhmm(e.ts)));
+    return node;
   }
-  // Rows that need the owner IN the bot's terminal — it is asking something,
-  // or a typed post is sitting there unsent — carry the door to it.
-  if ((e.event === "waiting" || e.event === "permission" || e.event === "undelivered") && bot?.sessionId) {
-    const open = document.createElement("button");
-    open.type = "button";
-    open.className = "tf-sys__open";
-    open.textContent = "Open";
-    open.title = `Go to ${bot.nickname}'s terminal`;
-    open.addEventListener("click", () => {
-      closeTeamRoom();
-      send({ type: "session.select", id: bot.sessionId });
-    });
-    node.appendChild(open);
+
+  // A bot's question (`perch team ask`): its choices as buttons, or a line to
+  // type into. The answer goes back to that bot as a post.
+  if (e.event === "ask" && e.note && project) {
+    const id = e.note;
+    node.classList.add("tf-sys--card");
+    const body = el("div", "tf-sys__body");
+    const who = target?.nickname ?? e.from;
+    body.appendChild(el("span", "tf-sys__text tf-sys__text--wrap", `${who} asks: ${e.text}`));
+    if (!answered.asks.has(id)) {
+      const actions = el("div", "tf-sys__actions");
+      const choices = (e.choices ?? []).map((c) => c.trim()).filter((c) => c.length > 0);
+      if (choices.length > 0) {
+        choices.forEach((c, i) => actions.appendChild(button("tf-sys__open" + (i === 0 ? " tf-sys__open--primary" : ""), c, () => {
+          send({ type: "team.ask.answer", projectId: project.id, id, answer: c }); disableAll();
+        })));
+      } else {
+        const form = el("form", "tf-sys__form") as HTMLFormElement;
+        const input = document.createElement("input");
+        input.type = "text";
+        input.className = "tf-sys__input";
+        input.placeholder = "Your answer";
+        input.setAttribute("aria-label", `Answer ${who}`);
+        input.addEventListener("keydown", (ev) => ev.stopPropagation());
+        form.appendChild(input);
+        const sendBtn = document.createElement("button");
+        sendBtn.type = "submit";
+        sendBtn.className = "tf-sys__open tf-sys__open--primary";
+        sendBtn.textContent = "Send";
+        form.appendChild(sendBtn);
+        form.addEventListener("submit", (ev) => {
+          ev.preventDefault();
+          const answer = input.value.trim();
+          if (!answer) return;
+          send({ type: "team.ask.answer", projectId: project.id, id, answer });
+          disableAll();
+        });
+        actions.appendChild(form);
+      }
+      const o = openBtn(target);
+      if (o) actions.appendChild(o);
+      body.appendChild(actions);
+    } else {
+      body.appendChild(el("span", "tf-sys__answered", "answered"));
+    }
+    node.appendChild(body);
+    node.appendChild(el("span", "tf-sys__time", hhmm(e.ts)));
+    return node;
+  }
+
+  node.appendChild(el("span", "tf-sys__text", e.text));
+
+  // A start-up question ("trust this folder?") is answered right here: the
+  // card carries the two answers until a later row says it was answered.
+  if (e.event === "trust" && askedBot && project && !answered.trust.has(askedBot.nickname)) {
+    node.appendChild(button("tf-sys__open tf-sys__open--primary", "Trust folder", () => {
+      send({ type: "team.bot.answer", projectId: project.id, botId: askedBot.botId, answer: "trust" }); disableAll();
+    }, `Answer "Yes, I trust this folder" for ${askedBot.nickname}`));
+    node.appendChild(button("tf-sys__open", "Don't", () => {
+      send({ type: "team.bot.answer", projectId: project.id, botId: askedBot.botId, answer: "exit" }); disableAll();
+    }, `Answer "No, exit" for ${askedBot.nickname}`));
+    const o = openBtn(askedBot);
+    if (o) node.appendChild(o);
+  }
+  // Rows that need the owner IN the bot's terminal — it is asking something
+  // the room can't relay, a typed post is sitting there unsent, or auto mode
+  // blocked it — carry the door to it.
+  if ((e.event === "waiting" || e.event === "permission" || e.event === "undelivered" || e.event === "denied") && target?.sessionId) {
+    const o = openBtn(target);
+    if (o) node.appendChild(o);
   }
   node.appendChild(el("span", "tf-sys__time", hhmm(e.ts)));
   return node;

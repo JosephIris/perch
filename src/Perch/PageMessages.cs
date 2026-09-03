@@ -566,25 +566,70 @@ internal sealed record TeamLeadSetMsg
     public required string BotId { get; init; }
 }
 
-/// The owner sets (or renames) the current task from the room.
+/// The owner opens a new task from the room (a card on the board).
 internal sealed record TeamTaskSetMsg
 {
     public required Guid ProjectId { get; init; }
     public required string Title { get; init; }
 }
 
-/// The owner confirms the current task is done: bots wrap up and reset.
+/// The owner renames an open task.
+internal sealed record TeamTaskRenameMsg
+{
+    public required Guid ProjectId { get; init; }
+    public required string TaskId { get; init; }
+    public required string Title { get; init; }
+}
+
+/// The owner confirms a task is done: the bots whose work was all on it
+/// wrap up and reset.
 internal sealed record TeamTaskConfirmMsg
 {
     public required Guid ProjectId { get; init; }
+    public required string TaskId { get; init; }
 }
 
-/// The owner says the task is not done yet (after the lead asked): back to
+/// The owner says a task is not done yet (after the lead asked): back to
 /// open, with a note the lead gets.
 internal sealed record TeamTaskRejectMsg
 {
     public required Guid ProjectId { get; init; }
+    public required string TaskId { get; init; }
     public string? Note { get; init; }
+}
+
+/// The owner answering a bot's permission card. `decision` is "allow" or
+/// "deny"; the host writes it where the waiting hook polls.
+internal sealed record TeamPermAnswerMsg
+{
+    public required Guid ProjectId { get; init; }
+    public required string Id { get; init; }
+    public required string Decision { get; init; }
+}
+
+/// The owner answering a bot's ask card; the answer is delivered to the bot
+/// as a post.
+internal sealed record TeamAskAnswerMsg
+{
+    public required Guid ProjectId { get; init; }
+    public required string Id { get; init; }
+    public required string Answer { get; init; }
+}
+
+/// The room asking for a picture's bytes (a screenshot a bot attached or
+/// mentioned). Answered with `team.image.data`.
+internal sealed record TeamImageMsg
+{
+    public required Guid ProjectId { get; init; }
+    public required string Path { get; init; }
+}
+
+/// The owner reacting to a room row with an emoji.
+internal sealed record TeamReactMsg
+{
+    public required Guid ProjectId { get; init; }
+    public required long Seq { get; init; }
+    public required string Emoji { get; init; }
 }
 
 /// The dialog's "Browse…" for a reference folder. Answered with

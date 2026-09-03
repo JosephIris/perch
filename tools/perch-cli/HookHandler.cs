@@ -3,6 +3,7 @@ using System.IO;
 using System.IO.Pipes;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 
 namespace PerchCli;
 
@@ -77,7 +78,14 @@ internal static class HookHandler
                     // send's target back to a sidebar row. Null when the file
                     // is absent (a pre-pairing pane): cc then auto-names from
                     // the cwd and the host falls back to the tab title.
-                    Send(pipeName, new { type = "session", id = sessionId, name = ReadOwnPeerName() });
+                    // `socket` is the session's own inbox address, exported
+                    // to hooks by cc: what a teammate's reply may be addressed
+                    // to instead of the name. The host maps it back to us.
+                    Send(pipeName, new
+                    {
+                        type = "session", id = sessionId, name = ReadOwnPeerName(),
+                        socket = NullIfBlank(Environment.GetEnvironmentVariable("CLAUDE_CODE_MESSAGING_SOCKET")),
+                    });
                 // Re-arm pane auto-naming so the next first prompt re-titles
                 // the pane to the new task — that's what makes a fresh launch
                 // (ctrl+c twice → relaunch) or `/clear` pick up a new name.
@@ -286,12 +294,144 @@ internal static class HookHandler
                 }
                 break;
 
+            case "permission-request":
+                // Claude Code is about to show a permission prompt (in any mode
+                // that asks, auto included for what auto never approves). For a
+                // team bot's pane, hold it and let the owner answer from the
+                // room; for any other pane, stay silent and the prompt shows.
+                return HoldPermission(pipeName, root);
+
+            case "permission-denied":
+                // Auto mode's classifier blocked a tool call. Information for
+                // the room; nothing to answer.
+                if (Environment.GetEnvironmentVariable("PERCH_PANE_ID") is { Length: > 0 } dpane
+                    && File.Exists(Path.Combine(Path.GetTempPath(), $"perch-team-{dpane}.txt")))
+                {
+                    var dtool = StringFrom(root, "tool_name") ?? "tool";
+                    Send(pipeName, new
+                    {
+                        type = "perm.denied", tool = dtool, summary = ToolSummary(root, dtool),
+                        reason = StringFrom(root, "reason", maxLen: 300),
+                    });
+                }
+                break;
+
             default:
                 // Unknown event — keep the hook fast and silent.
                 break;
         }
         return 0;
     }
+
+    // ---- permission cards --------------------------------------------------
+
+    /// How long PermissionRequest waits for the room's answer before letting
+    /// Claude Code show its own prompt. Under the hook's 590 s timeout so the
+    /// exit is ours, not a kill.
+    private static readonly TimeSpan PermWait = TimeSpan.FromSeconds(570);
+    private static readonly TimeSpan PermPoll = TimeSpan.FromMilliseconds(250);
+
+    /// The PermissionRequest hook body: tell the host what the bot wants to
+    /// do, then poll for the owner's decision file. On `allow`/`deny`, print
+    /// the decision JSON (the only thing cc reads); on timeout print nothing,
+    /// so the normal prompt appears in the terminal. Exit 0 either way — a
+    /// non-zero exit would make cc ignore even a valid decision.
+    private static int HoldPermission(string pipeName, JsonElement? root)
+    {
+        try
+        {
+            var paneId = Environment.GetEnvironmentVariable("PERCH_PANE_ID");
+            if (string.IsNullOrWhiteSpace(paneId)) return 0;
+            if (!File.Exists(Path.Combine(Path.GetTempPath(), $"perch-team-{paneId}.txt"))) return 0;   // not a bot's pane
+
+            var id = Guid.NewGuid().ToString("N")[..12];
+            var tool = StringFrom(root, "tool_name") ?? "tool";
+            Send(pipeName, new
+            {
+                type = "perm.ask", id, tool,
+                summary = ToolSummary(root, tool),
+                input = ToolInputJson(root),
+                suggestions = PermissionSuggestions(root),
+            });
+
+            var answerPath = Path.Combine(Path.GetTempPath(), $"perch-perm-{id}.txt");
+            var deadline = DateTime.UtcNow + PermWait;
+            while (DateTime.UtcNow < deadline)
+            {
+                if (File.Exists(answerPath))
+                {
+                    string answer;
+                    try { answer = File.ReadAllText(answerPath).Trim().ToLowerInvariant(); }
+                    catch { Thread.Sleep(PermPoll); continue; }   // the host may still be writing it
+                    try { File.Delete(answerPath); } catch { }
+                    if (answer is "allow" or "deny")
+                    {
+                        Console.Out.Write(JsonSerializer.Serialize(new
+                        {
+                            hookSpecificOutput = new { hookEventName = "PermissionRequest", decision = answer },
+                        }, JsonOpts));
+                        Console.Out.Flush();
+                    }
+                    return 0;
+                }
+                Thread.Sleep(PermPoll);
+            }
+            Console.Error.WriteLine("perch hooks: no answer from the room; showing the prompt here");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"perch hooks: permission card failed: {ex.Message}");
+            return 0;
+        }
+    }
+
+    /// One line saying what the tool wants to do: the command for Bash, the
+    /// file for the editing tools, the tool name otherwise.
+    private static string ToolSummary(JsonElement? root, string tool)
+    {
+        string? s = tool switch
+        {
+            "Bash" or "PowerShell" => ToolInputString(root, "command"),
+            "Edit" or "MultiEdit" or "Write" or "NotebookEdit" or "Read" => ToolInputString(root, "file_path") ?? ToolInputString(root, "notebook_path"),
+            "WebFetch" => ToolInputString(root, "url"),
+            _ => ToolInputString(root, "description") ?? ToolInputString(root, "command"),
+        };
+        s = (s ?? tool).Trim().Replace('\n', ' ').Replace('\r', ' ');
+        return s.Length > 300 ? s.Substring(0, 300) + "…" : s;
+    }
+
+    /// The raw tool_input object as JSON text, capped at 4 KB, for the card's
+    /// details.
+    private static string? ToolInputJson(JsonElement? root)
+    {
+        if (root is not JsonElement el) return null;
+        foreach (var container in new[] { el, Wrapped(el, "hook_input"), Wrapped(el, "data") })
+        {
+            if (container is JsonElement c && c.TryGetProperty("tool_input", out var ti))
+            {
+                var raw = ti.GetRawText();
+                return raw.Length > 4096 ? raw.Substring(0, 4096) + "…" : raw;
+            }
+        }
+        return null;
+    }
+
+    private static string[]? PermissionSuggestions(JsonElement? root)
+    {
+        if (root is not JsonElement el || !el.TryGetProperty("permission_suggestions", out var arr)
+            || arr.ValueKind != JsonValueKind.Array) return null;
+        var list = new System.Collections.Generic.List<string>();
+        foreach (var s in arr.EnumerateArray())
+            if (s.ValueKind == JsonValueKind.Object && s.TryGetProperty("rule", out var r) && r.ValueKind == JsonValueKind.String)
+                list.Add(r.GetString() ?? "");
+        return list.Count == 0 ? null : list.ToArray();
+    }
+
+    private static JsonElement? Wrapped(JsonElement el, string name)
+        => el.TryGetProperty(name, out var w) && w.ValueKind == JsonValueKind.Object ? w : null;
+
+    private static string? NullIfBlank(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
 
     /// PreToolUse(Bash): if the command creates a billable GCP resource, rewrite
     /// it to carry agent-attribution labels, and tell the host so it can snapshot

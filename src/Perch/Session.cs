@@ -366,6 +366,12 @@ internal sealed class PaneNode
     /// address a teammate was told. PERSISTED. Null for ordinary panes.
     public string? PinnedPeerName { get; set; }
 
+    /// The Claude session's own inbox address (its messaging socket, as the
+    /// session-start hook reported it). TRANSIENT: a new launch binds a new
+    /// one. Lets an observed SendMessage whose target is a reply ADDRESS
+    /// rather than a name be routed back to this pane.
+    [JsonIgnore] public string? MessagingSocket { get; set; }
+
     /// True while Name is the auto-assigned "pane-N" placeholder OR an
     /// auto-derived title (e.g. a URL pane's website <title>). User-typed
     /// rename via pane.rename flips this false; subsequent URL-pane title

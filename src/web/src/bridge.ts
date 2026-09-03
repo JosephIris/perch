@@ -305,12 +305,27 @@ export type OutMessage =
   | { type: "team.bot.answer"; projectId: string; botId: string; answer: "trust" | "exit" }
   /* Make a bot the team's one lead. */
   | { type: "team.lead.set"; projectId: string; botId: string }
-  /* The task board: the owner sets or renames the task, confirms it's done
-   * (bots wrap up and reset), or says not yet (back to open; the lead is
-   * told, with the note). */
+  /* The task board — several tasks may be open, each a card. The owner opens a
+   * new one (`set`), renames one, confirms one is done (the bots on it wrap
+   * up and reset), or says not yet (back to open; the lead is told, with the
+   * note). */
   | { type: "team.task.set"; projectId: string; title: string }
-  | { type: "team.task.confirm"; projectId: string }
-  | { type: "team.task.reject"; projectId: string; note?: string }
+  | { type: "team.task.rename"; projectId: string; taskId: string; title: string }
+  | { type: "team.task.confirm"; projectId: string; taskId: string }
+  | { type: "team.task.reject"; projectId: string; taskId: string; note?: string }
+  /* Answer a bot's permission prompt from its card in the room (the host
+   * hands the decision to Claude Code's PermissionRequest hook). `id` is the
+   * request id the card's row carried in `note`. */
+  | { type: "team.perm.answer"; projectId: string; id: string; decision: "allow" | "deny" }
+  /* Answer a bot's question (`perch team ask`) from its card; the host
+   * delivers the answer to that bot as a post. */
+  | { type: "team.ask.answer"; projectId: string; id: string; answer: string }
+  /* Fetch an image a row refers to (a screenshot path a bot shared); replies
+   * team.image.data. */
+  | { type: "team.image"; projectId: string; path: string }
+  /* React to a row with one of the room's four emoji. The host echoes a
+   * `reaction` row; clicking an existing pill sends the same (no un-react). */
+  | { type: "team.react"; projectId: string; seq: number; emoji: string }
   /* Native folder picker for the reference repo; replies team.reference.picked. */
   | { type: "team.reference.browse"; requestId: string; projectId: string }
   /* Room opened/closed. While open the host pushes team.data on every new
@@ -740,9 +755,9 @@ export type TeamTaskItemView = {
   updatedAtMs: number;
 };
 
-/* The team's current task: one at a time. open → review (the lead asked the
- * owner to confirm) → done (confirmed; bots in `wrapping` are still writing
- * their memory and being reset; when it empties the board is archived). */
+/* One task on the board — a card. open → review (the lead asked the owner to
+ * confirm) → done (confirmed; bots in `wrapping` are still writing their
+ * memory and being reset; when it empties the card is archived). */
 export type TeamTaskView = {
   id: string;
   title: string;
@@ -761,7 +776,8 @@ export type TeamView = {
   positions: TeamPositionView[];
   /* The one lead's botId; absent when no bot leads yet. */
   lead?: string;
-  task?: TeamTaskView | null;
+  /* Every task still on the board (open first). Absent on older hosts. */
+  tasks?: TeamTaskView[];
 };
 
 /* One row of the room's ledger.
@@ -771,8 +787,10 @@ export type TeamView = {
  *   work   — what a bot DID (a tool call; verb/target/repeat as in the journal).
  *   peer   — a bot messaged another bot (`to` = [nickname]).
  *   note   — a bot posted to the room for you, pinging nobody.
+ *   reaction — an emoji on another row (`note` = that row's seq); rendered as
+ *            a pill under it, never as a row of its own.
  *   system — the room narrating itself: joined / left / waiting / asleep … */
-export type TeamEntryKind = "user" | "beat" | "work" | "peer" | "note" | "system";
+export type TeamEntryKind = "user" | "beat" | "work" | "peer" | "note" | "system" | "reaction";
 
 export type TeamEntryView = {
   /* Ledger sequence; strictly increasing, the merge/dedupe key. */
@@ -788,10 +806,24 @@ export type TeamEntryView = {
   /* work rows only, mirroring InspectorEventView. */
   verb?: string;
   target?: string;
+  /* work rows: the journal's annotation. peer rows: the hand-off label the
+   * sender put in front (handoff | report | question | answer | fyi). system
+   * rows: the request id a permission/ask card is about, or the seq a
+   * waiting/undelivered row is about. reaction rows: the target row's seq. */
   note?: string;
   repeat?: number;
   /* user rows only — the echo of team.post's clientId. */
   clientId?: string;
+  /* An image the row shares (an absolute path to a screenshot); rendered as a
+   * thumbnail under the text, fetched through team.image. */
+  image?: string;
+  /* system rows about the board: which task. */
+  taskId?: string;
+  /* ask rows: the answers offered as buttons; absent → a free-text answer. */
+  choices?: string[];
+  /* peer rows: the sender's one-line preview. permission rows: the raw tool
+   * input as JSON, for the card's details line. */
+  summary?: string;
   /* system rows only. */
   /* "waiting"/"undelivered" rows from a bot (botId set) are about one post
    * (note = its seq): its pane is asking something, or the typed line never
@@ -801,7 +833,11 @@ export type TeamEntryView = {
         | "delivered" | "undelivered"
         /* the task board: a change, the lead asking to confirm, the owner
          * confirming, a bot reset for the next task, a new lead */
-        | "task" | "task.review" | "task.done" | "reset" | "lead";
+        | "task" | "task.review" | "task.done" | "reset" | "lead"
+        /* cards you answer in the room: a permission prompt (Allow / Deny),
+         * a bot's question (`perch team ask`); the rows that close them; a
+         * classifier block in auto mode; a post copied to the lead */
+        | "permission.answered" | "denied" | "ask" | "ask.answered" | "cc";
   /* user rows: false while the host is holding the post for a bot that has no
    * Claude up yet (asleep, still booting). Flips true when it lands. */
   delivered?: boolean;
@@ -842,6 +878,17 @@ export type TeamReferencePickedMessage = {
   type: "team.reference.picked";
   requestId: string;
   path: string | null;
+};
+
+/* Reply to team.image: the file's bytes, base64, or `error` when it can't be
+ * read (gone, not an image, too big). */
+export type TeamImageDataMessage = {
+  type: "team.image.data";
+  projectId: string;
+  path: string;
+  mediaType?: string;
+  data?: string;
+  error?: string;
 };
 
 /* Reply to settings.request. shells is the host's detected-shell list;
@@ -981,7 +1028,8 @@ export type InMessage =
   | TeamDataMessage
   | TeamBriefProgressMessage
   | TeamBriefResultMessage
-  | TeamReferencePickedMessage;
+  | TeamReferencePickedMessage
+  | TeamImageDataMessage;
 
 /** One machine (or one Dataproc cluster — a cluster is ONE row, not five). */
 export interface CloudResourceView {

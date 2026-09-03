@@ -37,6 +37,10 @@ internal sealed class PerchIpcServer : IDisposable
     public event Action<PeerMsgMessage>? OnPeerMsg;
     public event Action<TeamPostMessage>? OnTeamPost;
     public event Action<TeamTaskMessage>? OnTeamTask;
+    public event Action<TeamAskMessage>? OnTeamAsk;
+    public event Action<TeamReactMessage>? OnTeamReact;
+    public event Action<PermAskMessage>? OnPermAsk;
+    public event Action<PermDeniedMessage>? OnPermDenied;
 
     private readonly CancellationTokenSource _cts = new();
     private readonly Dispatcher _dispatcher;
@@ -181,6 +185,22 @@ internal sealed class PerchIpcServer : IDisposable
                     var tt = JsonSerializer.Deserialize<TeamTaskMessage>(json, IpcJson.Options);
                     if (tt != null) _dispatcher.BeginInvoke(() => OnTeamTask?.Invoke(tt));
                     break;
+                case "team.ask":
+                    var ta = JsonSerializer.Deserialize<TeamAskMessage>(json, IpcJson.Options);
+                    if (ta != null) _dispatcher.BeginInvoke(() => OnTeamAsk?.Invoke(ta));
+                    break;
+                case "team.react":
+                    var tr = JsonSerializer.Deserialize<TeamReactMessage>(json, IpcJson.Options);
+                    if (tr != null) _dispatcher.BeginInvoke(() => OnTeamReact?.Invoke(tr));
+                    break;
+                case "perm.ask":
+                    var pa = JsonSerializer.Deserialize<PermAskMessage>(json, IpcJson.Options);
+                    if (pa != null) _dispatcher.BeginInvoke(() => OnPermAsk?.Invoke(pa));
+                    break;
+                case "perm.denied":
+                    var pd = JsonSerializer.Deserialize<PermDeniedMessage>(json, IpcJson.Options);
+                    if (pd != null) _dispatcher.BeginInvoke(() => OnPermDenied?.Invoke(pd));
+                    break;
             }
         }
         catch (JsonException ex) { Log.Error("PerchIpc.Dispatch.Json", ex); }
@@ -286,9 +306,15 @@ internal sealed record AgentMessage(
 /// wrap-claude shim passed the host-written per-pane name file as --name).
 /// Null for launches predating the file. The host stores it on the pane so a
 /// SendMessage target observed in another pane can be routed back to a row.
+/// `socket` is the session's own inbox address (Claude Code exports it to
+/// hooks as CLAUDE_CODE_MESSAGING_SOCKET, possibly with a `uds:` prefix).
+/// A bot replying to a teammate sometimes addresses the REPLY ADDRESS it
+/// was handed rather than a name; the host maps such a target back to a
+/// pane — and so to a bot — through this.
 internal sealed record SessionMessage(
     [property: JsonPropertyName("id")] string? Id,
-    [property: JsonPropertyName("name")] string? Name = null);
+    [property: JsonPropertyName("name")] string? Name = null,
+    [property: JsonPropertyName("socket")] string? Socket = null);
 
 /// Sent by the cc HookHandler when the agent messages ANOTHER Claude Code
 /// session (the cross-session SendMessage tool). phase="sending" fires from
@@ -314,7 +340,41 @@ internal sealed record PeerMsgMessage(
 /// say "done, it's in src/x" without a SendMessage to each colleague. The
 /// host appends it to the room ledger; nothing is typed anywhere.
 internal sealed record TeamPostMessage(
-    [property: JsonPropertyName("text")] string? Text);
+    [property: JsonPropertyName("text")] string? Text,
+    [property: JsonPropertyName("image")] string? Image = null);
+
+/// `perch team ask "<question>" [--choices "A|B"]` from a bot: a card in the
+/// room the owner answers; the answer comes back to the bot as a post. `id`
+/// is minted by the CLI so the answer can name the card it closes.
+internal sealed record TeamAskMessage(
+    [property: JsonPropertyName("id")] string? Id,
+    [property: JsonPropertyName("text")] string? Text,
+    [property: JsonPropertyName("choices")] string[]? Choices = null);
+
+/// `perch team react <target> <emoji>` from a bot. `target` is `#<seq>` (a
+/// room row by number) or `@<nick>` (that bot's latest message).
+internal sealed record TeamReactMessage(
+    [property: JsonPropertyName("target")] string? Target,
+    [property: JsonPropertyName("emoji")] string? Emoji);
+
+/// The PermissionRequest hook in a bot's pane: Claude Code is about to show a
+/// permission prompt and the hook is holding it (polling for the answer file)
+/// so the owner can answer from the room instead. `summary` is one line
+/// (Bash: the command; Edit/Write: the file; else the tool name); `input` is
+/// the raw tool_input JSON, capped; `suggestions` the rules cc offered.
+internal sealed record PermAskMessage(
+    [property: JsonPropertyName("id")] string? Id,
+    [property: JsonPropertyName("tool")] string? Tool,
+    [property: JsonPropertyName("summary")] string? Summary,
+    [property: JsonPropertyName("input")] string? Input = null,
+    [property: JsonPropertyName("suggestions")] string[]? Suggestions = null);
+
+/// The PermissionDenied hook: auto mode's classifier blocked a tool call.
+/// Information only — nothing to answer.
+internal sealed record PermDeniedMessage(
+    [property: JsonPropertyName("tool")] string? Tool,
+    [property: JsonPropertyName("summary")] string? Summary,
+    [property: JsonPropertyName("reason")] string? Reason = null);
 
 /// `perch team task …` from a bot: the task board's verbs. `op` is "main"
 /// (the lead sets or renames the task), "assign" (the lead gives `bot` a
@@ -325,7 +385,8 @@ internal sealed record TeamTaskMessage(
     [property: JsonPropertyName("bot")] string? Bot,
     [property: JsonPropertyName("title")] string? Title,
     [property: JsonPropertyName("status")] string? Status,
-    [property: JsonPropertyName("note")] string? Note);
+    [property: JsonPropertyName("note")] string? Note,
+    [property: JsonPropertyName("taskId")] string? TaskId = null);
 
 /// Sent by the cc HookHandler (PreToolUse/Bash) the moment it stamps agent
 /// labels onto a `gcloud ... create`. The hook can only put JOIN KEYS on the

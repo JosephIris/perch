@@ -12,7 +12,7 @@
 import {
   send, onMessage,
   type AgentStateName, type ProjectView, type SessionView, type StateMessage,
-  type TeamBotView, type TeamDataMessage, type TeamEntryView,
+  type TeamBotView, type TeamDataMessage, type TeamEntryView, type TeamImageDataMessage, type TeamTaskView,
 } from "./bridge.js";
 
 // ---- Data layer ------------------------------------------------------------
@@ -98,7 +98,39 @@ export function ingestTeamData(msg: TeamDataMessage): TeamDataMessage {
 
 onMessage((msg) => {
   if (msg.type === "team.data") ingestTeamData(msg);
+  else if (msg.type === "team.image.data") settleImage(msg);
 });
+
+// ---- Images ----------------------------------------------------------------
+// A screenshot a bot shared is a path on this machine; the host reads it and
+// hands back a data URL. Cached per path so a re-render costs nothing and the
+// same picture in two rows is fetched once.
+
+const imageCache = new Map<string, string | null>();
+const imageWaiters = new Map<string, ((src: string | null) => void)[]>();
+const IMAGE_TIMEOUT_MS = 8000;
+
+/** A data: URL for an image path, or null when the host couldn't read it. */
+export function requestTeamImage(projectId: string, path: string): Promise<string | null> {
+  const hit = imageCache.get(path);
+  if (hit !== undefined) return Promise.resolve(hit);
+  return new Promise((resolve) => {
+    const list = imageWaiters.get(path);
+    if (list) { list.push(resolve); return; }
+    imageWaiters.set(path, [resolve]);
+    send({ type: "team.image", projectId, path });
+    setTimeout(() => settleImage({ type: "team.image.data", projectId, path, error: "timed out" }), IMAGE_TIMEOUT_MS);
+  });
+}
+
+function settleImage(msg: TeamImageDataMessage): void {
+  const waiters = imageWaiters.get(msg.path);
+  if (!waiters) return;   // already settled (a late reply after the timeout)
+  imageWaiters.delete(msg.path);
+  const src = msg.data && !msg.error ? `data:${msg.mediaType || "image/png"};base64,${msg.data}` : null;
+  if (src !== null || msg.error !== "timed out") imageCache.set(msg.path, src);
+  for (const w of waiters) w(src);
+}
 
 // ---- Pure: the ledger ------------------------------------------------------
 
@@ -355,3 +387,82 @@ export function teamProjectFor(state: StateMessage): string | null {
   const first = state.projects.find(hasBots);
   return first ? first.id : null;
 }
+
+// ---- Pure: what the feed shows ---------------------------------------------
+
+/** The rows the feed renders. Reactions never render as rows (they hang under
+ *  their target), a landed delivery is the post's own status line, and tool
+ *  activity only shows when the owner asks for it. */
+export function visibleEntries(entries: TeamEntryView[], showActivity: boolean): TeamEntryView[] {
+  return entries.filter((e) => {
+    if (e.kind === "reaction") return false;
+    if (e.kind === "system" && e.event === "delivered") return false;
+    if (e.kind === "work" && !showActivity) return false;
+    return true;
+  });
+}
+
+/** One pill under a row: the emoji and everyone who put it there. */
+export type ReactionPill = { emoji: string; who: string[] };
+
+/** Reactions grouped by the row they're on (a `reaction` row's `note` is that
+ *  row's seq), in first-seen order, each emoji once with its senders in
+ *  order — the host dedupes, so a name appears at most once per emoji. */
+export function reactionsFor(entries: TeamEntryView[]): Map<number, ReactionPill[]> {
+  const out = new Map<number, ReactionPill[]>();
+  for (const e of entries) {
+    if (e.kind !== "reaction") continue;
+    const seq = Number(e.note);
+    if (!Number.isFinite(seq) || seq <= 0) continue;
+    const emoji = e.text.trim();
+    if (!emoji) continue;
+    let pills = out.get(seq);
+    if (!pills) { pills = []; out.set(seq, pills); }
+    let pill = pills.find((p) => p.emoji === emoji);
+    if (!pill) { pill = { emoji, who: [] }; pills.push(pill); }
+    if (!pill.who.includes(e.from)) pill.who.push(e.from);
+  }
+  return out;
+}
+
+/** Task cards in the order the column shows them: what needs you first
+ *  (review), then what's moving (open), then what's wrapping up (done).
+ *  Stable within a status so cards don't shuffle on every push. */
+export function taskOrder(tasks: TeamTaskView[]): TeamTaskView[] {
+  const rank = (s: string) => (s === "review" ? 0 : s === "open" ? 1 : 2);
+  return tasks
+    .map((t, i) => ({ t, i, r: rank(t.status) }))
+    .sort((a, b) => a.r - b.r || a.i - b.i)
+    .map((x) => x.t);
+}
+
+/** Which cards have been answered, from the rows themselves (never a second
+ *  source of truth): permission and ask cards by request id, the start-up
+ *  question by nickname. */
+export function answeredSet(entries: TeamEntryView[]): { perms: Set<string>; asks: Set<string>; trust: Set<string> } {
+  const perms = new Set<string>(), asks = new Set<string>(), trust = new Set<string>();
+  for (const e of entries) {
+    if (e.kind !== "system") continue;
+    if (e.event === "permission.answered" && e.note) perms.add(e.note);
+    else if (e.event === "ask.answered" && e.note) asks.add(e.note);
+    else if ((e.event === "trusted" || e.event === "exited") && Array.isArray(e.to))
+      for (const n of e.to) trust.add(n);
+  }
+  return { perms, asks, trust };
+}
+
+/** The label a hand-off chip wears for a peer row's `note`, or null for a
+ *  plain message. */
+export function handoffLabel(note: string | undefined): string | null {
+  switch ((note ?? "").toLowerCase()) {
+    case "handoff": return "hand-off";
+    case "report": return "report";
+    case "question": return "question";
+    case "answer": return "answer";
+    case "fyi": return "fyi";
+    default: return null;
+  }
+}
+
+/** The four reactions the room offers, in bar order. */
+export const REACTIONS: readonly string[] = ["✅", "👀", "✏️", "👋"];

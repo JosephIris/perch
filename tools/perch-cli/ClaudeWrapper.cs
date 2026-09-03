@@ -305,6 +305,16 @@ internal static class ClaudeWrapper
             // critical path; the host coalesces the resulting working→working
             // firehose (see OnAgentStatus).
             ["PostToolUse"]       = new[] { Hook("post-tool-use", async: true) },
+            // PermissionRequest fires when cc is about to show a permission
+            // prompt — in any mode that asks, auto included for the things auto
+            // never approves. SYNCHRONOUS and long: the handler holds the prompt
+            // while the owner answers a card in the team room, and prints the
+            // decision cc then applies. It exits silently at once for a pane
+            // that isn't a team bot's, so the ordinary prompt shows as before.
+            // 590 s: under cc's 600 s default so the exit is ours, not a kill.
+            ["PermissionRequest"] = new[] { Hook("permission-request", timeoutSec: 590) },
+            // Auto mode's classifier blocked something: a line for the room.
+            ["PermissionDenied"]  = new[] { Hook("permission-denied", async: true) },
         };
 
         // PreToolUse carries at most two NARROW matcher groups — the "" matcher

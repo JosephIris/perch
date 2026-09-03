@@ -603,6 +603,55 @@ public class ProtocolTests
     }
 
     [Fact]
+    public void TeamMilestoneB_Verbs_RoundTrip()
+    {
+        var rename = Round<TeamTaskRenameMsg>($"{{\"type\":\"team.task.rename\",\"projectId\":\"{G1}\",\"taskId\":\"abcd1234\",\"title\":\"Dark footer\"}}");
+        Assert.Equal("abcd1234", rename.TaskId);
+        Assert.Equal("Dark footer", rename.Title);
+        var confirm = Round<TeamTaskConfirmMsg>($"{{\"type\":\"team.task.confirm\",\"projectId\":\"{G1}\",\"taskId\":\"abcd1234\"}}");
+        Assert.Equal("abcd1234", confirm.TaskId);
+        var reject = Round<TeamTaskRejectMsg>($"{{\"type\":\"team.task.reject\",\"projectId\":\"{G1}\",\"taskId\":\"abcd1234\",\"note\":\"footer shifts\"}}");
+        Assert.Equal("footer shifts", reject.Note);
+        var perm = Round<TeamPermAnswerMsg>($"{{\"type\":\"team.perm.answer\",\"projectId\":\"{G1}\",\"id\":\"p1\",\"decision\":\"allow\"}}");
+        Assert.Equal("allow", perm.Decision);
+        var ask = Round<TeamAskAnswerMsg>($"{{\"type\":\"team.ask.answer\",\"projectId\":\"{G1}\",\"id\":\"q1\",\"answer\":\"Ship it\"}}");
+        Assert.Equal("Ship it", ask.Answer);
+        var image = Round<TeamImageMsg>($"{{\"type\":\"team.image\",\"projectId\":\"{G1}\",\"path\":\"C:\\\\shots\\\\a.png\"}}");
+        Assert.Equal(@"C:\shots\a.png", image.Path);
+        var react = Round<TeamReactMsg>($"{{\"type\":\"team.react\",\"projectId\":\"{G1}\",\"seq\":42,\"emoji\":\"✅\"}}");
+        Assert.Equal(42, react.Seq);
+        Assert.Equal("✅", react.Emoji);
+    }
+
+    [Fact]
+    public void TeamMilestoneB_PipeShapes()
+    {
+        var ask = JsonSerializer.Deserialize<PermAskMessage>(
+            "{\"type\":\"perm.ask\",\"id\":\"p1\",\"tool\":\"Bash\",\"summary\":\"rm -rf build\",\"input\":\"{\\\"command\\\":\\\"rm -rf build\\\"}\",\"suggestions\":[\"Bash(rm *)\"]}",
+            IpcJson.Options)!;
+        Assert.Equal("p1", ask.Id);
+        Assert.Equal("Bash", ask.Tool);
+        Assert.Equal("rm -rf build", ask.Summary);
+        Assert.Equal("Bash(rm *)", Assert.Single(ask.Suggestions!));
+        var denied = JsonSerializer.Deserialize<PermDeniedMessage>("{\"type\":\"perm.denied\",\"tool\":\"Bash\",\"summary\":\"curl x\"}", IpcJson.Options)!;
+        Assert.Null(denied.Reason);
+        var post = JsonSerializer.Deserialize<TeamPostMessage>("{\"type\":\"team.post\",\"text\":\"look\",\"image\":\"C:\\\\a.png\"}", IpcJson.Options)!;
+        Assert.Equal(@"C:\a.png", post.Image);
+        var old = JsonSerializer.Deserialize<TeamPostMessage>("{\"type\":\"team.post\",\"text\":\"look\"}", IpcJson.Options)!;
+        Assert.Null(old.Image);
+        var q = JsonSerializer.Deserialize<TeamAskMessage>("{\"type\":\"team.ask\",\"id\":\"q1\",\"text\":\"Ship?\",\"choices\":[\"Yes\",\"No\"]}", IpcJson.Options)!;
+        Assert.Equal(2, q.Choices!.Length);
+        var r = JsonSerializer.Deserialize<TeamReactMessage>("{\"type\":\"team.react\",\"target\":\"#12\",\"emoji\":\"👀\"}", IpcJson.Options)!;
+        Assert.Equal("#12", r.Target);
+        var task = JsonSerializer.Deserialize<TeamTaskMessage>("{\"type\":\"team.task\",\"op\":\"assign\",\"taskId\":\"abcd1234\",\"bot\":\"ada\",\"title\":\"x\"}", IpcJson.Options)!;
+        Assert.Equal("abcd1234", task.TaskId);
+        var legacyTask = JsonSerializer.Deserialize<TeamTaskMessage>("{\"type\":\"team.task\",\"op\":\"mine\",\"status\":\"done\"}", IpcJson.Options)!;
+        Assert.Null(legacyTask.TaskId);
+        var session = JsonSerializer.Deserialize<SessionMessage>("{\"type\":\"session\",\"id\":\"abc\",\"name\":\"ada\",\"socket\":\"uds:\\\\\\\\.\\\\pipe\\\\LOCAL\\\\cc-msg-1\"}", IpcJson.Options)!;
+        Assert.Equal(@"uds:\\.\pipe\LOCAL\cc-msg-1", session.Socket);
+    }
+
+    [Fact]
     public void TeamBotAnswer_CarriesTheChoice()
     {
         var m = Round<TeamBotAnswerMsg>(
