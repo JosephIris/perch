@@ -281,16 +281,23 @@ internal static class HookHandler
                 {
                     var sentTarget = PeerTarget(root);
                     if (sentTarget.Length > 0)
+                    {
+                        var sendOk = PeerSendOk(root);
                         Send(pipeName, new
                         {
                             type = "peer.msg",
                             phase = "sent",
                             target = sentTarget,
                             text = PeerText(root),
-                            ok = PeerSendOk(root),
+                            ok = sendOk,
                             message = PeerFullText(root),
                             summary = PeerSummary(root),
+                            // Only for a failure, and only the first sentence:
+                            // the room says "couldn't reach Ada — <why>" instead
+                            // of showing the undelivered body as if it landed.
+                            reason = sendOk ? null : PeerVerdict.Reason(RawToolResponse(root)),
                         });
+                    }
                 }
                 break;
 
@@ -778,19 +785,12 @@ internal static class HookHandler
         return s.Length > 200 ? s.Substring(0, 200) + "…" : s;
     }
 
-    /// Did the send actually deliver? The response shape is a plain prose
-    /// string, so this is a marker sniff, biased toward true: a false "sent"
-    /// just means no warn note, while a false "failed" would put a scary note
-    /// on a healthy pair. cc ≥2.1.224 reports failures properly.
-    private static bool PeerSendOk(JsonElement? root)
-    {
-        var raw = RawToolResponse(root);
-        if (raw.Length == 0) return true;
-        var lower = raw.ToLowerInvariant();
-        return !(lower.Contains("failed") || lower.Contains("not found")
-                 || lower.Contains("no session") || lower.Contains("unable to")
-                 || lower.Contains("\"is_error\":true"));
-    }
+    /// Did the send actually deliver? cc answers with an explicit `success`
+    /// flag; PeerVerdict reads it (and falls back to a prose sniff for a
+    /// response without one). Shared with the host so the room's row and this
+    /// hook can't disagree — see PeerVerdict.cs for why the old sniff alone
+    /// was wrong.
+    private static bool PeerSendOk(JsonElement? root) => PeerVerdict.Ok(RawToolResponse(root));
 
     /// This pane's own peer name: the address other sessions use in
     /// SendMessage. Prefers the name wrap-claude recorded it ACTUALLY passed

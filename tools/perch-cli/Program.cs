@@ -168,10 +168,12 @@ internal static class Program
     private static int CmdTeam(string pipeName, string[] args)
     {
         // Usage: perch team post <text...>
+        //        perch team artefact --file <path> [--title "…"] [--summary "…"]
+        //        perch team artefact --title "…" --text "<body>"
         //        perch team task main <title...>              (the lead sets/renames the task)
-        //        perch team task assign <bot> <title...>      (the lead gives a bot its piece)
+        //        perch team task assign <id> <bot> [<title...>] [--status s] [--note n]  (the lead sets a bot's piece)
         //        perch team task mine <title...> [--status todo|doing|done|blocked] [--note <text>]
-        //        perch team task done                         (the lead asks the owner to confirm)
+        //        perch team task done <id>                    (the lead asks the owner to confirm; on an already-done card, clears it)
         //
         // `post` is a note from a bot to the team room — for the user, pinging
         // no teammate. (Bot-to-bot goes through Claude Code's own SendMessage;
@@ -180,12 +182,15 @@ internal static class Program
         // do what (the lead runs the board, every bot keeps its own piece) and
         // the room shows the result.
         const string usage = "perch team: usage: perch team post [--image <path>] <text...> | ask [--choices \"A|B\"] <text...> | "
+                           + "artefact --file <path> | --title \"…\" --text \"…\" | "
                            + "react <#seq|@nick> <emoji> | task new|assign|mine|done …";
         if (args.Length < 2) { Console.Error.WriteLine(usage); return 2; }
         switch (args[1])
         {
             case "post": return TeamPost(pipeName, args.Skip(2).ToArray());
             case "ask": return TeamAsk(pipeName, args.Skip(2).ToArray());
+            case "artefact":
+            case "artifact": return TeamArtefact(pipeName, args.Skip(2).ToArray());
             case "react": return TeamReact(pipeName, args.Skip(2).ToArray());
             case "task": return TeamTask(pipeName, args.Skip(2).ToArray(), usage);
         }
@@ -235,6 +240,48 @@ internal static class Program
         if (text.Length == 0) { Console.Error.WriteLine("perch team ask: missing the question"); return 2; }
         var id = Guid.NewGuid().ToString("N")[..8];
         return Send(pipeName, new { type = "team.ask", id, text, choices });
+    }
+
+    /// `perch team artefact --file &lt;path&gt; [--title "…"] [--summary "…"]` or
+    /// `perch team artefact --title "…" --text "&lt;body&gt;"`: something too long
+    /// to read in the feed. The room shows a card; the owner opens it beside
+    /// the chat. The path is resolved here because the host may be running
+    /// from a different folder than the bot's worktree.
+    private static int TeamArtefact(string pipeName, string[] rest)
+    {
+        string? file = null, title = null, summary = null, text = null;
+        for (var i = 0; i < rest.Length; i++)
+        {
+            switch (rest[i])
+            {
+                case "--file" when i + 1 < rest.Length: file = rest[++i]; break;
+                case "--title" when i + 1 < rest.Length: title = rest[++i]; break;
+                case "--summary" when i + 1 < rest.Length: summary = rest[++i]; break;
+                case "--text" when i + 1 < rest.Length: text = rest[++i]; break;
+                default:
+                    Console.Error.WriteLine($"perch team artefact: unexpected {rest[i]}");
+                    return 2;
+            }
+        }
+        if (file == null && string.IsNullOrWhiteSpace(text))
+        {
+            Console.Error.WriteLine("perch team artefact: give --file <path> or --text \"<body>\"");
+            return 2;
+        }
+        string? ext = null;
+        if (file != null)
+        {
+            try { file = Path.GetFullPath(file); } catch { }
+            if (!File.Exists(file)) { Console.Error.WriteLine($"perch team artefact: no such file: {file}"); return 2; }
+            ext = Path.GetExtension(file).TrimStart('.').ToLowerInvariant();
+            if (string.IsNullOrEmpty(title)) title = Path.GetFileName(file);
+        }
+        else if (string.IsNullOrWhiteSpace(title))
+        {
+            Console.Error.WriteLine("perch team artefact: --text needs a --title");
+            return 2;
+        }
+        return Send(pipeName, new { type = "team.artefact", title, summary, path = file, text, ext });
     }
 
     /// `perch team react <#seq|@nick> <emoji>`: an emoji on a room row.
@@ -289,7 +336,10 @@ internal static class Program
                 op = "new";
                 break;
             case "assign":
-                if (title.Length == 0) { Console.Error.WriteLine("perch team task assign: missing title"); return 2; }
+                // A title-less assign is how the lead closes or unblocks a
+                // teammate's existing piece: `assign <id> <bot> --status done`.
+                if (title.Length == 0 && status == null && note == null)
+                { Console.Error.WriteLine("perch team task assign: give a title, --status or --note"); return 2; }
                 break;
             case "mine":
                 if (title.Length == 0 && status == null && note == null)
@@ -435,8 +485,10 @@ internal static class Program
         Console.WriteLine("  perch agent <name>           (header badge; empty clears)");
         Console.WriteLine("  perch team post [--image <path>] <text...>   (a note to the team room; pings nobody)");
         Console.WriteLine("  perch team ask [--choices \"A|B\"] <question>  (a card the owner answers; the answer comes back as a post)");
+        Console.WriteLine("  perch team artefact --file <path> [--title \"…\"] [--summary \"…\"]  (something too long for the feed)");
+        Console.WriteLine("  perch team artefact --title \"…\" --text \"<body>\"                  (the same, written inline)");
         Console.WriteLine("  perch team react <#seq|@nick> <emoji>        (an emoji on a room row)");
-        Console.WriteLine("  perch team task new <title> | assign <id> <bot> <title> | mine [<id>] <title> [--status s] [--note n] | done <id>");
+        Console.WriteLine("  perch team task new <title> | assign <id> <bot> [<title>] [--status s] [--note n] | mine [<id>] [<title>] [--status s] [--note n] | done <id>");
         Console.WriteLine();
         Console.WriteLine("Outside a perch pane (no PERCH_PIPE set) every command is a silent no-op.");
     }

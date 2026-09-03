@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -245,12 +246,25 @@ internal sealed class TeamController
         return active.Count == 0 ? null : "Model limits right now: " + string.Join(", ", active);
     }
 
-    /// After typing: how long to wait for the hook before pressing Enter
-    /// again (first two), and before giving up (last).
+    /// After typing: how long to wait for the hook's confirmation before
+    /// looking again. The first two checks press Enter again (a line the paste
+    /// detector swallowed needs it); the rest only wait.
+    ///
+    /// The waiting is long on purpose. Claude reports a queued line when it
+    /// gets to it, which is when its current turn's tool calls finish — often
+    /// minutes. The old three-check, ten-second budget declared "didn't take
+    /// the post" while the bot was simply busy, which is the false alarm
+    /// Joseph kept seeing; the pane's state at that instant isn't proof
+    /// either, since a bot can look idle between two tool calls.
     internal static readonly TimeSpan[] SubmitChecks =
     {
-        TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(5),
+        TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(3),
+        TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(20), TimeSpan.FromSeconds(30),
+        TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(120),
     };
+
+    /// How many of those checks press Enter again before it just waits.
+    internal const int SubmitEnterTries = 2;
 
     /// Multi-line posts: bracketed paste keeps the newlines but depends on the
     /// TUI honouring the sequence; off until the live check proves it, in
@@ -428,6 +442,35 @@ internal sealed class TeamController
         var target = (msg.Target ?? "").Trim();
         var tbot = ResolvePeerTarget(h.Store, target);
         var (label, body) = SplitHandoff(msg.Message ?? msg.Text ?? "");
+        var to = tbot?.Nickname ?? TeamRender.OneLine(target, 40);
+        if (tbot == null) Log.Info("Team.peer", $"unresolved target '{TeamRender.OneLine(target, 80)}' from {h.Bot.Slug}");
+
+        // A send that didn't land is not a message — showing its body would put
+        // words in a teammate's inbox that never arrived, and a bot that retries
+        // (a shared name needs a ref, an address goes stale) would fill the room
+        // with what reads as the same message three times. One quiet line
+        // instead, and the retry that works is the only bubble.
+        if (msg.Ok == false)
+        {
+            var why = (msg.Reason ?? "").Trim();
+            var failed = h.Store.Ledger.Append(new RoomEntry
+            {
+                Kind = "system", From = h.Bot.Slug, Event = "peer.failed",
+                To = new List<string> { tbot?.Slug ?? "(another session)" },
+                Text = $"{h.Bot.Nickname} couldn't reach {to}" + (why.Length > 0 ? $" — {why}" : "") + "; it will try again",
+            });
+            Log.Info("Team.peer.failed", $"{h.Bot.Slug} → '{TeamRender.OneLine(target, 40)}': {TeamRender.OneLine(why, 120)}");
+            PostEntries(h.Project.Id, h.Store, new[] { failed });
+            return;
+        }
+
+        // Same body, same pair, moments ago: the send went out twice (a retry
+        // whose first attempt did land, a hook that fired twice). One bubble.
+        if (RecentlySaid(h.Store, h.Bot.Slug, tbot?.Slug, body))
+        {
+            Log.Info("Team.peer.dupe", $"{h.Bot.Slug} → {to}: same message again, not shown twice");
+            return;
+        }
         var entry = h.Store.Ledger.Append(new RoomEntry
         {
             Kind = "peer",
@@ -438,8 +481,25 @@ internal sealed class TeamController
             Ok = msg.Ok,
             Note = label,
         });
-        if (tbot == null) Log.Info("Team.peer", $"unresolved target '{TeamRender.OneLine(target, 80)}' from {h.Bot.Slug}");
         PostEntries(h.Project.Id, h.Store, new[] { entry });
+    }
+
+    /// How long the same bot→bot body counts as a repeat rather than a new
+    /// message. A retry after a name clash comes seconds later; a bot saying
+    /// the same thing again a quarter of an hour on means it.
+    internal static readonly TimeSpan PeerRepeatWindow = TimeSpan.FromMinutes(15);
+
+    /// Did this pair already carry this exact body, just now? Reads the tail of
+    /// the ledger rather than keeping state, so it survives a restart.
+    internal static bool RecentlySaid(TeamStore store, string from, string? toSlug, string body)
+    {
+        if (string.IsNullOrWhiteSpace(body)) return false;
+        var (recent, _) = store.Ledger.ReadSince(store.Ledger.LastSeq - 60);
+        var cutoff = DateTimeOffset.UtcNow.Subtract(PeerRepeatWindow).ToUnixTimeMilliseconds();
+        return recent.Any(e => e.Kind == "peer" && e.TsMs >= cutoff
+                               && string.Equals(e.From, from, StringComparison.OrdinalIgnoreCase)
+                               && string.Equals(e.To?.FirstOrDefault() ?? "", toSlug ?? "(another session)", StringComparison.OrdinalIgnoreCase)
+                               && string.Equals(e.Text, body, StringComparison.Ordinal));
     }
 
     /// The bot a SendMessage target names. Bots address each other by session
@@ -494,6 +554,11 @@ internal sealed class TeamController
 
     /// `perch team post` from a bot: a note for the owner, pinging nobody —
     /// with a picture when it attached one.
+    ///
+    /// A note long enough to be a document is stored as one instead. A ticket
+    /// draft pasted into the feed pushes everything else off the screen and is
+    /// unreadable there anyway; as an artefact it is a card the owner opens
+    /// when he wants it, and the conversation stays a conversation.
     public void OnTeamPost(Session sess, Guid paneId, TeamPostMessage msg)
     {
         if (BotOfSession(sess.Id) is not { } h) return;
@@ -501,6 +566,13 @@ internal sealed class TeamController
         var image = (msg.Image ?? "").Trim();
         if (image.Length > 0 && !(IsImagePath(image) && File.Exists(image))) image = "";
         if (text.Length == 0 && image.Length == 0) return;
+        if (image.Length == 0 && IsLongEnoughToStore(text))
+        {
+            var (title, summary) = TitleAndSummaryOf(text);
+            Log.Info("Team.artefact.promoted", $"bot={h.Bot.Slug} chars={text.Length} title={TeamRender.OneLine(title, 60)}");
+            StoreArtefact(h.Project, h.Store, h.Bot.Slug, title, summary, "md", text);
+            return;
+        }
         var entry = h.Store.Ledger.Append(new RoomEntry
         {
             Kind = "note", From = h.Bot.Slug, To = new List<string> { TeamRender.Everyone }, Text = text,
@@ -508,6 +580,213 @@ internal sealed class TeamController
         });
         PostEntries(h.Project.Id, h.Store, new[] { entry });
     }
+
+    // ---- artefacts ----------------------------------------------------------
+
+    /// Formats an artefact may be, all of them text: the room shows the body,
+    /// it never runs it. An extension outside this list is refused rather than
+    /// stored, so "here is the installer" can't become an artefact.
+    internal static readonly string[] ArtefactKinds =
+    {
+        "md", "txt", "html", "json", "csv", "log", "diff", "sql", "ts", "cs", "py",
+    };
+
+    /// Biggest body kept. Past this the tail is dropped with a marker: the
+    /// point of an artefact is that the owner can read it, and the page holds
+    /// the whole thing in memory.
+    internal const int ArtefactMaxBytes = 256 * 1024;
+
+    /// A `perch team post` this long is a document, not a message.
+    internal const int ArtefactPromoteChars = 1200;
+    internal const int ArtefactPromoteLines = 14;
+
+    internal static bool IsLongEnoughToStore(string text)
+        => text.Length > ArtefactPromoteChars
+           || text.AsSpan().Count('\n') + 1 > ArtefactPromoteLines;
+
+    /// The title and one-line summary a promoted post gets: its own first line
+    /// (a bot writes one), then whatever the next line says.
+    internal static (string Title, string? Summary) TitleAndSummaryOf(string text)
+    {
+        var lines = text.Replace("\r\n", "\n").Split('\n');
+        var i = Array.FindIndex(lines, l => l.Trim().Length > 0);
+        if (i < 0) return ("Untitled", null);
+        var title = lines[i].Trim().TrimStart('#', '*', '-', ' ').Trim();
+        if (title.Length > 80) title = title[..80].TrimEnd() + "…";
+        var j = Array.FindIndex(lines, i + 1, l => l.Trim().Length > 0);
+        var summary = j < 0 ? null : TeamRender.OneLine(lines[j].Trim(), 120);
+        return (title.Length == 0 ? "Untitled" : title, string.IsNullOrWhiteSpace(summary) ? null : summary);
+    }
+
+    /// `perch team artefact` from a bot.
+    public void OnTeamArtefact(Session sess, Guid paneId, TeamArtefactMessage msg)
+    {
+        if (BotOfSession(sess.Id) is not { } h) return;
+        var path = (msg.Path ?? "").Trim();
+        var text = msg.Text ?? "";
+        var ext = (msg.Ext ?? "").Trim().TrimStart('.').ToLowerInvariant();
+        var title = (msg.Title ?? "").Trim();
+        var summary = string.IsNullOrWhiteSpace(msg.Summary) ? null : TeamRender.OneLine(msg.Summary, 200);
+
+        if (path.Length > 0)
+        {
+            if (ext.Length == 0) ext = Path.GetExtension(path).TrimStart('.').ToLowerInvariant();
+            try
+            {
+                if (!File.Exists(path)) { Fallback(h.Project, h.Store, $"{h.Bot.Nickname} shared a file that isn't there: {TeamRender.OneLine(path, 80)}"); return; }
+                text = File.ReadAllText(path);
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Team.artefact.read", ex);
+                Fallback(h.Project, h.Store, $"{h.Bot.Nickname} shared a file Perch couldn't read: {TeamRender.OneLine(path, 80)}");
+                return;
+            }
+            if (title.Length == 0) title = HeadingOf(text) ?? Path.GetFileName(path);
+        }
+        if (ext.Length == 0) ext = "md";
+        if (!ArtefactKinds.Contains(ext))
+        {
+            Fallback(h.Project, h.Store,
+                $"{h.Bot.Nickname} tried to share a .{TeamRender.OneLine(ext, 12)} — the room shows text files ({string.Join(", ", ArtefactKinds)})");
+            return;
+        }
+        if (text.Trim().Length == 0) { Fallback(h.Project, h.Store, $"{h.Bot.Nickname} shared an empty artefact"); return; }
+        if (title.Length == 0) title = HeadingOf(text) ?? TitleAndSummaryOf(text).Title;
+        StoreArtefact(h.Project, h.Store, h.Bot.Slug, title, summary, ext, text);
+    }
+
+    /// A markdown file's first heading, when it has one — the title a bot
+    /// meant, without being asked for it twice.
+    private static string? HeadingOf(string text)
+    {
+        foreach (var raw in text.Replace("\r\n", "\n").Split('\n'))
+        {
+            var line = raw.Trim();
+            if (line.Length == 0) continue;
+            if (!line.StartsWith('#')) return null;
+            var t = line.TrimStart('#').Trim();
+            return t.Length == 0 ? null : t.Length > 80 ? t[..80].TrimEnd() + "…" : t;
+        }
+        return null;
+    }
+
+    /// Write the body under the team's local folder and put its card in the
+    /// room. The id names the file, so the page can ask for it back by id
+    /// alone and no path from a bot is ever opened by the page.
+    private void StoreArtefact(Project proj, TeamStore store, string from, string title, string? summary, string ext, string body)
+    {
+        var truncated = false;
+        if (Encoding.UTF8.GetByteCount(body) > ArtefactMaxBytes)
+        {
+            body = CutToBytes(body, ArtefactMaxBytes) + "\n\n… (cut here: the artefact was over 256 KB)";
+            truncated = true;
+        }
+        var id = TaskDoc.NewId();
+        try
+        {
+            Directory.CreateDirectory(store.ArtefactsDir);
+            AtomicFile.WriteAllText(store.ArtefactPathFor(id, ext), body);
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Team.artefact.write", ex);
+            Fallback(proj, store, "Perch couldn't save that artefact — the room kept nothing.");
+            return;
+        }
+        var entry = store.Ledger.Append(new RoomEntry
+        {
+            Kind = "artefact", From = from, To = new List<string> { TeamRender.Everyone },
+            Text = title, Target = id, Note = ext,
+            Summary = truncated ? (summary == null ? "cut at 256 KB" : summary + " (cut at 256 KB)") : summary,
+        });
+        Log.Info("Team.artefact", $"project={proj.Id:N} id={id} ext={ext} from={from} bytes={body.Length}");
+        PostEntries(proj.Id, store, new[] { entry });
+    }
+
+    /// The room opening an artefact: its body, by id.
+    public void OnArtefactOpen(TeamArtefactOpenMsg msg)
+    {
+        var store = StoreFor(msg.ProjectId);
+        var row = store == null ? null : ArtefactRows(store).FirstOrDefault(e => e.Target == msg.Id);
+        if (store == null || row == null)
+        {
+            _h.Post(new { type = "team.artefact.data", projectId = msg.ProjectId.ToString("D"), id = msg.Id, error = "The room doesn't have that artefact." });
+            return;
+        }
+        var path = store.ArtefactPathFor(row.Target!, row.Note ?? "md");
+        string content;
+        try
+        {
+            if (!File.Exists(path))
+            {
+                _h.Post(new { type = "team.artefact.data", projectId = msg.ProjectId.ToString("D"), id = msg.Id, error = "That artefact's file is gone." });
+                return;
+            }
+            content = File.ReadAllText(path);
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Team.artefact.open", ex);
+            _h.Post(new { type = "team.artefact.data", projectId = msg.ProjectId.ToString("D"), id = msg.Id, error = "Perch couldn't read that artefact." });
+            return;
+        }
+        // A file edited by hand since it was stored could be any size; the page
+        // gets at most the cap either way.
+        var truncated = Encoding.UTF8.GetByteCount(content) > ArtefactMaxBytes;
+        if (truncated) content = CutToBytes(content, ArtefactMaxBytes);
+        _h.Post(new
+        {
+            type = "team.artefact.data",
+            projectId = msg.ProjectId.ToString("D"),
+            id = row.Target,
+            title = row.Text,
+            kind = row.Note ?? "md",
+            from = row.From,
+            tsMs = row.TsMs,
+            content,
+            truncated,
+        });
+    }
+
+    /// Everything the room still has, newest first — the artefacts menu.
+    public void OnArtefactList(TeamArtefactListMsg msg)
+    {
+        var store = StoreFor(msg.ProjectId);
+        var items = new List<object>();
+        if (store != null)
+        {
+            var rows = ArtefactRows(store);
+            for (var i = rows.Count - 1; i >= 0 && items.Count < ArtefactListMax; i--)
+            {
+                var e = rows[i];
+                if (!File.Exists(store.ArtefactPathFor(e.Target!, e.Note ?? "md"))) continue;   // deleted by hand
+                items.Add(new { id = e.Target, title = e.Text, kind = e.Note ?? "md", from = e.From, tsMs = e.TsMs, summary = e.Summary });
+            }
+        }
+        _h.Post(new { type = "team.artefact.index", projectId = msg.ProjectId.ToString("D"), items });
+    }
+
+    internal const int ArtefactListMax = 50;
+
+    /// The longest prefix of `text` that fits in `max` UTF-8 bytes, never
+    /// splitting a character in half. The cap is a byte cap because that is
+    /// what the file and the page's memory cost.
+    internal static string CutToBytes(string text, int max)
+    {
+        if (Encoding.UTF8.GetByteCount(text) <= max) return text;
+        var cut = Math.Min(text.Length, max);
+        while (cut > 0 && Encoding.UTF8.GetByteCount(text.AsSpan(0, cut)) > max) cut--;
+        // A lead surrogate left at the end has lost its pair: drop it.
+        if (cut > 0 && char.IsHighSurrogate(text[cut - 1])) cut--;
+        return text[..cut];
+    }
+
+    /// The artefact rows in the ledger, oldest first. Read from the log rather
+    /// than a second index file: the room's order IS the ledger, and one file
+    /// can't then disagree with the other.
+    private static List<RoomEntry> ArtefactRows(TeamStore store)
+        => store.Ledger.ReadAll().Where(e => e.Kind == "artefact" && !string.IsNullOrEmpty(e.Target)).ToList();
 
     /// `perch team ask` from a bot: a card the owner answers.
     public void OnTeamAsk(Session sess, Guid paneId, TeamAskMessage msg)
@@ -832,22 +1111,27 @@ internal sealed class TeamController
             _submits.Remove(sid);
             Log.Info("Team.submit", $"session={sid:N} seq={seq} blocked by a prompt in the pane");
             Say(h, p.Bot, "waiting", seq,
-                $"{nick} is waiting on you in their terminal — answer there, then press Enter to send the post");
+                $"{nick} has a question open — the post goes in as soon as it is answered");
             return;
         }
         p.Tries++;
         if (p.Tries < SubmitChecks.Length)
         {
-            var ok = _h.PressEnter(s);
-            Log.Info("Team.submit", $"session={sid:N} seq={seq} enter-again={p.Tries} ok={ok}");
+            if (p.Tries <= SubmitEnterTries)
+            {
+                var ok = _h.PressEnter(s);
+                Log.Info("Team.submit", $"session={sid:N} seq={seq} enter-again={p.Tries} ok={ok}");
+            }
+            // Past the Enter retries this only waits: the line is in the pane,
+            // and a busy bot confirms it when its turn reaches the queue.
             _h.Delay(() => CheckSubmitted(sid, seq), SubmitChecks[p.Tries]);
             return;
         }
         _submits.Remove(sid);
         if (Working(s))
         {
-            // Mid-turn the line is queued, and the hook reports it only when
-            // Claude gets to it. Not a failure, so nothing to say.
+            // Still mid-turn after the whole budget. Not a failure — a long
+            // tool run is exactly where a post waits longest.
             Log.Info("Team.submit", $"session={sid:N} seq={seq} unconfirmed, bot is working (queued)");
             return;
         }
@@ -1175,8 +1459,13 @@ internal sealed class TeamController
                     || string.Equals(b.Nickname, name, StringComparison.OrdinalIgnoreCase)
                     || ClaudePeerNames.Matches(b.CcName, name));
                 if (target == null) { Refuse(h.Project, h.Store, $"{h.Bot.Nickname} assigned a piece to \"{name}\", who isn't on the team"); return; }
-                if (title.Length == 0) { Refuse(h.Project, h.Store, $"{h.Bot.Nickname} assigned {target.Nickname} an empty piece"); return; }
-                UpsertItem(h.Project, h.Store, board, target, title, null, null, h.Bot);
+                var hasStatus = TaskItem.Statuses.Contains((msg.Status ?? "").Trim().ToLowerInvariant());
+                if (title.Length == 0 && !hasStatus)
+                { Refuse(h.Project, h.Store, $"{h.Bot.Nickname} assigned {target.Nickname} an empty piece"); return; }
+                // --status and --note on an assign are honoured: the lead has
+                // to be able to close (or unblock) a teammate's piece, or an
+                // abandoned piece keeps the card alive forever.
+                UpsertItem(h.Project, h.Store, board, target, title, msg.Status, msg.Note, h.Bot);
                 break;
             }
             case "mine":
@@ -1332,9 +1621,13 @@ internal sealed class TeamController
 
     private void AskConfirm(Project proj, TeamStore store, TaskBoard board, TeamBot lead)
     {
-        if (board.Status != "open")
+        // Closing a card that is already done is how a stuck card gets cleared:
+        // do it, don't argue. (It used to refuse, which left no way to take a
+        // pinned card off the board from a bot.)
+        if (board.Status == "done") { CloseCard(proj, store, board, $"{lead.Nickname} cleared"); return; }
+        if (board.Status == "review")
         {
-            Refuse(proj, store, $"{lead.Nickname} closed task {board.Id}, but it is already {board.Status}");
+            Refuse(proj, store, $"{lead.Nickname} closed task {board.Id}, which is already waiting for Joseph to confirm");
             return;
         }
         board.Status = "review";
@@ -1409,10 +1702,57 @@ internal sealed class TeamController
             rows.Add(post);
             rows.AddRange(Record(store, post, attempts));
         }
+        // The card leaves the board NOW. Wrapping up is the bots' business and
+        // takes as long as it takes; it used to hold the card in place, so one
+        // bot that never finished its wrap-up (or picked up a piece on a new
+        // task first) pinned a confirmed card on the board for good.
+        Archive(store, board);
+        store.Tasks.Open.Remove(board);
+        store.SaveTasks();
+        RefreshRoster(proj, store);
+        rows.Add(store.Ledger.Append(new RoomEntry
+        {
+            Kind = "system", From = "perch", Event = "task", TaskId = board.Id,
+            Text = $"\"{TeamRender.OneLine(board.Title, 60)}\" is off the board"
+                 + (store.Tasks.Active.Any() ? "" : " — ready for the next task"),
+        }));
         Log.Info("Team.task", $"project={proj.Id:N} done id={board.Id}; wrapping={_wrapping.Count(kv => kv.Value.TaskId == board.Id)} staying={staying.Count}");
         _h.PushState();
         PostEntries(proj.Id, store, rows);
-        MaybeArchive(proj.Id, board.Id);
+    }
+
+    /// Take a card off the board with no ceremony: no confirmation, no
+    /// wrap-up, no reset. The owner's "remove this card" and a bot closing a
+    /// card that is already done both land here.
+    private void CloseCard(Project proj, TeamStore store, TaskBoard board, string who)
+    {
+        Archive(store, board);
+        store.Tasks.Open.Remove(board);
+        foreach (var sid in _wrapping.Where(kv => kv.Value.Project == proj.Id && kv.Value.TaskId == board.Id)
+                                     .Select(kv => kv.Key).ToList())
+            _wrapping.Remove(sid);
+        store.SaveTasks();
+        RefreshRoster(proj, store);
+        var e = store.Ledger.Append(new RoomEntry
+        {
+            Kind = "system", From = "perch", Event = "task", TaskId = board.Id,
+            Text = $"{who} \"{TeamRender.OneLine(board.Title, 60)}\" off the board",
+        });
+        Log.Info("Team.task", $"project={proj.Id:N} closed id={board.Id} by={who}");
+        _h.PushState();
+        PostEntries(proj.Id, store, new[] { e });
+    }
+
+    /// The owner takes a card off the board by hand — the escape hatch for a
+    /// card nobody is going to finish, or one that is done in everything but
+    /// name. Nothing is asked of the bots.
+    public void OnTaskClose(TeamTaskCloseMsg msg)
+    {
+        var proj = _h.ProjectById(msg.ProjectId);
+        var store = StoreFor(msg.ProjectId);
+        var board = store?.Tasks.Board(msg.TaskId);
+        if (proj == null || store == null || board == null) return;
+        CloseCard(proj, store, board, "Joseph took");
     }
 
     /// A wrapping bot's turn ended after the wrap-up post went in: clear its
@@ -1446,7 +1786,9 @@ internal sealed class TeamController
         var rows = new List<RoomEntry>();
         foreach (var board in done)
         {
-            if (_wrapping.Any(kv => kv.Value.Project == projectId && kv.Value.TaskId == board.Id)) continue;
+            // No wrapping gate: a confirmed card leaves the board when it is
+            // confirmed (CompleteTask). This is now only the sweep for a card
+            // an older build left pinned.
             Archive(store, board);
             store.Tasks.Open.Remove(board);
             rows.Add(store.Ledger.Append(new RoomEntry
@@ -1711,7 +2053,7 @@ internal sealed class TeamController
                     events.Add(store.Ledger.Append(new RoomEntry
                     {
                         Kind = "system", From = a.Bot.Slug, Event = "waiting", Note = post.Seq.ToString(),
-                        Text = $"{a.Bot.Nickname} is waiting on you in their terminal — this goes through once that's answered",
+                        Text = $"{a.Bot.Nickname} has a question open — this goes in as soon as it is answered",
                     }));
             }
         }

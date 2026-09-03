@@ -31,7 +31,7 @@ import {
   visibleEntries, reactionsFor, taskOrder, answeredSet, handoffLabel, REACTIONS,
   type FeedRow, type Presence, type ReactionPill,
 } from "./team.js";
-import { appendRich, hhmm, imageLabel } from "./text.js";
+import { appendRich, appendBlocks, hhmm, imageLabel } from "./text.js";
 import { elapsedSpan, agoSpan } from "./elapsed.js";
 import { buildComposer, type Composer } from "./mention-input.js";
 import { showNewBotDialog } from "./new-bot-dialog.js";
@@ -40,7 +40,9 @@ import type { MentionTarget } from "./mention.js";
 import { createBotFace, normalizeLook, type BotFace, type FaceState } from "./bot-face.js";
 import { confirmDialog } from "./confirm.js";
 import { showToast } from "./toast.js";
-import type { TeamPasteDataMessage } from "./bridge.js";
+import type {
+  TeamPasteDataMessage, TeamArtefactDataMessage, TeamArtefactIndexMessage, TeamArtefactItem,
+} from "./bridge.js";
 
 // ---- Pure rendering decisions ---------------------------------------------
 
@@ -93,6 +95,19 @@ export function systemTone(event: TeamEntryView["event"]): "calm" | "attention" 
   }
 }
 
+/** The word a card wears, or "" for a row that is only narration. Cards are
+ *  what you ACT on, and each kind has its own colour in the CSS keyed on the
+ *  same event — the word is there so the colour is never the only carrier. */
+export function cardKind(event: TeamEntryView["event"]): string {
+  switch (event) {
+    case "permission": return "permission";
+    case "ask": return "question";
+    case "trust": return "trust";
+    case "task.review": return "review";
+    default: return "";
+  }
+}
+
 /** The word on a task card's pill for a board status. */
 export function taskStatusWord(status: TeamTaskView["status"] | undefined): string {
   switch (status) {
@@ -138,6 +153,18 @@ let taskBodyEl: HTMLElement;
 let renameFor: string | null = null;
 let rejectFor: string | null = null;
 let newTaskOpen = false;
+
+/* The artefacts panel under the cards: what is on screen, what the "Recent"
+ * menu offers, and which one we asked the host for. */
+let artefactTitleEl: HTMLElement;
+let artefactMetaEl: HTMLElement;
+let artefactMenuBtn: HTMLButtonElement;
+let artefactMenuEl: HTMLElement;
+let artefactBodyEl: HTMLElement;
+let artefactMenuOpen = false;
+let artefactIndex: TeamArtefactItem[] = [];
+let shownArtefact: TeamArtefactDataMessage | null = null;
+let artefactLoading: string | null = null;
 
 let projectId: string | null = null;
 let lastState: StateMessage | null = null;
@@ -257,8 +284,13 @@ export function openTeamRoom(id: string): void {
   if (root && projectId === id && !closing) { composer?.focus(); return; }
   if (root) unmount(true);
   projectId = id;
+  shownArtefact = null;
+  artefactIndex = [];
+  artefactLoading = null;
+  artefactMenuOpen = false;
   mount();
   send({ type: "team.room", projectId: id, open: true });
+  send({ type: "team.artefact.list", projectId: id });
   unsubscribe = subscribeTeam(id, () => render());
   render();
   void requestTeam(id, cachedTeam(id)?.lastSeq).then(() => render());
@@ -407,6 +439,31 @@ function mount(): void {
   tasks.appendChild(tHead);
   taskBodyEl = el("div", "team-tasks__body scroll");
   tasks.appendChild(taskBodyEl);
+
+  // Under the cards: the artefacts panel. Anything a bot writes that is too
+  // long to read as a message — a draft ticket, a table, a plan — lands here,
+  // opened from its card in the feed or from this panel's own list of recent
+  // ones. It fills the space the task cards leave.
+  const arte = el("section", "team-arte");
+  arte.setAttribute("aria-label", "Artefacts");
+  const aHead = el("div", "team-arte__head");
+  artefactTitleEl = el("span", "team-arte__title", "Artefacts");
+  aHead.appendChild(artefactTitleEl);
+  artefactMetaEl = el("span", "team-arte__meta");
+  aHead.appendChild(artefactMetaEl);
+  artefactMenuBtn = button("team-roster__add team-arte__recent", "Recent", () => {
+    artefactMenuOpen = !artefactMenuOpen;
+    if (artefactMenuOpen && projectId) send({ type: "team.artefact.list", projectId });
+    renderArtefacts();
+  });
+  aHead.appendChild(artefactMenuBtn);
+  arte.appendChild(aHead);
+  artefactMenuEl = el("div", "team-arte__menu");
+  artefactMenuEl.hidden = true;
+  arte.appendChild(artefactMenuEl);
+  artefactBodyEl = el("div", "team-arte__body scroll");
+  arte.appendChild(artefactBodyEl);
+  tasks.appendChild(arte);
   mainEl.appendChild(tasks);
 
   const roster = el("aside", "team-roster");
@@ -581,6 +638,7 @@ function render(): void {
   renderHead(project);
   renderRoster(project);
   renderTasks(project);
+  renderArtefacts();
   composer?.refresh();
 
   const empty = roomEmptyState({ bots, entries: data?.entries ?? [], pending: !data || data.pending });
@@ -765,6 +823,114 @@ function renderTasks(project: ProjectView | null): void {
   for (const t of tasks) taskBodyEl.appendChild(taskCard(project, team!, t));
 }
 
+// ---- Artefacts --------------------------------------------------------------
+
+/** A short word for what an artefact is, from its file extension. The card and
+ *  the panel both say it, so a table isn't mistaken for a page. */
+export function artefactKindWord(kind: string | undefined): string {
+  switch ((kind ?? "").toLowerCase()) {
+    case "md": return "document";
+    case "html": return "page";
+    case "csv": return "table";
+    case "json": return "data";
+    case "sql": return "query";
+    case "diff": return "diff";
+    case "log": return "log";
+    case "": return "note";
+    default: return kind!.toLowerCase();
+  }
+}
+
+/** Ask the host for one artefact and show it. */
+function openArtefactById(id: string): void {
+  if (!projectId) return;
+  artefactLoading = id;
+  artefactMenuOpen = false;
+  send({ type: "team.artefact.open", projectId, id });
+  renderArtefacts();
+}
+
+/** The host answered with an artefact's text. */
+export function applyArtefact(msg: TeamArtefactDataMessage): void {
+  if (projectId && msg.projectId !== projectId) return;
+  artefactLoading = null;
+  shownArtefact = msg;
+  renderArtefacts();
+}
+
+/** The host answered with the recent list for the panel's menu. */
+export function applyArtefactIndex(msg: TeamArtefactIndexMessage): void {
+  if (projectId && msg.projectId !== projectId) return;
+  artefactIndex = msg.items ?? [];
+  // Nothing open yet: show the newest, so the panel is never a blank half of
+  // the room when there is something to read.
+  if (!shownArtefact && !artefactLoading && artefactIndex.length > 0) openArtefactById(artefactIndex[0].id);
+  else renderArtefacts();
+}
+
+function renderArtefacts(): void {
+  if (!artefactBodyEl) return;
+  const a = shownArtefact;
+  artefactTitleEl.textContent = a && !a.error ? (a.title ?? "Untitled") : "Artefacts";
+  artefactTitleEl.title = a?.title ?? "";
+  artefactMetaEl.textContent = a && !a.error
+    ? `${artefactKindWord(a.kind)} · from ${a.from}` + (a.truncated ? " · shortened" : "")
+    : "";
+  artefactMenuBtn.hidden = artefactIndex.length === 0 && !a;
+  artefactMenuBtn.textContent = artefactMenuOpen ? "Close list" : "Recent";
+
+  artefactMenuEl.hidden = !artefactMenuOpen;
+  if (artefactMenuOpen) {
+    artefactMenuEl.replaceChildren();
+    if (artefactIndex.length === 0) artefactMenuEl.appendChild(el("p", "team-tasks__empty", "Nothing yet."));
+    for (const it of artefactIndex) {
+      const row = button("team-arte__item", "", () => openArtefactById(it.id));
+      if (it.id === a?.id) row.classList.add("team-arte__item--on");
+      row.appendChild(el("span", "team-arte__item-title", it.title));
+      row.appendChild(el("span", "team-arte__item-meta", `${artefactKindWord(it.kind)} · ${it.from}`));
+      artefactMenuEl.appendChild(row);
+    }
+  }
+
+  artefactBodyEl.replaceChildren();
+  if (artefactLoading) { artefactBodyEl.appendChild(el("p", "team-tasks__empty", "Opening…")); return; }
+  if (!a) {
+    artefactBodyEl.appendChild(el("p", "team-tasks__empty",
+      "Anything a bot writes that is longer than a message opens here — a draft ticket, a table, a plan."));
+    return;
+  }
+  if (a.error) { artefactBodyEl.appendChild(el("p", "team-tasks__empty", a.error)); return; }
+  const body = el("div", "team-arte__doc");
+  // Markdown and plain prose read as a document; everything structured (a
+  // table file, a query, a diff) stays exactly as the bot wrote it.
+  const content = a.content ?? "";
+  if (a.kind === "md" || a.kind === "txt" || !a.kind) appendBlocks(body, content, []);
+  else body.appendChild(el("pre", "team-arte__pre", content));
+  artefactBodyEl.appendChild(body);
+}
+
+/** An artefact's row in the feed: a card that opens it beside the chat. */
+function renderArtefactCard(e: TeamEntryView, bots: TeamBotView[]): HTMLElement {
+  const node = el("div", "tf-sys tf-sys--card");
+  node.dataset.seq = String(e.seq);
+  node.dataset.event = "artefact";
+  node.dataset.tone = "calm";
+  node.appendChild(el("span", "tf-sys__kind", "artefact"));
+  const body = el("div", "tf-sys__body");
+  const who = botByName(bots, e.from, e.botId)?.nickname ?? e.from;
+  body.appendChild(el("span", "tf-sys__text tf-sys__text--wrap", `${who} — ${e.text}`));
+  if (e.summary) body.appendChild(el("span", "tf-arte__summary", e.summary));
+  const actions = el("div", "tf-sys__actions");
+  actions.appendChild(button("tf-sys__open tf-sys__open--primary", "Open", () => {
+    if (e.target) openArtefactById(e.target);
+  }, "Show it beside the chat"));
+  actions.appendChild(el("span", "tf-sys__answered", artefactKindWord(e.note)));
+  body.appendChild(actions);
+  node.appendChild(body);
+  node.appendChild(el("span", "tf-sys__time", hhmm(e.ts)));
+  return node;
+}
+
 function taskCard(project: ProjectView, team: TeamView, t: TeamTaskView): HTMLElement {
   const bots = team.bots;
   const card = el("article", "task-card");
@@ -835,6 +1001,15 @@ function taskCard(project: ProjectView, team: TeamView, t: TeamTaskView): HTMLEl
     }
   } else if (t.status === "open") {
     actions.appendChild(button("projects-card__btn", "Mark done", confirmDone));
+    // The escape hatch: a card nobody is going to finish, or one that is done
+    // in all but name. Nothing is asked of the bots — it just goes.
+    actions.appendChild(button("team-tasks__remove", "Remove", () => {
+      void confirmDialog({
+        title: "Remove this card?",
+        body: `"${t.title}" leaves the board. The bots are not told and nothing is reset — use "Mark done" for that.`,
+        confirmLabel: "Remove",
+      }).then((ok) => { if (ok) send({ type: "team.task.close", projectId: project.id, taskId: t.id }); });
+    }, "Take this card off the board"));
     card.appendChild(actions);
   } else if (t.status === "done") {
     const wrap = el("div", "team-tasks__wrap");
@@ -996,6 +1171,7 @@ function renderRow(row: FeedRow, bots: TeamBotView[], names: string[]): HTMLElem
   if (row.kind === "workfold") return renderFold(row, bots);
   const e = row.entry;
   if (e.kind === "system") return renderSystem(e, bots);
+  if (e.kind === "artefact") return renderArtefactCard(e, bots);
   if (e.kind === "work") return renderWork(e);
 
   const bot = botByName(bots, e.from, e.botId);
@@ -1030,7 +1206,7 @@ function renderRow(row: FeedRow, bots: TeamBotView[], names: string[]): HTMLElem
   }
 
   const text = el("div", "tf-msg__text");
-  const images = appendRich(text, e.text, names);
+  const images = appendBlocks(text, e.text, names);
   body.appendChild(text);
   if (e.image && !images.includes(e.image)) images.push(e.image);
   if (images.length > 0) body.appendChild(renderThumbs(images, hhmm(e.ts)));
@@ -1244,6 +1420,13 @@ function renderSystem(e: TeamEntryView, bots: TeamBotView[]): HTMLElement {
   const dot = el("span", "tf-sys__dot");
   dot.setAttribute("aria-hidden", "true");
   node.appendChild(dot);
+  // A row you have to act on wears its kind: a coloured frame (CSS, keyed on
+  // data-event) and the word itself, so the colour is never the only carrier.
+  const kindWord = cardKind(e.event);
+  if (kindWord) {
+    node.classList.add("tf-sys--card");
+    node.appendChild(el("span", "tf-sys__kind", kindWord));
+  }
   const bot = botByName(bots, e.from, e.botId);
   const project = projectId ? projectFor(projectId) : null;
   const asked = Array.isArray(e.to) ? e.to[0] : undefined;

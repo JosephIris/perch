@@ -106,7 +106,11 @@ test("the seed moves the blink, not the perch", () => {
   // a blink lands at a different moment for a different seed…
   const at = (seed: number) => poseAt(look, "idle", 1300, seed).blink;   // steady blinks at 1300 + phase
   assert.ok(at(0) < 0.5, "seed 0 is mid-blink at 1300");
-  assert.ok(at(2) > 0.9, "seed 2 is open-eyed at 1300");
+  // Some other bot is open-eyed at that same instant — that is the whole point
+  // of the phase, and it must hold for ordinary neighbouring seeds, not just
+  // one lucky number.
+  const open = [1, 2, 3, 4, 5, 6, 7, 8].filter((s) => at(s) > 0.9);
+  assert.ok(open.length >= 4, `expected most seeds open-eyed at 1300, got ${open.length}`);
   // …but the neutral perch is the same
   const a = poseAt(look, "idle", 0, 0), b = poseAt(look, "idle", 0, 3);
   for (const k of ["headTilt", "headDX", "bodyRot", "brow"]) assert.equal(a[k], b[k]);

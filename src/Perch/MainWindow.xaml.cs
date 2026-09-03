@@ -369,6 +369,7 @@ public partial class MainWindow : FluentWindow
         _panes.TeamTask += (s, p, m) => _teamCtrl.OnTeamTask(s, p, m);
         _panes.TeamAsk += (s, p, m) => _teamCtrl.OnTeamAsk(s, p, m);
         _panes.TeamReact += (s, p, m) => _teamCtrl.OnTeamReact(s, p, m);
+        _panes.TeamArtefact += (s, p, m) => _teamCtrl.OnTeamArtefact(s, p, m);
         _panes.PermAsk += (s, p, m) => _teamCtrl.OnPermAsk(s, p, m);
         _panes.PermDenied += (s, p, m) => _teamCtrl.OnPermDenied(s, p, m);
         // Usage poller for the model picker. Subscribe once here; a new snapshot
@@ -856,6 +857,9 @@ public partial class MainWindow : FluentWindow
         .Add<TeamTaskRenameMsg>("team.task.rename", m => _teamCtrl.OnTaskRename(m))
         .Add<TeamTaskConfirmMsg>("team.task.confirm", m => _teamCtrl.OnTaskConfirm(m))
         .Add<TeamTaskRejectMsg>("team.task.reject", m => _teamCtrl.OnTaskReject(m))
+        .Add<TeamTaskCloseMsg>("team.task.close", m => _teamCtrl.OnTaskClose(m))
+        .Add<TeamArtefactOpenMsg>("team.artefact.open", m => _teamCtrl.OnArtefactOpen(m))
+        .Add<TeamArtefactListMsg>("team.artefact.list", m => _teamCtrl.OnArtefactList(m))
         .Add<TeamPermAnswerMsg>("team.perm.answer", m => _teamCtrl.OnPermAnswer(m))
         .Add<TeamAskAnswerMsg>("team.ask.answer", m => _teamCtrl.OnAskAnswer(m))
         .Add<TeamImageMsg>("team.image", m => _teamCtrl.OnImage(m))

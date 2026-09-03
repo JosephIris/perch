@@ -38,6 +38,7 @@ internal sealed class PerchIpcServer : IDisposable
     public event Action<TeamPostMessage>? OnTeamPost;
     public event Action<TeamTaskMessage>? OnTeamTask;
     public event Action<TeamAskMessage>? OnTeamAsk;
+    public event Action<TeamArtefactMessage>? OnTeamArtefact;
     public event Action<TeamReactMessage>? OnTeamReact;
     public event Action<PermAskMessage>? OnPermAsk;
     public event Action<PermDeniedMessage>? OnPermDenied;
@@ -189,6 +190,10 @@ internal sealed class PerchIpcServer : IDisposable
                     var ta = JsonSerializer.Deserialize<TeamAskMessage>(json, IpcJson.Options);
                     if (ta != null) _dispatcher.BeginInvoke(() => OnTeamAsk?.Invoke(ta));
                     break;
+                case "team.artefact":
+                    var tf = JsonSerializer.Deserialize<TeamArtefactMessage>(json, IpcJson.Options);
+                    if (tf != null) _dispatcher.BeginInvoke(() => OnTeamArtefact?.Invoke(tf));
+                    break;
                 case "team.react":
                     var tr = JsonSerializer.Deserialize<TeamReactMessage>(json, IpcJson.Options);
                     if (tr != null) _dispatcher.BeginInvoke(() => OnTeamReact?.Invoke(tr));
@@ -333,7 +338,8 @@ internal sealed record PeerMsgMessage(
     [property: JsonPropertyName("text")] string? Text,
     [property: JsonPropertyName("ok")] bool? Ok = null,
     [property: JsonPropertyName("message")] string? Message = null,
-    [property: JsonPropertyName("summary")] string? Summary = null);
+    [property: JsonPropertyName("summary")] string? Summary = null,
+    [property: JsonPropertyName("reason")] string? Reason = null);
 
 /// Sent by `perch team post <text>` from inside a bot's pane: a note for the
 /// team room (and so for the user) that pings no teammate. The bot's way to
@@ -342,6 +348,18 @@ internal sealed record PeerMsgMessage(
 internal sealed record TeamPostMessage(
     [property: JsonPropertyName("text")] string? Text,
     [property: JsonPropertyName("image")] string? Image = null);
+
+/// `perch team artefact --file &lt;path&gt; | --text "&lt;body&gt;"` from a bot: something
+/// too long for the room — a draft ticket, a table, a plan. `path` is a file
+/// the bot already wrote (the CLI resolves it to an absolute path); `text` is
+/// the body given inline. `ext` is the format the page highlights by, taken
+/// from the file's extension or "md" for inline text.
+internal sealed record TeamArtefactMessage(
+    [property: JsonPropertyName("title")] string? Title,
+    [property: JsonPropertyName("summary")] string? Summary = null,
+    [property: JsonPropertyName("path")] string? Path = null,
+    [property: JsonPropertyName("text")] string? Text = null,
+    [property: JsonPropertyName("ext")] string? Ext = null);
 
 /// `perch team ask "<question>" [--choices "A|B"]` from a bot: a card in the
 /// room the owner answers; the answer comes back to the bot as a post. `id`

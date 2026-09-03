@@ -289,6 +289,21 @@ public class ProtocolTests
         Assert.Equal("Sidebar mockup is in design-loop/team.html", post.Text);
         // A bare post (no text) still parses; the host drops it.
         Assert.Null(JsonSerializer.Deserialize<TeamPostMessage>("{\"type\":\"team.post\"}", IpcJson.Options)!.Text);
+
+        // `perch team artefact --file …`: the CLI sends an absolute path and
+        // the extension it read from it; --text sends the body instead.
+        var fromFile = JsonSerializer.Deserialize<TeamArtefactMessage>(
+            "{\"type\":\"team.artefact\",\"title\":\"draft.md\",\"summary\":\"for Galina\","
+            + "\"path\":\"C:\\\\repo\\\\draft.md\",\"text\":null,\"ext\":\"md\"}",
+            IpcJson.Options)!;
+        Assert.Equal(@"C:\repo\draft.md", fromFile.Path);
+        Assert.Equal("md", fromFile.Ext);
+        Assert.Equal("for Galina", fromFile.Summary);
+        var inline = JsonSerializer.Deserialize<TeamArtefactMessage>(
+            "{\"type\":\"team.artefact\",\"title\":\"Counters\",\"text\":\"| a |\\n|---|\"}", IpcJson.Options)!;
+        Assert.Equal("Counters", inline.Title);
+        Assert.Null(inline.Path);
+        Assert.Null(inline.Ext);
     }
 
     [Fact]
@@ -612,6 +627,12 @@ public class ProtocolTests
         Assert.Equal("abcd1234", confirm.TaskId);
         var reject = Round<TeamTaskRejectMsg>($"{{\"type\":\"team.task.reject\",\"projectId\":\"{G1}\",\"taskId\":\"abcd1234\",\"note\":\"footer shifts\"}}");
         Assert.Equal("footer shifts", reject.Note);
+        var close = Round<TeamTaskCloseMsg>($"{{\"type\":\"team.task.close\",\"projectId\":\"{G1}\",\"taskId\":\"abcd1234\"}}");
+        Assert.Equal("abcd1234", close.TaskId);
+        var open = Round<TeamArtefactOpenMsg>($"{{\"type\":\"team.artefact.open\",\"projectId\":\"{G1}\",\"id\":\"9f2c11aa\"}}");
+        Assert.Equal("9f2c11aa", open.Id);
+        var list = Round<TeamArtefactListMsg>($"{{\"type\":\"team.artefact.list\",\"projectId\":\"{G1}\"}}");
+        Assert.Equal(Guid.Parse(G1), list.ProjectId);
         var perm = Round<TeamPermAnswerMsg>($"{{\"type\":\"team.perm.answer\",\"projectId\":\"{G1}\",\"id\":\"p1\",\"decision\":\"allow\"}}");
         Assert.Equal("allow", perm.Decision);
         var ask = Round<TeamAskAnswerMsg>($"{{\"type\":\"team.ask.answer\",\"projectId\":\"{G1}\",\"id\":\"q1\",\"answer\":\"Ship it\"}}");

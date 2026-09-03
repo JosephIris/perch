@@ -7,7 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { visibleEntries, reactionsFor, taskOrder, answeredSet, handoffLabel, REACTIONS } from "../src/team.js";
 import { findLinks, findImagePaths, imageLabel } from "../src/text.js";
-import { feedRowClass, systemTone, taskStatusWord, permissionDetails } from "../src/team-room.js";
+import { feedRowClass, systemTone, taskStatusWord, permissionDetails, cardKind, artefactKindWord } from "../src/team-room.js";
 import type { TeamEntryView, TeamTaskView } from "../src/bridge.js";
 import type { FeedRow } from "../src/team.js";
 
@@ -124,4 +124,28 @@ test("findImagePaths: absolute Windows or rooted paths ending in an image extens
   assert.deepEqual(paths, ["C:\\dev\\app\\design-loop\\kpi-dark.png", "/tmp/out/final.JPG"]);
   assert.equal(imageLabel("C:\\dev\\app\\design-loop\\kpi-dark.png"), "kpi-dark.png");
   assert.equal(imageLabel("/tmp/out/final.JPG"), "final.JPG");
+});
+
+test("cardKind: the rows you answer wear their kind, narration wears nothing", () => {
+  // Each of these gets a coloured frame in the CSS, keyed on the same event.
+  assert.equal(cardKind("permission"), "permission");
+  assert.equal(cardKind("ask"), "question");
+  assert.equal(cardKind("trust"), "trust");
+  assert.equal(cardKind("task.review"), "review");
+  // Narration is not a card: a joined/left/reset row stays a quiet line.
+  for (const e of ["joined", "left", "reset", "task", "cc", "delivered"] as const)
+    assert.equal(cardKind(e), "", `${e} should not be framed`);
+  assert.equal(cardKind(undefined), "");
+});
+
+test("artefactKindWord: says what the thing is, in words the owner uses", () => {
+  assert.equal(artefactKindWord("md"), "document");
+  assert.equal(artefactKindWord("csv"), "table");
+  assert.equal(artefactKindWord("html"), "page");
+  assert.equal(artefactKindWord("json"), "data");
+  // An extension with no plain-English name is shown as itself, lowercased;
+  // nothing is ever blank on the card.
+  assert.equal(artefactKindWord("TS"), "ts");
+  assert.equal(artefactKindWord(""), "note");
+  assert.equal(artefactKindWord(undefined), "note");
 });

@@ -92,23 +92,43 @@ messaging address), Stop, SubagentStop, SessionEnd, Notification,
 UserPromptSubmit, PostToolUse, PreToolUse(SendMessage), **PermissionRequest**
 (all tools, 590 s, silent for non-bot panes), **PermissionDenied** (async).
 
-Pane pipe messages (hook/CLI → host): `peer.msg` (with `message`, `summary`),
-`team.post {text, image?}`, `team.ask {id, text, choices?}`, `team.react
+Pane pipe messages (hook/CLI → host): `peer.msg` (with `message`, `summary`,
+`reason` when a send failed), `team.post {text, image?}`, `team.artefact
+{title, summary?, path?, text?, ext?}`, `team.ask {id, text, choices?}`, `team.react
 {target, emoji}`, `team.task {op, taskId?, bot?, title?, status?, note?}`,
 `perm.ask {id, tool, summary, input, suggestions}`, `perm.denied`, `session
 {id, name, socket?}`.
 
-CLI for bots: `perch team post [--image <path>] <text>` · `perch team ask
-[--choices "A|B"] <question>` · `perch team react <#seq|@nick> <emoji>` · `perch
-team task new "<title>"` (prints the id) / `assign <id> <bot> "<piece>"` / `mine
-[<id>] --status doing|done|blocked --note "…"` / `done <id>`.
+CLI for bots: `perch team post [--image <path>] <text>` · `perch team artefact
+--file <path> [--title "…"] [--summary "…"]` (or `--title "…" --text "<body>"`)
+· `perch team ask [--choices "A|B"] <question>` · `perch team react
+<#seq|@nick> <emoji>` · `perch team task new "<title>"` (prints the id) /
+`assign <id> <bot> ["<piece>"] [--status s] [--note n]` / `mine [<id>] --status
+doing|done|blocked --note "…"` / `done <id>`.
+
+## Artefacts
+
+A bot's long piece of work — a draft ticket, a table, a plan, a status dump —
+is stored rather than pasted into the feed: `team/local/artefacts/<id>.<ext>`
+(text formats only: md, txt, html, json, csv, log, diff, sql, ts, cs, py; over
+256 KB is cut with a marker). The room shows a card and opens the body beside
+the chat. A `perch team post` over 1200 characters or 14 lines is turned into
+one automatically — its first line is the title, the next its summary. The page
+asks for a body with `team.artefact.open {projectId, id}` (answered by
+`team.artefact.data {id, title, kind, from, tsMs, content, truncated}` or
+`{id, error}`) and for the menu with `team.artefact.list {projectId}`
+(answered by `team.artefact.index {items: [{id, title, kind, from, tsMs,
+summary}]}`, newest first, at most 50, skipping bodies deleted by hand).
 
 ## The room ledger (`RoomEntry.Kind`)
 
 `user` (owner's post; `to` = bots, `["*"]` everyone, or null = routed) · `beat`
 (what a bot said) · `work` (what it did; hidden by default) · `peer` (bot→bot
 SendMessage; `note` = `handoff|report|question|answer|fyi` from the message's
-prefix) · `note` (`perch team post`, may carry `image`) · `reaction` (`text` =
+prefix) · `note` (`perch team post`, may carry `image`) · `artefact` (something
+too long for the feed: `text` = title, `target` = the artefact id, `note` = its
+extension, `summary` = one line; the body is a file under
+`team/local/artefacts/<id>.<ext>`) · `reaction` (`text` =
 emoji, `note` = target seq, `from` = bot or "you") · `system` with `event`:
 joined, left, asleep, woke, reset, lead, task, task.review, task.done, cc,
 trust, trusted, exited, permission, permission.answered, denied, ask,
@@ -159,10 +179,35 @@ owner post carries its number: `[Perch team] #123 Joseph → @Ada: …`.
 
 ## Page
 
-Three columns: feed · task cards · roster; the composer spans feed and cards.
-"Show activity" (header toggle, off by default) reveals the work rows. Links
-open in the browser; absolute image paths (and `note` images) render as
-thumbnails with a lightbox. Hover a message for the four reactions.
+Three columns: feed · (task cards over the artefacts panel) · roster; the
+composer spans feed and cards. "Show activity" (header toggle, off by default)
+reveals the work rows. Links open in the browser; absolute image paths (and
+`note` images) render as thumbnails with a lightbox. Hover a message for the
+four reactions.
+
+A message body is rendered block by block (`appendBlocks` in `text.ts`):
+paragraphs, lists, headings, quotes, fenced code and **markdown tables** — a
+bot's status dump reads as a document instead of a wall of text, and a table
+scrolls inside its own box rather than widening the column. Still DOM nodes
+only; agent output never goes near an HTML parser.
+
+Anything you answer is a **card with its own colour**, framed with a hairline,
+a thicker left edge, a faint tint of the same hue, and the kind spelled out so
+the colour is never the only carrier: permission (caution yellow), question
+(accent blue), trust (cloud teal), review (success green), artefact (skill
+violet), anything that went wrong (error red). The tokens are
+`--team-card-*` in `tokens.css`; the CSS keys on `data-event`, so a new card
+kind needs one token pair and one line.
+
+The artefacts panel sits under the task cards: the head names the open
+artefact and offers "Recent" (the last 50, newest first), the body renders
+markdown as a document and everything else verbatim. It opens from an
+artefact's card in the feed, and shows the newest one when the room opens.
+
+The owner can take a card off the board with **Remove** (`team.task.close`):
+no confirmation from the bots, nothing reset — the escape hatch for a card
+nobody will finish. Confirming one ("Mark done") takes it off the board at
+once; the bots' wrap-up and reset carry on behind it.
 
 Pasting a picture into the composer asks the host to read the clipboard
 (`team.paste` → `team.paste.data`); the PNG is saved under
@@ -173,8 +218,9 @@ a post.
 
 ## Verification
 
-- `dotnet test src/Perch.Tests` (524) and `cd src/web && npm run typecheck &&
-  npm test` (198).
+- `dotnet test src/Perch.Tests` (546) and `cd src/web && npm run typecheck &&
+  npm test`. A host-only run while the page is mid-edit: add
+  `-p:SkipWebBundle=true`.
 - `scripts/test-team-hook.ps1` — one JSON object with board + context; the
   wrapper appends the brief flag only for a contained path.
 - `scripts/test-team.ps1` — fake claude: launch argv, delivery, parking, fan-out,

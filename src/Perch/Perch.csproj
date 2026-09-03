@@ -42,6 +42,10 @@
          host would resolve to our claude.cmd shim. The resolver that skips
          every perch tools dir is the one the shim already trusts. -->
     <Compile Include="..\..\tools\perch-cli\BinResolver.cs" Link="BinResolver.cs" />
+    <!-- And PeerVerdict: the hook decides whether a bot's SendMessage landed,
+         the room shows that verdict, and both must read a response the same
+         way — so the rule lives once, here, where Perch.Tests can reach it. -->
+    <Compile Include="..\..\tools\perch-cli\PeerVerdict.cs" Link="PeerVerdict.cs" />
   </ItemGroup>
 
   <!-- Perch.Tests exercises internal types (PaneTree, Session, the message

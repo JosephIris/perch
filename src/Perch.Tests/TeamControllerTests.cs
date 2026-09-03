@@ -306,14 +306,19 @@ public class TeamControllerTests
         Assert.Empty(h.Delayed);
         Assert.DoesNotContain(h.Ledger, e => e.Kind == "system" && e.Event is "undelivered" or "waiting");
 
-        // No echo this time. Enter is pressed again, twice, each with a new
-        // check; the third check gives up and tells the room.
+        // No echo this time. Enter is pressed again on the first two checks;
+        // every later check only waits (a busy bot confirms a queued line
+        // minutes later), and only the last one tells the room.
         h.Post("still there?", "[\"Ada\"]", "c2");
         h.RunLastDelayed();
         Assert.Single(h.Entered);
         h.RunLastDelayed();
         Assert.Equal(2, h.Entered.Count);
-        h.RunLastDelayed();
+        for (var i = TeamController.SubmitEnterTries; i < TeamController.SubmitChecks.Length; i++)
+        {
+            Assert.DoesNotContain(h.Ledger, e => e.Event == "undelivered");   // silent until the budget is out
+            h.RunLastDelayed();
+        }
         Assert.Equal(2, h.Entered.Count);
         Assert.Empty(h.Delayed);
         var stuck = h.Ledger.Single(e => e.Event == "undelivered");
@@ -357,7 +362,7 @@ public class TeamControllerTests
         Assert.Empty(h.Delayed);
         var held = h.Ledger.Single(e => e.Kind == "system" && e.Event == "waiting");
         Assert.Equal("ada", held.From);
-        Assert.Contains("waiting on you", held.Text);
+        Assert.Contains("has a question open", held.Text);
         Assert.False(h.Ledger.Single(e => e.Kind == "user").Delivered);
 
         // A status that isn't a prompt frees it: one flush is scheduled (not
@@ -541,11 +546,12 @@ public class TeamControllerTests
         Assert.Equal(2, h.Typed.Count);
         Assert.Contains(h.Typed, t => t.Session == leeSess.Id && t.Line.Contains("Wrap up now: update your memory file"));
         Assert.Contains(h.Typed, t => t.Session == adaSess.Id && t.Line.Contains("You still have a piece on another open task"));
+        // Confirming takes the card off the board THERE AND THEN: only the
+        // second one is left, whatever the bots are still doing about it.
         var tasks = JsonSerializer.SerializeToElement(h.Ctrl.ProjectTeamView(h.Project.Id)!).GetProperty("tasks");
-        Assert.Equal(2, tasks.GetArrayLength());
-        var first = tasks.EnumerateArray().Single(t => t.GetProperty("id").GetString() == board.Id);
-        Assert.Equal("done", first.GetProperty("status").GetString());
-        Assert.Equal("lee", Assert.Single(first.GetProperty("wrapping").EnumerateArray()).GetString());
+        Assert.Equal(second.Id, Assert.Single(tasks.EnumerateArray()).GetProperty("id").GetString());
+        Assert.Equal("Ship the sidebar", Assert.Single(h.Store.Tasks.Done).Title);
+        Assert.Contains(h.Ledger, e => e.Event == "task" && e.TaskId == board.Id && e.Text.Contains("is off the board"));
 
         // A Done BEFORE the post echo is the old turn ending: no reset. The
         // echo, then the turn end: /clear is typed, the room says reset.
@@ -558,10 +564,8 @@ public class TeamControllerTests
         Assert.Equal(leeSess.Id, resetSess);
         Assert.Equal("/clear", cleared);
         Assert.Contains(h.Ledger, e => e.Event == "reset" && e.Text == "Lee reset for the next task");
-        // The first board is archived; the second stays open, with Ada on it.
-        Assert.Equal("Ship the sidebar", Assert.Single(h.Store.Tasks.Done).Title);
+        // The second stays open, with Ada on it.
         Assert.Same(second, Assert.Single(h.Store.Tasks.Open));
-        Assert.Contains(h.Ledger, e => e.Event == "task" && e.TaskId == board.Id && e.Text.Contains("is wrapped up"));
         Assert.Contains($"- Task {second.Id}: **Dark mode for the room** — open", File.ReadAllText(h.Store.ContextPathFor("lee")));
         foreach (var s in h.Sessions) TeamMarkers.Clear(s.Root.Id);
     }
@@ -589,6 +593,71 @@ public class TeamControllerTests
         h.Ctrl.OnTaskConfirm(new TeamTaskConfirmMsg { ProjectId = h.Project.Id, TaskId = board.Id });
         Assert.Single(h.Store.Tasks.Open);
         Assert.Equal("Fix the login and signup flows", Assert.Single(h.Store.Tasks.Done).Title);
+    }
+
+    [Fact]
+    public async Task ACard_LeavesTheBoardWhenItIsConfirmed_AndCanBeForcedOff()
+    {
+        var h = new Harness();
+        var lee = await h.CreateBot("Lee", position: "Team lead");
+        await h.CreateBot("Ada");
+        var leeSess = h.Sessions[0];
+        void Task(Session s, string op, string? title = null, string? bot = null, string? id = null, string? status = null)
+            => h.Ctrl.OnTeamTask(s, s.Root.Id, new TeamTaskMessage(op, bot, title, status, null, id));
+
+        Task(leeSess, "new", "Card A");
+        var a = h.Store.Tasks.Open.Single(b => b.Title == "Card A");
+        Task(leeSess, "assign", "A piece", bot: "ada", id: a.Id);
+        Task(leeSess, "new", "Card B");
+        var b2 = h.Store.Tasks.Open.Single(x => x.Title == "Card B");
+        Task(leeSess, "assign", "B piece", bot: "ada", id: b2.Id);
+
+        // Ada holds a piece on B, so she does not wrap A up — and that must not
+        // keep A on the board. Confirming closes A at once.
+        Task(leeSess, "done", id: a.Id);
+        h.Ctrl.OnTaskConfirm(new TeamTaskConfirmMsg { ProjectId = h.Project.Id, TaskId = a.Id });
+        Assert.Same(b2, Assert.Single(h.Store.Tasks.Open));
+        Assert.Equal("Card A", Assert.Single(h.Store.Tasks.Done).Title);
+
+        // The lead can close a teammate's piece: --status on an assign, with no
+        // title, so an abandoned piece can't hold a card open.
+        Task(leeSess, "assign", null, bot: "ada", id: b2.Id, status: "done");
+        Assert.Equal("done", b2.ItemOf("ada")!.Status);
+        Assert.Equal("B piece", b2.ItemOf("ada")!.Title);
+
+        // A card left stuck in "done" by an older build: closing it again
+        // clears it instead of arguing.
+        var stuck = new TaskBoard { Id = "deadbeef", Title = "Stuck", Status = "done", SetBy = "lee" };
+        h.Store.Tasks.Open.Add(stuck);
+        Task(leeSess, "done", id: stuck.Id);
+        Assert.DoesNotContain(h.Store.Tasks.Open, x => x.Id == "deadbeef");
+        Assert.DoesNotContain(h.Ledger, e => e.Event == "error" && e.Text.Contains("already"));
+
+        // And Joseph can take any card off the board himself.
+        h.Ctrl.OnTaskClose(new TeamTaskCloseMsg { ProjectId = h.Project.Id, TaskId = b2.Id });
+        Assert.Empty(h.Store.Tasks.Open);
+        Assert.Contains(h.Ledger, e => e.Event == "task" && e.TaskId == b2.Id && e.Text.Contains("Joseph took"));
+        Assert.Equal(lee.Slug, h.Store.Doc.LeadSlug);
+        foreach (var s in h.Sessions) TeamMarkers.Clear(s.Root.Id);
+    }
+
+    [Fact]
+    public async Task AHandEditOfTasksJson_IsWhatTheBoardShows()
+    {
+        var h = new Harness();
+        await h.CreateBot("Ada");
+        h.Ctrl.OnTaskSet(new TeamTaskSetMsg { ProjectId = h.Project.Id, Title = "Fix the login flow" });
+        Assert.Single(h.Store.Tasks.Open);
+
+        // Joseph deletes the card in the file. Perch must not write its own
+        // copy back over that — the file is the board.
+        File.WriteAllText(h.Store.TasksPath, "{\"v\":2,\"open\":[],\"done\":[]}");
+        File.SetLastWriteTimeUtc(h.Store.TasksPath, DateTime.UtcNow.AddSeconds(2));
+        System.Threading.Thread.Sleep(TeamStore.TasksDiskCheckMs + 50);
+        Assert.Empty(h.Store.Tasks.Open);
+        h.Store.SaveTasks();
+        Assert.DoesNotContain("Fix the login flow", File.ReadAllText(h.Store.TasksPath));
+        TeamMarkers.Clear(h.Sessions.Single().Root.Id);
     }
 
     [Fact]
@@ -749,6 +818,149 @@ public class TeamControllerTests
         h.Ctrl.OnPeerMsg(ada, ada.Root.Id, new PeerMsgMessage("sending", "bo", "x"));
         Assert.Single(h.Ledger, e => e.Kind == "peer");
         foreach (var s in h.Sessions) TeamMarkers.Clear(s.Root.Id);
+    }
+
+    [Fact]
+    public async Task PeerMsg_AFailedSend_IsOneQuietLine_NotAMessage()
+    {
+        var h = new Harness();
+        await h.CreateBot("Ada");
+        await h.CreateBot("Bo", slug: "frontend-dev");
+        var ada = h.Sessions[0];
+
+        // The send didn't land: the body never reached Bo, so it is not shown
+        // as something Ada said — one line with the reason instead.
+        h.Ctrl.OnPeerMsg(ada, ada.Root.Id, new PeerMsgMessage("sent", "bo", "…", false,
+            "FYI: stand down on the ticket definitions", "FYI: stand down",
+            "2 agents are named 'bo'. Re-send with the ref of the one you mean"));
+        Assert.DoesNotContain(h.Ledger, e => e.Kind == "peer");
+        var failed = h.Ledger.Single(e => e.Event == "peer.failed");
+        Assert.Equal("ada", failed.From);
+        Assert.Contains("couldn't reach Bo", failed.Text);
+        Assert.Contains("2 agents are named", failed.Text);
+
+        // The retry that works is the only bubble in the room…
+        h.Ctrl.OnPeerMsg(ada, ada.Root.Id, new PeerMsgMessage("sent", "bo [7d21]", "…", true,
+            "FYI: stand down on the ticket definitions", "FYI: stand down"));
+        var peer = h.Ledger.Single(e => e.Kind == "peer");
+        Assert.Equal("stand down on the ticket definitions", peer.Text);
+
+        // …and the same body again moments later is the same message, not a
+        // second one.
+        h.Ctrl.OnPeerMsg(ada, ada.Root.Id, new PeerMsgMessage("sent", "bo", "…", true,
+            "FYI: stand down on the ticket definitions", "FYI: stand down"));
+        Assert.Single(h.Ledger, e => e.Kind == "peer");
+        foreach (var s in h.Sessions) TeamMarkers.Clear(s.Root.Id);
+    }
+
+    [Fact]
+    public async Task Artefact_FromABot_IsAFileAndACard_AndTheRoomCanOpenIt()
+    {
+        var h = new Harness();
+        await h.CreateBot("Ada");
+        var ada = h.Sessions.Single();
+        var src = Path.Combine(h.Repo, "draft.md");
+        File.WriteAllText(src, "# Bid shading ETL\nOne row per outgoing bid.\n\n- label: lossprice\n");
+
+        h.Ctrl.OnTeamArtefact(ada, ada.Root.Id, new TeamArtefactMessage(null, "for Galina", src, null, null));
+        var card = h.Ledger.Single(e => e.Kind == "artefact");
+        Assert.Equal("ada", card.From);
+        Assert.Equal("Bid shading ETL", card.Text);          // the file's own heading
+        Assert.Equal("md", card.Note);
+        Assert.Equal("for Galina", card.Summary);
+        Assert.True(File.Exists(h.Store.ArtefactPathFor(card.Target!, "md")));
+        Assert.Contains(("artefact", "Bid shading ETL"), h.PostedEntries());
+
+        // Opening it by id gives the body back.
+        h.Posted.Clear();
+        h.Ctrl.OnArtefactOpen(new TeamArtefactOpenMsg { ProjectId = h.Project.Id, Id = card.Target! });
+        var data = JsonSerializer.SerializeToElement(h.Posted.Single());
+        Assert.Equal("team.artefact.data", data.GetProperty("type").GetString());
+        Assert.Contains("One row per outgoing bid", data.GetProperty("content").GetString());
+        Assert.False(data.GetProperty("truncated").GetBoolean());
+
+        // An id the room doesn't have is an error, not a crash.
+        h.Posted.Clear();
+        h.Ctrl.OnArtefactOpen(new TeamArtefactOpenMsg { ProjectId = h.Project.Id, Id = "nope1234" });
+        Assert.Equal("The room doesn't have that artefact.",
+            JsonSerializer.SerializeToElement(h.Posted.Single()).GetProperty("error").GetString());
+
+        // Text inline, with a title of its own.
+        h.Ctrl.OnTeamArtefact(ada, ada.Root.Id, new TeamArtefactMessage("Counter table", null, null, "| a | b |\n|---|---|\n| 1 | 2 |", null));
+        Assert.Equal(2, h.Ledger.Count(e => e.Kind == "artefact"));
+
+        // The menu: newest first, and one whose file was deleted is dropped.
+        var gone = h.Ledger.Last(e => e.Kind == "artefact");
+        File.Delete(h.Store.ArtefactPathFor(gone.Target!, gone.Note!));
+        h.Posted.Clear();
+        h.Ctrl.OnArtefactList(new TeamArtefactListMsg { ProjectId = h.Project.Id });
+        var index = JsonSerializer.SerializeToElement(h.Posted.Single());
+        Assert.Equal("team.artefact.index", index.GetProperty("type").GetString());
+        var item = Assert.Single(index.GetProperty("items").EnumerateArray());
+        Assert.Equal(card.Target, item.GetProperty("id").GetString());
+        Assert.Equal("Bid shading ETL", item.GetProperty("title").GetString());
+
+        // Only text formats: an .exe is refused, and nothing is stored.
+        var exe = Path.Combine(h.Repo, "setup.exe");
+        File.WriteAllText(exe, "MZ");
+        h.Ctrl.OnTeamArtefact(ada, ada.Root.Id, new TeamArtefactMessage("Installer", null, exe, null, null));
+        Assert.Equal(2, h.Ledger.Count(e => e.Kind == "artefact"));
+        Assert.Contains(h.Ledger, e => e.Event == "error" && e.Text.Contains("the room shows text files"));
+        TeamMarkers.Clear(ada.Root.Id);
+    }
+
+    [Fact]
+    public async Task ALongTeamPost_BecomesAnArtefact_NotAWallOfText()
+    {
+        var h = new Harness();
+        await h.CreateBot("Ada");
+        var ada = h.Sessions.Single();
+
+        // Short: still a note.
+        h.Ctrl.OnTeamPost(ada, ada.Root.Id, new TeamPostMessage("Sidebar spacing is on main now."));
+        Assert.Single(h.Ledger, e => e.Kind == "note");
+
+        // Long: stored, with its first line as the title and the next as the
+        // summary, and nothing of it in the feed.
+        var body = "DRAFT 1 v2 (ETL, for Galina)\nSummary: bid-level prepared table\n"
+                 + string.Join("\n", Enumerable.Range(0, 40).Select(i => $"- line {i} of the scope"));
+        h.Ctrl.OnTeamPost(ada, ada.Root.Id, new TeamPostMessage(body));
+        var card = h.Ledger.Single(e => e.Kind == "artefact");
+        Assert.Equal("DRAFT 1 v2 (ETL, for Galina)", card.Text);
+        Assert.Equal("Summary: bid-level prepared table", card.Summary);
+        Assert.Single(h.Ledger, e => e.Kind == "note");
+        Assert.Equal(body, File.ReadAllText(h.Store.ArtefactPathFor(card.Target!, "md")));
+
+        // A picture keeps its post: the caption belongs with the picture.
+        var png = Path.Combine(h.Repo, "shot.png");
+        File.WriteAllBytes(png, new byte[] { 1, 2, 3 });
+        h.Ctrl.OnTeamPost(ada, ada.Root.Id, new TeamPostMessage(body, png));
+        Assert.Equal(2, h.Ledger.Count(e => e.Kind == "note"));
+        TeamMarkers.Clear(ada.Root.Id);
+    }
+
+    [Fact]
+    public async Task AnArtefactOver256Kb_IsCutWithAMarker()
+    {
+        var h = new Harness();
+        await h.CreateBot("Ada");
+        var ada = h.Sessions.Single();
+        h.Ctrl.OnTeamArtefact(ada, ada.Root.Id,
+            new TeamArtefactMessage("Huge log", null, null, new string('x', TeamController.ArtefactMaxBytes + 5000), "log"));
+        var card = h.Ledger.Single(e => e.Kind == "artefact");
+        Assert.Contains("cut at 256 KB", card.Summary);
+        var text = File.ReadAllText(h.Store.ArtefactPathFor(card.Target!, "log"));
+        Assert.True(text.Length < TeamController.ArtefactMaxBytes + 200);
+        Assert.EndsWith("over 256 KB)", text);
+
+        // The cap is bytes, so a body of emoji and accents is cut to fit and
+        // never splits a character in half.
+        var wide = string.Concat(Enumerable.Repeat("é🐦", 100));
+        var cut = TeamController.CutToBytes(wide, 61);
+        Assert.True(System.Text.Encoding.UTF8.GetByteCount(cut) <= 61);
+        Assert.Equal(cut, new string(cut.ToCharArray()));            // still valid text
+        Assert.False(char.IsHighSurrogate(cut[^1]));
+        TeamMarkers.Clear(ada.Root.Id);
     }
 
     [Fact]

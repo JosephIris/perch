@@ -315,6 +315,11 @@ export type OutMessage =
   | { type: "team.task.set"; projectId: string; title: string }
   | { type: "team.task.rename"; projectId: string; taskId: string; title: string }
   | { type: "team.task.confirm"; projectId: string; taskId: string }
+  | { type: "team.task.close"; projectId: string; taskId: string }
+  /* The artefacts panel: open one (the host answers with its text), and the
+   * list of recent ones for the panel's menu. */
+  | { type: "team.artefact.open"; projectId: string; id: string }
+  | { type: "team.artefact.list"; projectId: string }
   | { type: "team.task.reject"; projectId: string; taskId: string; note?: string }
   /* Answer a bot's permission prompt from its card in the room (the host
    * hands the decision to Claude Code's PermissionRequest hook). `id` is the
@@ -792,8 +797,11 @@ export type TeamView = {
  *   note   — a bot posted to the room for you, pinging nobody.
  *   reaction — an emoji on another row (`note` = that row's seq); rendered as
  *            a pill under it, never as a row of its own.
- *   system — the room narrating itself: joined / left / waiting / asleep … */
-export type TeamEntryKind = "user" | "beat" | "work" | "peer" | "note" | "system" | "reaction";
+ *   system — the room narrating itself: joined / left / waiting / asleep …
+ *   artefact — a bot put something long somewhere the room can show it: a
+ *            draft ticket, a table, a plan. The row is a card; the thing
+ *            itself opens in the artefacts panel beside the task cards. */
+export type TeamEntryKind = "user" | "beat" | "work" | "peer" | "note" | "system" | "reaction" | "artefact";
 
 export type TeamEntryView = {
   /* Ledger sequence; strictly increasing, the merge/dedupe key. */
@@ -1033,7 +1041,42 @@ export type InMessage =
   | TeamBriefResultMessage
   | TeamReferencePickedMessage
   | TeamImageDataMessage
-  | TeamPasteDataMessage;
+  | TeamPasteDataMessage
+  | TeamArtefactDataMessage
+  | TeamArtefactIndexMessage;
+
+/** One artefact, opened: its text, ready to render in the panel. `truncated`
+ *  says the host cut a very large file; `error` says the file is gone. */
+export type TeamArtefactDataMessage = {
+  type: "team.artefact.data";
+  projectId: string;
+  id: string;
+  /** Absent when `error` is set — the host sends the failure alone. */
+  title?: string;
+  /** The extension, without the dot: md, txt, html, csv… */
+  kind?: string;
+  from?: string;
+  tsMs?: number;
+  content?: string;
+  truncated?: boolean;
+  error?: string | null;
+};
+
+/** The panel's menu: the recent artefacts, newest first. */
+export type TeamArtefactIndexMessage = {
+  type: "team.artefact.index";
+  projectId: string;
+  items: TeamArtefactItem[];
+};
+
+export type TeamArtefactItem = {
+  id: string;
+  title: string;
+  kind: string;
+  from: string;
+  tsMs: number;
+  summary?: string | null;
+};
 
 /** The host's answer to `team.paste`: where it saved the clipboard picture,
  *  or why it couldn't ("No picture on the clipboard."). */

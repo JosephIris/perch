@@ -280,6 +280,32 @@
   /* The feed's measure now fills its column (the task column bounds it); the
    * token stays as the cap for a very wide window. */
   --team-feed-measure: 1200px;
+
+  /* Cards in the room, one hue each. A card is a thing the owner ACTS on, and
+   * he reads the colour before the words: at a glance he wants to know "that
+   * one wants a decision from me" without parsing a sentence. The hues are
+   * borrowed from the palette above rather than invented, so nothing new
+   * competes: caution for a permission (a gate), cloud teal for the trust
+   * question (a machine asking to start), accent blue for a bot's question,
+   * success green for "confirm this is done", skill violet for an artefact
+   * (the same violet the inspector uses for a packaged thing), error red for
+   * what went wrong. Faint fills are ~10%: a tint, never a block of colour. */
+  --team-card-permission:       var(--color-caution);
+  --team-card-permission-faint: rgba(252, 225, 0, 0.08);
+  --team-card-trust:            var(--color-cloud);
+  --team-card-trust-faint:      rgba(91, 200, 175, 0.09);
+  --team-card-ask:              var(--color-accent);
+  --team-card-ask-faint:        rgba(118, 185, 237, 0.10);
+  --team-card-review:           var(--color-success);
+  --team-card-review-faint:     rgba(108, 203, 95, 0.09);
+  --team-card-artefact:         var(--color-skill);
+  --team-card-artefact-faint:   rgba(199, 146, 234, 0.10);
+  --team-card-error:            var(--color-error);
+  --team-card-error-faint:      rgba(255, 153, 164, 0.09);
+
+  /* The artefacts panel under the task cards: what a bot writes when it has
+   * more to show than a message can carry. */
+  --team-artefact-min-height: 220px;
   /* @mention chips. The accent family: a mention is "this reached someone",
    * the same claim the accent makes everywhere else, never a new hue. */
   --color-mention:       var(--color-accent);

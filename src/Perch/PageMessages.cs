@@ -601,6 +601,15 @@ internal sealed record TeamTaskConfirmMsg
     public required string TaskId { get; init; }
 }
 
+/// The owner takes a card off the board by hand, whatever state it is in:
+/// nothing is asked of the bots, nothing is reset. The escape hatch for a
+/// card that is finished in all but name, or that nobody will finish.
+internal sealed record TeamTaskCloseMsg
+{
+    public required Guid ProjectId { get; init; }
+    public required string TaskId { get; init; }
+}
+
 /// The owner says a task is not done yet (after the lead asked): back to
 /// open, with a note the lead gets.
 internal sealed record TeamTaskRejectMsg
@@ -634,6 +643,22 @@ internal sealed record TeamImageMsg
 {
     public required Guid ProjectId { get; init; }
     public required string Path { get; init; }
+}
+
+/// The room opening an artefact — a bot's long piece of work — by its id.
+/// Answered with `team.artefact.data`. The id names a file Perch itself
+/// wrote, so no path from a bot is ever opened on the page's say-so.
+internal sealed record TeamArtefactOpenMsg
+{
+    public required Guid ProjectId { get; init; }
+    public required string Id { get; init; }
+}
+
+/// The room asking what artefacts it still has, for the menu above the
+/// artefact panel. Answered with `team.artefact.index`.
+internal sealed record TeamArtefactListMsg
+{
+    public required Guid ProjectId { get; init; }
 }
 
 /// The owner reacting to a room row with an emoji.

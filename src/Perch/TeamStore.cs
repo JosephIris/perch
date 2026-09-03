@@ -62,6 +62,12 @@ internal sealed class TeamStore
     public string LedgerPath => Path.Combine(LocalDir, "room.jsonl");
     public string PositionsDir => Path.Combine(Dir, "positions");
     public string BotsDir => Path.Combine(Dir, "bots");
+    /// Where a bot's long piece of work is kept: a draft ticket, a table, a
+    /// plan. Local, like the room it is shown in — an artefact is part of the
+    /// conversation with the bots running HERE, not something a teammate
+    /// pulling the repository should get.
+    public string ArtefactsDir => Path.Combine(LocalDir, "artefacts");
+    public string ArtefactPathFor(string id, string ext) => Path.Combine(ArtefactsDir, $"{id}.{ext}");
     public string BriefPathFor(string positionSlug) => Path.Combine(PositionsDir, positionSlug, "brief.md");
     public string MemoryPathFor(string botSlug) => Path.Combine(BotsDir, botSlug, "memory.md");
     public string SystemPathFor(string botSlug) => Path.Combine(LocalDir, "bots", botSlug, "system.md");
@@ -77,13 +83,52 @@ internal sealed class TeamStore
     /// The task board (tasks.json beside team.json; shared). Read on first
     /// use and on Reload; a missing or unreadable file is an empty board —
     /// never fatal, the team file is the one that matters.
+    ///
+    /// The file is the source of truth, not this copy: a hand edit (or a pull,
+    /// or another Perch) is picked up on the next read, checked at most once a
+    /// second so the hot paths that walk the board stay a memory read. Without
+    /// that, Perch wrote its stale copy back over an edit within the minute and
+    /// a card the owner had deleted by hand came straight back.
     private TaskDoc? _tasks;
-    public TaskDoc Tasks => _tasks ??= LoadTasks();
+    private DateTime _tasksStamp;
+    private long _tasksCheckedAt;
+
+    public TaskDoc Tasks
+    {
+        get
+        {
+            if (_tasks != null && !TasksChangedOnDisk()) return _tasks;
+            return _tasks = LoadTasks();
+        }
+    }
+
+    internal const int TasksDiskCheckMs = 1000;
+
+    private bool TasksChangedOnDisk()
+    {
+        var now = Environment.TickCount64;
+        if (now - _tasksCheckedAt < TasksDiskCheckMs) return false;
+        _tasksCheckedAt = now;
+        try
+        {
+            if (!File.Exists(TasksPath)) return false;
+            return File.GetLastWriteTimeUtc(TasksPath) != _tasksStamp;
+        }
+        catch { return false; }
+    }
+
+    private void StampTasks()
+    {
+        try { _tasksStamp = File.Exists(TasksPath) ? File.GetLastWriteTimeUtc(TasksPath) : default; }
+        catch { /* a stamp we can't read just means the next read re-reads */ }
+        _tasksCheckedAt = Environment.TickCount64;
+    }
 
     private TaskDoc LoadTasks()
     {
         try
         {
+            StampTasks();
             if (!File.Exists(TasksPath)) return new TaskDoc();
             var doc = JsonSerializer.Deserialize(File.ReadAllText(TasksPath), TaskJsonContext.Default.TaskDoc);
             if (doc == null) return new TaskDoc();
@@ -108,6 +153,7 @@ internal sealed class TeamStore
             var doc = Tasks;
             while (doc.Done.Count > TaskDoc.DoneKept) doc.Done.RemoveAt(0);
             AtomicFile.WriteAllText(TasksPath, JsonSerializer.Serialize(doc, TaskJsonContext.Default.TaskDoc));
+            StampTasks();   // our own write is not an outside edit
         }
         catch (Exception ex) { Log.Error("TeamStore.SaveTasks", ex); }
     }

@@ -6991,6 +6991,7 @@ body.show-dashboard .dashboard { display: flex; }
   color: var(--color-text-disabled);
 }
 .tf-msg__text {
+  min-width: 0;   /* so a table or a code block inside can't widen the column */
   font-size: var(--type-body-size);
   line-height: var(--type-body-line);
   color: var(--color-text-secondary);
@@ -7231,11 +7232,113 @@ body.show-dashboard .dashboard { display: flex; }
 .team-tasks__body {
   overflow-y: auto;
   min-height: 0;
+  flex: 0 1 auto;
+  max-height: 55%;
   padding: 0 0 var(--sp-12);
   display: flex;
   flex-direction: column;
   font-size: var(--type-caption-size);
 }
+.team-tasks__remove { margin-left: auto; }
+
+/* ── Artefacts ─────────────────────────────────────────────────────────── */
+/* Under the task cards: the one thing in the room with room to breathe. A
+ * bot's long piece of work — a draft ticket, a table, a plan — is a card in
+ * the feed and a document here, instead of a wall of text in the chat. */
+.team-arte {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: var(--team-artefact-min-height);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border-top: 1px solid var(--color-stroke);
+}
+.team-arte__head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sp-4) var(--sp-8);
+  padding: var(--sp-12) var(--sp-12) var(--sp-8) var(--sp-16);
+}
+/* The document's own name gets the line; who wrote it and what it is drop
+ * underneath rather than fighting the title for room. */
+.team-arte__meta { flex-basis: 100%; order: 3; }
+.team-arte__title {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-text);
+  font-size: var(--type-body-size);
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+.team-arte__meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-small);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+}
+.team-arte__recent { flex: none; }
+.team-arte__menu {
+  position: absolute;
+  z-index: 2;
+  top: 40px;
+  right: var(--sp-12);
+  left: var(--sp-16);
+  max-height: 240px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding: var(--sp-4);
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--r-card);
+  background: var(--color-flyout);
+}
+.team-arte__item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--sp-8);
+  border: 0;
+  border-radius: var(--r-input);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.team-arte__item:hover { background: var(--color-subtle-secondary); }
+.team-arte__item--on { background: var(--color-subtle-tertiary); }
+.team-arte__item-title {
+  font-family: var(--font-text);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.team-arte__item-meta { font-family: var(--font-small); font-size: 11px; color: var(--color-text-tertiary); }
+.team-arte__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 var(--sp-16) var(--sp-16);
+}
+.team-arte__doc { font-size: var(--type-caption-size); color: var(--color-text-secondary); line-height: var(--type-body-line); }
+.team-arte__pre {
+  margin: 0;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--color-text-secondary);
+  white-space: pre;
+}
+.tf-arte__summary { font-family: var(--font-small); font-size: 11px; color: var(--color-text-tertiary); }
 .team-tasks__body > .team-tasks__editor { padding: var(--sp-4) var(--sp-16) var(--sp-12); }
 .team-tasks__empty { margin: 0; padding: var(--sp-4) var(--sp-16); color: var(--color-text-tertiary); line-height: 1.4; }
 .task-card {
@@ -7521,6 +7624,40 @@ body.show-dashboard .dashboard { display: flex; }
  * Still a system row (dot, caption type), grown a body with its buttons. */
 .tf-sys--card { align-items: flex-start; }
 .tf-sys--card .tf-sys__dot { margin-top: 5px; }
+
+/* Every card wears its kind as a colour: a hairline frame, a thicker left
+ * edge, and a tint of the same hue. Reading the room, the frame answers
+ * "what is this?" before the sentence does. Tokens, one per kind, live in
+ * tokens.css; nothing here invents a colour. */
+.tf-sys--card {
+  /* No horizontal margin: the feed is a flex column whose items stretch, and
+   * side margins there push the row past the column and give the whole chat a
+   * horizontal scrollbar. The frame sits on the column's own inset. */
+  margin: var(--sp-4) 0;
+  padding: var(--sp-8) var(--sp-12);
+  border: 1px solid var(--card-hue, var(--color-stroke));
+  border-left-width: 3px;
+  border-radius: var(--r-card);
+  background: var(--card-tint, transparent);
+}
+.tf-sys--card .tf-sys__dot { display: none; }   /* the frame is the marker now */
+.tf-sys--card[data-event="permission"] { --card-hue: var(--team-card-permission); --card-tint: var(--team-card-permission-faint); }
+.tf-sys--card[data-event="trust"]      { --card-hue: var(--team-card-trust);      --card-tint: var(--team-card-trust-faint); }
+.tf-sys--card[data-event="ask"]        { --card-hue: var(--team-card-ask);        --card-tint: var(--team-card-ask-faint); }
+.tf-sys--card[data-event="task.review"]{ --card-hue: var(--team-card-review);     --card-tint: var(--team-card-review-faint); }
+.tf-sys--card[data-event="artefact"]   { --card-hue: var(--team-card-artefact);   --card-tint: var(--team-card-artefact-faint); }
+.tf-sys--card[data-tone="error"]       { --card-hue: var(--team-card-error);      --card-tint: var(--team-card-error-faint); }
+
+/* The kind, spelled out, so the colour isn't the only carrier. */
+.tf-sys__kind {
+  align-self: flex-start;
+  font-family: var(--font-small);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: lowercase;
+  color: var(--card-hue, var(--color-text-tertiary));
+}
 .tf-sys__body {
   min-width: 0;
   flex: 1;
@@ -7973,4 +8110,169 @@ body.show-dashboard .dashboard { display: flex; }
 .tf-msg__avatar:has(> .bot-face) {
   background: transparent;
   box-shadow: none;
+}
+
+/* ===========================================================================
+ * Block markdown in a room message (text.ts → appendBlocks)
+ *
+ * A bot's status report is a document, not a shout: paragraphs that breathe,
+ * real bullets, a fence that scrolls inside its own box, and a table that is
+ * a table. The renderer marks the body `md`, and `md--rich` when it built
+ * anything beyond plain paragraphs — that second class is what lets the rules
+ * below drop pre-wrap and clamp by height instead of by line count, without
+ * touching how a one-line beat has always looked.
+ *
+ * Everything is one step quieter than the prose around it: hairlines, no
+ * shadows, no fills except the code box. The eye should land on the words.
+ * =========================================================================== */
+
+.tf-msg__text.md { white-space: normal; }
+
+/* Paragraphs: the gap between two is the whole point — 8px reads as "these
+ * are separate thoughts" without pushing the message into an essay. */
+.md-p { margin: 0; }
+.md-p + .md-p { margin-top: var(--sp-8); }
+
+/* A block after prose (or prose after a block) gets the same air. */
+.md-p + .md-list,
+.md-p + .md-pre,
+.md-p + .md-quote,
+.md-p + .md-tablewrap,
+.md-list + .md-p,
+.md-pre + .md-p,
+.md-quote + .md-p,
+.md-tablewrap + .md-p,
+.md-list + .md-list,
+.md-tablewrap + .md-tablewrap { margin-top: var(--sp-8); }
+
+/* Headings are a strong LINE, never a display size: the row is 14px body and
+ * a bot's "## Scope" must not out-shout the sender's name above it. */
+.md-h {
+  margin: var(--sp-12) 0 var(--sp-4);
+  font-family: var(--font-text);
+  font-size: var(--type-body-size);
+  font-weight: 600;
+  line-height: var(--type-body-line);
+  color: var(--color-text-primary);
+}
+.md-h:first-child { margin-top: 0; }
+.md-h--3,
+.md-h--4 {
+  font-size: var(--type-caption-size);
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: var(--color-text-secondary);
+}
+
+/* Lists: the marker sits in the gutter so the text edge stays flush with the
+ * paragraphs above it. */
+.md-list {
+  margin: 0;
+  padding-left: var(--sp-16);
+}
+.md-li { margin: 0; }
+.md-li + .md-li { margin-top: var(--sp-4); }
+.md-list--sub {
+  margin-top: var(--sp-4);
+  padding-left: var(--sp-12);
+}
+.md-list--sub > .md-li { color: var(--color-text-tertiary); }
+.md-list::marker,
+.md-li::marker { color: var(--color-text-disabled); }
+
+/* A fence keeps its own box and scrolls sideways; it never widens the feed
+ * column, which is the failure mode that made long messages unreadable. */
+.md-pre {
+  margin: 0;
+  padding: var(--sp-8) var(--sp-12);
+  overflow-x: auto;
+  background: var(--color-subtle-secondary);
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--r-input);
+}
+.md-code {
+  font-family: var(--font-mono);
+  font-size: var(--type-caption-size);
+  line-height: 1.5;
+  color: var(--color-text-primary);
+  white-space: pre;
+}
+
+/* A quote is a rule and a shade, nothing more — a bot quoting the owner
+ * shouldn't look like a second message. */
+.md-quote {
+  margin: 0;
+  padding-left: var(--sp-12);
+  border-left: 2px solid var(--color-stroke-strong);
+  color: var(--color-text-tertiary);
+}
+
+.md-hr {
+  height: 0;
+  margin: var(--sp-12) 0;
+  border: 0;
+  border-top: 1px solid var(--color-stroke);
+}
+
+/* Tables. The wrap scrolls, the table doesn't stretch the column, and the
+ * header is separated by a hairline rather than a fill — same discipline as
+ * the rest of the chrome. Numbers sit in tabular figures so a column of
+ * percentages lines up. */
+.md-tablewrap {
+  max-width: 100%;
+  /* A flex child's default min-width is its content, so a wide table pushed
+   * the whole feed sideways and gave the chat a horizontal scrollbar. The
+   * table scrolls inside this box; the column never moves. */
+  min-width: 0;
+  overflow-x: auto;
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--r-input);
+}
+.md-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: var(--type-caption-size);
+  line-height: var(--type-body-line);
+  font-variant-numeric: tabular-nums;
+}
+.md-th,
+.md-td {
+  padding: var(--sp-4) var(--sp-8);
+  text-align: left;
+  vertical-align: top;
+  white-space: nowrap;
+}
+.md-th {
+  font-weight: 600;
+  color: var(--color-text-primary);
+  border-bottom: 1px solid var(--color-stroke);
+}
+.md-td { color: var(--color-text-secondary); }
+.md-table tbody tr + tr .md-td { border-top: 1px solid var(--color-sidebar-stroke); }
+.md-th--right,
+.md-td--right { text-align: right; }
+.md-th--center,
+.md-td--center { text-align: center; }
+
+/* Inline forms the block renderer adds on top of the room's existing chips
+ * (.beat__strong, .beat__code, .tf-link, .tf-path, .tf-mention). */
+.md-em { font-style: italic; }
+.md-del {
+  text-decoration: line-through;
+  text-decoration-color: var(--color-text-disabled);
+  color: var(--color-text-tertiary);
+}
+
+/* A long beat still clamps — but a body with blocks in it can't be clamped by
+ * -webkit-line-clamp (a table inside a -webkit-box measures nothing like six
+ * lines), so it clamps by height instead. Same six-line feel, same click to
+ * open, and the room's scrollHeight test still decides when to offer it. */
+.tf-msg--beat .tf-msg__text.md--rich {
+  display: block;
+  max-height: 128px;
+  overflow: hidden;
+}
+.tf-msg--open .tf-msg__text.md--rich {
+  max-height: none;
+  overflow: visible;
 }

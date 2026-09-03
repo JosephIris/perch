@@ -75,6 +75,9 @@ internal static class TeamRender
           .Append("`). They read it at their next step, or wake up if idle. Start every message with its kind — ")
           .Append("`HANDOFF:` (do this), `REPORT:` (done or blocked), `QUESTION:`, `ANSWER:`, `FYI:` — then one line: what, ")
           .Append("where it is, by when. The room shows the exchange with that label; never send the same message twice.\n");
+        sb.Append("- If a send comes back saying several sessions answer to that name, run ListAgents and pick the one on THIS ")
+          .Append("machine, in this project's folder — never invent a `name [ref]`. If it comes back unreachable, say so with ")
+          .Append("`perch team post` instead of trying more addresses; Perch shows Joseph the failure.\n");
         sb.Append("- Joining: post ONE note to the room of at most two lines (your name, what you own). Never introduce yourself ")
           .Append("by messaging teammates.\n");
         sb.Append("- Lines that begin with `").Append(PostPrefix)
@@ -91,6 +94,9 @@ internal static class TeamRender
           .Append("for a teammate's latest message. It costs nothing to read.\n");
         sb.Append("- After a teammate's message, your reply stays in your own terminal. When Joseph needs to know something, run: ")
           .Append("perch team post \"<text>\" — or `perch team post --image <path> \"<caption>\"` to show him a screenshot.\n");
+        sb.Append("- Anything longer than about ten lines — a draft ticket, a table, a plan, a status dump — is an artefact, not a ")
+          .Append("room post: write the file, then `perch team artefact --file <path> --title \"<what it is>\"`. Joseph gets a card ")
+          .Append("in the room and opens it beside the chat; a post that long is stored as one anyway.\n");
         sb.Append("- When you need Joseph's decision or his eyes (a visual check, a choice, a go-ahead), run: ")
           .Append("perch team ask \"<question>\" [--choices \"A|B\"]. It becomes a card he answers; the answer arrives as a post. ")
           .Append("Do not wait for approval in prose.\n");

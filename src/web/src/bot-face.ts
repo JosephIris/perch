@@ -550,9 +550,29 @@ function fullPose(look: BotLook, state: FaceState, t: number, ph: number): Pose 
 
 /** The seed picks a blink phase (so a roster never blinks in unison) and,
  *  for the two ambient loops, where in the loop this bot starts. */
-const blinkPhase = (seed: number) => ((Math.floor(Math.abs(seed)) % 5) * 60);
+const blinkPhase = (seed: number) => (hash32(seed) % 17) * 20;
+
+/* Mixed into the offset so one bot doesn't sit at the same point of every
+ * loop it has: switching idle → working must not put two bots that switched
+ * together back in step. */
+const STATE_SALT: Readonly<Record<FaceState, number>> = { idle: 0, working: 1013, waiting: 2027, asleep: 3049 };
+
+/** Where in its loop this face starts — for EVERY state, not just the ambient
+ *  ones. The faces in a roster are built in one pass, so they share a start
+ *  time; a state change resets that start time for all of them at once (one
+ *  post sets four bots working). Without an offset per state they march in
+ *  unison, which is what the room actually looked like. */
 const loopOffset = (seed: number, state: FaceState) =>
-  state === "idle" || state === "asleep" ? (Math.floor(Math.abs(seed)) * 7919) % FACE_LOOP_MS[state] : 0;
+  (hash32(seed + STATE_SALT[state]) * 7919) % FACE_LOOP_MS[state];
+
+/* Spreads adjacent seeds (two bots created seconds apart) across the range
+ * instead of leaving them neighbours. */
+function hash32(seed: number): number {
+  let h = Math.floor(Math.abs(seed)) >>> 0;
+  h = Math.imul(h ^ (h >>> 16), 2246822507) >>> 0;
+  h = Math.imul(h ^ (h >>> 13), 3266489909) >>> 0;
+  return (h ^ (h >>> 16)) >>> 0;
+}
 
 /** The pure pose at loop time `ms` for a look in a state — every channel the
  *  rig reads. Exported for the tests and the harness; the rig calls it too. */

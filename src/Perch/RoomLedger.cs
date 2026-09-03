@@ -20,6 +20,11 @@ namespace Perch;
 ///   peer   — a bot-to-bot SendMessage as observed by the hook. `Ok` is the
 ///            delivery verdict; `Summary` is the sender's one-line preview.
 ///   note   — a bot's `perch team post` to the room; pings nobody.
+///   artefact — something too long to read in the feed (a draft ticket, a
+///            table, a plan): `Text` is the title, `Target` the artefact id,
+///            `Note` its file extension, `Summary` an optional one-liner. The
+///            body is a file under `team/local/artefacts/`; the room shows a
+///            card and opens it beside the feed.
 ///   system — lifecycle. `Event` says which: joined, left, asleep, woke,
 ///            waiting, permission, done, error, routed, delivered, undelivered.
 internal sealed class RoomEntry

@@ -24,7 +24,7 @@ import { RestoreProgress } from "./restore-progress.js";
 import { openCommitsPopover, openCommitsLightbox } from "./commits-view.js";
 import { showCloudPanel, applyCloudData } from "./cloud-panel.js";
 import type { SessionView, PaneTreeView, ProjectView, StateMessage, TeamDataMessage, TeamEntryView } from "./bridge.js";
-import { openTeamRoom, applyTeamState, onTeamRoomChange, feedTeamFixture } from "./team-room.js";
+import { openTeamRoom, applyTeamState, onTeamRoomChange, feedTeamFixture, applyArtefact, applyArtefactIndex } from "./team-room.js";
 import { showNewBotDialog, applyBriefProgress, applyBriefResult, applyReferencePicked } from "./new-bot-dialog.js";
 import { onMessage as onHostMessage } from "./bridge.js";
 import { Terminal } from "@xterm/xterm";
@@ -1509,6 +1509,22 @@ if (view === "team" || view === "team-activity" || view === "team-empty" || view
     // A question card with choices.
     row({ kind: "system", from: "Cy", botId: "b-cy", ts: at(2), to: ["Cy"], note: "ask-3f9e", event: "ask",
       text: "Which empty state should I build?", choices: ["Centered card", "Inline line"] }),
+    // A trust card and a review card, so every card kind's frame is in one shot.
+    row({ kind: "system", from: "perch", ts: at(2, 20), to: ["Cy"], event: "trust",
+      text: "Cy is waiting on a question before it can start — usually \"trust this folder?\" for its new folder." }),
+    row({ kind: "system", from: "perch", ts: at(2, 10), taskId: "t-2", event: "task.review",
+      text: "Ada says \"Sidebar team row\" is done — confirm it on the card, or say not yet" }),
+    // A bot's long piece of work: a card here, the document in the panel.
+    row({ kind: "artefact", from: "Bo", botId: "b-bo", ts: at(2, 5), target: "a1b2c3d4", note: "md",
+      text: "Draft ticket: bid-shading prepared table",
+      summary: "Scope, columns, acceptance — for Galina, not created yet" }),
+    // A message with real markdown in it: a table and a list, formatted.
+    row({ kind: "beat", from: "Bo", botId: "b-bo", ts: at(2, 2), text:
+      "Counter coverage as measured this morning:\n\n"
+      + "| Counter | Populated | Source |\n|---|---:|---|\n"
+      + "| `avgUserClearPrice` | 66% | bid_event |\n| `pbundle_loss_fixed` | 91% | loss_event |\n\n"
+      + "Two things follow:\n\n- the 66% column can't be a hard acceptance rule\n"
+      + "- `loss_event` is the only source that covers every SSP\n" }),
     row({ kind: "system", from: "perch", ts: at(1, 50), text: "Copied to Ada for the board", event: "cc" }),
     row({ kind: "user", from: "you", ts: at(1, 30), to: ["Bo"], text: "@Bo hold the push until Ada's review is in; I'll allow it then." }),
     // Reactions: yours on Bo's hand-off (highlighted), Ada's on your post.
@@ -1548,6 +1564,37 @@ if (view === "team" || view === "team-activity" || view === "team-empty" || view
   if (view === "team" || view === "team-activity") {
     feedTeamFixture(fixture);
     openTeamRoom("p-ptp");
+    // No host here, so answer the panel's own requests: the recent list, then
+    // the document it opens.
+    applyArtefactIndex({
+      type: "team.artefact.index", projectId: "p-ptp",
+      items: [
+        { id: "a1b2c3d4", title: "Draft ticket: bid-shading prepared table", kind: "md", from: "Bo", tsMs: Date.now() - 125_000,
+          summary: "Scope, columns, acceptance — for Galina, not created yet" },
+        { id: "b2c3d4e5", title: "Counter validation plan", kind: "md", from: "Ada", tsMs: Date.now() - 3_600_000 },
+        { id: "c3d4e5f6", title: "Loss codes by SSP", kind: "csv", from: "Bo", tsMs: Date.now() - 7_200_000 },
+      ],
+    });
+    applyArtefact({
+      type: "team.artefact.data", projectId: "p-ptp", id: "a1b2c3d4", kind: "md", from: "Bo", tsMs: Date.now() - 125_000,
+      title: "Draft ticket: bid-shading prepared table",
+      content:
+        "# Bid shading: bid-level prepared table\n\n"
+        + "One row per outgoing bid, built daily on the existing ingestion. A condensed copy of the\n"
+        + "loss table with win and impression outcomes joined from `bid_event`.\n\n"
+        + "## Label\n\n"
+        + "`lossprice` where `losscode = 102` (lost to a higher bid). Other codes are not auction\n"
+        + "losses: excluded from the label, kept as `lossCode`.\n\n"
+        + "| Column | Populated | Note |\n|---|---:|---|\n"
+        + "| `lossminprice` | 2.5% | a carried column, never a label |\n"
+        + "| `bidPricePreShading` | 0% | null on the NN path until PK-7225 ships |\n\n"
+        + "## Acceptance\n\n"
+        + "- partitioned by day; bids per day match `bid_event`\n"
+        + "- `lossprice` coverage per SSP reported daily\n"
+        + "- shaded / shadable populated and consistent across all three tables\n\n"
+        + "> Open for Joseph: table name and retention, and whether \"condensed\" means all bids or\n"
+        + "> only shadable campaigns.\n",
+    });
   } else if (view === "team-empty") {
     feedTeamFixture(emptyFixture);
     openTeamRoom("p-gm");
