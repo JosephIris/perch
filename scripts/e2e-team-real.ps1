@@ -278,7 +278,8 @@ JSON over REST). Build: `npm run build` in each folder. Tests: `npm test`.
     # --- 8. reactions both ways ------------------------------------------------
     Write-Host "`n[8] a bot reacts to a post; the owner reacts to a bot's message and the bot is told"
     [void](Send-Verb 'team.post' @{ projectId = $pid2; text = 'React to this post with the eyes emoji using perch team react, and nothing else.'; to = 'Ada'; clientId = 'e6' })
-    Check "Ada's reaction landed as a pill, not a row" (Wait-Until { @((Team-Dump $pid2).ledger | Where-Object { $_.kind -eq 'reaction' -and $_.from -eq 'Ada' }).Count -ge 1 } 180)
+    # A bot still finishing an earlier turn answers that first; give it time.
+    Check "Ada's reaction landed as a pill, not a row" (Wait-Until { @((Team-Dump $pid2).ledger | Where-Object { $_.kind -eq 'reaction' -and $_.from -eq 'Ada' }).Count -ge 1 } 360)
     $lastBeat = @((Team-Dump $pid2).ledger | Where-Object { $_.kind -eq 'beat' -and $_.from -eq 'Bo' }) | Select-Object -Last 1
     if ($lastBeat) {
         [void](Send-Verb 'team.react' @{ projectId = $pid2; seq = [string]$lastBeat.seq; emoji = ([char]0x2705).ToString() })
