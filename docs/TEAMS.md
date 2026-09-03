@@ -226,6 +226,12 @@ a post.
 - `scripts/test-team.ps1` — fake claude: launch argv, delivery, parking, fan-out,
   router fallback, removal, lead + task ids, a held `PermissionRequest`
   answered from the room, an ask card, reactions with dedupe.
+- `scripts/verify-comms.ps1` — **the release gate.** Real Perch, real Claude:
+  a post reaches a running bot and is answered; after a restart a bot whose tab
+  has no terminal is started, the post waits for its Claude rather than being
+  typed into a booting shell, then lands and is answered; "Send again" re-types
+  a failed post with no second post in the room. Must be green before a
+  `v*.*.*` tag — see CLAUDE.md.
 - `scripts/e2e-team-real.ps1` — real Claude: brief from a repo, two bots up
   (trust card answered), replies in the room, bot-to-bot message recorded,
   ask card answered, a permission prompt (project ask rule) answered from the

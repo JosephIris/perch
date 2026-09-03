@@ -5,7 +5,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { visibleEntries, reactionsFor, taskOrder, answeredSet, handoffLabel, REACTIONS } from "../src/team.js";
+import { visibleEntries, reactionsFor, taskOrder, answeredSet, landedSet, handoffLabel, REACTIONS } from "../src/team.js";
 import { findLinks, findImagePaths, imageLabel } from "../src/text.js";
 import { feedRowClass, systemTone, taskStatusWord, permissionDetails, cardKind, artefactKindWord, rowKey, rowSig } from "../src/team-room.js";
 import type { TeamEntryView, TeamTaskView } from "../src/bridge.js";
@@ -156,7 +156,7 @@ test("rowSig: a row keeps its identity while nothing on it changed", () => {
   // left in place, and a press that starts and ends on it still counts.
   const card = entry({ seq: 12, kind: "system", from: "perch", event: "permission", note: "p-9", text: "Bo wants to run Bash: git push" });
   const row = rowOf(card);
-  const ctx = () => ({ answered: answeredSet([]), reactions: new Map(), optimistic: new Map(), sessions: new Map(), openFolds: new Set<number>(), openBeats: new Set<number>() });
+  const ctx = () => ({ answered: answeredSet([]), reactions: new Map(), optimistic: new Map(), landed: new Set<number>(), sessions: new Map(), openFolds: new Set<number>(), openBeats: new Set<number>() });
   assert.equal(rowKey(row), "e12");
   assert.equal(rowSig(row, ctx()), rowSig(row, ctx()), "same row, same context, same signature");
 
@@ -177,7 +177,7 @@ test("rowSig: a folded run of tool calls is rebuilt only as it grows or opens", 
   const work = (seq: number) => entry({ seq, kind: "work", from: "Ada", verb: "Read", target: "a.ts", text: "" });
   const fold = (n: number): FeedRow =>
     ({ kind: "workfold", seq: 20, from: "Ada", entries: Array.from({ length: n }, (_, i) => work(20 + i)), summary: `read ${n} files`, cont: false });
-  const ctx = () => ({ answered: answeredSet([]), reactions: new Map(), optimistic: new Map(), sessions: new Map(), openFolds: new Set<number>(), openBeats: new Set<number>() });
+  const ctx = () => ({ answered: answeredSet([]), reactions: new Map(), optimistic: new Map(), landed: new Set<number>(), sessions: new Map(), openFolds: new Set<number>(), openBeats: new Set<number>() });
   assert.equal(rowKey(fold(2)), "w20");
   assert.equal(rowSig(fold(2), ctx()), rowSig(fold(2), ctx()));
   assert.notEqual(rowSig(fold(3), ctx()), rowSig(fold(2), ctx()));
@@ -194,4 +194,19 @@ test("answeredSet: a card that ran out of time stops offering buttons", () => {
   ]);
   assert.ok(set.perms.has("p-1"));
   assert.equal(systemTone("permission.expired"), "attention");
+});
+
+test("landedSet: a post parked for a starting bot stops saying it is waiting", () => {
+  // The host cannot rewrite the post (the ledger only appends), so it says a
+  // post landed with a row naming that post's number. Without reading those,
+  // the room said "waiting for the bot" forever on a post that did arrive.
+  const rows = [
+    entry({ seq: 7, kind: "user", from: "you", text: "@Ada are you there?", delivered: false }),
+    entry({ seq: 8, kind: "system", from: "perch", event: "delivered", note: "7", text: "Delivered to Ada" }),
+    entry({ seq: 9, kind: "user", from: "you", text: "@Bo and you?", delivered: false }),
+  ];
+  const landed = landedSet(rows);
+  assert.ok(landed.has(7));
+  assert.ok(!landed.has(9), "a post with no delivered row is still waiting");
+  assert.equal(landedSet([]).size, 0);
 });

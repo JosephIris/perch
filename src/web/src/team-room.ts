@@ -28,7 +28,7 @@ import {
 import {
   requestTeam, subscribeTeam, cachedTeam, ingestTeamData, requestTeamImage,
   foldFeed, groupRows, presenceOf, rosterSort, anyWorking, unreadCount, teamSummary, roomEmptyState,
-  visibleEntries, reactionsFor, taskOrder, answeredSet, handoffLabel, REACTIONS,
+  visibleEntries, reactionsFor, taskOrder, answeredSet, landedSet, handoffLabel, REACTIONS,
   type FeedRow, type Presence, type ReactionPill,
 } from "./team.js";
 import { appendRich, appendBlocks, hhmm, imageLabel } from "./text.js";
@@ -1134,6 +1134,8 @@ function stateLine(p: Presence, s: SessionView | undefined): HTMLElement {
  * the reactions hanging under each row. Rebuilt from the rows themselves on
  * every render — no second source of truth. */
 let answered = answeredSet([]);
+/* Posts that landed after being parked (a bot that had to start first). */
+let landed = new Set<number>();
 let reactions = new Map<number, ReactionPill[]>();
 
 /** Whether the last feed render was pinned to the bottom. A picture that
@@ -1162,6 +1164,9 @@ export function rowSig(
     /* Reactions you clicked that the host has not echoed yet — they are on
      * screen, so they belong in the signature. */
     optimistic: Map<number, Set<string>>;
+    /* Posts that landed late: a row saying "waiting for the bot" has to stop
+     * saying it once the post goes in. */
+    landed: Set<number>;
     /* Nickname (and slug) → the tab that bot runs in. A reused row keeps the
      * handlers it was built with, so its "Open" button holds the session id of
      * that moment: if the bot moved tabs, the row has to be rebuilt. */
@@ -1183,13 +1188,14 @@ export function rowSig(
     : "";
   return [
     "e", e.kind, e.seq, e.text.length, e.summary?.length ?? 0, e.event ?? "", e.delivered ?? "",
-    row.cont, ctx.openBeats.has(e.seq), done, e.image ?? "", pills,
+    row.cont, ctx.openBeats.has(e.seq), done, e.image ?? "", pills, ctx.landed.has(e.seq),
     tab(e.from), tab(Array.isArray(e.to) ? e.to[0] : undefined),
   ].join("|");
 }
 
 function renderFeed(entries: TeamEntryView[], bots: TeamBotView[]): void {
   answered = answeredSet(entries);
+  landed = landedSet(entries);
   reactions = reactionsFor(entries);
   // Drop the optimistic reactions the host has echoed.
   for (const [seq, emojis] of optimisticReactions) {
@@ -1252,7 +1258,7 @@ function renderFeed(entries: TeamEntryView[], bots: TeamBotView[]): void {
 
   const sessions = new Map<string, string>();
   for (const b of bots) { const id = b.sessionId ?? ""; sessions.set(b.nickname, id); sessions.set(b.botId, id); }
-  const sigCtx = { answered, reactions, optimistic: optimisticReactions, sessions, openFolds, openBeats };
+  const sigCtx = { answered, reactions, optimistic: optimisticReactions, landed, sessions, openFolds, openBeats };
   const nodes: HTMLElement[] = [];
   const nextFaces = new Map<string, BotFace[]>();
   let maxSeq = renderedSeq;
@@ -1411,7 +1417,7 @@ function renderRow(row: FeedRow, bots: TeamBotView[], names: string[]): HTMLElem
 
   if (e.kind === "user") {
     const strip = el("div", "tf-msg__to", recipientsLabel(e.to));
-    if (e.delivered === false) strip.textContent += " · waiting for the bot";
+    if (e.delivered === false && !landed.has(e.seq)) strip.textContent += " · waiting for the bot";
     body.appendChild(strip);
   }
 

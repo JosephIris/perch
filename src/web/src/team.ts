@@ -439,6 +439,20 @@ export function taskOrder(tasks: TeamTaskView[]): TeamTaskView[] {
 /** Which cards have been answered, from the rows themselves (never a second
  *  source of truth): permission and ask cards by request id, the start-up
  *  question by nickname. */
+/** Posts that reached their bot LATER, after being parked: the host appends a
+ *  "delivered" row naming the post's seq rather than rewriting the post (the
+ *  ledger only ever appends). Without this the room says "waiting for the
+ *  bot" for good on a post that actually landed. */
+export function landedSet(entries: TeamEntryView[]): Set<number> {
+  const out = new Set<number>();
+  for (const e of entries) {
+    if (e.kind !== "system" || e.event !== "delivered" || !e.note) continue;
+    const seq = Number(e.note);
+    if (Number.isFinite(seq)) out.add(seq);
+  }
+  return out;
+}
+
 export function answeredSet(entries: TeamEntryView[]): { perms: Set<string>; asks: Set<string>; trust: Set<string> } {
   const perms = new Set<string>(), asks = new Set<string>(), trust = new Set<string>();
   for (const e of entries) {
