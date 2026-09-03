@@ -7229,17 +7229,33 @@ body.show-dashboard .dashboard { display: flex; }
   gap: var(--sp-8);
   padding: var(--sp-16) var(--sp-12) var(--sp-8) var(--sp-16);
 }
+/* The cards take the height they need; the artefacts panel takes what is left,
+ * down to its minimum. The cap only bites when there are more cards than the
+ * column can hold — and the grip below overrides all of it. */
 .team-tasks__body {
   overflow-y: auto;
   min-height: 0;
   flex: 0 1 auto;
-  max-height: 55%;
+  max-height: calc(100% - var(--team-artefact-min-height) - 44px);
   padding: 0 0 var(--sp-12);
   display: flex;
   flex-direction: column;
   font-size: var(--type-caption-size);
 }
 .team-tasks__remove { margin-left: auto; }
+
+/* The line between the cards and the artefacts panel. A hairline at rest, the
+ * accent while you drag it; double-click gives the cards their natural height
+ * back. */
+.team-tasks__grip {
+  flex: none;
+  height: 7px;
+  margin-top: -3px;
+  cursor: row-resize;
+  background: transparent;
+  touch-action: none;
+}
+.team-tasks__grip:hover { background: var(--color-accent-faint); }
 
 /* ── Artefacts ─────────────────────────────────────────────────────────── */
 /* Under the task cards: the one thing in the room with room to breathe. A
@@ -7641,6 +7657,14 @@ body.show-dashboard .dashboard { display: flex; }
   background: var(--card-tint, transparent);
 }
 .tf-sys--card .tf-sys__dot { display: none; }   /* the frame is the marker now */
+/* A framed row wraps: a card is something you read and answer, so its sentence
+ * must not disappear into an ellipsis the way a narration line may. */
+.tf-sys--card .tf-sys__text {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  line-height: var(--type-body-line);
+}
 .tf-sys--card[data-event="permission"] { --card-hue: var(--team-card-permission); --card-tint: var(--team-card-permission-faint); }
 .tf-sys--card[data-event="trust"]      { --card-hue: var(--team-card-trust);      --card-tint: var(--team-card-trust-faint); }
 .tf-sys--card[data-event="ask"]        { --card-hue: var(--team-card-ask);        --card-tint: var(--team-card-ask-faint); }
@@ -8169,7 +8193,12 @@ body.show-dashboard .dashboard { display: flex; }
 .md-list {
   margin: 0;
   padding-left: var(--sp-16);
+  /* The app's reset strips every ul's marker (line 72), which left a bot's
+   * bullets as an unexplained indent. A list has to look like a list. */
+  list-style: disc outside;
 }
+.md-list--num { list-style: decimal outside; }
+.md-list--sub { list-style: circle outside; }
 .md-li { margin: 0; }
 .md-li + .md-li { margin-top: var(--sp-4); }
 .md-list--sub {
@@ -8267,12 +8296,23 @@ body.show-dashboard .dashboard { display: flex; }
  * -webkit-line-clamp (a table inside a -webkit-box measures nothing like six
  * lines), so it clamps by height instead. Same six-line feel, same click to
  * open, and the room's scrollHeight test still decides when to offer it. */
+/* A rich body folds on a block boundary (clampBlocks in team-room.ts hides
+ * whole blocks), so a table is never cut through its third row. Only a single
+ * block taller than the fold has nowhere to break: that one is cut with a
+ * fade, which reads as "more below" rather than as a broken table. */
 .tf-msg--beat .tf-msg__text.md--rich {
   display: block;
-  max-height: 128px;
+  max-height: none;
   overflow: hidden;
+}
+.tf-msg--beat .tf-msg__text.md--rich.md--cut {
+  max-height: 320px;
+  -webkit-mask-image: linear-gradient(to bottom, #000 76%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 76%, transparent 100%);
 }
 .tf-msg--open .tf-msg__text.md--rich {
   max-height: none;
   overflow: visible;
+  -webkit-mask-image: none;
+  mask-image: none;
 }

@@ -162,6 +162,29 @@ let artefactMenuBtn: HTMLButtonElement;
 let artefactMenuEl: HTMLElement;
 let artefactBodyEl: HTMLElement;
 let artefactMenuOpen = false;
+/* How tall the owner dragged the cards half, in px; null = let the cards take
+ * the height they need. Kept per machine, like the activity toggle. */
+let taskSplitPx: number | null = null;
+const ARTEFACT_MIN_PX = 220;
+const SPLIT_KEY = "perch.team.tasksSplit";
+
+function readTaskSplit(): number | null {
+  try {
+    const raw = localStorage.getItem(SPLIT_KEY);
+    const n = raw === null ? NaN : Number(raw);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  } catch { return null; }
+}
+function writeTaskSplit(px: number | null): void {
+  try { if (px === null) localStorage.removeItem(SPLIT_KEY); else localStorage.setItem(SPLIT_KEY, String(Math.round(px))); }
+  catch { /* private mode: the split just doesn't survive the session */ }
+}
+function setTaskSplit(px: number | null): void {
+  taskSplitPx = px;
+  if (!taskBodyEl) return;
+  taskBodyEl.style.flex = px === null ? "" : `0 0 ${Math.round(px)}px`;
+}
+
 let artefactIndex: TeamArtefactItem[] = [];
 let shownArtefact: TeamArtefactDataMessage | null = null;
 let artefactLoading: string | null = null;
@@ -439,6 +462,35 @@ function mount(): void {
   tasks.appendChild(tHead);
   taskBodyEl = el("div", "team-tasks__body scroll");
   tasks.appendChild(taskBodyEl);
+  setTaskSplit(readTaskSplit());
+
+  // The cards take the height they need and the panel takes what is left; drag
+  // the line between them to change that, and it is remembered per machine.
+  const grip = el("div", "team-tasks__grip");
+  grip.setAttribute("role", "separator");
+  grip.setAttribute("aria-orientation", "horizontal");
+  grip.setAttribute("aria-label", "Resize the task cards");
+  grip.addEventListener("pointerdown", (ev) => {
+    ev.preventDefault();
+    grip.setPointerCapture(ev.pointerId);
+    const startY = ev.clientY;
+    const startH = taskBodyEl.getBoundingClientRect().height;
+    const column = tasks.getBoundingClientRect().height;
+    const move = (m: PointerEvent) => {
+      // Neither half may vanish: the cards keep one row, the panel its minimum.
+      const max = Math.max(48, column - ARTEFACT_MIN_PX - 44);
+      setTaskSplit(Math.min(max, Math.max(48, startH + (m.clientY - startY))));
+    };
+    const up = () => {
+      grip.removeEventListener("pointermove", move);
+      grip.removeEventListener("pointerup", up);
+      writeTaskSplit(taskSplitPx);
+    };
+    grip.addEventListener("pointermove", move);
+    grip.addEventListener("pointerup", up);
+  });
+  grip.addEventListener("dblclick", () => { setTaskSplit(null); writeTaskSplit(null); });
+  tasks.appendChild(grip);
 
   // Under the cards: the artefacts panel. Anything a bot writes that is too
   // long to read as a message — a draft ticket, a table, a plan — lands here,
@@ -821,6 +873,40 @@ function renderTasks(project: ProjectView | null): void {
     return;
   }
   for (const t of tasks) taskBodyEl.appendChild(taskCard(project, team!, t));
+}
+
+/** How much of a long message is shown before it is folded. */
+const BLOCK_CLAMP_PX = 200;
+/** …and how tall a single unsplittable block (one big table) may be while
+ *  folded, before it is cut with a fade. */
+const SINGLE_BLOCK_MAX_PX = 320;
+
+/** Fold a long message on a BLOCK boundary rather than mid-height: a table cut
+ *  through its third row, or half a bullet, reads as broken rather than as
+ *  "there is more". Whole blocks are hidden instead, and the row keeps its
+ *  click-to-open. Returns whether anything is folded away.
+ *
+ *  Only for the rich bodies (a table, a list, code…). A plain paragraph beat
+ *  still clamps by line count in CSS, which is exactly right for prose. */
+function clampBlocks(text: HTMLElement, open: boolean): boolean {
+  if (!text.classList.contains("md--rich")) return false;
+  const kids = Array.from(text.children) as HTMLElement[];
+  for (const k of kids) k.hidden = false;
+  text.classList.remove("md--cut");
+  if (open || kids.length === 0) return kids.length > 0;
+  const top = text.getBoundingClientRect().top;
+  let cut = -1;
+  for (let i = 1; i < kids.length; i++) {
+    if (kids[i].getBoundingClientRect().bottom - top > BLOCK_CLAMP_PX) { cut = i; break; }
+  }
+  if (cut >= 0) {
+    for (let i = cut; i < kids.length; i++) kids[i].hidden = true;
+    return true;
+  }
+  // One block, taller than the fold on its own: cut it with a fade, since
+  // there is no boundary to fold at.
+  if (text.getBoundingClientRect().height > SINGLE_BLOCK_MAX_PX) { text.classList.add("md--cut"); return true; }
+  return false;
 }
 
 // ---- Artefacts --------------------------------------------------------------
@@ -1219,9 +1305,12 @@ function renderRow(row: FeedRow, bots: TeamBotView[], names: string[]): HTMLElem
       if (!node.classList.contains("tf-msg--expandable")) return;
       const open = node.classList.toggle("tf-msg--open");
       if (open) openBeats.add(e.seq); else openBeats.delete(e.seq);
+      clampBlocks(text, open);
     });
     requestAnimationFrame(() => {
-      if (text.scrollHeight > text.clientHeight + 2 || node.classList.contains("tf-msg--open"))
+      const open = node.classList.contains("tf-msg--open");
+      const long = clampBlocks(text, open);
+      if (long || text.scrollHeight > text.clientHeight + 2 || open)
         node.classList.add("tf-msg--expandable");
     });
   }
