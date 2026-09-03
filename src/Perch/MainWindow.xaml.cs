@@ -336,8 +336,10 @@ public partial class MainWindow : FluentWindow
                         .Where(p => !string.IsNullOrEmpty(p.ClaudeSessionId)
                                     && ClaudeTranscripts.Exists(p.ClaudeSessionId!, ResolvePaneCwd(sess, p)))
                         .ToList();
+                    // No "Resuming session" lightbox here: the room's roster
+                    // already says the bot is coming up, and the box would
+                    // land on top of the room the owner is typing in.
                     foreach (var p in resumable) _armedResumePanes.Add(p.Id);
-                    if (resumable.Count > 0) BeginRestoreProgress(resumable.Select(p => p.Id).ToList());
                 }
                 foreach (var p in cold) SpawnPty(sess, p);
                 Log.Info("Team.start", $"session={sess.Id:N} spawned {cold.Count} cold pane(s) for a room post");
@@ -2588,7 +2590,10 @@ public partial class MainWindow : FluentWindow
             .ToList();
         if (resumable.Count == 0) return;
         foreach (var p in resumable) _armedResumePanes.Add(p.Id);
-        BeginRestoreProgress(resumable.Select(p => p.Id).ToList());
+        // A team bot woken from the room shows its progress in the roster;
+        // the lightbox is for tabs the user is about to look at.
+        if (_teamCtrl.BotOfSession(sess.Id) == null)
+            BeginRestoreProgress(resumable.Select(p => p.Id).ToList());
     }
 
     private void OnSessionSelect(SessionRef msg)
