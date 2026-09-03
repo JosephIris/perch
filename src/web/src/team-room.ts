@@ -39,6 +39,8 @@ import { showBotMenu } from "./bot-menu.js";
 import type { MentionTarget } from "./mention.js";
 import { createBotFace, normalizeLook, type BotFace, type FaceState } from "./bot-face.js";
 import { confirmDialog } from "./confirm.js";
+import { showToast } from "./toast.js";
+import type { TeamPasteDataMessage } from "./bridge.js";
 
 // ---- Pure rendering decisions ---------------------------------------------
 
@@ -421,10 +423,11 @@ function mount(): void {
 
   composer = buildComposer({
     roster: () => (projectId ? projectFor(projectId)?.team?.bots ?? [] : []),
-    onSend: (text, to, clientId) => {
+    onPaste: () => { if (projectId) send({ type: "team.paste", projectId }); },
+    onSend: (text, to, clientId, image) => {
       if (!projectId) return;
-      pending.set(clientId, { text, to, sentAt: Date.now(), failed: false });
-      send({ type: "team.post", projectId, text, to, clientId });
+      pending.set(clientId, { text: text || "(picture)", to, sentAt: Date.now(), failed: false });
+      send({ type: "team.post", projectId, text, to, clientId, image });
       render();
       feedEl.scrollTop = feedEl.scrollHeight;
       window.setTimeout(() => {
@@ -437,6 +440,14 @@ function mount(): void {
 
   app.appendChild(root);
   window.addEventListener("keydown", onEsc, true);
+}
+
+/** The host answered a paste: attach the saved picture to the draft, or say
+ *  why there was nothing to attach. */
+export function applyPasteResult(msg: TeamPasteDataMessage): void {
+  if (!composer || !projectId || msg.projectId !== projectId) return;
+  if (msg.path) composer.attachImage(msg.path);
+  else showToast(msg.error || "No picture on the clipboard.", "warn");
 }
 
 function unmount(immediate: boolean): void {

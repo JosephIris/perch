@@ -1141,4 +1141,35 @@ public class TeamControllerTests
         Assert.DoesNotContain("[not started]", File.ReadAllText(h.Store.RosterPath));
         TeamMarkers.Clear(sess.Root.Id);
     }
+
+    /// A pasted picture rides on the post and is named in the typed line so
+    /// the bot can Read it; a post that is only a picture is still a post.
+    [Fact]
+    public async Task Post_WithAPastedPicture_NamesTheFileForTheBot()
+    {
+        var h = new Harness();
+        await h.CreateBot("Ada");
+        var png = Path.Combine(h.Repo, "shot.png");
+        File.WriteAllBytes(png, new byte[] { 0x89, 0x50, 0x4E, 0x47 });
+        h.Ctrl.OnPost(new TeamPostMsg
+        {
+            ProjectId = h.Project.Id, Text = "does this look right?", ClientId = "i1",
+            To = JsonDocument.Parse("[\"Ada\"]").RootElement.Clone(), Image = png,
+        });
+        var (_, line) = Assert.Single(h.Typed);
+        Assert.Contains("does this look right? (attached picture: " + png + " — Read it if you need to see it)", line);
+        var row = h.Ledger.Single(e => e.Kind == "user");
+        Assert.Equal(png, row.Image);
+        Assert.Equal("does this look right?", row.Text);
+
+        // Picture only, no words: still delivered. A path that isn't a picture
+        // (or doesn't exist) is dropped, never typed.
+        h.Ctrl.OnPost(new TeamPostMsg { ProjectId = h.Project.Id, Text = "", ClientId = "i2", To = JsonDocument.Parse("[\"Ada\"]").RootElement.Clone(), Image = png });
+        Assert.Equal(2, h.Typed.Count);
+        Assert.StartsWith("[Perch team] #", h.Typed[1].Line);
+        Assert.Contains("(attached picture:", h.Typed[1].Line);
+        h.Ctrl.OnPost(new TeamPostMsg { ProjectId = h.Project.Id, Text = "", ClientId = "i3", To = JsonDocument.Parse("[\"Ada\"]").RootElement.Clone(), Image = Path.Combine(h.Repo, "nope.png") });
+        Assert.Equal(2, h.Typed.Count);
+        TeamMarkers.Clear(h.Sessions.Single().Root.Id);
+    }
 }

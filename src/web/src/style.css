@@ -7598,6 +7598,22 @@ body.show-dashboard .dashboard { display: flex; }
   color: var(--color-text-tertiary);
 }
 .team-room__empty-cta { margin-top: var(--sp-16); }
+/* A pasted picture waiting in the composer: one quiet chip above the box. */
+.team-composer__attach { display: flex; padding: 0 0 var(--sp-8); }
+.team-composer__attach[hidden] { display: none; }
+.team-composer__attach-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: 2px var(--sp-8);
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--r-pill);
+  font-family: var(--font-small);
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  background: var(--color-subtle-secondary);
+}
+.team-composer__attach-name { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* The same words, inside the feed: bots exist, nothing has been said yet.
  * The roster stays beside it (see render() — a pulled team starts from there). */
 .team-feed__empty {

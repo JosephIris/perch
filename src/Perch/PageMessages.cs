@@ -478,6 +478,18 @@ internal sealed record TeamPostMsg
     /// Page-generated id echoed on the ledger entry so the optimistic row can
     /// be reconciled.
     public required string ClientId { get; init; }
+    /// A picture pasted into the composer (absolute path the host saved it
+    /// under, from `team.paste`). Travels on the row and is named in the line
+    /// typed to the bots, which Read the file when they need to see it.
+    public string? Image { get; init; }
+}
+
+/// The owner pasted a picture into the room's composer: read the clipboard on
+/// the host, save it under the team's local folder, answer with the path
+/// (`team.paste.data`). The page never sees the bytes.
+internal sealed record TeamPasteMsg
+{
+    public required Guid ProjectId { get; init; }
 }
 
 /// A new position, sent inline with the bot that first fills it. `brief` is

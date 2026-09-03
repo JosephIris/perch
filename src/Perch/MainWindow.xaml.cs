@@ -862,7 +862,8 @@ public partial class MainWindow : FluentWindow
         .Add<TeamReactMsg>("team.react", m => _teamCtrl.OnReact(m))
         .Add<TeamReferenceBrowseMsg>("team.reference.browse", OnTeamReferenceBrowse)
         .Add<TeamRoomMsg>("team.room", m => _teamCtrl.OnRoom(m))
-        .Add<TeamBotAnswerMsg>("team.bot.answer", m => _teamCtrl.OnBotAnswer(m));
+        .Add<TeamBotAnswerMsg>("team.bot.answer", m => _teamCtrl.OnBotAnswer(m))
+        .Add<TeamPasteMsg>("team.paste", OnTeamPaste);
 
     private void OnWebMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
@@ -3447,6 +3448,49 @@ public partial class MainWindow : FluentWindow
     }
 
     private void OnProjectAdd(ProjectAddMsg msg) => AddProject(msg.Path, msg.Name);
+
+    /// A picture pasted into the room's composer. The clipboard is read HERE
+    /// (the page can't reach it), the bitmap saved as PNG under the team's
+    /// local folder, and the path handed back for the composer to attach.
+    /// Same clipboard rules as the board's paste: a locked clipboard is a
+    /// "try again", not an error worth a log.
+    private void OnTeamPaste(TeamPasteMsg msg)
+    {
+        string? path = null, error = null;
+        try
+        {
+            var store = _teamCtrl.StoreFor(msg.ProjectId);
+            if (store == null) error = "This project has no team.";
+            else if (!System.Windows.Clipboard.ContainsImage()) error = "No picture on the clipboard.";
+            else
+            {
+                var src = System.Windows.Clipboard.GetImage();
+                var png = src == null ? null : ImageThumb.EncodePng(src);
+                if (png == null) error = "Couldn't read that picture.";
+                else
+                {
+                    var dir = System.IO.Path.Combine(store.LocalDir, "images");
+                    System.IO.Directory.CreateDirectory(dir);
+                    path = System.IO.Path.Combine(dir, $"paste-{DateTime.Now:yyyyMMdd-HHmmss}.png");
+                    AtomicFile.WriteAllBytes(path, png);
+                    Log.Info("Team.paste", $"project={msg.ProjectId:N} bytes={png.Length} path={path}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Team.paste.clipboard", ex);
+            error = "Couldn't read the clipboard just then. Try again.";
+        }
+        try
+        {
+            Web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(new
+            {
+                type = "team.paste.data", projectId = msg.ProjectId.ToString("D"), path, error,
+            }));
+        }
+        catch (Exception ex) { Log.Error("OnTeamPaste.post", ex); }
+    }
 
     /// The new-bot dialog's "Browse…" for a reference folder. Same native
     /// picker as adding a project; the answer is keyed by the page's request id

@@ -164,6 +164,13 @@ Three columns: feed · task cards · roster; the composer spans feed and cards.
 open in the browser; absolute image paths (and `note` images) render as
 thumbnails with a lightbox. Hover a message for the four reactions.
 
+Pasting a picture into the composer asks the host to read the clipboard
+(`team.paste` → `team.paste.data`); the PNG is saved under
+`team/local/images/` and rides on the post (`image`). The line typed to the
+bots names the file — "(attached picture: <path> — Read it if you need to see
+it)" — so a bot opens it only when the post calls for it. A picture alone is
+a post.
+
 ## Verification
 
 - `dotnet test src/Perch.Tests` (524) and `cd src/web && npm run typecheck &&

@@ -283,7 +283,10 @@ export type OutMessage =
    * "everyone", or null when there were none (the host routes it, and the
    * echoed entry carries the resolved recipients). `clientId` is page-minted so
    * the optimistic row can be matched to its echo. */
-  | { type: "team.post"; projectId: string; text: string; to: string[] | "everyone" | null; clientId: string }
+  | { type: "team.post"; projectId: string; text: string; to: string[] | "everyone" | null; clientId: string; image?: string }
+  /* A picture was pasted into the composer: the host reads the clipboard,
+   * saves the PNG under the team's local folder and answers team.paste.data. */
+  | { type: "team.paste"; projectId: string }
   /* Create a bot: an existing position by slug, or a new one whose `brief` is
    * the text the user accepted in the dialog (generated or hand-written). */
   | { type: "team.bot.create"; projectId: string; nickname: string; worktree: boolean; positionSlug?: string;
@@ -1029,7 +1032,17 @@ export type InMessage =
   | TeamBriefProgressMessage
   | TeamBriefResultMessage
   | TeamReferencePickedMessage
-  | TeamImageDataMessage;
+  | TeamImageDataMessage
+  | TeamPasteDataMessage;
+
+/** The host's answer to `team.paste`: where it saved the clipboard picture,
+ *  or why it couldn't ("No picture on the clipboard."). */
+export type TeamPasteDataMessage = {
+  type: "team.paste.data";
+  projectId: string;
+  path?: string | null;
+  error?: string | null;
+};
 
 /** One machine (or one Dataproc cluster — a cluster is ONE row, not five). */
 export interface CloudResourceView {

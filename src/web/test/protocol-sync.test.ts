@@ -88,6 +88,7 @@ const EXPECTED_TYPES = [
   "team.brief.generate",
   "team.image",
   "team.lead.set",
+  "team.paste",
   "team.perm.answer",
   "team.position.update",
   "team.post",

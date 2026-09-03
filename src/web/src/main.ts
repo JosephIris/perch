@@ -25,7 +25,7 @@ import { initUtilityMini } from "./mini-mode.js";
 import { initInspector, toggleInspector, openInspectorSearch } from "./inspector.js";
 import { setModelLimits } from "./model-menu.js";
 import { initWebPaneSuppression } from "./webpane-suppress.js";
-import { applyTeamState, toggleTeamRoom, closeTeamRoom, onTeamRoomChange } from "./team-room.js";
+import { applyTeamState, toggleTeamRoom, closeTeamRoom, onTeamRoomChange, applyPasteResult } from "./team-room.js";
 import { setFaceColorMode } from "./bot-face.js";
 import { teamProjectFor } from "./team.js";
 import { applyBriefProgress, applyBriefResult, applyReferencePicked } from "./new-bot-dialog.js";
@@ -299,6 +299,9 @@ onMessage((msg) => {
       break;
     case "team.reference.picked":
       applyReferencePicked(msg);
+      break;
+    case "team.paste.data":
+      applyPasteResult(msg);
       break;
     case "resume.prompt": {
       // One-time "reopen previous Claude sessions?" prompt. Until we answer,

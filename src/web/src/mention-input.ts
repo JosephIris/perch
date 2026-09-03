@@ -20,12 +20,18 @@ export interface Composer {
   getDraft(): string;
   /** Re-read the roster (a bot joined or left) and refresh the chips. */
   refresh(): void;
+  /** A pasted picture the host saved: show it as a chip until the post is
+   *  sent (or the chip's × is clicked). Null clears it. */
+  attachImage(path: string | null): void;
   dispose(): void;
 }
 
 export interface ComposerOpts {
   roster: () => TeamBotView[];
-  onSend: (text: string, to: MentionTarget, clientId: string) => void;
+  onSend: (text: string, to: MentionTarget, clientId: string, image?: string) => void;
+  /** A picture was pasted into the box: ask the host to read the clipboard
+   *  (the page can't); the path comes back through attachImage. */
+  onPaste?: () => void;
 }
 
 /* The textarea grows with the draft up to this many rows, then scrolls. Six
@@ -249,11 +255,13 @@ export function buildComposer(opts: ComposerOpts): Composer {
 
   const submit = () => {
     const text = input.value.trim();
-    if (text.length === 0) return;
+    // A picture alone is a post; words alone are a post; neither is nothing.
+    if (text.length === 0 && !attached) return;
     const names = opts.roster().map((b) => b.nickname);
     const { to } = parseMentions(text, names);
-    opts.onSend(text, to, newClientId());
+    opts.onSend(text, to, newClientId(), attached ?? undefined);
     input.value = "";
+    setAttached(null);
     closePop();
     onInput();
   };
@@ -292,12 +300,54 @@ export function buildComposer(opts: ComposerOpts): Composer {
   });
   sendBtn.addEventListener("click", submit);
 
+  // A pasted picture. The page cannot read the clipboard's bitmap, so the
+  // paste event only tells the host to; the saved file's path comes back and
+  // sits here as a chip until the post goes out.
+  let attached: string | null = null;
+  const attachEl = document.createElement("div");
+  attachEl.className = "team-composer__attach";
+  attachEl.hidden = true;
+  root.insertBefore(attachEl, root.firstChild);
+  const setAttached = (path: string | null) => {
+    attached = path;
+    attachEl.replaceChildren();
+    attachEl.hidden = !path;
+    if (!path) return;
+    const chip = document.createElement("span");
+    chip.className = "team-composer__attach-chip";
+    const name = document.createElement("span");
+    name.className = "team-composer__attach-name";
+    name.textContent = "Picture: " + (path.split(/[\\/]/).pop() ?? path);
+    name.title = path;
+    const x = document.createElement("button");
+    x.type = "button";
+    x.className = "to-chip__x";
+    x.setAttribute("aria-label", "Remove the picture");
+    x.textContent = "×";
+    x.addEventListener("click", () => { setAttached(null); input.focus(); });
+    chip.appendChild(name);
+    chip.appendChild(x);
+    attachEl.appendChild(chip);
+  };
+  input.addEventListener("paste", (e) => {
+    const items = e.clipboardData?.items;
+    if (!items || !opts.onPaste) return;
+    for (const item of Array.from(items)) {
+      if (item.type.startsWith("image/")) {
+        e.preventDefault();
+        opts.onPaste();
+        return;
+      }
+    }
+  });
+
   return {
     element: root,
     focus: () => input.focus(),
     setDraft: (t) => { input.value = t; onInput(); },
     getDraft: () => input.value,
     refresh: () => { renderTo(); },
+    attachImage: (path) => setAttached(path),
     dispose: () => { closePop(); root.remove(); },
   };
 }

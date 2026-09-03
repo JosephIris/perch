@@ -990,7 +990,10 @@ internal sealed class TeamController
         var proj = _h.ProjectById(msg.ProjectId);
         var store = StoreFor(msg.ProjectId);
         var text = (msg.Text ?? "").Trim();
-        if (proj == null || store == null || text.Length == 0) return;
+        // A pasted picture is a post on its own; it must exist and be a picture.
+        var image = (msg.Image ?? "").Trim();
+        if (image.Length > 0 && !(File.Exists(image) && IsImagePath(image))) image = "";
+        if (proj == null || store == null || (text.Length == 0 && image.Length == 0)) return;
 
         // No one named = everyone. The owner talks to the room, not to a
         // picker; each bot judges from the text whether the post concerns it
@@ -1008,6 +1011,7 @@ internal sealed class TeamController
         {
             Kind = "user", From = "you", Text = text, ClientId = msg.ClientId,
             To = everyone ? new List<string> { TeamRender.Everyone } : targets.Select(b => b.Slug).ToList(),
+            Image = image.Length > 0 ? image : null,
         };
         // Deliver FIRST, so the row lands with its verdict: "delivered" or
         // "waiting for the bot to wake" is a fact about this post, not a later
@@ -1015,7 +1019,7 @@ internal sealed class TeamController
         // it exists (appends are single-threaded), so the typed line carries
         // it and a bot can react to `#<n>`.
         var seq = store.Ledger.NextSeq;
-        var attempts = Attempt(targets, text, everyone, seq);
+        var attempts = Attempt(targets, WithImage(text, image), everyone, seq);
         entry.Delivered = attempts.All(a => a.Ok);
         store.Ledger.Append(entry);
         var events = Record(store, entry, attempts);
@@ -1716,6 +1720,13 @@ internal sealed class TeamController
 
     /// The line typed into a bot's terminal for one of the owner's posts. The
     /// post's room number rides along (`#12`) so the bot can react to it.
+    /// The text a bot is typed when the post carries a picture: the path is
+    /// named so the bot can Read the file when it needs to see it, and the
+    /// wording says so — a bot should not open every picture it is sent.
+    internal static string WithImage(string text, string image)
+        => image.Length == 0 ? text
+         : (text.Length == 0 ? "" : text + " ") + $"(attached picture: {image} — Read it if you need to see it)";
+
     internal static string DeliveryLine(string text, string? nickname, long seq = 0)
     {
         var who = nickname == null ? "@everyone" : "@" + nickname;

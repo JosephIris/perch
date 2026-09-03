@@ -652,6 +652,17 @@ public class ProtocolTests
     }
 
     [Fact]
+    public void TeamPost_MayCarryAPastedPicture_AndPasteAsksTheHost()
+    {
+        var m = Round<TeamPostMsg>(
+            $"{{\"type\":\"team.post\",\"projectId\":\"{G1}\",\"text\":\"\",\"to\":null,\"clientId\":\"c9\",\"image\":\"C:\\\\repo\\\\.perch\\\\team\\\\local\\\\images\\\\paste-1.png\"}}");
+        Assert.Equal(@"C:\repo\.perch\team\local\images\paste-1.png", m.Image);
+        Assert.Equal("", m.Text);
+        Assert.Null(Round<TeamPostMsg>($"{{\"type\":\"team.post\",\"projectId\":\"{G1}\",\"text\":\"x\",\"to\":null,\"clientId\":\"c1\"}}").Image);
+        Assert.Equal(Guid.Parse(G1), Round<TeamPasteMsg>($"{{\"type\":\"team.paste\",\"projectId\":\"{G1}\"}}").ProjectId);
+    }
+
+    [Fact]
     public void TeamBotAnswer_CarriesTheChoice()
     {
         var m = Round<TeamBotAnswerMsg>(
