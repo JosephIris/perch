@@ -508,14 +508,15 @@ function render(): void {
   composer?.refresh();
 
   const empty = roomEmptyState({ bots, entries: data?.entries ?? [], pending: !data || data.pending });
-  if (empty && pending.size === 0) {
+  if (empty && pending.size === 0 && bots.length === 0) {
+    // No bots at all: the whole room is the invitation to add one.
     emptyEl.hidden = false;
     mainEl.hidden = true;
-    if (composer) composer.element.hidden = bots.length === 0;
+    if (composer) composer.element.hidden = true;
     emptyEl.replaceChildren();
     emptyEl.appendChild(el("div", "team-room__empty-title", empty.title));
     emptyEl.appendChild(el("div", "team-room__empty-body", empty.body));
-    if (bots.length === 0 && project) {
+    if (project) {
       const cta = document.createElement("button");
       cta.type = "button";
       cta.className = "projects-card__btn projects-card__btn--primary team-room__empty-cta";
@@ -530,6 +531,18 @@ function render(): void {
   if (composer) composer.element.hidden = false;
 
   truncEl.hidden = !(data?.truncated);
+  if (empty && pending.size === 0) {
+    // Bots exist but the room has nothing to show — a team pulled onto a
+    // fresh machine (the chat is local), or a team nobody has spoken to. Say
+    // so INSIDE the feed and keep the roster up: it is the only place a
+    // not-running bot can be started from, and hiding it left a pulled team
+    // with no way in.
+    const note = el("div", "team-feed__empty");
+    note.appendChild(el("div", "team-room__empty-title", empty.title));
+    note.appendChild(el("div", "team-room__empty-body", empty.body));
+    feedEl.replaceChildren(note);
+    return;
+  }
   renderFeed(data?.entries ?? [], bots);
 }
 
