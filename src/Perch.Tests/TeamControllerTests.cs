@@ -26,6 +26,7 @@ public class TeamControllerTests
         public readonly List<Guid> Entered = new();
         public readonly List<Action> Delayed = new();
         public readonly List<(Guid Pane, byte[] Bytes)> Raw = new();
+        public readonly List<Guid> Cleared = new();
         public readonly List<(Guid Pane, string Model)> ModelSet = new();
         public readonly List<Guid> Closed = new();
         public bool TypeOk = true;
@@ -63,6 +64,7 @@ public class TeamControllerTests
                 PushState = () => { },
                 Delay = (a, t) => Delayed.Add(a),
                 WriteRaw = (p, b) => Raw.Add((p, b)),
+                ClearPrompt = id => Cleared.Add(id),
                 SetPaneModel = (p, m) => ModelSet.Add((p, m)),
             });
         }
@@ -865,6 +867,9 @@ public class TeamControllerTests
         try
         {
             h.Ctrl.OnPermAnswer(new TeamPermAnswerMsg { ProjectId = h.Project.Id, Id = "p1", Decision = "allow" });
+            // Answered here means no terminal dialog will ever be dismissed:
+            // the pane's "on a prompt" state must be dropped by the answer.
+            Assert.Contains(sess.Root.Id, h.Cleared);
             Assert.Equal("allow", File.ReadAllText(path).Trim());
             var done = h.Ledger.Single(e => e.Event == "permission.answered");
             Assert.Equal("You allowed Ada", done.Text);

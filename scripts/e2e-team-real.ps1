@@ -102,7 +102,9 @@ JSON over REST). Build: `npm run build` in each folder. Tests: `npm test`.
     # An ask rule in the project's own settings: auto mode still prompts for
     # it, and that prompt is what step [6] expects to see as a room card.
     New-Item -ItemType Directory -Force -Path (Join-Path $RepoDir '.claude') | Out-Null
-    Set-Content -Path (Join-Path $RepoDir '.claude\settings.json') -Encoding utf8 -Value '{"permissions":{"ask":["Bash(git tag*)"]}}'
+    # Both shells: on Windows a bot may reach for the PowerShell tool for the
+    # same command, and a rule names the tool.
+    Set-Content -Path (Join-Path $RepoDir '.claude\settings.json') -Encoding utf8 -Value '{"permissions":{"ask":["Bash(git tag:*)","PowerShell(git tag:*)"]}}'
     Push-Location $RepoDir
     try {
         & git init --quiet 2>$null
@@ -279,10 +281,9 @@ JSON over REST). Build: `npm run build` in each folder. Tests: `npm test`.
     Check "Ada's reaction landed as a pill, not a row" (Wait-Until { @((Team-Dump $pid2).ledger | Where-Object { $_.kind -eq 'reaction' -and $_.from -eq 'Ada' }).Count -ge 1 } 180)
     $lastBeat = @((Team-Dump $pid2).ledger | Where-Object { $_.kind -eq 'beat' -and $_.from -eq 'Bo' }) | Select-Object -Last 1
     if ($lastBeat) {
-        $deliverBefore = Log-Count 'Team.deliver'
         [void](Send-Verb 'team.react' @{ projectId = $pid2; seq = [string]$lastBeat.seq; emoji = ([char]0x2705).ToString() })
         Check "your reaction is recorded from you" (Wait-Until { @((Team-Dump $pid2).ledger | Where-Object { $_.kind -eq 'reaction' -and $_.from -eq 'you' }).Count -ge 1 } 10)
-        Check "and Bo was told in one line" (Wait-Until { (Log-Count 'Team.deliver') -gt $deliverBefore } 15)
+        Check "and Bo was told in one line" (Wait-Until { (Log-Count 'Team.react:') -ge 1 -and ((Select-String -Path $LogPath -Pattern 'Team.react:' -SimpleMatch | Select-Object -Last 1).Line -match 'delivered=True') } 15)
     }
 
     Write-Host ""

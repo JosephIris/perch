@@ -163,7 +163,7 @@ cmd /k
     Write-Host "  feed rows: $(Cdp-Eval "document.querySelectorAll('.team-feed > *').length")  roster rows: $(Cdp-Eval "document.querySelectorAll('.roster-bot').length")"
     Shot (Join-Path $OutDir 'team-room-live.png')
 
-    [void](Cdp-Eval "(()=>{const b=document.querySelector('.team-roster__add');if(b){b.click();return 1}return 0})()")
+    [void](Cdp-Eval "(()=>{const b=[...document.querySelectorAll('.team-roster__add')].find(x=>/add bot/i.test(x.textContent||''));if(b){b.click();return 1}return 0})()")
     if (-not (Wait-Until { (Cdp-Eval "document.querySelectorAll('.newbot-card').length") -eq '1' } 10)) { throw "the dialog did not open" }
     Start-Sleep -Milliseconds 600
     Shot (Join-Path $OutDir 'newbot-live.png')

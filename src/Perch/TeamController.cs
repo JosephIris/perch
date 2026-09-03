@@ -38,6 +38,10 @@ internal sealed class TeamHost
     /// Raw bytes into a pane's PTY (PaneManager.Write) — for answering a
     /// dialog with keys, as opposed to typing a line for Claude to read.
     public required Action<Guid, byte[]> WriteRaw { get; init; }
+    /// A prompt on this pane was answered from the room (a permission card):
+    /// drop the pane's Permission/Waiting state so posts stop being parked
+    /// for a dialog that will never be shown. Optional: tests leave it null.
+    public Action<Guid>? ClearPrompt { get; init; }
     /// Change a pane's Claude model (the `pane.model` path: persists the
     /// alias and types `/model <alias>` live). "" = the account default.
     public Action<Guid, string> SetPaneModel { get; init; } = (_, _) => { };
@@ -578,6 +582,11 @@ internal sealed class TeamController
             Text = allow ? $"You allowed {bot?.Nickname ?? "the bot"}" : $"You denied {bot?.Nickname ?? "the bot"}",
         });
         Log.Info("Team.perm.answer", $"id={msg.Id} allow={allow}");
+        // The prompt was answered HERE, so no terminal dialog will ever be
+        // shown or dismissed — nothing else clears the pane's "on a prompt"
+        // state, and a post arriving meanwhile would sit parked for good.
+        if (who.PaneId != Guid.Empty) _h.ClearPrompt?.Invoke(who.PaneId);
+        if (bot?.SessionId is Guid sid && _parked.ContainsKey(sid)) FlushParked(sid, TimeSpan.FromSeconds(2));
         RefreshRoster(proj, store);
         PostEntries(proj.Id, store, new[] { e });
     }

@@ -308,6 +308,17 @@ public partial class MainWindow : FluentWindow
                 timer.Start();
             },
             WriteRaw = (paneId, bytes) => { if (_panes.Has(paneId)) _panes.Write(paneId, bytes); },
+            ClearPrompt = paneId =>
+            {
+                // Same demotion the page's probe applies when a dialog leaves
+                // the screen: the state is a guess again until a hook speaks.
+                var s = OwningSession(paneId);
+                var pane = s == null ? null : FindPane(s, paneId);
+                if (pane == null || pane.AgentState is not (AgentState.Permission or AgentState.Waiting)) return;
+                pane.AgentState = AgentState.Working;
+                pane.StateInferred = true;
+                PushState();
+            },
             SetPaneModel = (paneId, alias) => OnPaneModel(new PaneModelMsg { PaneId = paneId, Model = alias }),
         });
         WireBoardController();
