@@ -870,6 +870,10 @@ public class TeamControllerTests
             // Answered here means no terminal dialog will ever be dismissed:
             // the pane's "on a prompt" state must be dropped by the answer.
             Assert.Contains(sess.Root.Id, h.Cleared);
+            // …and a prompt notice arriving right after is recognised as that
+            // same, already-settled prompt.
+            Assert.True(h.Ctrl.PromptAnsweredRecently(sess.Root.Id));
+            Assert.False(h.Ctrl.PromptAnsweredRecently(Guid.NewGuid()));
             Assert.Equal("allow", File.ReadAllText(path).Trim());
             var done = h.Ledger.Single(e => e.Event == "permission.answered");
             Assert.Equal("You allowed Ada", done.Text);

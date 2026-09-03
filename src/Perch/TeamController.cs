@@ -100,6 +100,17 @@ internal sealed class TeamController
     /// Bot slug → the pane whose Claude is stuck on its start-up question
     /// ("trust this folder?"), until the owner answers from the room.
     private readonly Dictionary<string, Guid> _awaitingTrust = new(StringComparer.OrdinalIgnoreCase);
+    /// Pane → when the owner last answered one of its permission prompts from
+    /// the room. A prompt notice arriving within PromptAnswerGrace of that is
+    /// the same prompt, already settled, and must not mark the pane as asking.
+    private readonly Dictionary<Guid, DateTimeOffset> _permAnswered = new();
+    internal static readonly TimeSpan PromptAnswerGrace = TimeSpan.FromSeconds(20);
+
+    /// True when a permission prompt on this pane was answered from the room
+    /// within the last PromptAnswerGrace — the window then treats a "permission"
+    /// status for it as working, not as a dialog waiting for a person.
+    public bool PromptAnsweredRecently(Guid paneId)
+        => _permAnswered.TryGetValue(paneId, out var at) && DateTimeOffset.UtcNow - at < PromptAnswerGrace;
     /// Per pane: how many collapsed transcript events are already in the
     /// ledger, for which Claude session, and whether the bot's current turn
     /// is answering a room post (its beats then belong in the room).
@@ -585,7 +596,15 @@ internal sealed class TeamController
         // The prompt was answered HERE, so no terminal dialog will ever be
         // shown or dismissed — nothing else clears the pane's "on a prompt"
         // state, and a post arriving meanwhile would sit parked for good.
-        if (who.PaneId != Guid.Empty) _h.ClearPrompt?.Invoke(who.PaneId);
+        // Claude's own "permission prompt" notice can also arrive AFTER this
+        // answer (hooks run side by side; the answer came in half a second),
+        // so the pane remembers the answer and the window ignores a prompt
+        // notice that follows it within a few seconds.
+        if (who.PaneId != Guid.Empty)
+        {
+            _permAnswered[who.PaneId] = DateTimeOffset.UtcNow;
+            _h.ClearPrompt?.Invoke(who.PaneId);
+        }
         if (bot?.SessionId is Guid sid && _parked.ContainsKey(sid)) FlushParked(sid, TimeSpan.FromSeconds(2));
         RefreshRoster(proj, store);
         PostEntries(proj.Id, store, new[] { e });

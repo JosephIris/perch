@@ -1394,6 +1394,15 @@ public partial class MainWindow : FluentWindow
         var prev = pane.AgentState;
         var newState  = StateProjection.ParseAgentState(msg.State);
         var newDetail = msg.Detail ?? "";
+        // A team bot's permission prompt that the owner already answered from
+        // the room's card: Claude's own "prompt shown" notice can land after
+        // the answer, and no dialog is on screen to dismiss — so it is not a
+        // wait for a person. Keep the pane working.
+        if (newState == AgentState.Permission && _teamCtrl.PromptAnsweredRecently(paneId))
+        {
+            Log.Info("Team.perm.notice", $"pane={paneId:N} prompt notice after a room answer — ignored");
+            newState = AgentState.Working;
+        }
         // Coalesce no-op repeats. PostToolUse fires once per tool — many/sec
         // during agentic work — and almost all are working→working with no
         // detail change. If the authoritative state and detail are unchanged
