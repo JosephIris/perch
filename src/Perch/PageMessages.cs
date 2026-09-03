@@ -549,6 +549,16 @@ internal sealed record TeamBotStartMsg
     public required string BotId { get; init; }
 }
 
+/// The owner answering a bot's start-up question from the room's card.
+/// `answer` is "trust" (Yes, I trust this folder) or "exit" (the dialog's
+/// default, No, exit).
+internal sealed record TeamBotAnswerMsg
+{
+    public required Guid ProjectId { get; init; }
+    public required string BotId { get; init; }
+    public required string Answer { get; init; }
+}
+
 /// Make a bot the team's one lead (replacing the current one).
 internal sealed record TeamLeadSetMsg
 {

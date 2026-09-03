@@ -10,9 +10,13 @@
 >
 > Two things the real run taught: a bot in a brand-new folder first gets
 > Claude Code's "trust this folder?" question in its terminal (default answer
-> is "No, exit" — pick "Yes" once per folder; the post waits, parked, until
-> the session starts). And typed lines must send their Enter in a separate
-> write, or Claude Code's paste detection swallows it (`TypeToClaude`).
+> is "No, exit"). Since 2026-09-03 that question is a CARD in the room: the
+> pre-session watchdog (`OnPreSessionQuiet`) tells `TeamController.OnPromptStuck`,
+> the room shows "big_dawg is waiting on a question…" with **Trust folder** /
+> **Don't** / Open, and the answer (`team.bot.answer`) presses the keys in that
+> pane (Down, Enter for trust). The post waits, parked, until the session
+> starts. And typed lines must send their Enter in a separate write, or Claude
+> Code's paste detection swallows it (`TypeToClaude`).
 
 ## Goal
 

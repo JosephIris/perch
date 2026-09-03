@@ -73,6 +73,7 @@ export function systemTone(event: TeamEntryView["event"]): "calm" | "attention" 
   switch (event) {
     case "waiting":
     case "permission":
+    case "trust":                              // a bot's start-up question, answered from the card
     case "task.review": return "attention";   // the lead is asking you to confirm
     case "error": return "error";
     default: return "calm";
@@ -777,7 +778,17 @@ function stateLine(p: Presence, s: SessionView | undefined): HTMLElement {
   return line;
 }
 
+/** Nicknames whose start-up question has been answered (a later trusted /
+ *  exited row), so their trust card renders without its buttons. Rebuilt on
+ *  every feed render from the rows themselves — no second source of truth. */
+const answeredTrust = new Set<string>();
+
 function renderFeed(entries: TeamEntryView[], bots: TeamBotView[]): void {
+  answeredTrust.clear();
+  for (const e of entries) {
+    if (e.kind === "system" && (e.event === "trusted" || e.event === "exited") && Array.isArray(e.to))
+      for (const n of e.to) answeredTrust.add(n);
+  }
   const pinned = isNearBottom(feedEl) || feedEl.childElementCount === 0;
   const prevTop = feedEl.scrollTop;
 
@@ -990,6 +1001,40 @@ function renderSystem(e: TeamEntryView, bots: TeamBotView[]): HTMLElement {
   node.appendChild(dot);
   node.appendChild(el("span", "tf-sys__text", e.text));
   const bot = botByName(bots, e.from, e.botId);
+  // A start-up question ("trust this folder?") is answered right here: the
+  // card carries the two answers until a later row says it was answered.
+  const asked = Array.isArray(e.to) ? e.to[0] : undefined;
+  const askedBot = asked ? bots.find((b) => b.nickname === asked) : undefined;
+  if (e.event === "trust" && askedBot && !answeredTrust.has(askedBot.nickname)) {
+    const project = projectId ? projectFor(projectId) : null;
+    const answer = (choice: "trust" | "exit", label: string, title: string) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "tf-sys__open";
+      b.textContent = label;
+      b.title = title;
+      b.addEventListener("click", () => {
+        if (!project) return;
+        send({ type: "team.bot.answer", projectId: project.id, botId: askedBot.botId, answer: choice });
+        node.querySelectorAll("button").forEach((x) => { (x as HTMLButtonElement).disabled = true; });
+      });
+      return b;
+    };
+    node.appendChild(answer("trust", "Trust folder", `Answer "Yes, I trust this folder" for ${askedBot.nickname}`));
+    node.appendChild(answer("exit", "Don't", `Answer "No, exit" for ${askedBot.nickname}`));
+    if (askedBot.sessionId) {
+      const open = document.createElement("button");
+      open.type = "button";
+      open.className = "tf-sys__open";
+      open.textContent = "Open";
+      open.title = `Go to ${askedBot.nickname}'s terminal`;
+      open.addEventListener("click", () => {
+        closeTeamRoom();
+        send({ type: "session.select", id: askedBot.sessionId });
+      });
+      node.appendChild(open);
+    }
+  }
   // Rows that need the owner IN the bot's terminal — it is asking something,
   // or a typed post is sitting there unsent — carry the door to it.
   if ((e.event === "waiting" || e.event === "permission" || e.event === "undelivered") && bot?.sessionId) {

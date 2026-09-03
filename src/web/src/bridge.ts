@@ -300,6 +300,9 @@ export type OutMessage =
   /* Start a bot that has no tab on this machine (it came with a pull, or its
    * tab was closed): a fresh tab under the same nickname, face and memory. */
   | { type: "team.bot.start"; projectId: string; botId: string }
+  /* Answer a bot's start-up question from the room's card. "trust" picks
+   * "Yes, I trust this folder"; "exit" takes the dialog's default (No, exit). */
+  | { type: "team.bot.answer"; projectId: string; botId: string; answer: "trust" | "exit" }
   /* Make a bot the team's one lead. */
   | { type: "team.lead.set"; projectId: string; botId: string }
   /* The task board: the owner sets or renames the task, confirms it's done
@@ -794,6 +797,7 @@ export type TeamEntryView = {
    * (note = its seq): its pane is asking something, or the typed line never
    * submitted. Both offer the bot's terminal. */
   event?: "joined" | "left" | "waiting" | "permission" | "done" | "asleep" | "woke" | "error"
+        | "trust" | "trusted" | "exited"
         | "delivered" | "undelivered"
         /* the task board: a change, the lead asking to confirm, the owner
          * confirming, a bot reset for the next task, a new lead */

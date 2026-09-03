@@ -162,9 +162,15 @@ JSON over REST). Build: `npm run build` in each folder. Tests: `npm test`.
         [void](Send-Verb 'team.bot.create' @{ projectId = $pid2; nickname = $Nick; positionSlug = $Slug; worktree = 'false' })
         $up = Wait-Until { (Log-Count 'type=session') -ge $Expected } 12
         if (-not $up) {
-            # The dialog's default is "No, exit" — Enter alone would close
-            # Claude. Down selects "Yes, I trust this folder", then Enter.
-            [void](Send-Verb 'pty.send' @{ text = "$([char]27)[B`r" })
+            # The bot is on Claude's "trust this folder?" question. The host
+            # notices and puts a card in the room (Team.trust.ask); answering
+            # it is the same verb the card's "Trust folder" button sends.
+            if (-not (Wait-Until { (Log-Count 'Team.trust.ask') -ge $Expected } 20)) {
+                Write-Host "      (no trust card seen for $Nick; answering the terminal directly)"
+                [void](Send-Verb 'pty.send' @{ text = "$([char]27)[B`r" })
+            } else {
+                [void](Send-Verb 'team.bot.answer' @{ projectId = $pid2; botId = $Nick.ToLowerInvariant(); answer = 'trust' })
+            }
             $up = Wait-Until { (Log-Count 'type=session') -ge $Expected } 60
         }
         return $up
@@ -191,9 +197,15 @@ JSON over REST). Build: `npm run build` in each folder. Tests: `npm test`.
     [void](Send-Verb 'team.post' @{ projectId = $pid2; text = 'Use your SendMessage tool to send bo exactly this message: PING-7731. Then reply done.'; to = 'Ada'; clientId = 'e2' })
     Check "delivered to Ada" (Wait-Until { (Log-Count 'Team.deliver') -ge 3 } 15)
     Check "the hook saw a SendMessage" (Wait-Until { (Log-Count 'type=peer.msg') -ge 1 } 180)
-    Start-Sleep -Seconds 3
-    $d = Team-Dump $pid2
-    $peer = @($d.ledger | Where-Object { $_.kind -eq 'peer' }) | Select-Object -Last 1
+    # The room records the SENT phase (the verdict), which follows the sending
+    # phase by however long delivery takes; poll for it rather than sleep.
+    $peer = $null
+    [void](Wait-Until {
+        $d = Team-Dump $pid2
+        $script:peer = @($d.ledger | Where-Object { $_.kind -eq 'peer' }) | Select-Object -Last 1
+        $null -ne $script:peer
+    } 60)
+    $peer = $script:peer
     Check "a peer entry from Ada to Bo with the full text" ($peer -and $peer.from -eq 'Ada' -and $peer.text -like '*PING-7731*') "- $($peer | ConvertTo-Json -Compress)"
     Write-Host "      peer: $($peer | ConvertTo-Json -Compress)"
 

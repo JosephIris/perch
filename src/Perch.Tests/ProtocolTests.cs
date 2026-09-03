@@ -603,6 +603,16 @@ public class ProtocolTests
     }
 
     [Fact]
+    public void TeamBotAnswer_CarriesTheChoice()
+    {
+        var m = Round<TeamBotAnswerMsg>(
+            $"{{\"type\":\"team.bot.answer\",\"projectId\":\"{G1}\",\"botId\":\"big-dawg\",\"answer\":\"trust\"}}");
+        Assert.Equal(Guid.Parse(G1), m.ProjectId);
+        Assert.Equal("big-dawg", m.BotId);
+        Assert.Equal("trust", m.Answer);
+    }
+
+    [Fact]
     public void Router_DispatchesTypedAndPayloadless()
     {
         PaneRef? seen = null;

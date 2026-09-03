@@ -307,6 +307,7 @@ public partial class MainWindow : FluentWindow
                 timer.Tick += (_, __) => { timer.Stop(); action(); };
                 timer.Start();
             },
+            WriteRaw = (paneId, bytes) => { if (_panes.Has(paneId)) _panes.Write(paneId, bytes); },
         });
         WireBoardController();
         _router = BuildRouter();
@@ -809,7 +810,8 @@ public partial class MainWindow : FluentWindow
         .Add<TeamTaskConfirmMsg>("team.task.confirm", m => _teamCtrl.OnTaskConfirm(m))
         .Add<TeamTaskRejectMsg>("team.task.reject", m => _teamCtrl.OnTaskReject(m))
         .Add<TeamReferenceBrowseMsg>("team.reference.browse", OnTeamReferenceBrowse)
-        .Add<TeamRoomMsg>("team.room", m => _teamCtrl.OnRoom(m));
+        .Add<TeamRoomMsg>("team.room", m => _teamCtrl.OnRoom(m))
+        .Add<TeamBotAnswerMsg>("team.bot.answer", m => _teamCtrl.OnBotAnswer(m));
 
     private void OnWebMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
@@ -1900,6 +1902,9 @@ public partial class MainWindow : FluentWindow
         st.Cap?.Stop();
         Log.Info("Setup", $"pane {paneId:N} quiet before session-start ({st.PreSessionBytes}B painted, no hook) — cc is on an interactive prompt (trust/theme/login); uncovering so it can be answered");
         PostToPage(new { type = "pane.setup", paneId = paneId.ToString("D"), show = false, colorIndex = 0 });
+        // A team bot's question goes to the room as a card the owner can
+        // answer without hunting for the terminal.
+        if (OwningSession(paneId) is Session bsess) _teamCtrl.OnPromptStuck(bsess, paneId);
     }
 
     private static void RestartSetupQuiet(SetupState st)

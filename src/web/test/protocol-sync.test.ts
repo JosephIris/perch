@@ -79,6 +79,7 @@ const EXPECTED_TYPES = [
   "settings.request",
   "settings.save",
   "sidebar.reorder",
+  "team.bot.answer",
   "team.bot.create",
   "team.bot.remove",
   "team.bot.start",

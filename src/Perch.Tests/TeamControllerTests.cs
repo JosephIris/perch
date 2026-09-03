@@ -25,6 +25,7 @@ public class TeamControllerTests
         /// Every Enter the controller pressed on its own (the submit retry).
         public readonly List<Guid> Entered = new();
         public readonly List<Action> Delayed = new();
+        public readonly List<(Guid Pane, byte[] Bytes)> Raw = new();
         public readonly List<Guid> Closed = new();
         public bool TypeOk = true;
         /// What a bot's transcript reads as, per pane. Null = no transcript.
@@ -60,6 +61,7 @@ public class TeamControllerTests
                 Post = o => Posted.Add(o),
                 PushState = () => { },
                 Delay = (a, t) => Delayed.Add(a),
+                WriteRaw = (p, b) => Raw.Add((p, b)),
             });
         }
 
@@ -745,5 +747,54 @@ public class TeamControllerTests
         Assert.Contains(entries, e => e.GetProperty("kind").GetString() == "user" && e.GetProperty("clientId").GetString() == "c2");
         Assert.Equal(h.Store.Ledger.LastSeq, reply.GetProperty("lastSeq").GetInt64());
         TeamMarkers.Clear(h.Sessions.Single().Root.Id);
+    }
+
+    [Fact]
+    public async Task StartupQuestion_BecomesACard_AndTheAnswerPressesTheKeys()
+    {
+        var h = new Harness();
+        var bot = await h.CreateBot("Ada");
+        var sess = h.Sessions.Single();
+        h.Ctrl.OnPromptStuck(sess, sess.Root.Id);
+
+        var ask = h.Ledger.Single(e => e.Event == "trust");
+        Assert.Equal("ada", Assert.Single(ask.To!));
+        Assert.Contains("trust this folder", ask.Text);
+        Assert.Contains("[waiting for the owner to answer its start-up question]", File.ReadAllText(h.Store.RosterPath));
+
+        // "Trust folder": Down (select "Yes, I trust this folder"), then Enter.
+        h.Ctrl.OnBotAnswer(new TeamBotAnswerMsg { ProjectId = h.Project.Id, BotId = bot.Slug, Answer = "trust" });
+        var (pane, bytes) = Assert.Single(h.Raw);
+        Assert.Equal(sess.Root.Id, pane);
+        Assert.Equal(new byte[] { 0x1b, (byte)'[', (byte)'B', (byte)'\r' }, bytes);
+        var done = h.Ledger.Single(e => e.Event == "trusted");
+        Assert.Equal("You trusted the folder for Ada", done.Text);
+        Assert.DoesNotContain("start-up question", File.ReadAllText(h.Store.RosterPath));
+        TeamMarkers.Clear(sess.Root.Id);
+    }
+
+    [Fact]
+    public async Task StartupQuestion_Declined_TakesTheDialogsDefault()
+    {
+        var h = new Harness();
+        var bot = await h.CreateBot("Bo");
+        var sess = h.Sessions.Single();
+        h.Ctrl.OnPromptStuck(sess, sess.Root.Id);
+        h.Ctrl.OnBotAnswer(new TeamBotAnswerMsg { ProjectId = h.Project.Id, BotId = bot.Slug, Answer = "exit" });
+        var (_, bytes) = Assert.Single(h.Raw);
+        Assert.Equal(new byte[] { (byte)'\r' }, bytes);
+        Assert.Contains(h.Ledger, e => e.Event == "exited" && e.Text == "You told Bo not to start");
+        TeamMarkers.Clear(sess.Root.Id);
+    }
+
+    [Fact]
+    public async Task StartupQuestion_ForANonBotPane_IsIgnored()
+    {
+        var h = new Harness();
+        var stray = new Session { Title = "just a tab" };
+        h.Sessions.Add(stray);
+        h.Ctrl.OnPromptStuck(stray, stray.Root.Id);
+        Assert.Null(h.Ctrl.StoreFor(h.Project.Id));   // no team was even created
+        Assert.Empty(h.Raw);
     }
 }

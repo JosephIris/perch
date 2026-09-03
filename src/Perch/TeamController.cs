@@ -35,6 +35,9 @@ internal sealed class TeamHost
     public required Action PushState { get; init; }
     /// Run `action` on the UI thread after `delay` (a DispatcherTimer).
     public required Action<Action, TimeSpan> Delay { get; init; }
+    /// Raw bytes into a pane's PTY (PaneManager.Write) — for answering a
+    /// dialog with keys, as opposed to typing a line for Claude to read.
+    public required Action<Guid, byte[]> WriteRaw { get; init; }
 }
 
 /// The team feature's host-side brain: per-project team stores, the marker
@@ -87,6 +90,9 @@ internal sealed class TeamController
     private readonly HashSet<Guid> _flushPending = new();
     private readonly Dictionary<string, CancellationTokenSource> _briefJobs = new(StringComparer.Ordinal);
     private readonly HashSet<Guid> _openRooms = new();
+    /// Bot slug → the pane whose Claude is stuck on its start-up question
+    /// ("trust this folder?"), until the owner answers from the room.
+    private readonly Dictionary<string, Guid> _awaitingTrust = new(StringComparer.OrdinalIgnoreCase);
     /// Per pane: how many collapsed transcript events are already in the
     /// ledger, for which Claude session, and whether the bot's current turn
     /// is answering a room post (its beats then belong in the room).
@@ -439,6 +445,61 @@ internal sealed class TeamController
             Kind = "system", From = bot.Slug, Event = ev, Note = seq.ToString(), Text = text,
         });
         PostEntries(h.Project.Id, h.Store, new[] { e });
+    }
+
+    /// A bot's Claude painted a screen and went quiet before its session
+    /// started: it is waiting on a question only a person can answer — for a
+    /// bot in a fresh folder, "trust this folder?". Put the question in the
+    /// room as a card the owner can answer, instead of a terminal they'd have
+    /// to go find.
+    public void OnPromptStuck(Session sess, Guid paneId)
+    {
+        if (BotOfSession(sess.Id) is not { } h) return;
+        _awaitingTrust[h.Bot.Slug] = paneId;
+        var e = h.Store.Ledger.Append(new RoomEntry
+        {
+            Kind = "system", From = "perch", Event = "trust", PaneId = paneId.ToString("D"),
+            To = new List<string> { h.Bot.Slug },
+            Text = $"{h.Bot.Nickname} is waiting on a question before it can start — usually \"trust this folder?\" for its new folder.",
+        });
+        Log.Info("Team.trust.ask", $"bot={h.Bot.Slug} pane={paneId:N}");
+        RefreshRoster(h.Project, h.Store);
+        PostEntries(h.Project.Id, h.Store, new[] { e });
+    }
+
+    /// The owner answered a bot's start-up question from the room. "trust"
+    /// picks "Yes, I trust this folder" (Down, then Enter — the dialog's
+    /// default is "No, exit"); anything else takes that default.
+    public void OnBotAnswer(TeamBotAnswerMsg msg)
+    {
+        var proj = _h.ProjectById(msg.ProjectId);
+        var store = StoreFor(msg.ProjectId);
+        var bot = store?.Doc.Bot(msg.BotId);
+        if (proj == null || store == null || bot == null) return;
+        Guid paneId;
+        if (!_awaitingTrust.TryGetValue(bot.Slug, out paneId))
+        {
+            var sess = bot.SessionId is Guid sid ? _h.SessionById(sid) : null;
+            var pane = sess == null ? null : PaneTree.AllLeaves(sess.Root).FirstOrDefault(p => p.IsTerminal);
+            if (pane == null) { Toast($"{bot.Nickname} isn't running."); return; }
+            paneId = pane.Id;
+        }
+        var trust = string.Equals(msg.Answer, "trust", StringComparison.OrdinalIgnoreCase);
+        try
+        {
+            _h.WriteRaw(paneId, trust ? new byte[] { 0x1b, (byte)'[', (byte)'B', (byte)'\r' } : new byte[] { (byte)'\r' });
+        }
+        catch (Exception ex) { Log.Info("Team.trust.answer", $"write failed: {ex.Message}"); }
+        _awaitingTrust.Remove(bot.Slug);
+        Log.Info("Team.trust.answer", $"bot={bot.Slug} pane={paneId:N} trust={trust}");
+        var e = store.Ledger.Append(new RoomEntry
+        {
+            Kind = "system", From = "perch", Event = trust ? "trusted" : "exited",
+            To = new List<string> { bot.Slug },
+            Text = trust ? $"You trusted the folder for {bot.Nickname}" : $"You told {bot.Nickname} not to start",
+        });
+        RefreshRoster(proj, store);
+        PostEntries(proj.Id, store, new[] { e });
     }
 
     public void OnSessionSlept(Session sess) => Lifecycle(sess, "asleep", b => $"{b.Nickname} is asleep");
@@ -1213,6 +1274,7 @@ internal sealed class TeamController
             var sess = bot.SessionId is Guid id ? _h.SessionById(id) : null;
             if (sess == null) { map[bot.Slug] = "not running"; continue; }
             if (sess.Dormant) { map[bot.Slug] = "asleep"; continue; }
+            if (_awaitingTrust.ContainsKey(bot.Slug)) { map[bot.Slug] = "waiting for the owner to answer its start-up question"; continue; }
             var leaves = PaneTree.AllLeaves(sess.Root).Where(p => p.IsTerminal).ToList();
             map[bot.Slug] = leaves.Any(p => p.AgentState is AgentState.Waiting or AgentState.Permission) ? "waiting for the owner"
                           : leaves.Any(p => p.AgentState == AgentState.Working) ? "working"
