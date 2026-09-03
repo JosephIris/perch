@@ -869,6 +869,15 @@ function stateLine(p: Presence, s: SessionView | undefined): HTMLElement {
 let answered = answeredSet([]);
 let reactions = new Map<number, ReactionPill[]>();
 
+/** Whether the last feed render was pinned to the bottom. A picture that
+ *  finishes loading after that render re-pins the feed, so late bytes never
+ *  leave the reader a screen above the newest message. */
+let lastPinned = true;
+
+function repinIfPinned(): void {
+  if (lastPinned && feedEl) feedEl.scrollTop = feedEl.scrollHeight;
+}
+
 function renderFeed(entries: TeamEntryView[], bots: TeamBotView[]): void {
   answered = answeredSet(entries);
   reactions = reactionsFor(entries);
@@ -879,6 +888,7 @@ function renderFeed(entries: TeamEntryView[], bots: TeamBotView[]): void {
     if (emojis.size === 0) optimisticReactions.delete(seq);
   }
   const pinned = isNearBottom(feedEl) || feedEl.childElementCount === 0;
+  lastPinned = pinned;
   const prevTop = feedEl.scrollTop;
 
   // Drop optimistic rows the host has echoed back.
@@ -1064,6 +1074,7 @@ function renderThumbs(paths: string[], time: string): HTMLElement {
     cap.title = path;
     fig.appendChild(cap);
     fig.addEventListener("click", (ev) => { ev.stopPropagation(); if (img.src) openImageLightbox(img.src, `${imageLabel(path)} · ${time}`); });
+    img.addEventListener("load", repinIfPinned, { once: true });
     void requestTeamImage(pid, path).then((src) => {
       if (src) { img.src = src; fig.classList.add("tf-thumb--loaded"); }
       else { fig.classList.add("tf-thumb--missing"); cap.textContent = `${imageLabel(path)} — couldn't load`; }
