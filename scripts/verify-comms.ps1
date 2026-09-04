@@ -116,8 +116,16 @@ try {
     Set-Content -Path (Join-Path $RepoDir 'src\app.ts') -Encoding utf8 -Value "export const hello = () => 'hi';`n"
     Push-Location $RepoDir
     try {
-        & git init --quiet 2>$null
-        & git add -A 2>$null; & git -c user.email=t@t -c user.name=t commit -qm init 2>$null
+        # NO `2>$null` on these. Under Windows PowerShell 5.1, redirecting a
+        # native command's stderr wraps every line in an ErrorRecord and clears
+        # $? even when the exe returned 0 — so with $ErrorActionPreference =
+        # 'Stop' (set at the top of this file) git's harmless "LF will be
+        # replaced by CRLF" warning KILLED the release gate before it ran a
+        # single check. autocrlf=false stops that warning being emitted at all
+        # in this throwaway repo, and --quiet keeps the rest silent.
+        & git init --quiet
+        & git -c core.autocrlf=false add -A
+        & git -c user.email=t@t -c user.name=t commit -qm init | Out-Null
     } finally { Pop-Location }
 
     # The team, seeded on disk: no brief generation, so the gate costs one
