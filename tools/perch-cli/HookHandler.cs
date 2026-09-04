@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.IO.Pipes;
 using System.Text;
@@ -7,24 +7,39 @@ using System.Threading;
 
 namespace PerchCli;
 
-// Handles `perch hooks claude <event>` callbacks fired by Claude Code via the
-// --settings hooks JSON our wrapper injects. Claude passes the hook context
-// as JSON on stdin; we extract what's useful and send it back to the perch
+// Handles `perch hooks <agent> <event>` callbacks fired by the coding agent
+// running in a pane: Claude Code via the --settings hooks JSON our wrapper
+// injects, or codex via the `perch` profile the codex wrapper writes. Both
+// pass the hook context as JSON on stdin, and — this is why one handler serves
+// both — codex deliberately mirrors Claude Code's event names AND its payload
+// field names (session_id, cwd, hook_event_name, tool_name, tool_input,
+// prompt, message). We extract what's useful and send it back to the perch
 // host through the IPC pipe.
 //
+// Where the two genuinely differ, `agent` is the switch: which badge the pane
+// wears, and which tool names PrettyAction knows how to phrase. Everything
+// claude-only (peer messaging, gcloud stamping, the team room's held
+// permission prompts) is reached only from events codex never fires, or is
+// guarded on the agent.
+//
 // We intentionally accept-and-forget unknown events so adding a new hook to
-// Claude Code doesn't break us.
+// either agent doesn't break us.
 internal static class HookHandler
 {
     public static int Run(string pipeName, string[] args)
     {
-        // Usage: perch hooks claude <event>
-        if (args.Length < 3 || args[1] != "claude")
+        // Usage: perch hooks <claude|codex> <event>
+        if (args.Length < 3 || args[1] is not ("claude" or "codex"))
         {
-            Console.Error.WriteLine("perch hooks: usage: perch hooks claude <event>");
+            Console.Error.WriteLine("perch hooks: usage: perch hooks <claude|codex> <event>");
             return 2;
         }
+        var agent = args[1];
         var evt = args[2];
+        // The one event whose HANDLING differs between the two agents, not just
+        // its payload — routed to its own case rather than branching inside a
+        // 90-line one. See "codex-permission" below.
+        if (agent == "codex" && evt == "permission-request") evt = "codex-permission";
 
         // Claude Code passes the hook payload on stdin as JSON. Read it
         // (with a small budget) and try to parse — if it isn't JSON, fall
@@ -44,6 +59,17 @@ internal static class HookHandler
         }
         catch { /* tolerate */ }
 
+        // Diagnostic seam. PERCH_HOOK_DUMP=<file> appends every hook payload we
+        // are handed, which is how the codex mapping below was written: an
+        // agent's own docs never tell you the exact shape of `tool_input` for
+        // the tool you care about, and guessing it produces an activity line
+        // that reads "using exec" forever. Off unless the variable is set, and
+        // best-effort — a diagnostic must never break a hook.
+        var dump = Environment.GetEnvironmentVariable("PERCH_HOOK_DUMP");
+        if (!string.IsNullOrWhiteSpace(dump))
+            try { File.AppendAllText(dump!, $"=== {agent} {evt}\n{stdinPayload}\n\n"); }
+            catch { }
+
         JsonElement? root = null;
         if (!string.IsNullOrWhiteSpace(stdinPayload))
         {
@@ -59,16 +85,18 @@ internal static class HookHandler
         switch (evt)
         {
             case "session-start":
-                // Tell the host this pane is running Claude Code so its header
-                // shows a "CC" badge. This wrapper only ever runs for `claude`,
-                // so the tool name is definitive.
-                Send(pipeName, new { type = "agent", name = "claude" });
-                Send(pipeName, new { type = "status", state = "working", detail = "claude started" });
-                // Capture Claude's own session id so a future relaunch can
-                // `claude --resume <id>` straight back into this conversation.
-                // Same root/hook_input/data fallback the other fields use. The
-                // resumed run re-fires session-start with the same id, so
-                // re-capture is idempotent. Empty/absent → nothing persisted.
+                // Tell the host which agent is running here so its header shows
+                // the right badge ("CC" / "CX"). The wrapper that installed this
+                // hook is the definitive answer.
+                Send(pipeName, new { type = "agent", name = agent });
+                Send(pipeName, new { type = "status", state = "working", detail = $"{agent} started" });
+                // The agent's own id for this conversation. Both agents have
+                // one and both can resume from it, but they are NOT
+                // interchangeable — `claude --resume <id>` vs `codex resume
+                // <id>`, and two entirely different journal files — so the
+                // agent travels with it and the host files it accordingly.
+                // Codex also hands us the journal's exact path, which saves the
+                // host a directory search.
                 var sessionId = StringFrom(root, "session_id");
                 if (!string.IsNullOrWhiteSpace(sessionId))
                     // `name` is the peer name this launch went out under (the
@@ -83,8 +111,22 @@ internal static class HookHandler
                     // to instead of the name. The host maps it back to us.
                     Send(pipeName, new
                     {
-                        type = "session", id = sessionId, name = ReadOwnPeerName(),
-                        socket = NullIfBlank(Environment.GetEnvironmentVariable("CLAUDE_CODE_MESSAGING_SOCKET")),
+                        type = "session", id = sessionId, agent,
+                        // Peer messaging is Claude Code's; codex has no
+                        // equivalent, so neither field is looked up for it.
+                        name = agent == "claude" ? ReadOwnPeerName() : null,
+                        socket = agent == "claude"
+                            ? NullIfBlank(Environment.GetEnvironmentVariable("CLAUDE_CODE_MESSAGING_SOCKET"))
+                            : null,
+                        // Where this conversation's journal lives. Codex states
+                        // it outright; Claude Code doesn't, and the host finds
+                        // that one from the id + cwd as it always has.
+                        path = NullIfBlank(StringFrom(root, "transcript_path")),
+                        // The model this launch actually got. Perch picks
+                        // Claude's, so there it's already known; codex's is
+                        // whatever codex resolved, and this is the only place
+                        // the header can learn it.
+                        model = NullIfBlank(StringFrom(root, "model")),
                     });
                 // Re-arm pane auto-naming so the next first prompt re-titles
                 // the pane to the new task — that's what makes a fresh launch
@@ -122,10 +164,19 @@ internal static class HookHandler
                 var promptText = StringFrom(root, "prompt", maxLen: 400);
                 if (!string.IsNullOrWhiteSpace(promptText))
                     Send(pipeName, new { type = "title", text = promptText });
+                // Codex only: refresh the model. Its user can change models
+                // mid-conversation with `/model`, and its prompt payload
+                // carries whatever is in force — so the header chip follows the
+                // switch instead of showing what the session started on. (No id
+                // is sent: this is a correction, not a new session.)
+                if (agent == "codex" && StringFrom(root, "model") is { Length: > 0 } turnModel)
+                    Send(pipeName, new { type = "session", agent, model = turnModel });
                 // If this pane's tab has a board, point the agent at it; if
                 // the pane is a team bot, hand it the current roster. One
-                // object on stdout, or nothing.
-                EmitPromptContext();
+                // object on stdout, or nothing. Claude-shaped stdout, so
+                // claude only — codex validates a hook's output against its own
+                // schema and would log ours as invalid.
+                if (agent == "claude") EmitPromptContext();
                 break;
 
             case "notification":
@@ -206,6 +257,26 @@ internal static class HookHandler
                     Send(pipeName, new { type = "status", state = "working", detail = PrettyAction(root, tool!) });
                 break;
 
+            case "codex-permission":
+                // Codex's PermissionRequest. Two jobs, in this order.
+                //
+                // First, say the pane is blocked. Claude Code announces its own
+                // prompt through a Notification hook and this case doesn't have
+                // to; codex sends no such notice, so without this line a codex
+                // pane waiting on an approval would look like it was still
+                // working. PostToolUse clears it the moment the command runs.
+                Send(pipeName, new
+                {
+                    type = "notify", level = "warn",
+                    text = "Codex is asking to run " + ToolSummary(root, StringFrom(root, "tool_name") ?? "something"),
+                });
+                Send(pipeName, new { type = "status", state = "permission", detail = (string?)null });
+                // Then hold it, exactly as a Claude bot's prompt is held, so a
+                // codex bot's approval can be answered from the room instead of
+                // in its terminal. Returns immediately for any pane that isn't
+                // a bot's, and codex then shows its own card as usual.
+                return HoldPermission(pipeName, root, agent);
+
             case "pre-send":
                 // PreToolUse, matcher "SendMessage" — the agent is messaging
                 // another Claude Code session (cross-session messaging). Report
@@ -253,12 +324,28 @@ internal static class HookHandler
                 // host can split a shared working tree's loc between the agents
                 // editing it (projects-mode tabs without worktrees). Only tools
                 // whose input names a file — a Bash side-effect can't be claimed.
+                // The rest of this case reads the agent's tool vocabulary. The
+                // two overlap more than they look: codex calls its shell tool
+                // "Bash" and passes `tool_input.command` as a plain string,
+                // exactly like Claude Code, so the commit-claiming below is
+                // shared. What differs is the file-editing tool — codex has one
+                // (apply_patch) whose input is a patch script, handled just
+                // after this.
                 var editTool = StringFrom(root, "tool_name") ?? StringFrom(root, "tool");
                 if (editTool is "Edit" or "MultiEdit" or "Write" or "NotebookEdit")
                 {
                     var touched = ToolInputString(root, "file_path") ?? ToolInputString(root, "notebook_path");
                     if (!string.IsNullOrWhiteSpace(touched))
                         Send(pipeName, new { type = "git.touched", path = touched });
+                }
+                // Codex's editing tool. One call can touch several files, and
+                // the patch header names each one absolutely, so every one is
+                // claimed — that's what lets two agents sharing a working tree
+                // each get billed only for their own lines.
+                else if (editTool is "apply_patch")
+                {
+                    foreach (var path in CodexPatch.Files(ToolInputString(root, "command")))
+                        Send(pipeName, new { type = "git.touched", path });
                 }
                 // A Bash `git commit` that just ran: claim its new sha(s) for
                 // THIS pane, parsed from the "[branch abc1234]" marker in the
@@ -306,7 +393,7 @@ internal static class HookHandler
                 // that asks, auto included for what auto never approves). For a
                 // team bot's pane, hold it and let the owner answer from the
                 // room; for any other pane, stay silent and the prompt shows.
-                return HoldPermission(pipeName, root);
+                return HoldPermission(pipeName, root, agent);
 
             case "permission-denied":
                 // Auto mode's classifier blocked a tool call. Information for
@@ -343,7 +430,7 @@ internal static class HookHandler
     /// the decision JSON (the only thing cc reads); on timeout print nothing,
     /// so the normal prompt appears in the terminal. Exit 0 either way — a
     /// non-zero exit would make cc ignore even a valid decision.
-    private static int HoldPermission(string pipeName, JsonElement? root)
+    private static int HoldPermission(string pipeName, JsonElement? root, string agent)
     {
         try
         {
@@ -373,9 +460,17 @@ internal static class HookHandler
                     try { File.Delete(answerPath); } catch { }
                     if (answer is "allow" or "deny")
                     {
+                        // Same field, two shapes: Claude Code takes the decision
+                        // as a bare word, codex as an object with a `behavior`.
+                        // Sending the wrong one is silent — the agent logs
+                        // "invalid hook JSON output" and just shows its own
+                        // prompt — so the shape follows the agent, not a guess.
+                        object decision = agent == "codex"
+                            ? new { behavior = answer }
+                            : answer;
                         Console.Out.Write(JsonSerializer.Serialize(new
                         {
-                            hookSpecificOutput = new { hookEventName = "PermissionRequest", decision = answer },
+                            hookSpecificOutput = new { hookEventName = "PermissionRequest", decision },
                         }, JsonOpts));
                         Console.Out.Flush();
                     }
@@ -399,6 +494,13 @@ internal static class HookHandler
     {
         string? s = tool switch
         {
+            // codex's editing tool: its whole input is a patch script, and
+            // dumping that into a one-line summary reads as noise ("Codex is
+            // asking to run *** Begin Patch *** Add File: …"). The files it
+            // touches are the answer to "what does it want to do".
+            "apply_patch" => CodexPatch.Files(ToolInputString(root, "command")) is { Count: > 0 } fs
+                ? "edit " + string.Join(", ", fs)
+                : "apply a patch",
             "Bash" or "PowerShell" => ToolInputString(root, "command"),
             "Edit" or "MultiEdit" or "Write" or "NotebookEdit" or "Read" => ToolInputString(root, "file_path") ?? ToolInputString(root, "notebook_path"),
             "WebFetch" => ToolInputString(root, "url"),
@@ -885,10 +987,39 @@ internal static class HookHandler
                 return "running a subagent";
             case "TodoWrite":
                 return "planning";
+
+            // ---- codex's vocabulary ------------------------------------
+            // Measured against codex-cli 0.153.2, not guessed (PERCH_HOOK_DUMP
+            // above is how). Codex names its shell tool "Bash" and passes
+            // `tool_input.command` as a plain string, so the Bash case above
+            // already covers it exactly. The one tool that is genuinely its
+            // own is apply_patch, whose entire input is a patch script:
+            //
+            //   *** Begin Patch
+            //   *** Update File: C:\tmp\notes.md
+            //   @@
+            //   +line two
+            //   *** End Patch
+            case "apply_patch":
+            {
+                var files = CodexPatch.Files(ToolInputString(root, "command"));
+                if (files.Count == 0) return "editing files";
+                return files.Count == 1
+                    ? $"editing {Base(files[0])}"
+                    : $"editing {files.Count} files";
+            }
+            case "update_plan":
+                return "planning";
+            case "view_image":
+                return "looking at an image";
+            case "web_search":
+                return "searching the web";
+
             default:
                 return $"using {tool}";
         }
     }
+
 
     /// Run `git rev-parse HEAD` in the cwd Claude was launched from. Returns
     /// the sha on success, null if git fails (no repo, no git on PATH, etc).

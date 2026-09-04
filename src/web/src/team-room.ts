@@ -32,6 +32,7 @@ import {
   type FeedRow, type Presence, type ReactionPill,
 } from "./team.js";
 import { appendRich, appendBlocks, hhmm, imageLabel } from "./text.js";
+import { artefactDocument } from "./artefact-export.js";
 import { elapsedSpan, agoSpan } from "./elapsed.js";
 import { buildComposer, type Composer } from "./mention-input.js";
 import { showNewBotDialog } from "./new-bot-dialog.js";
@@ -163,6 +164,7 @@ let newTaskOpen = false;
 let artefactTitleEl: HTMLElement;
 let artefactMetaEl: HTMLElement;
 let artefactMenuBtn: HTMLButtonElement;
+let artefactTabBtn: HTMLButtonElement;
 let artefactMenuEl: HTMLElement;
 let artefactBodyEl: HTMLElement;
 let artefactMenuOpen = false;
@@ -510,6 +512,12 @@ function mount(): void {
   aHead.appendChild(artefactTitleEl);
   artefactMetaEl = el("span", "team-arte__meta");
   aHead.appendChild(artefactMetaEl);
+  // The panel is a strip; a plan or a draft ticket wants a whole tab. This
+  // opens the artefact on screen as its own browser tab, so it can sit next to
+  // the work it's about instead of being scrolled in a corner.
+  artefactTabBtn = button("team-roster__add team-arte__tab", "Open in a tab", openArtefactInTab);
+  artefactTabBtn.title = "Open this artefact as its own tab";
+  aHead.appendChild(artefactTabBtn);
   artefactMenuBtn = button("team-roster__add team-arte__recent", "Recent", () => {
     artefactMenuOpen = !artefactMenuOpen;
     if (artefactMenuOpen && projectId) send({ type: "team.artefact.list", projectId });
@@ -967,6 +975,8 @@ function renderArtefacts(): void {
     : "";
   artefactMenuBtn.hidden = artefactIndex.length === 0 && !a;
   artefactMenuBtn.textContent = artefactMenuOpen ? "Close list" : "Recent";
+  // Only offer the tab when there is a document to put in it.
+  artefactTabBtn.hidden = !a || !!a.error;
 
   artefactMenuEl.hidden = !artefactMenuOpen;
   if (artefactMenuOpen) {
@@ -989,13 +999,36 @@ function renderArtefacts(): void {
     return;
   }
   if (a.error) { artefactBodyEl.appendChild(el("p", "team-tasks__empty", a.error)); return; }
+  artefactBodyEl.appendChild(renderArtefactDoc(a));
+}
+
+/** One artefact's body, as an element. Shared by the panel and by "Open in a
+ *  tab" so the tab is the same document, not a second rendering of it.
+ *  Markdown and plain prose read as a document; everything structured (a table
+ *  file, a query, a diff) stays exactly as the bot wrote it. */
+function renderArtefactDoc(a: TeamArtefactDataMessage): HTMLElement {
   const body = el("div", "team-arte__doc");
-  // Markdown and plain prose read as a document; everything structured (a
-  // table file, a query, a diff) stays exactly as the bot wrote it.
   const content = a.content ?? "";
   if (a.kind === "md" || a.kind === "txt" || !a.kind) appendBlocks(body, content, []);
   else body.appendChild(el("pre", "team-arte__pre", content));
-  artefactBodyEl.appendChild(body);
+  return body;
+}
+
+/** Send the artefact on screen to the host as a finished HTML document, which
+ *  it writes out and opens as its own tab. Rendered here rather than host-side
+ *  because this is the side that owns the markdown renderer and the theme. */
+function openArtefactInTab(): void {
+  const a = shownArtefact;
+  if (!projectId || !a || a.error) return;
+  const title = a.title ?? "Artefact";
+  const meta = `${artefactKindWord(a.kind)} · from ${a.from}` + (a.truncated ? " · shortened" : "");
+  send({
+    type: "team.artefact.tab",
+    projectId,
+    id: a.id,
+    title,
+    html: artefactDocument(title, meta, renderArtefactDoc(a).outerHTML),
+  });
 }
 
 /** An artefact's row in the feed: a card that opens it beside the chat. */

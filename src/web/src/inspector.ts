@@ -559,14 +559,28 @@ function renderEvent(e: InspectorEventView, i: number, canceled = false): HTMLEl
  *  Exported for test: this is the whole decision, and it is worth pinning
  *  without standing up a DOM. */
 export function emptyState(
-  data: Pick<InspectorDataMessage, "hasAgent" | "pending">,
+  data: Pick<InspectorDataMessage, "hasAgent" | "pending" | "agent">,
 ): { title: string; body: string } {
   if (data.pending)  return { title: "Reading…", body: "Still waiting on this pane." };
   if (data.hasAgent) return { title: "Nothing yet", body: "The agent hasn't said anything yet." };
+  // Name the agent that IS here when we know it — a codex pane being told to
+  // "start Claude" was the whole complaint. With no agent running, the
+  // invitation names both, because either one fills this rail.
+  const name = agentLabel(data.agent);
   return {
     title: "No agent in this pane",
-    body: "Start Claude here and its work shows up in this rail.",
+    body: name
+      ? `Start ${name} here and its work shows up in this rail.`
+      : "Start Claude or Codex here and its work shows up in this rail.",
   };
+}
+
+/** How an agent is written in prose. "" for a shell pane, where the rail
+ *  should name no one in particular. */
+export function agentLabel(agent: string | undefined): string {
+  if (agent === "claude") return "Claude";
+  if (agent === "codex") return "Codex";
+  return "";
 }
 
 function renderStream(host: HTMLElement, data: InspectorDataMessage): void {
@@ -733,6 +747,11 @@ function apply(data: InspectorDataMessage): void {
   // list, and a poll appending rows below must not move you.
   const pinned = !query && isNearBottom(streamEl);
   const prevTop = streamEl.scrollTop;
+
+  // The "agent messages" chip names whichever agent is in this pane. A chip
+  // reading "Claude" over a codex journal is a small lie the eye trips on.
+  const label = document.getElementById("filter-label-claude");
+  if (label) label.textContent = agentLabel(data.agent) || "Agent";
 
   renderChanges(changesEl, data, changesOpen);
   renderStream(streamEl, data);

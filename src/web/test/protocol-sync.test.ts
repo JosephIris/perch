@@ -81,6 +81,7 @@ const EXPECTED_TYPES = [
   "sidebar.reorder",
   "team.artefact.list",
   "team.artefact.open",
+  "team.artefact.tab",
   "team.ask.answer",
   "team.bot.answer",
   "team.bot.create",

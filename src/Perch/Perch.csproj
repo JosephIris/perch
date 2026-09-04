@@ -46,6 +46,10 @@
          the room shows that verdict, and both must read a response the same
          way — so the rule lives once, here, where Perch.Tests can reach it. -->
     <Compile Include="..\..\tools\perch-cli\PeerVerdict.cs" Link="PeerVerdict.cs" />
+    <!-- And CodexPatch, for the same reason: a codex edit names its files only
+         inside the patch text, and that parse decides both what the pane says
+         it is doing and which files its line counts are billed for. -->
+    <Compile Include="..\..\tools\perch-cli\CodexPatch.cs" Link="CodexPatch.cs" />
   </ItemGroup>
 
   <!-- Perch.Tests exercises internal types (PaneTree, Session, the message

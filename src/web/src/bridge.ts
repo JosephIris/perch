@@ -323,6 +323,13 @@ export type OutMessage =
    * list of recent ones for the panel's menu. */
   | { type: "team.artefact.open"; projectId: string; id: string }
   | { type: "team.artefact.list"; projectId: string }
+  /* "Open in a tab": the panel is a strip at the bottom of the room, and a
+   * plan or a draft ticket wants a whole tab. The PAGE renders the document
+   * (it already has the artefact's text and the markdown renderer) and sends
+   * the finished HTML; the host writes it beside the project and opens it as
+   * a browser tab, so the artefact can sit open next to the work it is
+   * about. */
+  | { type: "team.artefact.tab"; projectId: string; id: string; title: string; html: string }
   | { type: "team.task.reject"; projectId: string; taskId: string; note?: string }
   /* Answer a bot's permission prompt from its card in the room (the host
    * hands the decision to Claude Code's PermissionRequest hook). `id` is the
@@ -587,6 +594,10 @@ export type StateMessage = {
    * reads as "every model enabled, no annotations". resetsAtMs is Unix-ms (the
    * menu formats a local "resets 14:30") or null when the bucket had no reset. */
   modelLimits?: { alias: string; resetsAtMs: number | null }[];
+  /* What the model picker offers on a CODEX pane, read from codex's own
+   * catalogue by the host. Absent / empty when codex isn't installed, and the
+   * picker then stays closed for codex panes. */
+  codexModels?: { slug: string; label: string }[];
 };
 
 export type SidebarMode = "sessions" | "projects";
@@ -699,7 +710,7 @@ export type InspectorImageDataMessage = {
   data: string;
 };
 
-/* Reply to inspector.request. hasAgent=false means the pane has no Claude
+/* Reply to inspector.request. hasAgent=false means the pane has no agent
  * session (a plain shell, or an agent that hasn't started one yet) — the rail
  * shows its empty state rather than a misleading zeroed-out journal. `files`
  * can still be populated in that case: a shell pane in a repo has git changes
@@ -708,6 +719,10 @@ export type InspectorDataMessage = {
   type: "inspector.data";
   paneId: string;
   hasAgent: boolean;
+  /** Which agent's journal this is ("claude" / "codex" / "" for none). The
+   *  rail reads the same either way; this only names the agent in the prose
+   *  the rail writes about itself — its empty state and its filter chip. */
+  agent?: string;
   events: InspectorEventView[];
   vitals: InspectorVitalsView | null;
   files: InspectorFileView[];

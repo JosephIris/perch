@@ -23,7 +23,7 @@ import { initCloud } from "./cloud-panel.js";
 import { initLocal } from "./local-panel.js";
 import { initUtilityMini } from "./mini-mode.js";
 import { initInspector, toggleInspector, openInspectorSearch } from "./inspector.js";
-import { setModelLimits } from "./model-menu.js";
+import { setModelLimits, setCodexModels } from "./model-menu.js";
 import { initWebPaneSuppression } from "./webpane-suppress.js";
 import { applyTeamState, toggleTeamRoom, closeTeamRoom, onTeamRoomChange, applyPasteResult, applyArtefact, applyArtefactIndex } from "./team-room.js";
 import { setFaceColorMode } from "./bot-face.js";
@@ -214,6 +214,7 @@ onMessage((msg) => {
       setFaceColorMode(msg.prefs?.teamFacesColor ?? false);
       // Account-wide model limits for the per-pane model menu (usually empty).
       setModelLimits(msg.modelLimits);
+      setCodexModels(msg.codexModels);
       maybeShowOnboarding(msg.prefs);
       renderSidebar();
       // The room derives presence from the same session list; it re-renders
@@ -317,10 +318,13 @@ onMessage((msg) => {
       resumePromptShown = true;
       const n = msg.paneCount;
       const sess = msg.sessionCount;
+      // "agent", not "Claude": a codex conversation resumes here too, and
+      // naming the wrong agent in the one dialog that asks about them is how
+      // you get told the feature doesn't work.
       const what =
         n === 1
-          ? "1 Claude session from your last run can be reopened."
-          : `${n} Claude sessions across ${sess} ${
+          ? "1 agent session from your last run can be reopened."
+          : `${n} agent sessions across ${sess} ${
               sess === 1 ? "project" : "projects"
             } can be reopened.`;
       confirmDialog({

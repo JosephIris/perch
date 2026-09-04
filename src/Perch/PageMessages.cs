@@ -670,6 +670,19 @@ internal sealed record TeamArtefactListMsg
     public required Guid ProjectId { get; init; }
 }
 
+/// "Open in a tab" on the artefact the room is showing. The page sends the
+/// finished document because it is the side that owns the markdown renderer
+/// and the theme; the host only writes it and opens a browser tab on it.
+/// `Html` is page-authored (never a bot's raw text), and it is written to a
+/// file under Perch's own data dir, so nothing here lets a bot choose a path.
+internal sealed record TeamArtefactTabMsg
+{
+    public required Guid ProjectId { get; init; }
+    public required string Id { get; init; }
+    public required string Title { get; init; }
+    public required string Html { get; init; }
+}
+
 /// The owner reacting to a room row with an emoji.
 internal sealed record TeamReactMsg
 {

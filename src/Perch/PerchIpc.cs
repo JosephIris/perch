@@ -319,7 +319,19 @@ internal sealed record AgentMessage(
 internal sealed record SessionMessage(
     [property: JsonPropertyName("id")] string? Id,
     [property: JsonPropertyName("name")] string? Name = null,
-    [property: JsonPropertyName("socket")] string? Socket = null);
+    [property: JsonPropertyName("socket")] string? Socket = null,
+    /// Which agent minted the id — "claude" (absent means claude, for older
+    /// wrappers) or "codex". The two ids resume with different commands and
+    /// their journals live in different files, so the pane stores them apart.
+    [property: JsonPropertyName("agent")] string? Agent = null,
+    /// The journal file for this conversation, when the agent states it
+    /// outright (codex does; Claude Code doesn't and the host derives it).
+    /// Saves a directory search, and is authoritative when it's present.
+    [property: JsonPropertyName("path")] string? Path = null,
+    /// The model this launch is actually running, as the agent reports it —
+    /// not the alias the user picked. Drives the pane header's model chip for
+    /// agents whose model Perch doesn't choose.
+    [property: JsonPropertyName("model")] string? Model = null);
 
 /// Sent by the cc HookHandler when the agent messages ANOTHER Claude Code
 /// session (the cross-session SendMessage tool). phase="sending" fires from

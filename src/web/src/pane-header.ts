@@ -46,13 +46,14 @@ export function applyModelChip(
   agentType: string | undefined,
   model: string | undefined
 ) {
-  if (agentType !== "claude") {
+  if (agentType !== "claude" && agentType !== "codex") {
     el.style.display = "none";
     el.dataset.model = "";
     return;
   }
   const alias = model ?? "";
   el.dataset.model = alias;
+  el.dataset.agent = agentType;
   el.textContent = alias === "" ? "default" : alias;
   el.style.display = "";
 }
@@ -191,11 +192,13 @@ export function buildPaneHeader(paneId: string): PaneHeader {
   modelEl.style.display = "none";
   modelEl.draggable = false;
   modelEl.dataset.model = "";
-  modelEl.title = "Claude model";
-  modelEl.setAttribute("aria-label", "Choose Claude model");
+  modelEl.title = "Model";
+  modelEl.setAttribute("aria-label", "Choose model");
   modelEl.addEventListener("click", (ev) => {
     ev.stopPropagation();
-    showModelMenu(modelEl, paneId, modelEl.dataset.model ?? "");
+    // dataset.agent decides which catalogue the menu offers — Claude's four
+    // aliases, or codex's own list.
+    showModelMenu(modelEl, paneId, modelEl.dataset.model ?? "", modelEl.dataset.agent);
   });
   root.appendChild(modelEl);
 

@@ -334,6 +334,29 @@ internal sealed class PaneNode
     /// ended session and we want the last id to stick.
     public string? ClaudeSessionId { get; set; }
 
+    /// The same thing for codex: the id of the last codex thread that ran in
+    /// this pane, from its SessionStart hook. PERSISTED, and kept in its OWN
+    /// field rather than sharing ClaudeSessionId, because the two are not
+    /// interchangeable — this one resumes with `codex resume &lt;id&gt;` and its
+    /// journal is a rollout file under ~/.codex/sessions, while everything
+    /// hanging off ClaudeSessionId (the cc transcript, peer names, the
+    /// rate-limit watch) would go looking for a Claude transcript that will
+    /// never exist. A pane has at most one of the two in practice.
+    public string? CodexSessionId { get; set; }
+
+    /// The rollout file backing <see cref="CodexSessionId"/>, as codex itself
+    /// reported it. PERSISTED because it saves a directory search on every
+    /// restart; treated as a hint, not a fact — the reader falls back to
+    /// finding the file by id whenever this is missing or gone.
+    public string? CodexTranscriptPath { get; set; }
+
+    /// The model an agent reported it is actually running ("gpt-5.6-sol").
+    /// Distinct from <see cref="Model"/>, which is the alias the USER picked
+    /// and Perch passes at launch: for Claude those agree, and for codex only
+    /// this one is true, because its user can switch models inside the TUI.
+    /// Display only — nothing launches from it.
+    public string? AgentModel { get; set; }
+
     /// Per-pane Claude Code model alias ("fable" | "opus" | "sonnet" | "haiku"),
     /// or "" for the account default. PERSISTED so the selection survives a
     /// restart/respawn. At launch the `wrap-claude` shim appends `--model

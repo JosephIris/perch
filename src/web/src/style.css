@@ -7301,6 +7301,9 @@ body.show-dashboard .dashboard { display: flex; }
   color: var(--color-text-tertiary);
 }
 .team-arte__recent { flex: none; }
+/* "Open in a tab" sits before "Recent" on the same line — both quiet subtle
+ * buttons, neither competing with the artefact's own title. */
+.team-arte__tab { flex: none; }
 .team-arte__menu {
   position: absolute;
   z-index: 2;
