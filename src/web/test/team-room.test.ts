@@ -4,7 +4,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { feedRowClass, avatarInitial, recipientsLabel, systemTone } from "../src/team-room.js";
+import { feedRowClass, avatarInitial, recipientsLabel, systemTone, splitCardText } from "../src/team-room.js";
 import { removeMention, mentionCandidates } from "../src/mention-input.js";
 import { canCreate, canGenerate } from "../src/new-bot-dialog.js";
 import { articleFor } from "../src/bot-menu.js";
@@ -91,4 +91,25 @@ test("articleFor: a Frontend dev, an Analyst", () => {
   assert.equal(articleFor("Frontend dev"), "a");
   assert.equal(articleFor("Analyst"), "an");
   assert.equal(articleFor(" engineer"), "an");
+});
+
+test("splitCardText: short sentences stay whole; a payload goes behind details", () => {
+  const short = splitCardText("Cy asks: trust its new folder?");
+  assert.equal(short.lead, "Cy asks: trust its new folder?");
+  assert.equal(short.rest, null);
+
+  const cmd = splitCardText("Bo: auto mode blocked Bash: nohup python services/pricing-agent-monitor/app.py --port 5108 > C:/tmp/pam-local.log 2>&1 & — Blocked by classifier");
+  assert.equal(cmd.lead, "Bo: auto mode blocked Bash");
+  assert.ok(cmd.rest?.startsWith("nohup python"));
+
+  // A long sentence with no clause to cut on is shortened, with the whole
+  // text behind details.
+  const long = splitCardText("x".repeat(30) + " " + "y".repeat(30) + " " + "z".repeat(90));
+  assert.ok(long.lead.length <= 140);
+  assert.ok(long.rest && long.rest.length > 140);
+
+  // A long token alone (a path) is enough to fold, even under 140 characters.
+  const path = splitCardText("Ada opened: C:/very/long/path/that/goes/on/and/on/without/a/space/for/a/while.md");
+  assert.equal(path.lead, "Ada opened");
+  assert.ok(path.rest?.startsWith("C:/very"));
 });

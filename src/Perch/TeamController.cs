@@ -1320,7 +1320,7 @@ internal sealed class TeamController
         {
             Kind = "system", From = "perch", Event = "trust", PaneId = paneId.ToString("D"),
             To = new List<string> { h.Bot.Slug },
-            Text = $"{h.Bot.Nickname} is waiting on a question before it can start — usually \"trust this folder?\" for its new folder.",
+            Text = $"{h.Bot.Nickname} asks: trust its new folder?",
         });
         Log.Info("Team.trust.ask", $"bot={h.Bot.Slug} pane={paneId:N}");
         RefreshRoster(h.Project, h.Store);
@@ -1798,7 +1798,7 @@ internal sealed class TeamController
         var e = store.Ledger.Append(new RoomEntry
         {
             Kind = "system", From = "perch", Event = "task.review", TaskId = board.Id,
-            Text = $"{lead.Nickname} says \"{TeamRender.OneLine(board.Title, 60)}\" is done — confirm it on the card, or say not yet",
+            Text = $"{lead.Nickname} says \"{TeamRender.OneLine(board.Title, 60)}\" is done — confirm on its card",
         });
         Log.Info("Team.task", $"project={proj.Id:N} review id={board.Id} by={lead.Slug}");
         _h.PushState();

@@ -51,7 +51,7 @@ import type {
  *  kinds get the "your post" fill, which continue the previous one — is pinned
  *  without a DOM. */
 export function feedRowClass(row: FeedRow, pending = false, failed = false): string {
-  if (row.kind === "workfold") return "tf-work";
+  if (row.kind === "workfold" || row.kind === "sysfold") return "tf-work";
   const e = row.entry;
   if (e.kind === "system") return "tf-sys";
   if (e.kind === "work") return "work";
@@ -194,6 +194,34 @@ function setTaskSplit(px: number | null): void {
 let artefactIndex: TeamArtefactItem[] = [];
 let shownArtefact: TeamArtefactDataMessage | null = null;
 let artefactLoading: string | null = null;
+/* The artefact panel widened over the board and roster columns. */
+let readingWide = false;
+let readingBtn: HTMLButtonElement;
+/* Narrow window: the board+team drawer. */
+let boardOpen = false;
+let boardBtn: HTMLButtonElement;
+
+/** The cards region scrolls; say so with a fade while there is more below. */
+function updateTasksMore(): void {
+  if (!taskBodyEl) return;
+  const more = taskBodyEl.scrollTop + taskBodyEl.clientHeight < taskBodyEl.scrollHeight - 4;
+  taskBodyEl.classList.toggle("is-more", more);
+}
+
+/** A card sentence that carries a payload — a shell command, a path, an
+ *  error — reads as a wall in a chat column. Keep the lead-in on the card and
+ *  put the rest behind "details". Exported so the cut is pinned by tests. */
+export function splitCardText(text: string): { lead: string; rest: string | null } {
+  const t = text.trim();
+  const longToken = /\S{40,}/.test(t);
+  if (t.length <= 140 && !longToken) return { lead: t, rest: null };
+  // Cut on the first clause break past a name ("Bo: " is not a lead-in;
+  // "Bo: auto mode blocked Bash" is).
+  const cuts = [t.indexOf(": ", 8), t.indexOf(" — ", 8)].filter((i) => i >= 8).sort((a, b) => a - b);
+  if (cuts.length === 0) return { lead: t.length > 140 ? t.slice(0, 137).trimEnd() + "…" : t, rest: t };
+  const cut = cuts[0];
+  return { lead: t.slice(0, cut).trim(), rest: t.slice(cut + 1).replace(/^[—:\s]+/, "").trim() };
+}
 
 let projectId: string | null = null;
 let lastState: StateMessage | null = null;
@@ -410,6 +438,16 @@ function mount(): void {
     renderedSeq = cachedTeam(projectId ?? "")?.lastSeq ?? 0;
   });
   head.appendChild(activityBtn);
+  // Narrow window: the board and the team fold into a drawer this opens.
+  // Hidden by CSS while the room is wide enough for all three columns.
+  boardBtn = button("team-room__activity team-room__board", "Board", () => {
+    boardOpen = !boardOpen;
+    root?.classList.toggle("team-room--board-open", boardOpen);
+    boardBtn.setAttribute("aria-pressed", String(boardOpen));
+  });
+  boardBtn.title = "Show the task board and the team";
+  boardBtn.setAttribute("aria-pressed", "false");
+  head.appendChild(boardBtn);
   const close = document.createElement("button");
   close.type = "button";
   close.className = "team-room__close";
@@ -470,6 +508,7 @@ function mount(): void {
   tHead.appendChild(newTaskBtn);
   tasks.appendChild(tHead);
   taskBodyEl = el("div", "team-tasks__body scroll");
+  taskBodyEl.addEventListener("scroll", updateTasksMore);
   tasks.appendChild(taskBodyEl);
   setTaskSplit(readTaskSplit());
 
@@ -507,23 +546,39 @@ function mount(): void {
   // ones. It fills the space the task cards leave.
   const arte = el("section", "team-arte");
   arte.setAttribute("aria-label", "Artefacts");
+  // Head: the document's name with its meta under it on the left, the three
+  // actions on one line to the right — never three stacked rows.
   const aHead = el("div", "team-arte__head");
+  const aTitles = el("div", "team-arte__titles");
   artefactTitleEl = el("span", "team-arte__title", "Artefacts");
-  aHead.appendChild(artefactTitleEl);
+  aTitles.appendChild(artefactTitleEl);
   artefactMetaEl = el("span", "team-arte__meta");
-  aHead.appendChild(artefactMetaEl);
-  // The panel is a strip; a plan or a draft ticket wants a whole tab. This
-  // opens the artefact on screen as its own browser tab, so it can sit next to
-  // the work it's about instead of being scrolled in a corner.
-  artefactTabBtn = button("team-roster__add team-arte__tab", "Open in a tab", openArtefactInTab);
+  aTitles.appendChild(artefactMetaEl);
+  aHead.appendChild(aTitles);
+  const aActions = el("div", "team-arte__actions");
+  // The panel is a strip; a plan or a draft ticket wants room. "Wide" gives
+  // the document the board's and the roster's columns, beside the chat, so it
+  // can be read next to the conversation about it. "Tab" opens it as its own
+  // browser tab (which leaves the room; the tab is a snapshot).
+  readingBtn = button("team-roster__add team-arte__wide", "Wide", () => {
+    readingWide = !readingWide;
+    root?.classList.toggle("team-room--reading", readingWide);
+    renderArtefacts();
+    repinIfPinned();
+  });
+  readingBtn.title = "Read it wide, beside the chat";
+  readingBtn.setAttribute("aria-pressed", "false");
+  aActions.appendChild(readingBtn);
+  artefactTabBtn = button("team-roster__add team-arte__tab", "Tab", openArtefactInTab);
   artefactTabBtn.title = "Open this artefact as its own tab";
-  aHead.appendChild(artefactTabBtn);
+  aActions.appendChild(artefactTabBtn);
   artefactMenuBtn = button("team-roster__add team-arte__recent", "Recent", () => {
     artefactMenuOpen = !artefactMenuOpen;
     if (artefactMenuOpen && projectId) send({ type: "team.artefact.list", projectId });
     renderArtefacts();
   });
-  aHead.appendChild(artefactMenuBtn);
+  aActions.appendChild(artefactMenuBtn);
+  aHead.appendChild(aActions);
   arte.appendChild(aHead);
   artefactMenuEl = el("div", "team-arte__menu");
   artefactMenuEl.hidden = true;
@@ -590,6 +645,9 @@ function unmount(immediate: boolean): void {
   }
   disposeFaces(feedFaces);
   disposeFaces(rosterFaces);
+  boardOpen = false;
+  readingWide = false;
+  artefactMenuOpen = false;
   renameFor = null;
   rejectFor = null;
   newTaskOpen = false;
@@ -611,6 +669,16 @@ function onEsc(e: KeyboardEvent): void {
   if (e.key !== "Escape" || !root) return;
   // Anything layered above the room owns Esc first.
   if (document.querySelector(".projects-overlay, .settings-overlay, .settings-page, .mention-pop, .bot-menu, .project-menu, .model-menu")) return;
+  // Typing somewhere in the room: Escape leaves that field, it doesn't close
+  // the room with the text still in it. An inline editor cancels itself on
+  // its own handler (this listener is on window, capture, so it must step
+  // aside); the composer just loses focus. The next Escape closes the room.
+  const active = document.activeElement as HTMLElement | null;
+  if (active && root.contains(active) &&
+      (active.tagName === "TEXTAREA" || active.tagName === "INPUT" || active.isContentEditable)) {
+    if (!active.closest(".team-tasks__editor")) { e.preventDefault(); e.stopPropagation(); active.blur(); }
+    return;
+  }
   e.preventDefault();
   e.stopPropagation();
   closeTeamRoom();
@@ -744,6 +812,10 @@ function render(): void {
 }
 
 function renderHead(project: ProjectView | null): void {
+  if (boardBtn) {
+    const n = project?.team?.tasks?.length ?? 0;
+    boardBtn.textContent = n > 0 ? `Board ${n}` : "Board";
+  }
   titleEl.replaceChildren();
   titleEl.appendChild(el("span", "team-room__project", project?.name ?? ""));
   titleEl.appendChild(el("span", "team-room__sep", "·"));
@@ -852,7 +924,9 @@ function editor(placeholder: string, initial: string, submitLabel: string,
     if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); form.requestSubmit(); }
     if (ev.key === "Escape") { ev.stopPropagation(); onCancel(); }
   });
-  requestAnimationFrame(() => input.focus());
+  // An editor opens where the card is, which may be below the region's cut:
+  // bring the whole form (its buttons included) into view.
+  requestAnimationFrame(() => { input.focus(); form.scrollIntoView({ block: "nearest" }); updateTasksMore(); });
   return form;
 }
 
@@ -884,6 +958,7 @@ function renderTasks(project: ProjectView | null): void {
     return;
   }
   for (const t of tasks) taskBodyEl.appendChild(taskCard(project, team!, t));
+  requestAnimationFrame(updateTasksMore);
 }
 
 /** How much of a long message is shown before it is folded. */
@@ -975,10 +1050,17 @@ function renderArtefacts(): void {
     : "";
   artefactMenuBtn.hidden = artefactIndex.length === 0 && !a;
   artefactMenuBtn.textContent = artefactMenuOpen ? "Close list" : "Recent";
-  // Only offer the tab when there is a document to put in it.
+  // Only offer the tab and the wide view when there is a document to show.
   artefactTabBtn.hidden = !a || !!a.error;
+  readingBtn.hidden = !a || !!a.error;
+  readingBtn.textContent = readingWide ? "Narrow" : "Wide";
+  readingBtn.setAttribute("aria-pressed", String(readingWide));
+  if ((!a || a.error) && readingWide) { readingWide = false; root?.classList.remove("team-room--reading"); }
 
+  // The recent list is a list in a panel, not a flyout: it takes the body's
+  // place while it is open, so nothing draws over the document.
   artefactMenuEl.hidden = !artefactMenuOpen;
+  artefactBodyEl.hidden = artefactMenuOpen;
   if (artefactMenuOpen) {
     artefactMenuEl.replaceChildren();
     if (artefactIndex.length === 0) artefactMenuEl.appendChild(el("p", "team-tasks__empty", "Nothing yet."));
@@ -1123,6 +1205,11 @@ function taskCard(project: ProjectView, team: TeamView, t: TeamTaskView): HTMLEl
     }
   } else if (t.status === "open") {
     actions.appendChild(button("projects-card__btn", "Mark done", confirmDone));
+    // Renaming was a click on the title with nothing to say so; the button
+    // says so. The title click stays for those who found it.
+    actions.appendChild(button("projects-card__btn", "Rename", () => {
+      renameFor = t.id; rejectFor = null; newTaskOpen = false; render();
+    }));
     // The escape hatch: a card nobody is going to finish, or one that is done
     // in all but name. Nothing is asked of the bots — it just goes.
     actions.appendChild(button("team-tasks__remove", "Remove", () => {
@@ -1184,7 +1271,7 @@ function repinIfPinned(): void {
 /** A row's identity across renders: its ledger seq (a folded run of tool calls
  *  is keyed by its first). Stable, because the ledger only ever appends. */
 export function rowKey(row: FeedRow): string {
-  return row.kind === "workfold" ? `w${row.seq}` : `e${row.seq}`;
+  return row.kind === "workfold" ? `w${row.seq}` : row.kind === "sysfold" ? `s${row.seq}` : `e${row.seq}`;
 }
 
 /** Everything about a row that changes what it looks like. Same signature =
@@ -1214,6 +1301,8 @@ export function rowSig(
   const tab = (who: string | undefined) => (who ? ctx.sessions.get(who) ?? "" : "");
   if (row.kind === "workfold")
     return `w|${row.entries.length}|${row.summary}|${row.cont}|${ctx.openFolds.has(row.seq)}|${pills}|${tab(row.from)}`;
+  if (row.kind === "sysfold")
+    return `s|${row.entries.length}|${row.summary}|${ctx.openFolds.has(row.seq)}`;
   const e = row.entry;
   const note = e.note ?? "";
   const done = e.kind === "system"
@@ -1381,6 +1470,7 @@ function displayName(from: string, bot: TeamBotView | undefined): string {
 
 function renderRow(row: FeedRow, bots: TeamBotView[], names: string[]): HTMLElement {
   if (row.kind === "workfold") return renderFold(row, bots);
+  if (row.kind === "sysfold") return renderSysFold(row, bots);
   const e = row.entry;
   if (e.kind === "system") return renderSystem(e, bots);
   if (e.kind === "artefact") return renderArtefactCard(e, bots);
@@ -1616,6 +1706,31 @@ function renderFold(row: Extract<FeedRow, { kind: "workfold" }>, bots: TeamBotVi
   return node;
 }
 
+/** A run of board changes as one quiet line, the changes behind it. Same
+ *  shape as a work fold: rail, summary, the rows when opened. */
+function renderSysFold(row: Extract<FeedRow, { kind: "sysfold" }>, bots: TeamBotView[]): HTMLElement {
+  const open = openFolds.has(row.seq);
+  const node = el("div", "tf-work tf-work--board");
+  node.dataset.seq = String(row.seq);
+  node.setAttribute("aria-expanded", String(open));
+  node.appendChild(el("span", "tf-work__rail", "│"));
+  const line = el("div", "tf-work__line");
+  const summary = button("tf-work__summary", row.summary, () => {
+    const now = node.getAttribute("aria-expanded") !== "true";
+    node.setAttribute("aria-expanded", String(now));
+    rows.hidden = !now;
+    if (now) openFolds.add(row.seq); else openFolds.delete(row.seq);
+  }, open ? "Hide the changes" : "Show the changes");
+  line.appendChild(summary);
+  line.appendChild(el("span", "tf-work__time", hhmm(row.entries[row.entries.length - 1].ts)));
+  node.appendChild(line);
+  const rows = el("div", "tf-work__rows");
+  rows.hidden = !open;
+  for (const e of row.entries) rows.appendChild(renderSystem(e, bots));
+  node.appendChild(rows);
+  return node;
+}
+
 /** One tool call, in the journal's own row shape (same classes, same CSS). */
 function renderWork(e: TeamEntryView): HTMLElement {
   const repeat = e.repeat ?? 1;
@@ -1746,8 +1861,22 @@ function renderSystem(e: TeamEntryView, bots: TeamBotView[]): HTMLElement {
     return node;
   }
 
-  // A framed row wraps its sentence; a narration line still clips to one.
-  node.appendChild(el("span", kindWord ? "tf-sys__text tf-sys__text--wrap" : "tf-sys__text", e.text));
+  // A framed row wraps its sentence; a narration line still clips to one. A
+  // card whose sentence carries a payload (the blocked command, an error)
+  // keeps its lead-in and folds the rest behind "details".
+  const { lead, rest } = kindWord ? splitCardText(e.text) : { lead: e.text, rest: null };
+  node.appendChild(el("span", kindWord ? "tf-sys__text tf-sys__text--wrap" : "tf-sys__text", lead));
+  if (rest) {
+    const details = el("pre", "tf-sys__details", rest);
+    details.hidden = !openDetails.has(e.seq);
+    const more = button("tf-sys__more", details.hidden ? "details" : "hide details", () => {
+      details.hidden = !details.hidden;
+      more.textContent = details.hidden ? "details" : "hide details";
+      if (details.hidden) openDetails.delete(e.seq); else openDetails.add(e.seq);
+    });
+    node.appendChild(more);
+    node.appendChild(details);
+  }
 
   // A start-up question ("trust this folder?") is answered right here: the
   // card carries the two answers until a later row says it was answered.

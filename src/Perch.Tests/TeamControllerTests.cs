@@ -1027,7 +1027,7 @@ public class TeamControllerTests
 
         var ask = h.Ledger.Single(e => e.Event == "trust");
         Assert.Equal("ada", Assert.Single(ask.To!));
-        Assert.Contains("trust this folder", ask.Text);
+        Assert.Contains("trust its new folder", ask.Text);
         Assert.Contains("[waiting for the owner to answer its start-up question]", File.ReadAllText(h.Store.RosterPath));
 
         // "Trust folder": Down (select "Yes, I trust this folder"), then Enter.

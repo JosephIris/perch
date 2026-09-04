@@ -158,7 +158,16 @@ export type FeedRow =
       entries: TeamEntryView[];
       summary: string;
       cont: boolean;
-    };
+    }
+  /* A run of board changes ("Ada: doing — …", "Lee gave Bo: …") folded into
+   * one line. The task card beside the chat is where the current state is
+   * read; the feed only needs to say that it moved. */
+  | { kind: "sysfold"; seq: number; entries: TeamEntryView[]; summary: string; cont: boolean };
+
+/** Whether a system row is a board change that folds with its neighbours. */
+export function isBoardChange(e: TeamEntryView): boolean {
+  return e.kind === "system" && e.event === "task";
+}
 
 /** Turn the ledger into rows. Consecutive `work` entries from one bot fold into
  *  one row; anything else — a beat, a system line, another bot's work — ends
@@ -179,16 +188,32 @@ export function foldFeed(entries: TeamEntryView[]): FeedRow[] {
     rows.push(row);
     run = [];
   };
+  // Board changes fold the same way: two or more in a row become one line.
+  // A single change stays a plain system row.
+  let board: TeamEntryView[] = [];
+  const flushBoard = () => {
+    if (board.length === 0) return;
+    if (board.length === 1) rows.push({ kind: "entry", seq: board[0].seq, entry: board[0], cont: false });
+    else rows.push({
+      kind: "sysfold", seq: board[0].seq, entries: board,
+      summary: `Board updated · ${board.length} changes`, cont: false,
+    });
+    board = [];
+  };
   for (const e of entries) {
     if (e.kind === "work") {
+      flushBoard();
       if (run.length > 0 && run[0].from !== e.from) flush();
       run.push(e);
       continue;
     }
     flush();
+    if (isBoardChange(e)) { board.push(e); continue; }
+    flushBoard();
     rows.push({ kind: "entry", seq: e.seq, entry: e, cont: false });
   }
   flush();
+  flushBoard();
   return rows;
 }
 

@@ -1511,9 +1511,9 @@ if (view === "team" || view === "team-activity" || view === "team-empty" || view
       text: "Which empty state should I build?", choices: ["Centered card", "Inline line"] }),
     // A trust card and a review card, so every card kind's frame is in one shot.
     row({ kind: "system", from: "perch", ts: at(2, 20), to: ["Cy"], event: "trust",
-      text: "Cy is waiting on a question before it can start — usually \"trust this folder?\" for its new folder." }),
+      text: "Cy asks: trust its new folder?" }),
     row({ kind: "system", from: "perch", ts: at(2, 10), taskId: "t-2", event: "task.review",
-      text: "Ada says \"Sidebar team row\" is done — confirm it on the card, or say not yet" }),
+      text: "Ada says \"Sidebar team row\" is done — confirm on its card" }),
     // A bot's long piece of work: a card here, the document in the panel.
     row({ kind: "artefact", from: "Bo", botId: "b-bo", ts: at(2, 5), target: "a1b2c3d4", note: "md",
       text: "Draft ticket: bid-shading prepared table",

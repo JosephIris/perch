@@ -277,6 +277,12 @@
    * 340 = 42.5×8; wide enough for a title and four pieces without wrapping
    * every line, narrow enough that the feed keeps most of the room. */
   --team-tasks-width: 340px;
+  /* Floors. The chat is the room's reason to exist, so it is never the
+   * column that gives: it keeps at least a reading width and the board
+   * shrinks first; below the width where all three fit (see the room's
+   * container query) the board and the team fold into a drawer. */
+  --team-feed-min: 420px;
+  --team-tasks-min: 340px;
   /* The feed's measure now fills its column (the task column bounds it); the
    * token stays as the cap for a very wide window. */
   --team-feed-measure: 1200px;

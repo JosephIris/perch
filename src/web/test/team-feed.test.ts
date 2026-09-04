@@ -137,3 +137,25 @@ test("unread counts messages after the watermark, never work or your own", () =>
   assert.equal(unreadCount(entries, 1), 2);
   assert.equal(unreadCount(entries, 5), 0);
 });
+
+test("foldFeed: two or more board changes in a row fold into one line; one stays a row", () => {
+  const change = (seq: number, text: string) => entry(seq, "system", "perch", { event: "task", text });
+  const rows = foldFeed([
+    entry(1, "beat", "Ada", { text: "hi" }),
+    change(2, "Ada: doing — faces"),
+    change(3, "Lee gave Bo: the API"),
+    change(4, "Bo: done — the API"),
+    entry(5, "system", "perch", { event: "joined", text: "Cy joined" }),
+    change(6, "Task set by Joseph: next"),
+    entry(7, "beat", "Bo", { text: "ok" }),
+  ]);
+  assert.deepEqual(rows.map((r) => r.kind), ["entry", "sysfold", "entry", "entry", "entry"]);
+  const fold = rows[1];
+  if (fold.kind === "sysfold") {
+    assert.equal(fold.seq, 2);
+    assert.equal(fold.entries.length, 3);
+    assert.equal(fold.summary, "Board updated · 3 changes");
+  }
+  // The lone change after the join is a plain row, not a fold of one.
+  assert.equal(rows[3].kind, "entry");
+});

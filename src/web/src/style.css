@@ -8341,3 +8341,98 @@ body.show-dashboard .dashboard { display: flex; }
   -webkit-mask-image: none;
   mask-image: none;
 }
+
+/* ── Team room: fit, folds and overlays ─────────────────────────────────── */
+/* The chat keeps a reading width and the board gives first; when the room is
+ * too narrow for three columns the board and the team fold into a drawer the
+ * header's "Board" button opens. Container-sized, not viewport-sized: the room
+ * shares the window with the sidebar and the inspector. */
+.team-room { container-type: inline-size; container-name: room; }
+/* The room's one column never grows past the room: a header whose pills and
+ * buttons can't shrink was the widest child, and the track took its width and
+ * pushed every row past the window's edge. */
+.team-room { grid-template-columns: minmax(0, 1fr); }
+.team-room > * { min-width: 0; }
+.team-room__main {
+  grid-template-columns:
+    minmax(var(--team-feed-min), var(--team-feed-measure))
+    minmax(var(--team-tasks-min), 1fr)
+    var(--team-roster-width);
+}
+.team-room__board { display: none; }
+/* 1040 = the three floors (420 + 340 + 240) plus slack: the width below which
+ * the columns would have to overlap. */
+@container room (max-width: 1040px) {
+  .team-room__board { display: inline-flex; }
+  .team-room__head { flex-wrap: nowrap; }
+  .team-room__title { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  /* No room for the counts beside the title and the buttons; the sidebar's
+   * team row carries the same "1 waiting · 1 working". */
+  .team-room__counts { display: none; }
+  .team-room__main { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .team-room__feedwrap { grid-column: 1; grid-row: 1 / span 2; }
+  .team-tasks, .team-roster { display: none; }
+  .team-room__main { overflow: hidden; }
+  .team-room--board-open .team-room__main { grid-template-columns: minmax(0, 1fr) min(440px, 60%); }
+  /* The team folds above the board: a few rows, its own scroll past that. A
+   * fixed cap, not a percentage — a percentage of an auto grid row resolves
+   * against nothing and clipped the list to one row. */
+  .team-room--board-open .team-roster {
+    display: flex; grid-column: 2; grid-row: 1;
+    min-width: 0;
+    max-height: 200px;
+    border-left: 1px solid var(--color-stroke);
+    border-bottom: 1px solid var(--color-stroke);
+  }
+  .team-room--board-open .team-tasks { display: flex; grid-column: 2; grid-row: 2; min-width: 0; }
+  .team-room--reading .team-room__main { grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); }
+  .team-room--reading .team-tasks { display: flex; grid-column: 2; grid-row: 1 / span 2; }
+  .team-room--reading .team-roster { display: none; }
+  .team-composer { width: 100%; border-right: 0; }
+}
+
+/* Reading mode: the artefact takes the board's and the roster's columns and
+ * reads as a page beside the chat. */
+.team-room--reading .team-room__main { grid-template-columns: minmax(var(--team-feed-min), 1fr) minmax(0, 1.5fr); }
+.team-room--reading .team-roster { display: none; }
+.team-room--reading .team-tasks__head,
+.team-room--reading .team-tasks__body,
+.team-room--reading .team-tasks__grip { display: none; }
+.team-room--reading .team-arte { border-top: 0; }
+.team-room--reading .team-arte__body { padding: 0 var(--sp-24) var(--sp-24); }
+.team-room--reading .team-arte__doc { max-width: 76ch; font-size: var(--type-body-size); }
+.team-room--reading .team-composer { width: 100%; border-right: 0; }
+
+/* The cards region scrolls; a fade at the cut says so while there is more. */
+.team-tasks__body.is-more { mask-image: linear-gradient(to bottom, #000 calc(100% - 32px), transparent); }
+
+/* Artefact head: name and meta stacked on the left, the actions on one line. */
+.team-arte__head { align-items: flex-start; flex-wrap: nowrap; }
+.team-arte__titles { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.team-arte__actions { flex: none; display: flex; gap: var(--sp-4); }
+.team-arte__meta { flex-basis: auto; order: 0; }
+/* The recent list is a list in a panel, not a flyout: inline and opaque. */
+.team-arte__menu {
+  position: static; top: auto; right: auto; left: auto; max-height: none;
+  padding: 0 var(--sp-8) var(--sp-8);
+  background: var(--color-room-surface);
+  border-bottom: 1px solid var(--color-stroke);
+  box-shadow: none;
+}
+/* A narrow panel is the normal case: text cells wrap instead of running off. */
+.team-arte__doc .md-td { white-space: normal; overflow-wrap: break-word; }
+
+/* Cards: the kind is the card's first line, inside the frame; the sentence
+ * wraps and the buttons never do — on a narrow card they drop under it. */
+.tf-sys--card { flex-wrap: wrap; row-gap: var(--sp-4); }
+.tf-sys--card .tf-sys__kind {
+  position: static; flex-basis: 100%; order: -1;
+  padding: 0; background: none;
+  color: var(--card-hue, var(--color-text-tertiary));
+  line-height: 1.2;
+}
+/* Only the card's OWN sentence takes the row's slack; inside a body (a column
+ * flex) the same class must not turn 220px into a height. */
+.tf-sys--card > .tf-sys__text--wrap { flex: 1 1 220px; min-width: 0; }
+.tf-sys__open { white-space: nowrap; }
+.tf-sys--card > .tf-sys__details { flex-basis: 100%; }
