@@ -236,13 +236,29 @@ a post.
   mid-turn. Must be green before a `v*.*.*` tag — see CLAUDE.md.
 - `scripts/mac-e2e.mjs` — the same gate on macOS (sections e1–e5 are the
   five above), preceded by boot, a typed `claude`, a project tab's Claude
-  under the Dock's bare PATH, and the codex shim. `--quick` skips the room.
+  under the Dock's bare PATH, and the codex shim, and followed by e6: a bot
+  on the roster with no tab on this machine is started by a post that names
+  it, and the post goes in once its Claude is up. `--quick` skips the room.
   Also must be green before a tag — see docs/MAC-TESTING.md.
 - `scripts/e2e-team-real.ps1` — real Claude: brief from a repo, two bots up
   (trust card answered), replies in the room, bot-to-bot message recorded,
   ask card answered, a permission prompt (project ask rule) answered from the
   room, a screenshot note, reactions both ways.
 - `scripts/shot-team.ps1`, `scripts/repro-team-inherited.ps1` — captures.
+
+## Tagging a bot that isn't running
+
+A pulled team shows its bots as "not running" until someone starts them.
+Naming one anyway — the owner's `@nick` in a post, or the lead handing work
+over with SendMessage — now STARTS it: `Attempt` (TeamController) opens the
+tab the Start button would, holds the line in `_pendingStart` until the tab
+exists, then in the ordinary parked list until the session-start hook
+fires, and the post lands with a "delivered" row like any parked post. The
+room says "Cy wasn't running — starting it" instead of "isn't running, so
+this didn't reach them". Two deliberate limits: a post to everyone does not
+bring up the whole team, and a hand-off between two ordinary bots does not
+start the receiver — only the owner and the lead wake bots. "Send again" on
+an old undelivered row wakes the bot too. Log tag: `Team.start.cold`.
 
 ## Known limits / open items
 

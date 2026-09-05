@@ -100,6 +100,29 @@ internal sealed class TeamController
     private readonly Dictionary<Guid, TeamStore> _stores = new();
     /// Posts waiting for a Claude to come up (or to be free) in that session.
     private readonly Dictionary<Guid, List<(long Seq, string Line, string Nick)>> _parked = new();
+
+    /// Lines addressed to a bot that had NO tab on this machine, held while
+    /// Perch starts one for it (see Attempt's `wake`). Keyed by bot slug
+    /// because there is no session yet; moved into _parked the moment the
+    /// tab exists, and flushed by the ordinary path when its Claude reports.
+    private readonly Dictionary<string, List<(long Seq, string Line, string Nick)>> _pendingStart = new();
+    /// Bots whose tab is being created right now — a second post to one
+    /// while it starts queues behind the first instead of starting twice.
+    private readonly HashSet<string> _startingBots = new(StringComparer.OrdinalIgnoreCase);
+    /// Tabs Attempt decided to open, started by KickStarts once the caller
+    /// has appended its own row. Starting inline would append the bot's
+    /// "joined" row FIRST and take the seq the post's typed line already
+    /// carries (`#n`), so the room would number the post one higher than
+    /// the line the bot reads.
+    private readonly List<(Project Project, TeamStore Store, TeamBot Bot)> _kickStarts = new();
+
+    private void KickStarts()
+    {
+        if (_kickStarts.Count == 0) return;
+        var list = _kickStarts.ToList();
+        _kickStarts.Clear();
+        foreach (var (proj, store, bot) in list) _ = StartForDeliveryAsync(proj, store, bot);
+    }
     /// Sessions with a parked-flush already on the timer.
     private readonly HashSet<Guid> _flushPending = new();
     private readonly Dictionary<string, CancellationTokenSource> _briefJobs = new(StringComparer.Ordinal);
@@ -469,7 +492,11 @@ internal sealed class TeamController
                 //  the same way it would have from SendMessage.
                 var line = $"{TeamRender.PostPrefix} {h.Bot.Nickname} → you: {Flatten(msg.Message ?? msg.Text ?? body)}";
                 var seq = h.Store.Ledger.NextSeq;
-                var attempts = Attempt(new List<TeamBot> { tbot }, line, everyone: false, seq, raw: true);
+                // The lead handing work to a bot that isn't running starts it,
+                // as the owner's own tag would; another bot's message waits
+                // for the owner to bring the receiver up.
+                var attempts = Attempt(new List<TeamBot> { tbot }, line, everyone: false, seq, raw: true,
+                    wake: h.Store.Doc.IsLead(h.Bot) ? (h.Project, h.Store) : null);
                 var relayed = h.Store.Ledger.Append(new RoomEntry
                 {
                     Kind = "peer", From = h.Bot.Slug, To = new List<string> { tbot.Slug },
@@ -483,6 +510,7 @@ internal sealed class TeamController
                          + (why.Length > 0 ? $" ({TeamRender.OneLine(why, 80)})" : ""),
                 }));
                 rows.AddRange(Record(h.Store, relayed, attempts));
+                KickStarts();
                 Log.Info("Team.peer.relayed", $"{h.Bot.Slug} → {tbot.Slug}: {TeamRender.OneLine(why, 90)}");
                 PostEntries(h.Project.Id, h.Store, rows);
                 return;
@@ -1463,10 +1491,13 @@ internal sealed class TeamController
         // it exists (appends are single-threaded), so the typed line carries
         // it and a bot can react to `#<n>`.
         var seq = store.Ledger.NextSeq;
-        var attempts = Attempt(targets, WithImage(text, image), everyone, seq);
+        // Naming a bot that isn't running here starts it (Attempt, `wake`);
+        // a post to everyone does not — that would bring up the whole team.
+        var attempts = Attempt(targets, WithImage(text, image), everyone, seq, wake: everyone ? null : (proj, store));
         entry.Delivered = attempts.All(a => a.Ok);
         store.Ledger.Append(entry);
         var events = Record(store, entry, attempts);
+        KickStarts();
 
         // The lead keeps the board. Work handed straight to a teammate that
         // no open task covers is copied to the lead, so a card appears without
@@ -1913,9 +1944,21 @@ internal sealed class TeamController
         var bot = store.Doc.Bot(msg.BotId ?? "");
         var sess = bot?.SessionId is Guid id ? _h.SessionById(id) : null;
         var post = store.Ledger.ReadAll().LastOrDefault(e => e.Seq == msg.Seq && e.Kind == "user");
-        if (bot == null || sess == null || post == null)
+        if (bot == null || post == null)
         {
             Log.Info("Team.retry", $"seq={msg.Seq} bot={msg.BotId}: nothing to send again");
+            return;
+        }
+        if (sess == null)
+        {
+            // "Send again" on a bot that has no tab here: start it for the
+            // post, the way a fresh tag would.
+            var wakeLine = DeliveryLine(post.Text, post.To == null || post.To.Contains(TeamRender.Everyone) ? null : bot.Nickname, post.Seq);
+            var wakeAttempts = Attempt(new List<TeamBot> { bot }, wakeLine, everyone: false, post.Seq, raw: true, wake: (proj, store));
+            Log.Info("Team.retry", $"seq={msg.Seq} bot={bot.Slug} ok=False (no tab here; starting one)");
+            var wakeRows = Record(store, post, wakeAttempts);
+            KickStarts();
+            PostEntries(proj.Id, store, wakeRows);
             return;
         }
         if (sess.Dormant) _h.Wake(sess);
@@ -2030,8 +2073,18 @@ internal sealed class TeamController
             Toast($"{bot.Nickname} is already running.");
             return;
         }
+        await StartBotAsync(proj, store, bot, because: null);
+    }
+
+    /// Open a tab for a bot that has none on this machine: the bot's own
+    /// address (re-minted if a live pane already answers to it), its markers,
+    /// a "joined" row. Shared by the owner's Start button (OnBotStartAsync)
+    /// and by delivery to a bot that isn't running (StartForDeliveryAsync).
+    /// Null when the tab could not be opened; the reason was toasted.
+    private async Task<Session?> StartBotAsync(Project proj, TeamStore store, TeamBot bot, string? because)
+    {
         var pos = store.Doc.Position(bot.PositionSlug);
-        if (pos == null) { Toast($"{bot.Nickname}'s position is missing from the team file."); return; }
+        if (pos == null) { Toast($"{bot.Nickname}'s position is missing from the team file."); return null; }
 
         var ccName = bot.CcName;
         var takenByLivePane = _h.Sessions().Any(s => PaneTree.AllLeaves(s.Root)
@@ -2047,18 +2100,50 @@ internal sealed class TeamController
         RefreshRoster(proj, store);
 
         var sess = await _h.CreateTab(proj, bot.Nickname, bot.Worktree, model, ccName);
-        if (sess == null) return;   // CreateTab already toasted why
+        if (sess == null) return null;   // CreateTab already toasted why
         bot.SessionId = sess.Id;
         store.Save();
         PublishMarkers(sess);
         RefreshRoster(proj, store);
         var e = store.Ledger.Append(new RoomEntry
         {
-            Kind = "system", From = "perch", Event = "joined", Text = $"{bot.Nickname} started here as {pos.Name}",
+            Kind = "system", From = "perch", Event = "joined",
+            Text = $"{bot.Nickname} started here as {pos.Name}" + (because == null ? "" : $" — {because}"),
         });
         Log.Info("Team.start", $"project={proj.Id:N} bot={bot.Slug} cc={ccName} session={sess.Id:N}");
         _h.PushState();
         PostEntries(proj.Id, store, new[] { e });
+        return sess;
+    }
+
+    /// A line was addressed to a bot with no tab here (Attempt, `wake`):
+    /// open its tab, then move what was held for it into the parked list of
+    /// the new session with the cold-start clock running — from there it is
+    /// the ordinary "post to a starting pane" path, released by the
+    /// session-start hook (OnAgentUp) or reported by ColdStartOverdue.
+    private async Task StartForDeliveryAsync(Project proj, TeamStore store, TeamBot bot)
+    {
+        Session? sess = null;
+        try { sess = await StartBotAsync(proj, store, bot, because: "a post was addressed to it"); }
+        catch (Exception ex) { Log.Error("Team.start.cold", ex); }
+        finally { _startingBots.Remove(bot.Slug); }
+        _pendingStart.Remove(bot.Slug, out var lines);
+        lines ??= new();
+        if (sess == null)
+        {
+            Log.Info("Team.start.cold", $"bot={bot.Slug}: could not open a tab; {lines.Count} line(s) undelivered");
+            foreach (var (seq, _, nick) in lines)
+                Say((proj, store, bot), bot, "undelivered", seq, $"{nick} couldn't be started, so this didn't reach them");
+            return;
+        }
+        if (lines.Count == 0) return;
+        if (!_parked.TryGetValue(sess.Id, out var list)) _parked[sess.Id] = list = new();
+        list.AddRange(lines);
+        _coldStart[sess.Id] = DateTimeOffset.UtcNow;
+        var waking = sess.Id;
+        _h.Delay(() => ColdStartOverdue(waking), ColdStartGrace);
+        foreach (var (seq, _, _) in lines)
+            Log.Info("Team.parked", $"session={sess.Id:N} seq={seq} bot={bot.Slug} (tab opened for it)");
     }
 
     public void OnBotRemove(TeamBotRemoveMsg msg)
@@ -2192,18 +2277,44 @@ internal sealed class TeamController
     /// Ok = the line was typed; Missing = the bot has no tab at all; Blocked =
     /// its pane is showing a prompt of its own; none of them = parked (asleep
     /// or booting).
-    private sealed record Attempted(TeamBot Bot, bool Ok, bool Missing, bool Blocked, string Line, Guid? SessionId);
+    private sealed record Attempted(TeamBot Bot, bool Ok, bool Missing, bool Blocked, string Line, Guid? SessionId, bool Starting = false);
 
     /// Try to type the post into each target's terminal now. Anything not
     /// typed is parked, to be flushed when the session is up and free.
-    private List<Attempted> Attempt(List<TeamBot> targets, string text, bool everyone, long seq = 0, bool raw = false)
+    ///
+    /// `wake`: the team the targets belong to, when a bot with no tab here at
+    /// all should be STARTED for this line rather than reported as "isn't
+    /// running". That is what tagging someone means — the owner's @mention,
+    /// or the lead handing work over — so those two callers pass it; a post
+    /// to everyone and a hand-off between two ordinary bots do not, because
+    /// nobody asked for six Claudes to come up. The line waits in
+    /// _pendingStart until the tab exists, then in _parked until its Claude
+    /// reports (OnAgentUp), exactly like a post to a tab that had no terminal.
+    private List<Attempted> Attempt(List<TeamBot> targets, string text, bool everyone, long seq = 0, bool raw = false,
+        (Project Project, TeamStore Store)? wake = null)
     {
         var results = new List<Attempted>();
         foreach (var bot in targets)
         {
             var line = raw ? text : DeliveryLine(text, everyone ? null : bot.Nickname, seq);
             var sess = bot.SessionId is Guid id ? _h.SessionById(id) : null;
-            if (sess == null) { results.Add(new Attempted(bot, false, true, false, line, null)); continue; }
+            if (sess == null)
+            {
+                if (wake is { } w)
+                {
+                    if (!_pendingStart.TryGetValue(bot.Slug, out var pend)) _pendingStart[bot.Slug] = pend = new();
+                    pend.Add((seq, line, bot.Nickname));
+                    if (_startingBots.Add(bot.Slug))
+                    {
+                        Log.Info("Team.start.cold", $"bot={bot.Slug} seq={seq}: no tab here; starting one for the post");
+                        _kickStarts.Add((w.Project, w.Store, bot));
+                    }
+                    results.Add(new Attempted(bot, false, false, false, line, null, Starting: true));
+                    continue;
+                }
+                results.Add(new Attempted(bot, false, true, false, line, null));
+                continue;
+            }
             var starting = false;
             if (sess.Dormant) { _h.Wake(sess); starting = true; }
             // A tab restored after a restart but never looked at has no
@@ -2256,6 +2367,16 @@ internal sealed class TeamController
             {
                 Log.Info("Team.deliver", $"session={a.SessionId:N} seq={post.Seq} bot={a.Bot.Slug}");
                 Expect(a.SessionId!.Value, a.Bot, post.Seq, a.Line);
+            }
+            else if (a.Starting)
+            {
+                // The page shows the post as "waiting for the bot" until the
+                // "delivered" row for it lands, same as a parked post.
+                events.Add(store.Ledger.Append(new RoomEntry
+                {
+                    Kind = "system", From = a.Bot.Slug, Event = "waiting", Note = post.Seq.ToString(),
+                    Text = $"{a.Bot.Nickname} wasn't running — starting it; this goes in as soon as its Claude is up",
+                }));
             }
             else if (a.SessionId is Guid sid)
             {

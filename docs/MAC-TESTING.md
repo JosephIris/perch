@@ -19,7 +19,7 @@ page and publishes the `perch` CLI + shims into `bin/Debug/net8.0/tools`).
 ```sh
 node scripts/mac-e2e.mjs                 # everything; must be green before a v* tag
 node scripts/mac-e2e.mjs --quick         # a–d only: no tokens, after a host change
-node scripts/mac-e2e.mjs --sections e1,e2
+node scripts/mac-e2e.mjs --sections e1,e6
 node scripts/mac-e2e.mjs --app /Applications/Perch.app/Contents/MacOS/Perch
 ```
 
@@ -43,6 +43,7 @@ consequence. `--inherit-path` opts out.
 | e3 | send again | `team.deliver.retry` re-types the line with no second post |
 | e4 | late Allow | a permission card answered 15 s later still runs the command |
 | e5 | bot to bot | Ada's SendMessage reaches Bo idle and mid-turn; Bo acts on both |
+| e6 | wake | a bot added to team.json with no tab here (a pulled team) is started by a post naming it (`Team.start.cold`), the post is held until its Claude reports, then lands and is answered |
 | log | — | zero ERROR lines across the run |
 
 Sections e1–e5 are the Windows gate (`scripts/verify-comms.ps1`) section for

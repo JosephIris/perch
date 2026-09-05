@@ -30,6 +30,9 @@
 //   e1–e5. room    the delivery gate, section for section as on Windows:
 //                  warm delivery, cold delivery after a restart, Send again,
 //                  a permission card answered at human speed, bot-to-bot.
+//   e6. wake       a bot on the roster with NO tab on this machine (a pulled
+//                  team) is started by a post that names it, and the post
+//                  goes in once its Claude is up — not "isn't running".
 //
 // ISOLATION: its own PERCH_DATA_DIR, its own CODEX_HOME, a throwaway repo,
 // and it kills only the PID it launched (the user's Perch.app keeps running
@@ -57,7 +60,7 @@ const toolsDir = path.join(appDir, "tools");
 const botModel = flag("--model") ?? "haiku";
 const quick = has("--quick");
 const inheritPath = has("--inherit-path");
-const sections = (flag("--sections") ?? (quick ? "a,b,c,d" : "a,b,c,d,e1,e2,e3,e4,e5")).split(",");
+const sections = (flag("--sections") ?? (quick ? "a,b,c,d" : "a,b,c,d,e1,e2,e3,e4,e5,e6")).split(",");
 const outDir = flag("--out") ?? path.join(os.tmpdir(), "perch-e2e-out");
 fs.mkdirSync(outDir, { recursive: true });
 
@@ -457,7 +460,7 @@ try {
   }
 
   // --- e. the team room --------------------------------------------------------
-  const roomOn = ["e1", "e2", "e3", "e4", "e5"].some((s) => sections.includes(s));
+  const roomOn = ["e1", "e2", "e3", "e4", "e5", "e6"].some((s) => sections.includes(s));
   if (roomOn && !projectId) {
     await send({ verb: "project.add", path: repoDir });
     const projectsJson = path.join(perchDir, "projects.json");
@@ -566,6 +569,40 @@ try {
     check("Bo acted on it although it was mid-turn", await waitUntil(async () => { await answerCards(projectId); return ledgerHas(await teamDump(projectId), (e) => e.from === "Bo" && String(e.text).includes("PEERTWO")); }, 240000, 3000));
     check("no send failed on an ambiguous name", count("Team.peer.failed") === 0);
     shot("e5-bots");
+  }
+
+  if (section("e6", "room: tagging a bot that has no tab here starts it and delivers")) {
+    // A pulled team: Cy is in team.json, nothing on this machine runs it.
+    // The store notices the file changed on disk and reloads it.
+    const teamJson = path.join(teamDir, "team.json");
+    const doc = JSON.parse(fs.readFileSync(teamJson, "utf8"));
+    doc.bots = doc.bots ?? [];
+    doc.bots.push({ slug: "cy", nickname: "Cy", positionSlug: "courier", ccName: "cy", worktree: false, model: "", createdAtMs: Date.now() });
+    fs.writeFileSync(teamJson, JSON.stringify(doc, null, 2));
+    await sleep(1500);
+    const d0 = await teamDump(projectId);
+    const cy = (d0.team?.bots ?? []).find((b) => (b.Slug ?? b.slug) === "cy");
+    check("the roster shows Cy as not running", !!cy && !(cy.sessionId ?? cy.SessionId), `- ${JSON.stringify(d0).slice(0, 200)}`);
+
+    const sessionsBefore = count("type=session");
+    const coldBefore = count("Team.start.cold");
+    const deliverBefore = count("Team.deliver");
+    await send({ verb: "team.post", projectId, text: "Reply with exactly this word and nothing else: PONGSIX", to: ["Cy"], clientId: "c6" });
+    check("the post started a tab for Cy instead of giving up", await waitUntil(() => count("Team.start.cold") > coldBefore, 15000));
+    check("the room did not say Cy isn't running", !(await teamDump(projectId)).ledger?.some((e) => e.event === "undelivered" && /Cy/.test(String(e.text))));
+    const up = await waitUntil(async () => {
+      if (count("type=session") > sessionsBefore) return true;
+      if (count("Team.trust.ask") > 0 && last("Team.trust.ask").includes("bot=cy") && !last("Team.trust.answer").includes("bot=cy"))
+        await send({ verb: "team.bot.answer", projectId, botId: "cy", answer: "trust" });
+      return false;
+    }, 120000);
+    check("Cy's Claude came up", up);
+    check("the held post went in after that", await waitUntil(() => count("Team.deliver") > deliverBefore && /\(parked\)/.test(last("Team.deliver")), 30000));
+    check("Cy answered in the room", await waitUntil(async () => { await answerCards(projectId); return ledgerHas(await teamDump(projectId), saysWord("PONGSIX")); }, 180000, 3000));
+    const d = await teamDump(projectId);
+    const post = (d.ledger ?? []).find((e) => e.kind === "user" && String(e.text).includes("PONGSIX"));
+    check("the room marks that post as delivered", !!post && (d.ledger ?? []).some((e) => e.event === "delivered" && String(e.note) === String(post.seq)));
+    shot("e6-wake");
   }
 
   // --- the log, at the end -------------------------------------------------

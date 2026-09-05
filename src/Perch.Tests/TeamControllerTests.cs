@@ -1005,6 +1005,9 @@ public class TeamControllerTests
         var h = new Harness();
         await h.CreateBot("Ada");
         h.Post("one", "[\"Ada\"]", "c1");
+        // The tab exists now but its pane has no terminal yet (the page has
+        // not laid it out) — the second post must queue, not be typed.
+        h.NoPty.Add(h.Sessions.Single().Root.Id);
         h.Post("two", "[\"Ada\"]", "c2");
         var before = h.Posted.Count;
         h.Ctrl.OnRequest(new TeamRequestMsg { ProjectId = h.Project.Id, SinceSeq = 2 });
@@ -1506,5 +1509,141 @@ public class TeamControllerTests
         h.Ctrl.OnPost(new TeamPostMsg { ProjectId = h.Project.Id, Text = "", ClientId = "i3", To = JsonDocument.Parse("[\"Ada\"]").RootElement.Clone(), Image = Path.Combine(h.Repo, "nope.png") });
         Assert.Equal(2, h.Typed.Count);
         TeamMarkers.Clear(h.Sessions.Single().Root.Id);
+    }
+    // ---- a tag wakes a bot that has no tab here ----------------------------
+
+    /// The pulled-team case: the bot is on the roster, nothing runs it on
+    /// this machine. The owner's post opens its tab, waits for its Claude,
+    /// then goes in — instead of "isn't running, so this didn't reach them".
+    [Fact]
+    public async Task APostToABotWithNoTabHereStartsItAndDeliversWhenItsClaudeIsUp()
+    {
+        var h = new Harness();
+        var ada = await h.CreateBot("Ada");
+        var first = h.Sessions.Single();
+        h.Sessions.Clear();
+        ada.SessionId = null;
+        TeamMarkers.Clear(first.Root.Id);
+
+        h.Post("did you save the report?", "[\"Ada\"]");
+
+        var sess = Assert.Single(h.Sessions);          // a tab was opened for the post
+        Assert.Equal(sess.Id, ada.SessionId);
+        Assert.Empty(h.Typed);                          // nothing typed into a booting pane
+        Assert.DoesNotContain(h.Ledger, e => e.Event == "undelivered");
+        var waiting = Assert.Single(h.Ledger, e => e.Event == "waiting");
+        Assert.Contains("starting it", waiting.Text);
+        Assert.Contains(h.Ledger, e => e.Event == "joined" && e.Text.Contains("a post was addressed to it"));
+        var post = h.Ledger.Single(e => e.Kind == "user");
+        Assert.False(post.Delivered);
+        // The bot's "joined" row must not have taken the post's number.
+        Assert.Equal(post.Seq, h.Ledger.Single(e => e.Event == "waiting").Seq - 1);
+
+        // The cold-start clock is armed (the overdue timer), then Claude reports.
+        Assert.Single(h.Delayed);
+        h.Ctrl.OnAgentUp(sess);
+        h.RunLastDelayed();                             // the flush after the settle delay
+        var typed = Assert.Single(h.Typed);
+        Assert.Equal(sess.Id, typed.Session);
+        Assert.Contains("did you save the report?", typed.Line);
+        Assert.Contains($"#{post.Seq} ", typed.Line);   // the line names the post the room shows
+        Assert.Contains(h.Ledger, e => e.Event == "delivered" && e.Note == post.Seq.ToString());
+        TeamMarkers.Clear(sess.Root.Id);
+    }
+
+    [Fact]
+    public async Task ASecondPostWhileTheBotStartsQueuesBehindTheFirst()
+    {
+        var h = new Harness();
+        var ada = await h.CreateBot("Ada");
+        TeamMarkers.Clear(h.Sessions.Single().Root.Id);
+        h.Sessions.Clear();
+        ada.SessionId = null;
+
+        h.Post("one", "[\"Ada\"]", "c1");
+        // The tab exists now but its pane has no terminal yet (the page has
+        // not laid it out) — the second post must queue, not be typed.
+        h.NoPty.Add(h.Sessions.Single().Root.Id);
+        h.Post("two", "[\"Ada\"]", "c2");
+
+        var sess = Assert.Single(h.Sessions);          // one tab, not two
+        h.Ctrl.OnAgentUp(sess);
+        h.RunLastDelayed();
+        Assert.Equal(2, h.Typed.Count);
+        Assert.Contains("one", h.Typed[0].Line);
+        Assert.Contains("two", h.Typed[1].Line);
+        TeamMarkers.Clear(sess.Root.Id);
+    }
+
+    [Fact]
+    public async Task APostToEveryoneDoesNotStartTheWholeTeam()
+    {
+        var h = new Harness();
+        var ada = await h.CreateBot("Ada");
+        foreach (var s in h.Sessions) TeamMarkers.Clear(s.Root.Id);
+        h.Sessions.Clear();
+        ada.SessionId = null;
+
+        h.Post("morning all", null);
+
+        Assert.Empty(h.Sessions);
+        Assert.Contains(h.Ledger, e => e.Event == "undelivered");
+    }
+
+    /// The lead handing work to a bot that isn't running starts it; a message
+    /// from an ordinary bot does not (the owner decides who comes up).
+    [Fact]
+    public async Task TheLeadsHandoffStartsTheReceiver_AnotherBotsDoesNot()
+    {
+        var h = new Harness();
+        var ada = await h.CreateBot("Ada");
+        var bo = await h.CreateBot("Bo", slug: ada.PositionSlug);
+        var adaSess = h.Sessions.First(s => s.Id == ada.SessionId);
+        var boSess = h.Sessions.First(s => s.Id == bo.SessionId);
+        TeamMarkers.Clear(boSess.Root.Id);
+        h.Sessions.Remove(boSess);
+        bo.SessionId = null;
+
+        // Ada is not the lead: her failed send is reported, Bo stays down.
+        h.Store.Doc.LeadSlug = null;
+        h.Ctrl.OnPeerMsg(adaSess, adaSess.Root.Id, new PeerMsgMessage("sent", "bo", "…", false,
+            "HANDOFF: take the schema", null, "no session named bo"));
+        Assert.Single(h.Sessions);
+        Assert.Contains(h.Ledger, e => e.Event == "undelivered");
+
+        // Ada leads: the same hand-off brings Bo up and waits for its Claude.
+        h.Store.Doc.LeadSlug = ada.Slug;
+        h.Ctrl.OnPeerMsg(adaSess, adaSess.Root.Id, new PeerMsgMessage("sent", "bo", "…", false,
+            "HANDOFF: take the schema", null, "no session named bo"));
+        Assert.Equal(2, h.Sessions.Count);
+        var fresh = h.Sessions.First(s => s.Id != adaSess.Id);
+        Assert.Equal(fresh.Id, bo.SessionId);
+        h.Ctrl.OnAgentUp(fresh);
+        h.RunLastDelayed();
+        var typed = Assert.Single(h.Typed, t => t.Session == fresh.Id);
+        Assert.Contains("take the schema", typed.Line);
+        foreach (var s in h.Sessions) TeamMarkers.Clear(s.Root.Id);
+    }
+
+    [Fact]
+    public async Task SendAgainOnABotWithNoTabStartsIt()
+    {
+        var h = new Harness();
+        var ada = await h.CreateBot("Ada");
+        TeamMarkers.Clear(h.Sessions.Single().Root.Id);
+        h.Sessions.Clear();
+        ada.SessionId = null;
+        // A post from before this feature: it landed as "undelivered".
+        h.Post("please", null);
+        var post = h.Ledger.Single(e => e.Kind == "user");
+        Assert.Empty(h.Sessions);
+
+        h.Ctrl.OnDeliverRetry(new TeamDeliverRetryMsg { ProjectId = h.Project.Id, Seq = post.Seq, BotId = ada.Slug });
+
+        var sess = Assert.Single(h.Sessions);
+        h.Ctrl.OnAgentUp(sess);
+        h.RunLastDelayed();
+        Assert.Contains(h.Typed, t => t.Session == sess.Id && t.Line.Contains("please"));
+        TeamMarkers.Clear(sess.Root.Id);
     }
 }
