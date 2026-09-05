@@ -181,6 +181,23 @@ public class StateProjectionTests
 
     // ---- Snapshot / pane projection wire shape --------------------------------
 
+    /// The agent marks on a tab's row: each agent once, in pane order, and
+    /// nothing for a shell — a tab with a Claude pane, a shell and a codex
+    /// pane wears exactly two marks.
+    [Fact]
+    public void ProjectSession_ListsEachAgentOnce_InPaneOrder()
+    {
+        var claude = new PaneNode { AgentType = "claude" };
+        var shell  = new PaneNode { AgentType = "" };
+        var codex  = new PaneNode { AgentType = "codex" };
+        var again  = new PaneNode { AgentType = "claude" };
+        var agents = Project(SessionWith(claude, shell, codex, again))
+            .GetProperty("agents").EnumerateArray().Select(a => a.GetString()).ToArray();
+        Assert.Equal(new[] { "claude", "codex" }, agents);
+
+        Assert.Empty(Project(SessionWith(shell)).GetProperty("agents").EnumerateArray());
+    }
+
     [Fact]
     public void ProjectPane_LeafCarriesTheFieldsThePageReads()
     {

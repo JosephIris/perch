@@ -3,6 +3,7 @@
 // plumbing that ships bytes to/from the host.
 
 import { Terminal } from "@xterm/xterm";
+import { SyncBatcher } from "./sync-output.js";
 import type { ILinkProvider, ILink } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
@@ -38,8 +39,19 @@ const utf8 = new TextEncoder();
 // Pane.smoothCursorVisibility() collapsed a repaint's hide→show pairs. The
 // difference IS the fix, so it's what the harness asserts on
 // (`node scripts/cdp-eval.mjs "window.__perchCursor"` while codex works).
-const cursorStats = { churn: 0, hidden: 0, shown: 0 };
+const cursorStats = {
+  churn: 0, hidden: 0, shown: 0,
+  // DECSCUSR (CSI Ps SP q): how many times an app set the cursor STYLE, and
+  // the last style it asked for (1/3/5 = blinking block/underline/bar).
+  styleSets: 0, lastStyle: -1,
+  // att610 (CSI ? 12 h/l): how many times an app turned cursor blink on/off.
+  blinkOn: 0, blinkOff: 0,
+};
 (window as any).__perchCursor = cursorStats;
+// Every live Terminal, for the same harness: lets a CDP probe read a pane's
+// cursor options or tap its input stream without a debug build of the page.
+const liveTerms: Terminal[] = [];
+(window as any).__perchTerms = liveTerms;
 
 export const DEFAULT_FONT_SIZE = 13;
 export const MIN_FONT_SIZE = 9;
@@ -56,12 +68,23 @@ export class Pane {
   private readonly commitsEl: HTMLElement;
   private readonly portsEl: HTMLButtonElement;
   private readonly agentBadgeEl: HTMLElement;
+  /** Frame batching for synchronized-output TUIs (codex) — see
+   *  sync-output.ts. Every write xterm gets comes out of this, so a held
+   *  frame is one write and one ack, and a shell's bytes pass straight
+   *  through it. */
+  private readonly sync = new SyncBatcher((bytes) => this.writeBytes(bytes));
   private readonly modelEl: HTMLButtonElement;
   private readonly footer: PaneFooter;
   // Boot cover shown while a Claude Code pane starts up (driven by pane.setup).
   private readonly setup: SetupOverlay;
   private setupActive = false;
   private readonly termHost: HTMLElement;
+  /** "Latest" pill, shown while the view is scrolled off the bottom of a
+   *  scrolling buffer. Claude Code lives on the alternate screen (no
+   *  scrollback, nothing to scroll) but codex keeps its history in the
+   *  normal buffer, and a wheel or trackpad nudge over the pane parks the
+   *  view up there until the next keystroke — "it scrolls up, weird". */
+  private readonly latestEl: HTMLButtonElement;
   private readonly term: Terminal;
   private readonly fit: FitAddon;
   private resizeFrame = 0;
@@ -117,6 +140,15 @@ export class Pane {
     this.termHost = document.createElement("div");
     this.termHost.className = "pane__term";
     this.element.appendChild(this.termHost);
+    this.latestEl = document.createElement("button");
+    this.latestEl.type = "button";
+    this.latestEl.className = "pane__latest inspector__jump";
+    this.latestEl.textContent = "↓ Latest";
+    this.latestEl.title = "Back to the latest output";
+    this.latestEl.hidden = true;
+    this.latestEl.addEventListener("mousedown", (ev) => ev.preventDefault());   // keep the terminal's focus
+    this.latestEl.addEventListener("click", () => { this.term.scrollToBottom(); this.term.focus(); });
+    this.element.appendChild(this.latestEl);
 
     // Per-pane status bar at the bottom: live activity + work produced. Built
     // here, populated on every applyLeafView. Sits below the terminal so the
@@ -192,6 +224,11 @@ export class Pane {
     this.term.loadAddon(new Unicode11Addon());
     this.term.unicode.activeVersion = "11";
     this.smoothCursorVisibility();
+    liveTerms.push(this.term);
+    // The pill follows the viewport: a scroll moves it, and so does output
+    // arriving under a parked view (the buffer grows, the view stays).
+    this.term.onScroll(() => this.updateLatest());
+    this.term.onWriteParsed(() => this.updateLatest());
 
     // Custom link provider — always underlines URLs (decorations.underline:
     // true) and routes clicks to our link-action menu instead of opening
@@ -373,6 +410,7 @@ export class Pane {
     this.stopProbe();
     this.observer?.disconnect();
     this.observer = undefined;
+    this.sync.dispose();
     try { this.term.dispose(); } catch { /* ignore */ }
     this.element.remove();
   }
@@ -386,13 +424,20 @@ export class Pane {
     // OUTSIDE the URL), so the link provider's regex still matches for
     // clicks. URLs split across feed() chunks are emitted unstyled —
     // acceptable for v1, real-world shells write a URL in one chunk.
-    const bytes = b64ToBytes(b64);
+    // Through the frame batcher: a synchronized-output frame is held until
+    // it is whole, everything else comes out the other side at once.
+    this.sync.feed(b64ToBytes(b64));
+  }
+
+  private writeBytes(bytes: Uint8Array) {
     const n = bytes.length;
     // Ack the ORIGINAL byte count once xterm has drained this write. The
     // host uses the ack to release PTY backpressure (see ConPty flow
     // control); acking only after the write callback fires is what bounds
     // the renderer's buffer under a fast producer. We report `n` (pre-
-    // underline-injection) to match the byte count the host sent.
+    // underline-injection) to match the byte count the host sent — for a
+    // held frame that is the sum of its chunks, which the host's counter
+    // takes just the same.
     this.term.write(injectUrlUnderlines(bytes), () => {
       send({ type: "pane.ack", paneId: this.paneId, bytes: n });
     });
@@ -464,7 +509,14 @@ export class Pane {
     const isCursorMode = (params: (number | number[])[]) =>
       params.length === 1 && params[0] === 25;
 
+    this.term.parser.registerCsiHandler({ intermediates: " ", final: "q" }, (params) => {
+      cursorStats.styleSets++;
+      cursorStats.lastStyle = typeof params[0] === "number" ? params[0] : 0;
+      return false;   // counted only; xterm applies it
+    });
+
     this.term.parser.registerCsiHandler({ prefix: "?", final: "l" }, (params) => {
+      if (params.length === 1 && params[0] === 12) cursorStats.blinkOff++;
       if (!isCursorMode(params)) return false;
       if (replayHide > 0) { replayHide--; return false; }
       cursorStats.churn++;
@@ -477,6 +529,7 @@ export class Pane {
     });
 
     this.term.parser.registerCsiHandler({ prefix: "?", final: "h" }, (params) => {
+      if (params.length === 1 && params[0] === 12) cursorStats.blinkOn++;
       if (!isCursorMode(params)) return false;
       if (replayShow > 0) { replayShow--; return false; }
       cursorStats.churn++;
@@ -680,6 +733,13 @@ export class Pane {
 
   private notifyFocus() {
     send({ type: "pane.focus", paneId: this.paneId });
+  }
+
+  private updateLatest() {
+    const b = this.term.buffer.active;
+    const off = b.type === "normal" && b.viewportY < b.baseY;
+    if (this.latestEl.hidden === !off) return;
+    this.latestEl.hidden = !off;
   }
 
   private reportResize() {

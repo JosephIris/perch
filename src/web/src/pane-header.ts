@@ -13,6 +13,7 @@
 // and update on each applyLeafView.
 
 import { send } from "./bridge.js";
+import { agentGlyph, spriteFor } from "./agent-glyph.js";
 import type { PaneTreeView } from "./bridge.js";
 import { showModelMenu } from "./model-menu.js";
 import { buildPaneActions } from "./pane-actions.js";
@@ -58,22 +59,19 @@ export function applyModelChip(
   el.style.display = "";
 }
 
-/** Set the agent-type badge: "CC" for Claude Code, "CX" for codex, hidden for
- *  a plain shell or unknown. Kept in one place so Pane just forwards the
- *  agentType string from each leaf view. */
+/** Set the agent badge: the agent's pixel mark (Claude Code's creature, the
+ *  Codex blob — see agent-glyph.ts), hidden for a plain shell or unknown.
+ *  Kept in one place so Pane just forwards the agentType string from each
+ *  leaf view. */
 export function applyAgentBadge(el: HTMLElement, agentType: string | undefined) {
-  const map: Record<string, { label: string; title: string }> = {
-    claude: { label: "CC", title: "Claude Code" },
-    codex:  { label: "CX", title: "Codex" },
-  };
-  const m = agentType ? map[agentType] : undefined;
-  if (m) {
-    el.textContent = m.label;
-    el.title = m.title;
+  const glyph = agentGlyph(agentType);
+  el.replaceChildren();
+  if (glyph) {
+    el.appendChild(glyph);
+    el.title = spriteFor(agentType)!.label;
     el.dataset.agent = agentType!;
     el.style.display = "";
   } else {
-    el.textContent = "";
     el.removeAttribute("data-agent");
     el.style.display = "none";
   }

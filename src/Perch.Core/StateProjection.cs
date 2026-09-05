@@ -230,6 +230,13 @@ internal static class StateProjection
                 level = LevelToString(s.PairNoteLevel),
                 atMs  = s.PairNoteAtMs,
             },
+            // Which agents run in this tab: one entry per distinct agent in
+            // pane order ("claude" / "codex"), none for plain shells. The
+            // sidebar row and the dashboard card wear one mark per entry.
+            agents = leaves.Select(p => p.AgentType)
+                           .Where(a => !string.IsNullOrEmpty(a))
+                           .Distinct()
+                           .ToArray(),
             // Pane breakdown so the sidebar can say "3 panes · 1 waiting".
             paneCount,
             waitingCount,

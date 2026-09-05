@@ -34,6 +34,10 @@
          inside the patch text, and that parse decides both what the pane says
          it is doing and which files its line counts are billed for. -->
     <Compile Include="..\..\tools\perch-cli\CodexPatch.cs" Link="CodexPatch.cs" />
+    <!-- And CodexAutoReview: whether a codex approval is the person's to
+         answer or its reviewer model's decides if a pane goes loud at all,
+         and the rule reads a journal line, which the tests hand it. -->
+    <Compile Include="..\..\tools\perch-cli\CodexAutoReview.cs" Link="CodexAutoReview.cs" />
   </ItemGroup>
 
 </Project>

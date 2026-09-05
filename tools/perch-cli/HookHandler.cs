@@ -258,9 +258,23 @@ internal static class HookHandler
                 break;
 
             case "codex-permission":
-                // Codex's PermissionRequest. Two jobs, in this order.
+                // Codex's PermissionRequest. Three jobs, in this order.
                 //
-                // First, say the pane is blocked. Claude Code announces its own
+                // First, find out who answers it. Codex fires this hook for
+                // every escalation, before it decides between the person and
+                // its own reviewer model ("auto-review", a thread setting) -
+                // and when the reviewer is on, nobody at the keyboard is asked:
+                // the reviewer rules a second later and the turn carries on.
+                // That is a working beat, not a wait, so it gets the quiet
+                // activity line and nothing else. Answering it from here would
+                // also pre-empt the reviewer, which is not what the user chose.
+                var askSummary = ToolSummary(root, StringFrom(root, "tool_name") ?? "something");
+                if (CodexAutoReview.IsOn(StringFrom(root, "transcript_path")))
+                {
+                    Send(pipeName, new { type = "status", state = "working", detail = "auto-reviewing " + askSummary });
+                    return 0;
+                }
+                // Then say the pane is blocked. Claude Code announces its own
                 // prompt through a Notification hook and this case doesn't have
                 // to; codex sends no such notice, so without this line a codex
                 // pane waiting on an approval would look like it was still
@@ -268,10 +282,10 @@ internal static class HookHandler
                 Send(pipeName, new
                 {
                     type = "notify", level = "warn",
-                    text = "Codex is asking to run " + ToolSummary(root, StringFrom(root, "tool_name") ?? "something"),
+                    text = "Codex is asking to run " + askSummary,
                 });
                 Send(pipeName, new { type = "status", state = "permission", detail = (string?)null });
-                // Then hold it, exactly as a Claude bot's prompt is held, so a
+                // Last, hold it, exactly as a Claude bot's prompt is held, so a
                 // codex bot's approval can be answered from the room instead of
                 // in its terminal. Returns immediately for any pane that isn't
                 // a bot's, and codex then shows its own card as usual.

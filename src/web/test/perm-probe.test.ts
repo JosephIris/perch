@@ -31,6 +31,24 @@ test("bash permission dialog is visible, wherever the selector sits", () => {
   assert.equal(permissionDialogVisible(dialog(3)), true);
 });
 
+test("codex's approval card is visible, in each of its phrasings", () => {
+  const run =
+    PAD +
+    "Would you like to run the following command?\n" +
+    "  python -u temp/pull_events.py\n" +
+    "> 1. Yes, proceed\n" +
+    "  2. Yes, and don't ask again for commands that start with python\n" +
+    "  3. No, and tell Codex what to do differently\n";
+  assert.equal(permissionDialogVisible(run), true);
+  const grant =
+    PAD +
+    "Would you like to grant these permissions?\n" +
+    "  Network access to api.example.com\n" +
+    "  1. Yes, grant these permissions for this turn\n" +
+    "  2. No, continue without permissions\n";
+  assert.equal(permissionDialogVisible(grant), true);
+});
+
 test("edit-file permission dialog is visible", () => {
   const tail =
     PAD +

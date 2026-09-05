@@ -208,6 +208,14 @@
   --color-local-fill:       rgba(232, 160, 76, 0.42);
   --color-local-fill-hover: rgba(232, 160, 76, 0.52);
 
+  /* Agent marks (agent-glyph.ts). These are the agents' OWN colours, not
+   * chrome: Claude Code's creature is Claude's terracotta in every theme,
+   * and the Codex mark is monochrome, so it takes the secondary ink. Used
+   * nowhere else — a pane-tag orange next to the creature would read as a
+   * second creature, which is why the tag palette stays where it is. */
+  --color-agent-claude:     #D97757;
+  --color-agent-codex:      var(--color-text-secondary);
+
   /* Status-dot palette. Drives the small colored circle on the left of
    * each session row (replacement for the old chip pill). One CSS variable
    * per agent state keeps the markup state-data-driven via

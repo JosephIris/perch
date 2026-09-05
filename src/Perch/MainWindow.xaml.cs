@@ -278,8 +278,20 @@ internal partial class MainWindow : FluentWindow, IWebViewHost, IWindowHost
             string? text = null;
             if (System.Windows.Clipboard.ContainsImage())
             {
-                var src = System.Windows.Clipboard.GetImage();
-                if (src != null) png = WpfImageCodec.EncodePng(src);
+                // Three ways to read the picture, best first. A PNG the source
+                // app put on the clipboard is the picture exactly. Failing
+                // that, the raw bitmap, decoded by us: WPF's own conversion
+                // turns the usual 32-bit screenshot (alpha bytes all zero,
+                // meaning nothing) into a transparent black rectangle, which
+                // is what the room showed on 2026-09-05. WPF's GetImage stays
+                // as the last resort for formats we don't decode.
+                var data = System.Windows.Clipboard.GetDataObject();
+                png = ClipboardPng(data) ?? ClipboardBitmap(data);
+                if (png == null)
+                {
+                    var src = System.Windows.Clipboard.GetImage();
+                    if (src != null) png = WpfImageCodec.EncodePng(src);
+                }
             }
             if (png == null && System.Windows.Clipboard.ContainsText())
                 text = System.Windows.Clipboard.GetText();
@@ -292,6 +304,43 @@ internal partial class MainWindow : FluentWindow, IWebViewHost, IWindowHost
             Log.Error("Board.paste.clipboard", ex);
             return null;
         }
+    }
+
+    /// The clipboard's own PNG, when the source app offered one.
+    private static byte[]? ClipboardPng(System.Windows.IDataObject? data)
+    {
+        try
+        {
+            if (data == null || !data.GetDataPresent("PNG")) return null;
+            if (data.GetData("PNG") is not System.IO.Stream s) return null;
+            using var ms = new System.IO.MemoryStream();
+            s.CopyTo(ms);
+            var bytes = ms.ToArray();
+            // Sanity: a real PNG starts with its signature.
+            return bytes.Length > 8 && bytes[0] == 0x89 && bytes[1] == 0x50 ? bytes : null;
+        }
+        catch { return null; }
+    }
+
+    /// The raw clipboard bitmap (CF_DIB), decoded by ClipboardDib and encoded
+    /// to PNG here. Null when the DIB is a shape we don't decode.
+    private static byte[]? ClipboardBitmap(System.Windows.IDataObject? data)
+    {
+        try
+        {
+            if (data == null || !data.GetDataPresent(System.Windows.DataFormats.Dib)) return null;
+            if (data.GetData(System.Windows.DataFormats.Dib) is not System.IO.Stream s) return null;
+            using var ms = new System.IO.MemoryStream();
+            s.CopyTo(ms);
+            var d = ClipboardDib.Decode(ms.ToArray());
+            if (d == null) return null;
+            var src = System.Windows.Media.Imaging.BitmapSource.Create(
+                d.Width, d.Height, 96, 96, System.Windows.Media.PixelFormats.Bgra32, null, d.Bgra, d.Width * 4);
+            src.Freeze();
+            if (d.AlphaWasEmpty) Log.Info("Board.paste", $"clipboard bitmap {d.Width}x{d.Height} had an empty alpha channel; shown opaque");
+            return WpfImageCodec.EncodePng(src);
+        }
+        catch (Exception ex) { Log.Error("Board.paste.dib", ex); return null; }
     }
 
     public Task<string?> PickFolderAsync(string? initialDir, string? title = null)

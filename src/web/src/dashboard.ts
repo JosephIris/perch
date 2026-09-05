@@ -12,6 +12,7 @@
 // the reply is withheld and only "Open to reply" is offered.
 
 import type { PaneTreeView, SessionView, AgentStateName } from "./bridge.js";
+import { agentGlyph } from "./agent-glyph.js";
 import { send, bytesToB64 } from "./bridge.js";
 import { elapsedSpan, agoSpan } from "./elapsed.js";
 import { openCommitsLightbox } from "./commits-view.js";
@@ -202,6 +203,14 @@ export class Dashboard {
     const dot = el("span", "card__dot");
     dot.dataset.state = s.agentState;
     head.appendChild(dot);
+    // The agent's mark, same as the sidebar row wears (agent-glyph.ts).
+    for (const agent of (s.agents ?? []).slice(0, 2)) {
+      const glyph = agentGlyph(agent);
+      if (glyph) {
+        glyph.classList.add("card__agent");
+        head.appendChild(glyph);
+      }
+    }
     const t = el("span", "card__title");
     t.textContent = s.title;
     head.appendChild(t);

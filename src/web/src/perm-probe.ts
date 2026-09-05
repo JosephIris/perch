@@ -18,8 +18,14 @@
 // the numbered ❯ selector every cc dialog has, plus its option phrasings.
 // "esc to interrupt" is deliberately NOT a marker: that's the WORKING
 // spinner's hint, i.e. exactly the state we want to heal into.
+//
+// Codex's approval card is matched too (a codex pane wears the same
+// "permission" state): its question is "Would you like to run/make/grant/
+// send…?", its options "Yes, proceed" and "No, and tell Codex what to do
+// differently". Without these the probe saw no Claude markers on a codex
+// card and healed a genuinely blocked codex pane back to working.
 export const PERM_DIALOG_RE =
-  /❯\s*\d+\.|do you want to|don['’]t ask again|tell claude what to do/i;
+  /❯\s*\d+\.|do you want to|would you like to|don['’]t ask again|tell (claude|codex) what to do|yes, proceed/i;
 
 /** Whether the permission dialog is plausibly still on screen given the tail
  *  of the pane's buffer. A nearly-empty tail can't prove absence (fresh page

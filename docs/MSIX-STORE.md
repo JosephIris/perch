@@ -95,7 +95,7 @@ Launch from the Start tile and verify the three things package identity could
 plausibly break:
 
 1. **A pane opens a working shell** (ConPTY spawns under package identity).
-2. **`claude` launches in a pane** and the CC badge appears - proves the
+2. **`claude` launches in a pane** and the Claude Code mark (the pixel creature) appears next to the pane name - proves the
    `claude.cmd` -> `perch.exe wrap-claude` PATH shim and the per-pane named
    pipe (`\\.\pipe\perch\<paneId>`) both work packaged. Watching a `perch
    notify` reach the footer is the direct pipe check.
