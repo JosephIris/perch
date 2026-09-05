@@ -638,6 +638,10 @@ function mount(): void {
 
   composer = buildComposer({
     roster: () => (projectId ? projectFor(projectId)?.team?.bots ?? [] : []),
+    lead: () => {
+      const team = projectId ? projectFor(projectId)?.team : null;
+      return team?.bots.find((b) => b.botId === team.lead)?.nickname ?? null;
+    },
     onPaste: () => { if (projectId) send({ type: "team.paste", projectId }); },
     onSend: (text, to, clientId, image) => {
       if (!projectId) return;

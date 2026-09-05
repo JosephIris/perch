@@ -318,11 +318,14 @@ internal static class HookHandler
 
             case "pre-bash":
                 // Registered with a "Bash" matcher (NOT the "" matcher that
-                // pre-tool-use would need) purely to stamp agent-attribution
-                // labels onto `gcloud ... create`. Deliberately silent otherwise:
-                // it emits no IPC and prints nothing for the overwhelming majority
-                // of Bash calls, so it can't resurrect the status-detail firehose
-                // that got PreToolUse disabled in the first place.
+                // pre-tool-use would need) for two narrow jobs: hold a team
+                // bot's `git push` for the owner's approval (GatePush), and
+                // stamp agent-attribution labels onto `gcloud ... create`.
+                // Deliberately silent otherwise: it emits no IPC and prints
+                // nothing for the overwhelming majority of Bash calls, so it
+                // can't resurrect the status-detail firehose that got
+                // PreToolUse disabled in the first place.
+                if (GatePush(root)) return 0;
                 return StampGcloud(pipeName, root);
 
             case "post-tool-use":
@@ -556,6 +559,69 @@ internal static class HookHandler
 
     private static string? NullIfBlank(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
 
+    /// PreToolUse(Bash) for a TEAM BOT: a `git push` (or anything that moves
+    /// main from here — a merge or rebase onto it) is not the bot's call.
+    /// Pushing needs the owner's go, so the command is turned into a
+    /// permission prompt whatever mode the bot runs in: Claude Code's "ask"
+    /// decision forces the prompt, the host's hook holds it, and the room
+    /// shows it as a card the owner allows or denies. Nothing is rewritten and
+    /// nothing is denied outright — the owner decides, every time.
+    ///
+    /// Only for a pane with a team marker: an ordinary tab's `git push` is the
+    /// user's own and stays exactly as permissioned as before.
+    internal static bool GatePush(JsonElement? root)
+    {
+        try
+        {
+            if (StringFrom(root, "tool_name") is not "Bash") return false;
+            var pane = Environment.GetEnvironmentVariable("PERCH_PANE_ID") ?? "";
+            if (pane.Length == 0 || !File.Exists(Path.Combine(Path.GetTempPath(), $"perch-team-{pane}.txt"))) return false;
+            var command = CommandOf(root);
+            if (!LooksLikePush(command)) return false;
+            Console.Out.Write(JsonSerializer.Serialize(new
+            {
+                hookSpecificOutput = new
+                {
+                    hookEventName = "PreToolUse",
+                    permissionDecision = "ask",
+                    permissionDecisionReason = "Pushing is Joseph's call: this is held as a card in the team room until he allows it.",
+                },
+            }, JsonOpts));
+            Console.Out.Flush();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"perch hooks: push gate failed: {ex.Message}");
+            return false;
+        }
+    }
+
+    private static string CommandOf(JsonElement? root)
+    {
+        if (root is not JsonElement r) return "";
+        if (r.TryGetProperty("tool_input", out var ti) && ti.ValueKind == JsonValueKind.Object
+            && ti.TryGetProperty("command", out var c) && c.ValueKind == JsonValueKind.String)
+            return c.GetString() ?? "";
+        return "";
+    }
+
+    /// A push, or a merge/rebase that lands work on main, anywhere in the
+    /// command line (chains and subshells included). `git push --dry-run` is
+    /// still a push as far as the gate is concerned — the owner can allow it.
+    internal static bool LooksLikePush(string command)
+    {
+        if (string.IsNullOrWhiteSpace(command)) return false;
+        var c = " " + System.Text.RegularExpressions.Regex.Replace(command, @"\s+", " ").Trim() + " ";
+        if (System.Text.RegularExpressions.Regex.IsMatch(c, @"\bgit\s+(-C\s+\S+\s+)?push\b")) return true;
+        if (System.Text.RegularExpressions.Regex.IsMatch(c, @"\bgh\s+pr\s+merge\b")) return true;
+        // Landing on main locally is a push waiting to happen: hold it too.
+        if (System.Text.RegularExpressions.Regex.IsMatch(c, @"\bgit\s+(-C\s+\S+\s+)?(merge|rebase)\b") &&
+            System.Text.RegularExpressions.Regex.IsMatch(c, @"\bgit\s+(-C\s+\S+\s+)?(checkout|switch)\s+(main|master)\b"))
+            return true;
+        return false;
+    }
+
     /// PreToolUse(Bash): if the command creates a billable GCP resource, rewrite
     /// it to carry agent-attribution labels, and tell the host so it can snapshot
     /// the pane's name + task into the ledger (the hook itself can't know either —
@@ -729,7 +795,11 @@ internal static class HookHandler
     /// per teammate plus etiquette — a 5-bot team is ~1.5 KB — so anything
     /// past this is a bug or a tampered file, and we cut rather than pay for
     /// it on every prompt.
-    private const int RosterMaxBytes = 6 * 1024;
+    // 8 KB: the context is the roster (~4.5 KB for five bots, with the
+    // orchestration rules), the task board and up to 2 KB of the bot's memory.
+    // The cut lands on the memory, which sits last — so the cap has to hold
+    // all three at their fullest.
+    private const int RosterMaxBytes = 8 * 1024;
 
     /// The team roster: unlike the board this IS inlined, because it is
     /// small, changes when a teammate joins or leaves, and is the one thing

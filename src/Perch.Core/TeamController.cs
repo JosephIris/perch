@@ -145,6 +145,33 @@ internal sealed class TeamController
     /// ledger, for which Claude session, and whether the bot's current turn
     /// is answering a room post (its beats then belong in the room).
     private readonly Dictionary<Guid, (string Session, int Count, bool Answering)> _ingested = new();
+    /// When each bot was last warned about editing with no piece on the
+    /// board (bot slug → ms). One warning per bot per quarter hour: the point
+    /// is the lead's attention, not a running commentary.
+    private readonly Dictionary<string, long> _unclaimedWarnedAt = new(StringComparer.OrdinalIgnoreCase);
+    internal const long UnclaimedWarnEveryMs = 15 * 60 * 1000;
+
+    private static bool IsEditVerb(string? verb)
+        => verb is "Edit" or "MultiEdit" or "Write" or "NotebookEdit";
+
+    /// A system row when `bot` edits files while holding no piece on any open
+    /// task and the team has a lead to hand one out — null when the work is
+    /// claimed, the bot IS the lead, there is no lead, or it was said lately.
+    private RoomEntry? UnclaimedWork(TeamStore store, TeamBot bot, long atMs)
+    {
+        var lead = store.Doc.Lead;
+        if (lead == null || store.Doc.IsLead(bot)) return null;
+        if (store.Tasks.Active.Any(b => b.ItemOf(bot.Slug) != null)) return null;
+        var now = atMs > 0 ? atMs : DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        if (_unclaimedWarnedAt.TryGetValue(bot.Slug, out var last) && now - last < UnclaimedWarnEveryMs) return null;
+        _unclaimedWarnedAt[bot.Slug] = now;
+        Log.Info("Team.unclaimed", $"bot={bot.Slug} edits with no piece on the board");
+        return new RoomEntry
+        {
+            Kind = "system", From = bot.Slug, Event = "unclaimed", TsMs = now,
+            Text = $"{bot.Nickname} is editing files with no piece on the board — {lead.Nickname} should assign it or stop it",
+        };
+    }
 
     /// A typed line the prompt-submit hook hasn't reported yet, per session.
     private sealed class PendingSubmit
@@ -639,12 +666,60 @@ internal sealed class TeamController
             StoreArtefact(h.Project, h.Store, h.Bot.Slug, title, summary, "md", text);
             return;
         }
+        // One voice per event: a note that says what the bot's own reply to
+        // the room just said is the same message twice. Drop it.
+        if (image.Length == 0 && SaidRecently(h.Store, h.Bot.Slug, "beat", text))
+        {
+            Log.Info("Team.note.duplicate", $"bot={h.Bot.Slug} repeats its reply; dropped");
+            return;
+        }
         var entry = h.Store.Ledger.Append(new RoomEntry
         {
             Kind = "note", From = h.Bot.Slug, To = new List<string> { TeamRender.Everyone }, Text = text,
             Image = image.Length > 0 ? image : null,
         });
         PostEntries(h.Project.Id, h.Store, new[] { entry });
+    }
+
+    /// Whether the bot's last rows of `kind` within two minutes say the same
+    /// thing as `text` — the same opening, once case, spacing and punctuation
+    /// are ignored. A reply and a note with one opening ARE one message.
+    internal static bool SaidRecently(TeamStore store, string botSlug, string kind, string text)
+    {
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var mine = Gist(text);
+        if (mine.Length < 24) return false;   // a short line repeats innocently
+        foreach (var row in store.Ledger.Tail(40))
+        {
+            if (row.From != botSlug || row.Kind != kind || now - row.TsMs > 120_000) continue;
+            if (SameGist(mine, Gist(row.Text))) return true;
+        }
+        return false;
+    }
+
+    internal static string Gist(string text)
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (var ch in text.ToLowerInvariant())
+            if (char.IsLetterOrDigit(ch)) sb.Append(ch);
+            else if (char.IsWhiteSpace(ch) && sb.Length > 0 && sb[^1] != ' ') sb.Append(' ');
+        return sb.ToString().Trim();
+    }
+
+    /// The same opening, or mostly the same words: a bot's note and its reply
+    /// are rarely letter-for-letter ("He is holding" / "he's holding"), so
+    /// the first thirty words of each are compared as sets too.
+    internal static bool SameGist(string a, string b)
+    {
+        if (a.Length == 0 || b.Length == 0) return false;
+        var n = Math.Min(Math.Min(a.Length, b.Length), 120);
+        if (n >= 24 && string.CompareOrdinal(a, 0, b, 0, n) == 0) return true;
+        var wa = new HashSet<string>(a.Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(30));
+        var wb = new HashSet<string>(b.Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(30));
+        if (wa.Count < 8 || wb.Count < 8) return false;
+        var shared = wa.Intersect(wb).Count();
+        var union = wa.Union(wb).Count();
+        return union > 0 && (double)shared / union >= 0.6;
     }
 
     // ---- artefacts ----------------------------------------------------------
@@ -1517,12 +1592,22 @@ internal sealed class TeamController
         if (image.Length > 0 && !(File.Exists(image) && IsImagePath(image))) image = "";
         if (proj == null || store == null || (text.Length == 0 && image.Length == 0)) return;
 
-        // No one named = everyone. The owner talks to the room, not to a
-        // picker; each bot judges from the text whether the post concerns it
-        // (the roster says how, and what to answer when it doesn't). Nothing
-        // sits between a post and its delivery.
-        var (targets, everyone) = ResolveRecipients(store, msg.To);
-        if (everyone) targets = store.Doc.Bots.ToList();
+        // No one named: the LEAD's, when the team has one — it turns the post
+        // into a card and hands out the pieces, so one bot acts on it, not
+        // every bot at once (two bots built the same fix from one untagged
+        // post, 2026-09-05). Without a lead, everyone, and each bot judges
+        // from the text whether the post concerns it. "@everyone" said out
+        // loud is an announcement to all and stays one. Nothing sits between
+        // a post and its delivery.
+        var (targets, everyone, explicitAll) = ResolveRecipients(store, msg.To);
+        var toLead = false;
+        if (everyone && !explicitAll && store.Doc.Lead is { } leadFor)
+        {
+            everyone = false;
+            toLead = true;
+            targets = new List<TeamBot> { leadFor };
+        }
+        else if (everyone) targets = store.Doc.Bots.ToList();
         if (targets.Count == 0)
         {
             Fallback(proj, store, "No bots on the team yet — add one first.");
@@ -1533,6 +1618,8 @@ internal sealed class TeamController
         {
             Kind = "user", From = "you", Text = text, ClientId = msg.ClientId,
             To = everyone ? new List<string> { TeamRender.Everyone } : targets.Select(b => b.Slug).ToList(),
+            // The page says "to Anton · the lead, nobody named" on the row.
+            Note = toLead ? "lead" : null,
             Image = image.Length > 0 ? image : null,
         };
         // Deliver FIRST, so the row lands with its verdict: "delivered" or
@@ -2491,29 +2578,33 @@ internal sealed class TeamController
 
     /// Who the page named. Nobody it could name — null, an empty list, only
     /// unknown names — is everyone.
-    private (List<TeamBot> Targets, bool Everyone) ResolveRecipients(TeamStore store, JsonElement? to)
+    /// Who the page named. `Everyone` is true when nobody it could name was
+    /// named (null, an empty list, only unknown names) AND when "everyone" was
+    /// said out loud; `ExplicitAll` tells those apart — the first goes to the
+    /// lead when there is one, the second never does.
+    private (List<TeamBot> Targets, bool Everyone, bool ExplicitAll) ResolveRecipients(TeamStore store, JsonElement? to)
     {
         var targets = new List<TeamBot>();
-        if (to is not { } el || el.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined) return (targets, true);
+        if (to is not { } el || el.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined) return (targets, true, false);
         if (el.ValueKind == JsonValueKind.String)
         {
             // "everyone", or a single nickname (what `perch test team.post
             // --to Ada` can express; the page always sends an array).
             var s = (el.GetString() ?? "").Trim();
-            if (string.Equals(s, "everyone", StringComparison.OrdinalIgnoreCase)) return (targets, true);
+            if (string.Equals(s, "everyone", StringComparison.OrdinalIgnoreCase)) return (targets, true, true);
             var one = store.Doc.Bots.FirstOrDefault(b =>
                 string.Equals(b.Nickname, s, StringComparison.OrdinalIgnoreCase)
                 || string.Equals(b.Slug, s, StringComparison.OrdinalIgnoreCase)
                 || ClaudePeerNames.Matches(b.CcName, s));
             if (one != null) targets.Add(one);
-            return (targets, targets.Count == 0);
+            return (targets, targets.Count == 0, false);
         }
         if (el.ValueKind == JsonValueKind.Array)
         {
             foreach (var item in el.EnumerateArray())
             {
                 var name = item.ValueKind == JsonValueKind.String ? item.GetString() ?? "" : "";
-                if (string.Equals(name, "everyone", StringComparison.OrdinalIgnoreCase)) return (targets, true);
+                if (string.Equals(name, "everyone", StringComparison.OrdinalIgnoreCase)) return (targets, true, true);
                 var bot = store.Doc.Bots.FirstOrDefault(b =>
                     string.Equals(b.Nickname, name, StringComparison.OrdinalIgnoreCase)
                     || string.Equals(b.Slug, name, StringComparison.OrdinalIgnoreCase)
@@ -2521,7 +2612,7 @@ internal sealed class TeamController
                 if (bot != null && !targets.Contains(bot)) targets.Add(bot);
             }
         }
-        return (targets, targets.Count == 0);
+        return (targets, targets.Count == 0, false);
     }
 
     /// A session name for a new bot: the nickname's slug, made unique against
@@ -2649,6 +2740,13 @@ internal sealed class TeamController
                         answering = StartsAnswer(e);
                         break;
                     case "beat" when answering && e.Text.Trim().Length > 0 && !IsNoReply(e.Text):
+                        // …unless the bot already posted the same thing as a
+                        // note: one voice per event.
+                        if (SaidRecently(store, bot.Slug, "note", e.Text))
+                        {
+                            Log.Info("Team.beat.duplicate", $"bot={bot.Slug} repeats its note; dropped");
+                            break;
+                        }
                         entry = new RoomEntry
                         {
                             Kind = "beat", From = bot.Slug, Text = e.Text.Trim(), PaneId = pane.Id.ToString("D"),
@@ -2663,6 +2761,11 @@ internal sealed class TeamController
                             Note = string.IsNullOrEmpty(e.Note) ? null : e.Note, Repeat = e.Repeat,
                             PaneId = pane.Id.ToString("D"), TsMs = ParseTs(e.Ts),
                         };
+                        // Work with no piece: a bot editing files that no card
+                        // gave it is the duplicate-fix mess starting again. Say
+                        // so once, to the lead, and let the board sort it out.
+                        if (IsEditVerb(e.Verb) && UnclaimedWork(store, bot, ParseTs(e.Ts)) is { } warning)
+                            added.Add(store.Ledger.Append(warning));
                         break;
                 }
                 if (entry != null) added.Add(store.Ledger.Append(entry));

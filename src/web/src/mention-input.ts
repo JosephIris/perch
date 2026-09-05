@@ -28,6 +28,9 @@ export interface Composer {
 
 export interface ComposerOpts {
   roster: () => TeamBotView[];
+  /** The lead's nickname, or null: an untagged post goes to the lead when
+   *  there is one, to everyone otherwise, and the hint says which. */
+  lead?: () => string | null;
   onSend: (text: string, to: MentionTarget, clientId: string, image?: string) => void;
   /** A picture was pasted into the box: ask the host to read the clipboard
    *  (the page can't); the path comes back through attachImage. */
@@ -212,7 +215,10 @@ export function buildComposer(opts: ComposerOpts): Composer {
     const names = opts.roster().map((b) => b.nickname);
     const { to } = parseMentions(text, names);
     if (to === null) {
-      toRow.appendChild(el("span", "team-composer__route", "No one tagged — goes to everyone; a bot answers only if it's for them"));
+      const lead = opts.lead?.() ?? null;
+      toRow.appendChild(el("span", "team-composer__route", lead
+        ? `No one tagged — goes to ${lead}, the lead, who opens a card and hands it out`
+        : "No one tagged — goes to everyone; a bot answers only if it's for them"));
       return;
     }
     const chipFor = (label: string, nick: string | null) => {

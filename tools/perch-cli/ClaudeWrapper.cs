@@ -278,6 +278,16 @@ internal static class ClaudeWrapper
         // Helper to keep the JSON structure readable. Each event maps to a
         // single hook entry calling our subcommand. timeout matches perch-mac's
         // values where they were specific; otherwise a 10s default.
+        // The host writes `perch-team-<pane>.txt` beside the brief marker for
+        // every pane that is a bot's (TeamMarkers.Publish); nothing else does.
+        static bool IsTeamBotPane()
+        {
+            var pane = Environment.GetEnvironmentVariable("PERCH_PANE_ID");
+            if (string.IsNullOrEmpty(pane)) return false;
+            try { return File.Exists(Path.Combine(Path.GetTempPath(), $"perch-team-{pane}.txt")); }
+            catch { return false; }
+        }
+
         object Hook(string eventName, int timeoutSec = 10, bool async = false, string matcher = "")
         {
             var hook = new System.Collections.Generic.Dictionary<string, object?>
@@ -337,7 +347,10 @@ internal static class ClaudeWrapper
         {
             Hook("pre-send", timeoutSec: 5, async: true, matcher: "SendMessage"),
         };
-        if (BinResolver.FindOnPathSkippingSelf("gcloud") != null)
+        // …and for a TEAM BOT, whatever is installed: the same Bash hook holds
+        // a `git push` for the owner's approval (HookHandler.GatePush). A bot
+        // is a pane with a team marker; the hook re-checks that per call.
+        if (BinResolver.FindOnPathSkippingSelf("gcloud") != null || IsTeamBotPane())
             pre.Add(Hook("pre-bash", timeoutSec: 5, matcher: "Bash"));
         hooks["PreToolUse"] = pre.ToArray();
 

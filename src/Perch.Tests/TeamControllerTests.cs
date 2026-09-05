@@ -13,10 +13,34 @@ namespace Perch.Tests;
 /// starts, its address is unique, the owner's post reaches its terminal as
 /// one prefixed line (or waits for a Claude to come up), and the room's
 /// ledger tells the story in order.
-public class TeamControllerTests
+public class TeamControllerTests : IDisposable
 {
+    /// Every harness a test built. Bots publish real marker files in %TEMP%
+    /// (TeamMarkers), and a test that failed before its own TeamMarkers.Clear
+    /// left them behind — dozens over a day, and the live harness once picked
+    /// a dead one's "lee" and talked to a pane that no longer existed. xUnit
+    /// makes a new instance per test and disposes it, so this sweeps them
+    /// whether the test passed or not.
+    private static readonly List<Harness> Live = new();
+
+    public void Dispose()
+    {
+        lock (Live)
+        {
+            foreach (var h in Live)
+            {
+                foreach (var s in h.Sessions) foreach (var p in PaneTree.AllLeaves(s.Root)) TeamMarkers.Clear(p.Id);
+                foreach (var id in h.PaneIds) TeamMarkers.Clear(id);
+            }
+            Live.Clear();
+        }
+    }
+
     private sealed class Harness
     {
+        /// Every pane a bot was created in, kept even after its session is
+        /// removed from Sessions, so Dispose can clear its markers.
+        public readonly List<Guid> PaneIds = new();
         public readonly string Repo;
         public readonly Project Project;
         public readonly List<Session> Sessions = new();
@@ -60,6 +84,7 @@ public class TeamControllerTests
                     s.Root.PinnedPeerName = cc;
                     s.Root.ClaudeSessionId = Guid.NewGuid().ToString();
                     Sessions.Add(s);
+                    PaneIds.Add(s.Root.Id);
                     return Task.FromResult<Session?>(s);
                 },
                 CloseSession = (id, rm) => { Closed.Add(id); Sessions.RemoveAll(s => s.Id == id); },
@@ -78,6 +103,7 @@ public class TeamControllerTests
 
         public async Task<TeamBot> CreateBot(string nick, string position = "Frontend dev", string? slug = null, bool worktree = false)
         {
+            lock (Live) if (!Live.Contains(this)) Live.Add(this);   // so Dispose sweeps this bot's markers
             await Ctrl.OnBotCreateAsync(new TeamBotCreateMsg
             {
                 ProjectId = Project.Id, Nickname = nick, Worktree = worktree,
@@ -428,10 +454,36 @@ public class TeamControllerTests
     }
 
     [Fact]
+    public async Task Post_NamingNobody_GoesToTheLead_WhenThereIsOne()
+    {
+        // Two bots built the same fix from one untagged post (2026-09-05):
+        // with a lead, an untagged post is the lead's to turn into a card and
+        // hand out. "@everyone" said out loud still reaches everyone.
+        var h = new Harness();
+        await h.CreateBot("Lee", position: "Team lead");
+        await h.CreateBot("Ada");
+        var leeSess = h.Sessions.Single(s => s.Root.PinnedPeerName == "lee");
+        h.Post("the members table needs the net column hidden", null);
+        var (sid, line) = Assert.Single(h.Typed);
+        Assert.Equal(leeSess.Id, sid);
+        Assert.Matches(@"^\[Perch team\] #\d+ Joseph → @Lee: the members table", line);
+        var post = h.Ledger.Single(e => e.Kind == "user");
+        Assert.Equal("lee", Assert.Single(post.To!));
+        Assert.Equal("lead", post.Note);
+        Assert.DoesNotContain(h.Ledger, e => e.Event == "cc");   // the lead IS the target: nothing to copy
+
+        h.Typed.Clear();
+        h.Post("standup in five", "\"everyone\"", "c2");
+        Assert.Equal(2, h.Typed.Count);
+        Assert.All(h.Typed, t => Assert.Contains("→ @everyone: standup in five", t.Line));
+        foreach (var s in h.Sessions) TeamMarkers.Clear(s.Root.Id);
+    }
+
+    [Fact]
     public async Task Post_NamingNobody_GoesToEveryone()
     {
-        // The owner talks to the room; each bot decides from the text whether
-        // the post is for it. No model call, no "not sure who that's for".
+        // No lead: the owner talks to the room; each bot decides from the text
+        // whether the post is for it. No model call, no "not sure who that's for".
         var h = new Harness();
         await h.CreateBot("Ada");
         await h.CreateBot("Bo", slug: "frontend-dev");
@@ -696,6 +748,95 @@ public class TeamControllerTests
         Assert.Equal("Old task", board.Title);
         Assert.Equal(2, h.Store.Tasks.V);
         TeamMarkers.Clear(h.Sessions.Single().Root.Id);
+    }
+
+    [Fact]
+    public async Task ANoteThatRepeatsTheBotsOwnReply_IsDropped_AndTheOtherWayRound()
+    {
+        var h = new Harness();
+        var ada = await h.CreateBot("Ada");
+        var sess = h.Sessions.Single();
+        // The reply landed in the room (a beat)…
+        h.Store.Ledger.Append(new RoomEntry
+        {
+            Kind = "beat", From = ada.Slug,
+            Text = "Shabtay built the same Team Members fix I did. He is holding it on his branch, unpushed.",
+        });
+        // …and the bot posts the same thing as a note: one voice per event.
+        h.Ctrl.OnTeamPost(sess, sess.Root.Id, new TeamPostMessage(
+            "Shabtay built the same Team Members fix I did — he's holding it on his branch, unpushed, with four more tests.", null));
+        Assert.DoesNotContain(h.Ledger, e => e.Kind == "note");
+        // A different note goes through.
+        h.Ctrl.OnTeamPost(sess, sess.Root.Id, new TeamPostMessage("Merged; the harness is green.", null));
+        Assert.Single(h.Ledger, e => e.Kind == "note");
+        // Short lines repeat innocently and are never treated as duplicates.
+        Assert.False(TeamController.SaidRecently(h.Store, ada.Slug, "beat", "Done."));
+        Assert.True(TeamController.SameGist(TeamController.Gist("Nothing is broken — mine is on main as 774689f6 and deploying."),
+                                            TeamController.Gist("Nothing is broken. Mine is on main as 774689f6 and deploying")));
+        TeamMarkers.Clear(sess.Root.Id);
+    }
+
+    [Fact]
+    public async Task EditingWithNoPieceOnTheBoard_WarnsTheLead_OncePerQuarterHour()
+    {
+        var h = new Harness();
+        await h.CreateBot("Lee", position: "Team lead");
+        var bo = await h.CreateBot("Bo");
+        var boSess = h.Sessions.Single(s => s.Root.PinnedPeerName == "bo");
+        var boPane = boSess.Root;
+        static InspectorEvent Ev(string kind, string ts, string text = "", string verb = "", string target = "")
+            => new(kind, ts, text, verb, target, "", 1);
+        // A task is open, Bo has no piece on it, and Bo starts editing.
+        h.Ctrl.OnTaskSet(new TeamTaskSetMsg { ProjectId = h.Project.Id, Title = "Hide the net column" });
+        h.Transcript = pane => pane == boPane.Id ? new InspectorData(new[]
+        {
+            Ev("prompt", "2026-09-05T19:00:00Z", "[Perch team] #3 Joseph → @everyone: hide the net column"),
+            Ev("work", "2026-09-05T19:00:10Z", verb: "Read", target: "members.py"),
+            Ev("work", "2026-09-05T19:00:20Z", verb: "Edit", target: "members.py"),
+            Ev("work", "2026-09-05T19:00:30Z", verb: "Edit", target: "members.py"),
+        }, null) : null;
+        h.Request();
+        var warn = Assert.Single(h.Ledger, e => e.Event == "unclaimed");
+        Assert.Equal("bo", warn.From);
+        Assert.Equal("Bo is editing files with no piece on the board — Lee should assign it or stop it", warn.Text);
+        // A piece assigned: no more warnings, even for more edits.
+        var lead = h.Store.Doc.Lead!;
+        var leeSess = h.Sessions.Single(s => s.Root.PinnedPeerName == "lee");
+        h.Ctrl.OnTeamTask(leeSess, leeSess.Root.Id, new TeamTaskMessage("assign", "bo", "Hide the column", null, null, h.Store.Tasks.Open.Single().Id));
+        Assert.NotNull(h.Store.Tasks.Open.Single().ItemOf("bo"));
+        h.Transcript = pane => pane == boPane.Id ? new InspectorData(new[]
+        {
+            Ev("prompt", "2026-09-05T19:00:00Z", "[Perch team] #3 Joseph → @everyone: hide the net column"),
+            Ev("work", "2026-09-05T19:00:10Z", verb: "Read", target: "members.py"),
+            Ev("work", "2026-09-05T19:00:20Z", verb: "Edit", target: "members.py"),
+            Ev("work", "2026-09-05T19:00:30Z", verb: "Edit", target: "members.py"),
+            Ev("work", "2026-09-05T19:20:00Z", verb: "Edit", target: "members.py"),
+        }, null) : null;
+        h.Request();
+        Assert.Single(h.Ledger, e => e.Event == "unclaimed");
+        Assert.Same(lead, h.Store.Doc.Lead);
+        foreach (var s in h.Sessions) TeamMarkers.Clear(s.Root.Id);
+    }
+
+    [Fact]
+    public async Task TheLeadOpensATask_ByCommand_AndEveryContextRerendersWithIt()
+    {
+        // The harness path: `perch team task new` from the lead's pane, with a
+        // teammate who has no piece yet. Every context re-renders (the
+        // no-piece line for Ada, the unassigned list for Lee).
+        var h = new Harness();
+        await h.CreateBot("Ada");
+        await h.CreateBot("Lee", position: "Team lead");
+        var leeSess = h.Sessions.Single(s => s.Root.PinnedPeerName == "lee");
+        h.Ctrl.OnTeamTask(leeSess, leeSess.Root.Id, new TeamTaskMessage("new", null, "Dark footer", null, null, null));
+        var board = Assert.Single(h.Store.Tasks.Open);
+        Assert.Equal("Dark footer", board.Title);
+        var ada = File.ReadAllText(h.Store.ContextPathFor("ada"));
+        Assert.Contains("**You have no piece on the board.**", ada);
+        Assert.Contains("until Lee assigns you one", ada);
+        var lee = File.ReadAllText(h.Store.ContextPathFor("lee"));
+        Assert.Contains("No piece on any open task: Ada", lee);
+        foreach (var s in h.Sessions) TeamMarkers.Clear(s.Root.Id);
     }
 
     [Fact]

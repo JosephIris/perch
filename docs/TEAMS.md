@@ -157,8 +157,31 @@ owner post carries its number: `[Perch team] #123 Joseph → @Ada: …`.
 
 - Owner → bot: typed into the pane as `[Perch team] #<seq> Joseph → @Ada: …`
   (Enter in a separate write); parked while no Claude is up; the roster shows
-  presence. Unaddressed posts: one bot → them; several → a haiku router
-  (`--json-schema`, $0.05 cap) or "Not sure who that's for — say @ada…".
+  presence. A post naming nobody goes to the LEAD when there is one (the row
+  says "to Anton · the lead"), to everyone otherwise; `@everyone` said out
+  loud is an announcement to all. No router, no model call.
+- Orchestrate, don't execute (from the duplicate-fix mess of 2026-09-05: an
+  untagged post reached every bot as an instruction, the lead did the fix
+  himself off the board, a teammate built the same fix, the lead pushed to
+  main). The lead role says the lead does not implement: every piece is
+  assigned by name in the same turn, the lead's own piece is review and
+  integration, an ambiguous post is a `perch team ask` to the owner, never
+  a guess relayed. Every roster says nothing starts before it is on a card
+  and `→ @everyone` is read, never worked; a bot with no piece on any open
+  task gets a bold line saying so with each prompt, the lead's context lists
+  who has no piece, and a bot editing files (Edit/Write/MultiEdit) with no
+  piece while a lead exists puts one `unclaimed` row in the room, at most
+  every fifteen minutes per bot (`TeamController.UnclaimedWork`).
+- Pushing is the owner's call. Nobody pushes or merges onto main; pieces end
+  as branches. Enforced: for a pane with a team marker, the Bash PreToolUse
+  hook (`HookHandler.GatePush`, wired by the wrapper for every bot whether or
+  not gcloud is installed) answers `git push`, `gh pr merge`, or a
+  merge/rebase onto main with `permissionDecision: "ask"`, which forces the
+  permission prompt in any mode; the host holds it and the room shows the
+  card the owner allows or denies. An ordinary tab's `git push` is untouched.
+- One voice per event: a bot's note that repeats its own reply within two
+  minutes is dropped, and so is a reply that repeats its note
+  (`TeamController.SaidRecently`: same opening, or mostly the same words).
 - A post to a teammate that no open task covers is also copied to the lead
   "(cc for the board)"; the lead's role says: open a task at once from the
   owner's words, never wait for agreement.

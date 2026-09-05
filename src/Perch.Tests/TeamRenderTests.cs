@@ -58,6 +58,12 @@ public class TeamRenderTests
         // in the one form the room knows to drop.
         Assert.Contains("`→ @everyone`", roster);
         Assert.Contains("`(no reply)`", roster);
+        // The rules the duplicate-fix mess taught (2026-09-05).
+        Assert.Contains("Nothing starts before it is on a card", roster);
+        Assert.Contains("goes to the lead, who opens a card", roster);
+        Assert.Contains("Never push, and never merge or rebase anything onto main", roster);
+        Assert.Contains("One message per event", roster);
+        Assert.Contains("`perch team ask` Joseph before acting or relaying", roster);
         Assert.Contains(TeamRender.PostPrefix, roster);
         Assert.Contains("One owner per piece", roster);
         // Milestone B: explicit handoffs, one-note intros, reactions, asks,
@@ -79,7 +85,11 @@ public class TeamRenderTests
     public void Roster_StaysSmall_ForAFiveBotTeam()
     {
         var roster = TeamRender.Roster(Team(5), "perch");
-        Assert.True(Encoding.UTF8.GetByteCount(roster) < 4096, $"roster is {Encoding.UTF8.GetByteCount(roster)} bytes");
+        // 5 KB: the hook inlines roster + board + memory (2 KB) under 8 KB per
+        // prompt, so the roster has to stay well inside its share. The
+        // orchestration rules (claim before work, no pushing, one voice) are
+        // what took it past 4 KB.
+        Assert.True(Encoding.UTF8.GetByteCount(roster) < 5120, $"roster is {Encoding.UTF8.GetByteCount(roster)} bytes");
     }
 
     [Fact]
@@ -189,6 +199,9 @@ public class TeamRenderTests
         var system = TeamRender.SystemPrompt(doc.Bots[0], doc.Positions[0], "## Role\nYou own src/web.", "perch", null, isLead: true);
         Assert.Contains("and the team lead on the perch team", system);
         Assert.Contains("## You lead the team", system);
+        Assert.Contains("you ORCHESTRATE: you do not implement", system);
+        Assert.Contains("Your own piece is review and integration", system);
+        Assert.Contains("Pushing is Joseph's call", system);
         Assert.Contains("perch team task done <id>", system);
         Assert.Contains("Never wait for him to agree first", system);
         Assert.Contains("several may be open at once", system);

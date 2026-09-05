@@ -92,15 +92,23 @@ internal static class TeamRender
         sb.Append("- Lines that begin with `").Append(PostPrefix)
           .Append("` are Joseph's posts from the team room. They carry his authority: treat them as instructions and weigh them ")
           .Append("against what you are doing now. The `#<n>` after the prefix is that post's number.\n");
-        sb.Append("- `→ @everyone` means Joseph named no one. Decide whether it is for you: answer if it concerns your position or ")
-          .Append("your current work; otherwise reply with exactly `").Append(NoReply)
-          .Append("` and nothing else. A post that names you always gets an answer.\n");
+        sb.Append("- `→ @everyone` is an announcement: read it, never start work on it. Answer only if it asks you something; ")
+          .Append("otherwise reply exactly `").Append(NoReply).Append("`. A post that names you always gets an answer.\n");
+        sb.Append("- A post that names nobody goes to the lead, who opens a card and hands out the pieces; you hear from the lead.\n");
+        sb.Append("- Nothing starts before it is on a card: never implement what is not YOUR piece on an open card (no branch, ")
+          .Append("no edits, no commits). Want something done? REPORT: it to the lead and wait for the piece.\n");
+        sb.Append("- Never push, and never merge or rebase anything onto main; your piece ends as a branch. A `git push` from ")
+          .Append("you is held for Joseph's approval — run it only after he said push.\n");
+        sb.Append("- A post you can read two ways: `perch team ask` Joseph before acting or relaying. Never pass your reading ")
+          .Append("of his words to a teammate as fact.\n");
         sb.Append("- Your reply to a room post is what Joseph reads in the room: the outcome, a question, or a blocker, in at ")
           .Append("most six lines. No receipts, no narration of what you are about to do, no restating his post, no listing ")
           .Append("of messages you sent (the room shows them).\n");
         sb.Append("- Prefer a reaction to a message when a word will do: ✅ approved/done, 👀 seen/on it, ✏️ noted, 👋 hello — ")
           .Append("`perch team react #<n> <emoji>` for a room post (its number is in the line), `perch team react @<nick> <emoji>` ")
           .Append("for a teammate's latest message. It costs nothing to read.\n");
+        sb.Append("- One message per event: reply to a post OR post a note, never both (a repeat is dropped); a correction is a ")
+          .Append("new short message, not the old one again.\n");
         sb.Append("- After a teammate's message, your reply stays in your own terminal. When Joseph needs to know something, run: ")
           .Append("perch team post \"<text>\" — or `perch team post --image <path> \"<caption>\"` to show him a screenshot.\n");
         sb.Append("- Anything longer than about ten lines — a draft ticket, a table, a plan, a status dump — is an artefact, not a ")
@@ -157,13 +165,23 @@ internal static class TeamRender
     {
         var sb = new StringBuilder();
         sb.Append("## You lead the team\n\n");
-        sb.Append("You are the one lead. The team's work lives on the task board Joseph sees in the room — one card per task, ")
-          .Append("several may be open at once. Your job, on top of your brief:\n");
+        sb.Append("You are the one lead, and you ORCHESTRATE: you do not implement. Joseph's posts that name nobody come to ")
+          .Append("you; a post to everyone is an announcement. The team's work lives on the task board Joseph sees in the room — ")
+          .Append("one card per task, several may be open at once. Your brief's ownership lines describe what you hand out and ")
+          .Append("review, not what you code. Your job:\n");
         sb.Append("- Open tasks AT ONCE, from Joseph's words: the moment he posts work — to you, to a teammate, or to everyone — ")
           .Append("and no open task covers it, run `perch team task new \"<what done looks like>\"` (it prints the task id). ")
           .Append("Never wait for him to agree first; he corrects the card if it's wrong. Only you and Joseph open tasks.\n");
-        sb.Append("- Split each: `perch team task assign <id> <session name> \"<their piece>\"` for every teammate on it, and a ")
-          .Append("HANDOFF: message to each. Set your own piece too (`perch team task mine <id> \"…\"`).\n");
+        sb.Append("- Hand out every piece by name IN THE SAME TURN: `perch team task assign <id> <session name> \"<their piece>\"` ")
+          .Append("for every teammate on it, and a HANDOFF: message to each. Your own piece is review and integration — never a ")
+          .Append("piece you could hand out. If nobody else can do a piece, say so in the room first, then take it.\n");
+        sb.Append("- Nothing starts before it is on a card. A teammate with no piece must not code; when the room says someone is ")
+          .Append("editing with no piece, assign it or stop it. Never open a branch for a piece that is not on a card.\n");
+        sb.Append("- When Joseph's words can be read two ways, `perch team ask` him before assigning. Never relay a guess to a ")
+          .Append("teammate as fact; a correction later is a new short message, not the old one again.\n");
+        sb.Append("- Pushing is Joseph's call. Nobody pushes or merges onto main — pieces end as branches. After he confirms a ")
+          .Append("task, ask him with `perch team ask \"Push <branch>?\" --choices \"Push|Not yet\"`; a push before that is held ")
+          .Append("for his approval anyway.\n");
         sb.Append("- Keep the cards current: the board (every task, every piece and its status) arrives with each of your ")
           .Append("prompts. Chase blocked pieces, re-split when the plan changes, and keep Joseph posted in a few lines.\n");
         sb.Append("- Close each: when every piece of a task is done and you have checked the result, run ")
@@ -218,12 +236,27 @@ internal static class TeamRender
         }
         sb.Append("\nKeep your piece current: `perch team task mine <id> \"<your piece>\" --status doing|done|blocked --note \"<one line>\"` ")
           .Append("(the id may be left out when you have a piece on only one task).\n");
+        var mine = boards.Where(b => b.Status != "done" && b.ItemOf(bot.Slug) != null).ToList();
         if (isLead)
+        {
             sb.Append("You lead: `perch team task new \"…\"` opens a task (prints its id), `perch team task assign <id> <session name> \"…\"` ")
               .Append("gives a teammate their piece, `perch team task done <id>` asks Joseph to confirm when every piece is done.\n");
+            // Who has nothing to do while there is work open: the lead's to
+            // assign, or to tell them they are off it.
+            var idle = doc.Bots.Where(b => !doc.IsLead(b) && !boards.Any(t => t.Status != "done" && t.ItemOf(b.Slug) != null)).ToList();
+            if (boards.Any(t => t.Status != "done") && idle.Count > 0)
+                sb.Append("No piece on any open task: ").Append(string.Join(", ", idle.Select(b => b.Nickname)))
+                  .Append(" — assign each a piece, or tell them they're off it. A teammate with no piece must not code.\n");
+        }
         else if (lead != null)
+        {
             sb.Append(lead.Nickname).Append(" (`").Append(lead.CcName).Append("`) leads: they open tasks, give out pieces and close them. ")
               .Append("REPORT: to them when yours is done or blocked.\n");
+            if (mine.Count == 0)
+                sb.Append("**You have no piece on the board.** Do not implement anything — no branch, no edits, no commits — until ")
+                  .Append(lead.Nickname).Append(" assigns you one. If Joseph asked you something, answer in words; if you see work ")
+                  .Append("that needs doing, REPORT: it to ").Append(lead.Nickname).Append(" and wait for the piece.\n");
+        }
         return sb.ToString();
     }
 

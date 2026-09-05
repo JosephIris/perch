@@ -241,8 +241,13 @@ cmd /k
     # echoes the line: Enter is pressed again twice, then the room is told.
     Check "Enter was pressed again" (Wait-Until { (Log-Count 'enter-again=1') -ge 1 } 6)
     Check "and again" (Wait-Until { (Log-Count 'enter-again=2') -ge 1 } 6)
-    Check "then the room says the post is stuck" (Wait-Until {
-        @((Team-Dump $pid2).ledger | Where-Object { $_.event -eq 'undelivered' -and $_.text -like "*didn't take the post*" }).Count -ge 1 } 10)
+    # …either as "didn't take the post" (a resting bot) or, since a post to a
+    # busy bot waits for its turn, as "mid-task — this goes in the moment it
+    # finishes" (the fake's shell never ends a turn, so it reads as busy).
+    Check "then the room says the post is stuck or held for the bot's turn" (Wait-Until {
+        @((Team-Dump $pid2).ledger | Where-Object {
+            ($_.event -eq 'undelivered' -and $_.text -like "*didn't take the post*") -or
+            ($_.event -eq 'waiting' -and $_.text -like '*mid-task*') }).Count -ge 1 } 10)
 
     # --- 4. a second bot; everyone fans out, tagged or not ------------------
     Write-Host "`n[4] a second bot: @everyone and an untagged post both reach both"
@@ -287,8 +292,11 @@ cmd /k
     $dump = Team-Dump $pid2
     Check "Lee leads (first bot in the lead-type position)" ($dump.team.lead -eq 'lee') "- lead=$($dump.team.lead)"
     # Lee's pane id: the brief marker that points at Lee's system.md is named by it.
+    # THIS run's Lee: a unit-test run that failed mid-way leaves markers for
+    # its own "lee" in a deleted temp folder, and the first of those would
+    # point this at a pane that no longer exists ("host not listening").
     $leeMarker = Get-ChildItem -Path $env:TEMP -Filter 'perch-claude-brief-*.txt' -EA SilentlyContinue |
-        Where-Object { (Get-Content $_.FullName -Raw -EA SilentlyContinue) -like "*\bots\lee\system.md*" } | Select-Object -First 1
+        Where-Object { (Get-Content $_.FullName -Raw -EA SilentlyContinue) -like "$RepoDir\.perch\team\*\bots\lee\system.md*" } | Select-Object -First 1
     if (-not $leeMarker) { throw "no brief marker for Lee" }
     $leePane = $leeMarker.BaseName.Substring('perch-claude-brief-'.Length)
     $env:PERCH_PIPE = "\\.\pipe\perch\$leePane"
