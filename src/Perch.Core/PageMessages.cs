@@ -388,6 +388,9 @@ internal sealed record PrefsSetMsg
     /// Local panel "Perch only" filter — count/show only servers Perch started.
     /// Nullable so the page can update one pref without asserting the others.
     public bool? LocalPerchOnly { get; init; }
+    /// Bot faces in colour (the bird and its circle take the bot's tag hue)
+    /// rather than plain ink. Off by default.
+    public bool? TeamFacesColor { get; init; }
 }
 
 internal sealed record SettingsSaveMsg
@@ -396,6 +399,8 @@ internal sealed record SettingsSaveMsg
     public string? DefaultCwd { get; init; }
     public int? FontSize { get; init; }
     public bool? ResumeAgentsOnLaunch { get; init; }
+    /// Team bot faces in colour (see Settings.TeamFacesColor).
+    public bool? TeamFacesColor { get; init; }
     /// Where a new tab lands in its project: "top" or "bottom".
     public string? NewTabPosition { get; init; }
     /// Parent folders scanned one level deep for repos to offer as projects.
@@ -407,8 +412,9 @@ internal sealed record SettingsSaveMsg
     public List<string>? WorktreeSeedPaths { get; init; }
 }
 
-/// Edit a registered project: rename it, or override what gets seeded into its
-/// worktrees. Every field optional — only the keys present are applied.
+/// Edit a registered project: rename it, hide/show it in the sidebar, or
+/// override what gets seeded into its worktrees. Every field optional — only
+/// the keys present are applied.
 internal sealed record ProjectUpdateMsg
 {
     public required Guid Id { get; init; }
@@ -417,6 +423,9 @@ internal sealed record ProjectUpdateMsg
     /// project that wants nothing seeded is vanishingly rare next to one where
     /// the user just cleared the box.
     public List<string>? SeedPaths { get; init; }
+    /// Fold the project into (or out of) the sidebar's "Hidden" drawer. The
+    /// registration itself is untouched — see Project.Hidden.
+    public bool? Hidden { get; init; }
 }
 
 /// Close a session. `removeWorktree` additionally reclaims its worktree folder
@@ -444,6 +453,260 @@ internal sealed record InspectorImageMsg
 /// numbers and bools may arrive as strings, because `perch test` ships every
 /// flag as a string. This is what lets the control path share the page
 /// handlers without per-verb payload rewriting.
+// ---- team ------------------------------------------------------------------
+// The team room and the new-bot dialog. Mirrors the `team.*` members of the
+// OutMessage union; the replies (`team.data`, `team.brief.progress`,
+// `team.brief.result`, `team.reference.picked`) are built by TeamController.
+
+/// The room asking for entries newer than `sinceSeq` (absent = everything the
+/// host is willing to send, newest 500).
+internal sealed record TeamRequestMsg
+{
+    public required Guid ProjectId { get; init; }
+    public long? SinceSeq { get; init; }
+}
+
+/// The owner's post. `to` is polymorphic on the wire — an array of nicknames,
+/// the string "everyone", or null for a post that names nobody (which goes to
+/// everyone) — so it arrives as a raw JsonElement and TeamController
+/// interprets it.
+internal sealed record TeamPostMsg
+{
+    public required Guid ProjectId { get; init; }
+    public required string Text { get; init; }
+    public JsonElement? To { get; init; }
+    /// Page-generated id echoed on the ledger entry so the optimistic row can
+    /// be reconciled.
+    public required string ClientId { get; init; }
+    /// A picture pasted into the composer (absolute path the host saved it
+    /// under, from `team.paste`). Travels on the row and is named in the line
+    /// typed to the bots, which Read the file when they need to see it.
+    public string? Image { get; init; }
+}
+
+/// The owner pasted a picture into the room's composer: read the clipboard on
+/// the host, save it under the team's local folder, answer with the path
+/// (`team.paste.data`). The page never sees the bytes.
+internal sealed record TeamPasteMsg
+{
+    public required Guid ProjectId { get; init; }
+}
+
+/// A new position, sent inline with the bot that first fills it. `brief` is
+/// the text the owner accepted (generated or hand-written).
+internal sealed record TeamPositionSpec
+{
+    public required string Name { get; init; }
+    public required string Purpose { get; init; }
+    public string? ReferencePath { get; init; }
+    public string? Model { get; init; }
+    public string? Brief { get; init; }
+}
+
+/// Create a bot: a nickname plus either an existing position (`positionSlug`)
+/// or a new one (`position`). The host mints the session name, opens the tab
+/// (in its own worktree unless told otherwise) and writes the bot's files.
+internal sealed record TeamBotCreateMsg
+{
+    public required Guid ProjectId { get; init; }
+    public required string Nickname { get; init; }
+    public bool? Worktree { get; init; }
+    public string? PositionSlug { get; init; }
+    public TeamPositionSpec? Position { get; init; }
+}
+
+/// Start a brief-generation job (a headless `claude -p` over the reference
+/// folder). `jobId` is page-generated so a stale reply can be dropped.
+internal sealed record TeamBriefGenerateMsg
+{
+    public required string JobId { get; init; }
+    public required Guid ProjectId { get; init; }
+    public required string PositionName { get; init; }
+    public required string Purpose { get; init; }
+    public string? ReferencePath { get; init; }
+    public string? Model { get; init; }
+}
+
+internal sealed record TeamBriefCancelMsg
+{
+    public required string JobId { get; init; }
+}
+
+/// Edit a position in place. Only the keys present are applied.
+internal sealed record TeamPositionUpdateMsg
+{
+    public required Guid ProjectId { get; init; }
+    public required string Slug { get; init; }
+    public string? Brief { get; init; }
+    public string? Purpose { get; init; }
+    public string? Name { get; init; }
+}
+
+/// Remove a bot from the team. `closeTab` also closes its session (archived to
+/// Recently closed like any close); `removeWorktree` additionally reclaims the
+/// folder, which makes that close permanent.
+internal sealed record TeamBotRemoveMsg
+{
+    public required Guid ProjectId { get; init; }
+    public required string BotId { get; init; }
+    public bool? CloseTab { get; init; }
+    public bool? RemoveWorktree { get; init; }
+}
+
+/// Start a bot that has no tab on this machine — one that was created
+/// elsewhere and arrived with a pull, or whose tab was closed here.
+internal sealed record TeamBotStartMsg
+{
+    public required Guid ProjectId { get; init; }
+    public required string BotId { get; init; }
+}
+
+/// The owner answering a bot's start-up question from the room's card.
+/// `answer` is "trust" (Yes, I trust this folder) or "exit" (the dialog's
+/// default, No, exit).
+internal sealed record TeamBotAnswerMsg
+{
+    public required Guid ProjectId { get; init; }
+    public required string BotId { get; init; }
+    public required string Answer { get; init; }
+}
+
+/// Make a bot the team's one lead (replacing the current one).
+internal sealed record TeamLeadSetMsg
+{
+    public required Guid ProjectId { get; init; }
+    public required string BotId { get; init; }
+}
+
+/// The owner opens a new task from the room (a card on the board).
+internal sealed record TeamTaskSetMsg
+{
+    public required Guid ProjectId { get; init; }
+    public required string Title { get; init; }
+}
+
+/// The owner renames an open task.
+internal sealed record TeamTaskRenameMsg
+{
+    public required Guid ProjectId { get; init; }
+    public required string TaskId { get; init; }
+    public required string Title { get; init; }
+}
+
+/// The owner confirms a task is done: the bots whose work was all on it
+/// wrap up and reset.
+internal sealed record TeamTaskConfirmMsg
+{
+    public required Guid ProjectId { get; init; }
+    public required string TaskId { get; init; }
+}
+
+/// "Send again" on a post a bot never took: the same line, typed into that
+/// bot again, with no second post in the room.
+internal sealed record TeamDeliverRetryMsg
+{
+    public required Guid ProjectId { get; init; }
+    public required long Seq { get; init; }
+    public required string BotId { get; init; }
+}
+
+/// The owner takes a card off the board by hand, whatever state it is in:
+/// nothing is asked of the bots, nothing is reset. The escape hatch for a
+/// card that is finished in all but name, or that nobody will finish.
+internal sealed record TeamTaskCloseMsg
+{
+    public required Guid ProjectId { get; init; }
+    public required string TaskId { get; init; }
+}
+
+/// The owner says a task is not done yet (after the lead asked): back to
+/// open, with a note the lead gets.
+internal sealed record TeamTaskRejectMsg
+{
+    public required Guid ProjectId { get; init; }
+    public required string TaskId { get; init; }
+    public string? Note { get; init; }
+}
+
+/// The owner answering a bot's permission card. `decision` is "allow" or
+/// "deny"; the host writes it where the waiting hook polls.
+internal sealed record TeamPermAnswerMsg
+{
+    public required Guid ProjectId { get; init; }
+    public required string Id { get; init; }
+    public required string Decision { get; init; }
+}
+
+/// The owner answering a bot's ask card; the answer is delivered to the bot
+/// as a post.
+internal sealed record TeamAskAnswerMsg
+{
+    public required Guid ProjectId { get; init; }
+    public required string Id { get; init; }
+    public required string Answer { get; init; }
+}
+
+/// The room asking for a picture's bytes (a screenshot a bot attached or
+/// mentioned). Answered with `team.image.data`.
+internal sealed record TeamImageMsg
+{
+    public required Guid ProjectId { get; init; }
+    public required string Path { get; init; }
+}
+
+/// The room opening an artefact — a bot's long piece of work — by its id.
+/// Answered with `team.artefact.data`. The id names a file Perch itself
+/// wrote, so no path from a bot is ever opened on the page's say-so.
+internal sealed record TeamArtefactOpenMsg
+{
+    public required Guid ProjectId { get; init; }
+    public required string Id { get; init; }
+}
+
+/// The room asking what artefacts it still has, for the menu above the
+/// artefact panel. Answered with `team.artefact.index`.
+internal sealed record TeamArtefactListMsg
+{
+    public required Guid ProjectId { get; init; }
+}
+
+/// "Open in a tab" on the artefact the room is showing. The page sends the
+/// finished document because it is the side that owns the markdown renderer
+/// and the theme; the host only writes it and opens a browser tab on it.
+/// `Html` is page-authored (never a bot's raw text), and it is written to a
+/// file under Perch's own data dir, so nothing here lets a bot choose a path.
+internal sealed record TeamArtefactTabMsg
+{
+    public required Guid ProjectId { get; init; }
+    public required string Id { get; init; }
+    public required string Title { get; init; }
+    public required string Html { get; init; }
+}
+
+/// The owner reacting to a room row with an emoji.
+internal sealed record TeamReactMsg
+{
+    public required Guid ProjectId { get; init; }
+    public required long Seq { get; init; }
+    public required string Emoji { get; init; }
+}
+
+/// The dialog's "Browse…" for a reference folder. Answered with
+/// `team.reference.picked { requestId, path | null }`.
+internal sealed record TeamReferenceBrowseMsg
+{
+    public required string RequestId { get; init; }
+    public required Guid ProjectId { get; init; }
+}
+
+/// The room opened or closed for a project — a cadence hint: while open, the
+/// host pushes new entries as they land instead of waiting to be polled.
+internal sealed record TeamRoomMsg
+{
+    public required Guid ProjectId { get; init; }
+    public required bool Open { get; init; }
+}
+
 internal static class PageJson
 {
     public static readonly JsonSerializerOptions Options = CreateOptions();

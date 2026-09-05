@@ -23,4 +23,29 @@ public class ClaudePeerNamesTests
         var s = ClaudePeerNames.Sanitize(new string('x', 100));
         Assert.Equal(40, s.Length);
     }
+
+    // The address itself is the SLUG — the one spelling the launch command,
+    // the name sweep and a teammate's SendMessage all use.
+    [Theory]
+    [InlineData("Loc diff fix", "loc-diff-fix")]
+    [InlineData("weekly-digest", "weekly-digest")]
+    [InlineData("fix: the / bug", "fix-the-bug")]
+    [InlineData("", "tab")]
+    [InlineData("!!!", "tab")]
+    public void ForTitle_IsTheLaunchSlug(string title, string expected)
+        => Assert.Equal(expected, ClaudePeerNames.ForTitle(title));
+
+    // The bug this pins: a project tab launched as `--name loc-diff-fix` while
+    // the host remembered "Loc diff fix", so an observed SendMessage target
+    // matched nothing and the note was dropped.
+    [Theory]
+    [InlineData("Loc diff fix", "loc-diff-fix", true)]
+    [InlineData("LOC DIFF FIX", "loc-diff-fix", true)]
+    [InlineData("loc-diff-fix", "loc-diff-fix", true)]
+    [InlineData("loc diff fix 2", "loc-diff-fix-2", true)]     // legacy " 2" suffix still resolves
+    [InlineData("loc-diff-fix", "loc-diff-fix-2", false)]
+    [InlineData("", "loc-diff-fix", false)]
+    [InlineData("!!!", "!!!", false)]                          // nothing slugs to nothing
+    public void Matches_ComparesThroughTheSlug(string a, string b, bool expected)
+        => Assert.Equal(expected, ClaudePeerNames.Matches(a, b));
 }

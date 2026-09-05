@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Perch — team avatars, variant C: character first, one small signature</title>
+<style>
+  body{margin:0;min-height:100vh;background:#141414}   /* page shell only; the variant is scoped below */
+
+  /* ---- everything scoped under .av-character so siblings can share a page ---- */
+  .av-character{--surface:#1f1f1f;--ink:#e9eef4;--ink-dim:#aab3bd;--ink-3:#7f8890;
+    --eye:#15233b;--accent:#76B9ED;--hair:rgba(255,255,255,.06);
+    color:var(--ink);font-family:"Inter var","Inter","Segoe UI Variable Text","Segoe UI",sans-serif;
+    -webkit-font-smoothing:antialiased;padding:32px 24px 48px;max-width:1360px;margin:0 auto}
+  .av-character *{box-sizing:border-box}
+  .av-character h1{font-size:20px;font-weight:600;line-height:1.2;margin:0 0 4px}
+  .av-character h2{font-size:14px;font-weight:600;margin:32px 0 12px;color:var(--ink)}
+  .av-character .lede{color:var(--ink-dim);font-size:13px;margin:0 0 24px;max-width:70ch}
+
+  .av-character table.map{border-collapse:collapse;font-size:13px;margin:0 0 8px;width:100%}
+  .av-character table.map td{padding:8px 16px 8px 0;vertical-align:top;border-top:1px solid var(--hair);line-height:1.4}
+  .av-character table.map td:first-child{font-weight:500;white-space:nowrap;width:150px}
+  .av-character table.map td:nth-child(2){width:300px;color:var(--ink-dim)}
+  .av-character table.map td:nth-child(3){color:var(--ink-dim)}
+  .av-character .swatch{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:8px;vertical-align:-1px;background:var(--tag)}
+
+  /* ---- the avatar: same circle as .tf-msg__avatar in the room ---- */
+  .av-character .av{--tag:#76B9ED;position:relative;flex:none;border-radius:50%;overflow:hidden;
+    color:var(--ink);user-select:none;
+    background:color-mix(in srgb,var(--tag) 16%,transparent);
+    box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--tag) 32%,transparent)}
+  .av-character .av svg{display:block;width:100%;height:100%}
+  .av-character .av--96{width:96px;height:96px}
+  .av-character .av--28{width:28px;height:28px}
+
+  /* ---- controls ---- */
+  .av-character .controls{display:flex;align-items:center;gap:12px;font-size:12px;color:var(--ink-dim);
+    padding:8px 12px;border-radius:8px;background:var(--surface);border:1px solid var(--hair);margin:0 0 24px}
+  .av-character .controls button,.av-character .controls select{
+    background:rgba(255,255,255,.07);color:var(--ink);border:1px solid rgba(255,255,255,.1);
+    border-radius:4px;padding:4px 12px;font:inherit;cursor:pointer}
+  .av-character .controls input[type=range]{flex:1;accent-color:var(--accent)}
+  .av-character .t-readout{font-variant-numeric:tabular-nums;min-width:120px;text-align:right}
+
+  /* ---- gallery ---- */
+  .av-character .gallery{display:grid;grid-template-columns:150px repeat(4,1fr);gap:12px 16px;align-items:center}
+  .av-character .colhead{font-size:12px;color:var(--ink-dim)}
+  .av-character .rowhead{font-size:13px;font-weight:500}
+  .av-character .rowhead small{display:block;font-weight:400;color:var(--ink-3);font-size:12px;margin-top:2px}
+  .av-character .cell{display:flex;align-items:center;gap:12px;padding:8px;border-radius:8px;background:var(--surface)}
+  .av-character .cell .twin{display:flex;flex-direction:column;align-items:center;gap:6px}
+  .av-character .cell .twin span{font-size:10px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+
+  /* ---- context: room rows + roster, borrowed from style.css ---- */
+  .av-character .context{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:24px}
+  .av-character .room,.av-character .roster{background:var(--surface);border-radius:8px;padding:8px;border:1px solid var(--hair)}
+  .av-character .tf-msg{display:grid;grid-template-columns:28px minmax(0,1fr);column-gap:12px;padding:8px 12px;border-radius:8px}
+  .av-character .tf-msg__body{display:flex;flex-direction:column;gap:4px;min-width:0}
+  .av-character .tf-msg__head{display:flex;align-items:baseline;gap:8px}
+  .av-character .tf-msg__name{font-size:14px;font-weight:500;color:var(--ink)}
+  .av-character .tf-msg__pos{font-size:12px;color:var(--ink-3)}
+  .av-character .tf-msg__time{font-size:11px;color:#5a626a;margin-left:4px;font-variant-numeric:tabular-nums}
+  .av-character .tf-msg__text{font-size:14px;line-height:1.4;color:var(--ink-dim)}
+  .av-character .roster__head{font-size:11px;font-weight:600;letter-spacing:.04em;color:var(--ink-3);padding:4px 8px 8px;text-transform:uppercase}
+  .av-character .roster-bot{display:grid;grid-template-columns:28px minmax(0,1fr);column-gap:8px;row-gap:1px;
+    padding:6px 8px;border-radius:8px;align-items:center}
+  .av-character .roster-bot .av{grid-row:1/span 2}
+  .av-character .roster-bot__text{display:flex;align-items:baseline;gap:8px;min-width:0}
+  .av-character .roster-bot__nick{font-size:14px;font-weight:500}
+  .av-character .roster-bot__pos{font-size:12px;color:var(--ink-3)}
+  .av-character .roster-bot__state{grid-column:2;font-size:12px;color:var(--ink-3)}
+  .av-character .roster-bot__state[data-state=waiting]{color:#FCE100}
+
+  /* ---- filmstrip mode: no chrome, one row per position ---- */
+  .av-character.strip{padding:16px;max-width:none}
+  .av-character.strip>*{display:none}
+  .av-character.strip .strip-grid{display:grid;gap:8px 8px;align-items:start}
+  .av-character.strip .strip-grid .lab{font-size:11px;color:var(--ink-dim);font-variant-numeric:tabular-nums;align-self:center}
+  .av-character.strip .strip-grid .lab b{display:block;color:var(--ink);font-weight:500;font-size:12px}
+  .av-character.strip .frame{display:flex;flex-direction:column;align-items:center;gap:6px;padding:4px;border-radius:6px;background:var(--surface)}
+</style>
+</head>
+<body>
+<div class="av-character" data-variant="character"></div>
+<script>
+(function(){
+"use strict";
+const ROOT = document.querySelector('[data-variant="character"]');
+
+/* ================================================================
+   Timeline engine — lifted from setup-overlay.ts. Every state is
+   pose(t, state, temper): a pure function of loop-time → rig channels.
+   No CSS animation on the rig, so any t can be frozen or filmstripped.
+   ================================================================ */
+const clamp01 = u => Math.min(1, Math.max(0, u));
+const EASES = {
+  lin: u => u,
+  in: u => u * u * u,
+  out: u => 1 - Math.pow(1 - u, 3),
+  inout: u => u < .5 ? 4*u*u*u : 1 - Math.pow(-2*u + 2, 3)/2,
+  back: u => { const c = 1.4; return 1 + (c+1)*Math.pow(u-1,3) + c*Math.pow(u-1,2); },
+};
+/* keyframe track: the ease names the curve INTO that key; clamped both ends */
+function kf(t, keys){
+  if (t <= keys[0][0]) return keys[0][1];
+  for (let i = 1; i < keys.length; i++){
+    const [t1, v1, e] = keys[i], [t0, v0] = keys[i-1];
+    if (t <= t1){
+      const u = (EASES[e || 'inout'])(clamp01((t - t0) / (t1 - t0)));
+      return v0 + (v1 - v0) * u;
+    }
+  }
+  return keys[keys.length - 1][1];
+}
+/* blink: v-shaped closure around a center time, ~140ms; blinks() = several */
+const blink = (t, at) => { const d = Math.abs(t - at); return d > 70 ? 1 : Math.max(.12, d / 70); };
+const blinks = (t, ...ats) => ats.reduce((m, a) => Math.min(m, blink(t, a)), 1);
+
+/* loop lengths per state (ms). Every loop starts AND ends at the bot's
+   neutral perch, so switching states or cycling never pops. */
+const LEN = { idle: 5200, working: 3000, waiting: 4000, asleep: 9000 };
+const STATES = ['idle', 'working', 'waiting', 'asleep'];
+
+/* ---- the cast: position → signature + temperament ----
+   eyewear replaces the monocle where it IS the signature; otherwise the
+   monocle stays and the signature rides elsewhere on the head/collar.
+   brow: resting attitude (rig lerp: 1 raised/smug, 0 neutral, <0 flat).
+   tempo scales the peck rate while working. mid/wait/sleep name the
+   temperament's own beat inside the shared working/waiting/asleep loops. */
+const CAST = [
+  { id:'lead',     nick:'Lee',   pos:'Team lead',      tag:'#76B9ED', eyewear:'monocle', sig:'bowtie',
+    brow:.35, tempo:1.0,  mid:'scan',       wait:'hop',    sleep:'still',
+    sigText:'monocle + bow tie',
+    act:'scans the room over the shoulder and back, taps a foot (a rhythmic bob), looks up from the pad to check on everyone, one hop for attention' },
+  { id:'frontend', nick:'Ada',   pos:'Frontend dev',   tag:'#FF9E5E', eyewear:'monocle', sig:'crest',
+    brow:.45, tempo:1.45, mid:'dart',       wait:'hophop', sleep:'twitch',
+    sigText:'monocle + spiky crest',
+    act:'quick and fidgety: head darts, three breaths a loop, pecks the pad at double speed, hops twice for attention, twitches in its sleep' },
+  { id:'backend',  nick:'Bo',    pos:'Backend dev',    tag:'#6CCB5F', eyewear:'rect',    sig:null,
+    brow:.10, tempo:.70,  mid:'nod',        wait:'nod',    sleep:'snore',
+    sigText:'rectangular glasses',
+    act:'steady and methodical: slow deliberate nods, level brow, evenly spaced blinks, one sure nod for attention, a deep slow snore' },
+  { id:'designer', nick:'Mira',  pos:'Designer',       tag:'#FF99A4', eyewear:'round',   sig:null,
+    brow:.30, tempo:.95,  mid:'squint',     wait:'tilt',   sleep:'lean',
+    sigText:'thick round glasses',
+    act:'tilts the head one way, squints, tilts the other, squints again, then a satisfied brow; cocks its head for attention; sleeps on a shoulder' },
+  { id:'analyst',  nick:'Sol',   pos:'Senior analyst', tag:'#C792EA', eyewear:'loupe',   sig:null,
+    brow:.20, tempo:.85,  mid:'tally',      wait:'lensup', sleep:'droop',
+    sigText:'loupe on a headband',
+    act:'leans in and peers, tallies with three counting nods, sits back with a raised brow; the loupe flips up when it needs you and droops as it dozes' },
+  { id:'qa',       nick:'Quinn', pos:'QA',             tag:'#FCE100', eyewear:'goggles', sig:null,
+    brow:.50, tempo:1.15, mid:'doubletake', wait:'pop',    sleep:'jolt',
+    sigText:'safety goggles with a strap',
+    act:'double-takes at everything: glance, snap back, whip back wide-eyed and freeze, then a suspicious side-eye; the goggles pop when it needs you; half-startles mid-doze' },
+];
+
+CAST.forEach((tp, i) => { tp.ph = i * 60; });   // blink phase, so a row of bots never blinks in unison
+
+/* neutral perch, per bot (only the resting brow differs) */
+const CALM = { bob:0, crouch:.55, bodyRot:0, headTilt:0, headDX:0, headDY:0, tailAng:4,
+  blink:1, breathe:0, brow:.25, slip:0, look:0, pupil:1, lensDY:0, lensRot:0,
+  padVis:0, scribble:0, jitter:0, padFlip:0, z1:0, z2:0 };
+const neutral = tp => ({ ...CALM, brow: tp.brow });
+const breath = (t, len, cycles, amp) => Math.sin(2 * Math.PI * cycles * t / len) * amp;
+
+function pose(t, state, tp){
+  const len = LEN[state];
+  const i = ((t % len) + len) % len;
+  switch (state){
+    case 'idle':    return IDLE[tp.id](i, tp);
+    case 'working': return working(i, tp);
+    case 'waiting': return waiting(i, tp);
+    default:        return asleep(i, tp);
+  }
+}
+
+/* ================================================================
+   IDLE — 5.2 s. The temperament lives here most of all: same rig,
+   six different people. Each starts and ends at neutral.
+   ================================================================ */
+const IDLE = {
+  /* the lead scans the room: over the shoulder, then forward-down across
+     the table; an impatient foot tap (legs are cropped, so it reads as a
+     rhythmic bob the head rides); one glance back before settling */
+  lead(i, tp){
+    const tap = clamp01((i - 2700) / 150) * clamp01((3900 - i) / 150);
+    const tapW = Math.abs(Math.sin(2 * Math.PI * (i - 2700) / 380));
+    return { ...neutral(tp),
+      breathe: breath(i, LEN.idle, 2, .012),
+      headTilt: kf(i, [[0,0],[420,-10,'back'],[1200,-10,'lin'],[1650,8,'inout'],[2350,8,'lin'],[2750,0,'inout'],
+                       [4300,0,'lin'],[4520,-5,'out'],[4950,0,'inout']]),
+      headDX: kf(i, [[0,0],[420,-1.5,'back'],[1200,-1.5,'lin'],[1650,1.6,'inout'],[2350,1.6,'lin'],[2750,0,'inout'],
+                     [4300,0,'lin'],[4520,-.6,'out'],[4950,0,'inout']]),
+      headDY: kf(i, [[0,0],[420,-.6,'back'],[1200,-.6,'lin'],[1650,.7,'inout'],[2350,.7,'lin'],[2750,0,'inout']]),
+      bodyRot: kf(i, [[1200,0],[1650,2.5,'inout'],[2350,2.5,'lin'],[2750,0,'inout']]),
+      bob: -tapW * .8 * tap,
+      tailAng: kf(i, [[3900,4],[4060,13,'back'],[4400,4,'out']]),
+      blink: blinks(i, 900, 3050, 3170, 4700),
+      brow: kf(i, [[0,.35],[420,.8,'back'],[1200,.8,'lin'],[1650,.1,'inout'],[2350,.1,'lin'],[2750,.35,'inout'],
+                   [2900,-.1,'inout'],[3900,-.1,'lin'],[4200,.35,'inout'],[4520,.7,'out'],[4950,.35,'inout']]),
+    };
+  },
+  /* the frontend dev cannot sit still: two clusters of quick darts, a body
+     shift each way, two tail flicks, three breaths per loop, double blinks */
+  frontend(i, tp){
+    return { ...neutral(tp),
+      breathe: breath(i, LEN.idle, 3, .012),
+      headTilt: kf(i, [[0,0],[240,-8,'back'],[560,-8,'lin'],[700,6,'out'],[1000,6,'lin'],[1200,0,'inout'],
+                       [2500,0,'lin'],[2620,-6,'out'],[2820,-6,'lin'],[2940,7,'out'],[3220,7,'lin'],[3480,0,'inout'],
+                       [4200,0,'lin'],[4310,-4,'out'],[4560,0,'out']]),
+      headDX: kf(i, [[0,0],[240,-1.3,'back'],[560,-1.3,'lin'],[700,1.3,'out'],[1000,1.3,'lin'],[1200,0,'inout'],
+                     [2500,0,'lin'],[2620,-1,'out'],[2820,-1,'lin'],[2940,1.5,'out'],[3220,1.5,'lin'],[3480,0,'inout'],
+                     [4200,0,'lin'],[4310,-.6,'out'],[4560,0,'out']]),
+      headDY: kf(i, [[0,0],[240,-.6,'back'],[560,-.6,'lin'],[700,.5,'out'],[1000,.5,'lin'],[1200,0,'inout'],
+                     [2620,0,'lin'],[2940,.6,'out'],[3220,.6,'lin'],[3480,0,'inout']]),
+      bodyRot: kf(i, [[1400,0],[1550,2,'out'],[1900,2,'lin'],[2100,0,'inout'],[3600,0,'lin'],[3720,-1.5,'out'],[4000,0,'inout']]),
+      tailAng: kf(i, [[1500,4],[1640,14,'back'],[1950,4,'out'],[3700,4,'lin'],[3840,13,'back'],[4150,4,'out']]),
+      blink: blinks(i, 450, 1650, 1740, 3080, 4380),
+      brow: kf(i, [[0,.45],[240,.9,'back'],[560,.9,'lin'],[700,.3,'out'],[1000,.3,'lin'],[1200,.45,'inout'],
+                   [2620,.85,'out'],[2820,.85,'lin'],[2940,.2,'out'],[3220,.2,'lin'],[3480,.45,'inout'],
+                   [4310,.75,'out'],[4560,.45,'out']]),
+    };
+  },
+  /* the backend dev is unflappable: two slow, deliberate nods, a level
+     brow, breathing a touch deeper, blinks evenly spaced on purpose */
+  backend(i, tp){
+    return { ...neutral(tp),
+      breathe: breath(i, LEN.idle, 2, .014),
+      headTilt: kf(i, [[900,0],[1500,7,'inout'],[1950,7,'lin'],[2550,0,'inout'],[3100,0,'lin'],[3650,5,'inout'],[3950,5,'lin'],[4500,0,'inout']]),
+      headDX: kf(i, [[900,0],[1500,.9,'inout'],[1950,.9,'lin'],[2550,0,'inout'],[3100,0,'lin'],[3650,.6,'inout'],[3950,.6,'lin'],[4500,0,'inout']]),
+      headDY: kf(i, [[900,0],[1500,.5,'inout'],[1950,.5,'lin'],[2550,0,'inout'],[3100,0,'lin'],[3650,.35,'inout'],[3950,.35,'lin'],[4500,0,'inout']]),
+      bodyRot: kf(i, [[900,0],[1500,1.5,'inout'],[1950,1.5,'lin'],[2550,0,'inout']]),
+      tailAng: kf(i, [[0,4],[2600,3,'inout'],[4500,4,'inout']]),
+      blink: blinks(i, 1300, 3900),
+      brow: kf(i, [[0,.1],[1500,-.12,'inout'],[2550,.1,'inout'],[3650,-.05,'inout'],[4500,.1,'inout']]),
+    };
+  },
+  /* the designer tilts to one side, squints at it, tilts to the other,
+     squints again, then decides: a raised-brow "yes" and a tail flick */
+  designer(i, tp){
+    const squint = kf(i, [[900,1],[1150,.5,'inout'],[1550,.5,'lin'],[1800,1,'out'],[2500,1,'lin'],[2750,.45,'inout'],[3250,.45,'lin'],[3500,1,'out']]);
+    return { ...neutral(tp),
+      breathe: breath(i, LEN.idle, 2, .012),
+      headTilt: kf(i, [[0,0],[450,-16,'back'],[1600,-16,'lin'],[2100,12,'inout'],[3300,12,'lin'],[3800,0,'inout'],[4000,-5,'out'],[4600,0,'inout']]),
+      headDX: kf(i, [[0,0],[450,-.9,'back'],[1600,-.9,'lin'],[2100,1.2,'inout'],[3300,1.2,'lin'],[3800,0,'inout'],[4000,-.4,'out'],[4600,0,'inout']]),
+      headDY: kf(i, [[0,0],[450,-.7,'back'],[1600,-.7,'lin'],[2100,.8,'inout'],[3300,.8,'lin'],[3800,0,'inout'],[4000,-.4,'out'],[4600,0,'inout']]),
+      bodyRot: kf(i, [[1600,0],[2100,3,'inout'],[3300,3,'lin'],[3800,0,'inout']]),
+      tailAng: kf(i, [[3950,4],[4110,14,'back'],[4450,4,'out']]),
+      blink: Math.min(squint, blinks(i, 4350)),
+      brow: kf(i, [[0,.3],[450,.6,'back'],[900,.6,'lin'],[1150,-.35,'inout'],[1550,-.35,'lin'],[1800,.3,'out'],[2500,.3,'lin'],
+                   [2750,-.4,'inout'],[3250,-.4,'lin'],[3800,.3,'inout'],[4000,.95,'back'],[4300,.95,'lin'],[4700,.3,'inout']]),
+    };
+  },
+  /* the analyst leans in and peers, tallies (three counting nods), then
+     sits back with a raised "hm" and lets it settle */
+  analyst(i, tp){
+    const nods = kf(i, [[1300,0],[1400,3,'out'],[1560,0,'out'],[1700,3,'out'],[1860,0,'out'],[2000,3,'out'],[2160,0,'out']]);
+    return { ...neutral(tp),
+      breathe: breath(i, LEN.idle, 2, .012),
+      headTilt: kf(i, [[0,0],[500,12,'inout'],[2700,12,'lin'],[3100,-6,'back'],[3800,-6,'lin'],[4300,0,'inout']]) + nods,
+      headDX: kf(i, [[0,0],[500,1.8,'inout'],[2700,1.8,'lin'],[3100,-.7,'back'],[3800,-.7,'lin'],[4300,0,'inout']]),
+      headDY: kf(i, [[0,0],[500,1.1,'inout'],[2700,1.1,'lin'],[3100,-.6,'back'],[3800,-.6,'lin'],[4300,0,'inout']]) + nods * .12,
+      bodyRot: kf(i, [[0,0],[500,3.5,'inout'],[2700,3.5,'lin'],[3100,-1,'back'],[3800,-1,'lin'],[4300,0,'inout']]),
+      tailAng: kf(i, [[3100,4],[3260,13,'back'],[3600,4,'out']]),
+      blink: blinks(i, 2550, 3950, 4040),
+      brow: kf(i, [[0,.2],[500,-.25,'inout'],[2700,-.25,'lin'],[3100,.9,'back'],[3800,.9,'lin'],[4300,.2,'inout']]),
+    };
+  },
+  /* QA: glance, snap back casual, WHIP back wide-eyed and freeze (the
+     double-take), a slow suspicious settle, then a flat side-eye */
+  qa(i, tp){
+    const wide = kf(i, [[1450,1],[1560,1.15,'out'],[2150,1.15,'lin'],[2650,1,'inout']]);
+    return { ...neutral(tp),
+      breathe: breath(i, LEN.idle, 2, .012),
+      headTilt: kf(i, [[900,0],[1040,10,'out'],[1180,10,'lin'],[1310,-3,'out'],[1450,-3,'lin'],[1560,14,'out'],[2150,14,'lin'],
+                       [2900,0,'inout'],[3600,0,'lin'],[3900,-6,'inout'],[4500,-6,'lin'],[5000,0,'inout']]),
+      headDX: kf(i, [[900,0],[1040,1.3,'out'],[1180,1.3,'lin'],[1310,-.5,'out'],[1450,-.5,'lin'],[1560,1.9,'out'],[2150,1.9,'lin'],
+                     [2900,0,'inout'],[3600,0,'lin'],[3900,-.8,'inout'],[4500,-.8,'lin'],[5000,0,'inout']]),
+      headDY: kf(i, [[900,0],[1040,.7,'out'],[1180,.7,'lin'],[1310,-.3,'out'],[1450,-.3,'lin'],[1560,1,'out'],[2150,1,'lin'],[2900,0,'inout']]),
+      bodyRot: kf(i, [[1450,0],[1560,3,'out'],[2150,3,'lin'],[2900,0,'inout']]),
+      tailAng: kf(i, [[1560,4],[1700,14,'back'],[2100,4,'out']]),
+      blink: wide * blinks(i, 420, 3000, 3080, 4700),
+      brow: kf(i, [[0,.5],[900,.5],[1040,.15,'out'],[1180,.15,'lin'],[1310,.7,'out'],[1450,.7,'lin'],[1560,1.05,'out'],[2150,1.05,'lin'],
+                   [2900,-.2,'inout'],[3600,-.2,'lin'],[3900,-.4,'inout'],[4500,-.4,'lin'],[5000,.5,'inout']]),
+    };
+  },
+};
+
+/* ================================================================
+   WORKING — 3.0 s. Head down over a tiny pad, beak pecking (lines appear
+   as it writes) in two bursts with the temperament's own beat between
+   them; at the end a page flip, and the head lifts back to neutral.
+   ================================================================ */
+/* the beat between the two write bursts, per temperament: keys inside the
+   1250–1850 window; the shared track supplies everything around them */
+const MID = {
+  scan:       { tilt:[[1400,-8,'back'],[1700,-8,'lin']], dx:[[1400,-1,'back'],[1700,-1,'lin']],
+                brow:[[1400,.75,'back'],[1700,.75,'lin']] },
+  dart:       { tilt:[[1330,-9,'out'],[1450,-9,'lin'],[1560,12,'out'],[1700,12,'lin']],
+                dx:[[1330,-1.1,'out'],[1450,-1.1,'lin'],[1560,2,'out'],[1700,2,'lin']],
+                brow:[[1330,.9,'out'],[1450,.9,'lin'],[1560,-.2,'out'],[1700,-.2,'lin']] },
+  nod:        { tilt:[[1500,17,'inout'],[1650,17,'lin']], dx:[[1500,2.4,'inout'],[1650,2.4,'lin']],
+                brow:[[1500,-.3,'inout'],[1650,-.3,'lin']] },
+  squint:     { tilt:[[1400,5,'inout'],[1700,5,'lin']], dx:[[1400,1,'inout'],[1700,1,'lin']],
+                brow:[[1400,-.4,'inout'],[1700,-.4,'lin']],
+                blink:[[1250,1],[1400,.5,'inout'],[1700,.5,'lin'],[1850,1,'out']] },
+  tally:      { tilt:[[1330,15,'out'],[1450,12,'out'],[1560,15,'out'],[1680,12,'out'],[1790,15,'out']],
+                dx:[[1330,2,'lin']], brow:[[1330,-.3,'lin']] },
+  doubletake: { tilt:[[1340,-4,'out'],[1470,-4,'lin'],[1570,16,'out'],[1800,16,'lin']],
+                dx:[[1340,-.6,'out'],[1470,-.6,'lin'],[1570,2.4,'out'],[1800,2.4,'lin']],
+                brow:[[1340,.7,'out'],[1470,.7,'lin'],[1570,1.05,'out'],[1800,1.05,'lin']],
+                wide:[[1470,1],[1570,1.15,'out'],[1800,1.15,'lin'],[1950,1,'inout']] },
+};
+function working(w, tp){
+  const per = 125 / tp.tempo;                        // peck period at this temperament
+  const env = clamp01((w - 420) / 120) * clamp01((1250 - w) / 120) +
+              clamp01((w - 1850) / 120) * clamp01((2500 - w) / 120);
+  const jit = env * Math.sin(2 * Math.PI * w / per);
+  const m = MID[tp.mid];
+  return { ...neutral(tp),
+    breathe: breath(w, LEN.working, 2, .012),
+    padVis: kf(w, [[0,0],[300,1,'out'],[2700,1,'lin'],[2900,0,'inout']]),
+    scribble: kf(w, [[420,0],[1250,.5,'lin'],[1850,.5],[2500,1,'lin']]),
+    padFlip: kf(w, [[2620,0],[2820,1,'out']]),
+    jitter: jit,
+    headTilt: kf(w, [[0,0],[300,12,'out'],[1250,12,'lin'], ...m.tilt,
+                     [1850,12,'inout'],[2500,12,'lin'],[2640,7,'out'],[2800,9,'inout'],[3000,0,'inout']]) + jit * 1.4,
+    headDX: kf(w, [[0,0],[300,2,'out'],[1250,2,'lin'], ...m.dx,
+                   [1850,2,'inout'],[2500,2,'lin'],[2640,1.2,'out'],[3000,0,'inout']]),
+    headDY: kf(w, [[0,0],[300,1.4,'out'],[2500,1.4,'lin'],[2640,.6,'out'],[3000,0,'inout']]) + jit * .3,
+    bodyRot: kf(w, [[0,0],[300,3.5,'out'],[2640,3.5,'lin'],[3000,0,'inout']]),
+    tailAng: kf(w, [[2500,4],[2640,14,'back'],[2950,4,'out']]),           // done: flick
+    blink: blinks(w, 1560 + tp.ph, 2760 - tp.ph) * (m.blink ? kf(w, m.blink) : 1) * (m.wide ? kf(w, m.wide) : 1),
+    brow: kf(w, [[0,tp.brow],[300,-.2,'out'],[1250,-.2,'lin'], ...m.brow,
+                 [1850,-.2,'inout'],[2500,-.2,'lin'],[2640,.6,'back'],[3000,tp.brow,'inout']]),   // satisfied
+  };
+}
+
+/* ================================================================
+   WAITING — 4.0 s. Turns to the viewer: brow up, pupil toward you, a
+   small lean-in and a chin lift; one attention beat per loop; then it
+   relaxes to neutral at the end (looks away, looks back: still waiting).
+   ================================================================ */
+function waiting(w, tp){
+  const p = { ...neutral(tp),
+    breathe: breath(w, LEN.waiting, 2, .012),
+    brow: kf(w, [[0,tp.brow],[300,.95,'out'],[3300,.95,'lin'],[4000,tp.brow,'inout']]),
+    headTilt: kf(w, [[0,0],[300,-6,'out'],[3300,-6,'lin'],[4000,0,'inout']]),
+    headDX: kf(w, [[0,0],[300,-.7,'out'],[3300,-.7,'lin'],[4000,0,'inout']]),
+    headDY: kf(w, [[0,0],[300,-.5,'out'],[3300,-.5,'lin'],[4000,0,'inout']]),
+    bodyRot: kf(w, [[0,0],[300,-2.5,'out'],[3300,-2.5,'lin'],[4000,0,'inout']]),
+    look: kf(w, [[0,0],[300,-.32,'out'],[3300,-.32,'lin'],[4000,0,'inout']]),
+    pupil: kf(w, [[0,1],[300,1.1,'out'],[3300,1.1,'lin'],[4000,1,'inout']]),
+    blink: blinks(w, 1000 + tp.ph * 2, 3050 - tp.ph),
+  };
+  switch (tp.wait){
+    case 'hop':      // anticipation squat, one hop, a settle
+      p.crouch += kf(w, [[1550,0],[1680,.35,'out'],[1760,-.25,'out'],[1930,.3,'out'],[2150,0,'inout']]);
+      p.bob = kf(w, [[1680,0],[1800,-2.4,'out'],[1930,0,'in']]);
+      p.tailAng = kf(w, [[1680,4],[1800,16,'back'],[2150,4,'out']]);
+      break;
+    case 'hophop':   // two quick hops, the second smaller
+      p.crouch += kf(w, [[1500,0],[1600,.3,'out'],[1660,-.2,'out'],[1800,.25,'out'],[1860,-.1,'out'],[1980,.2,'out'],[2150,0,'inout']]);
+      p.bob = kf(w, [[1600,0],[1700,-2,'out'],[1800,0,'in'],[1860,0,'lin'],[1930,-1.2,'out'],[2000,0,'in']]);
+      p.tailAng = kf(w, [[1600,4],[1700,15,'back'],[2100,4,'out']]);
+      break;
+    case 'nod':      // one slow, sure nod: whenever you are ready
+      p.headTilt += kf(w, [[1500,0],[1900,8,'inout'],[2100,8,'lin'],[2600,0,'inout']]);
+      p.headDY += kf(w, [[1500,0],[1900,.8,'inout'],[2100,.8,'lin'],[2600,0,'inout']]);
+      break;
+    case 'tilt':     // the head cocks over, the glasses ride up a touch
+      p.headTilt += kf(w, [[1550,0],[1800,-13,'back'],[2400,-13,'lin'],[2800,0,'inout']]);
+      p.headDX += kf(w, [[1550,0],[1800,-.6,'back'],[2400,-.6,'lin'],[2800,0,'inout']]);
+      p.lensDY = kf(w, [[1550,0],[1700,-.35,'out'],[2400,-.35,'lin'],[2800,0,'inout']]);
+      break;
+    case 'lensup':   // the loupe flips up off the eye, then drops back
+      p.lensRot = kf(w, [[1600,0],[1780,-55,'back'],[2500,-55,'lin'],[2700,0,'back']]);
+      p.headTilt += kf(w, [[1600,0],[1780,-4,'out'],[2500,-4,'lin'],[2700,0,'inout']]);
+      break;
+    case 'pop':      // goggles pop up and settle with a wobble, eyes wide
+      p.lensDY = kf(w, [[1600,0],[1700,-1.3,'out'],[1830,-.55,'out'],[1950,-.85,'out'],[2100,0,'back']]);
+      p.headTilt += kf(w, [[1600,0],[1700,-3,'out'],[1900,0,'out']]);
+      p.blink *= kf(w, [[1650,1],[1720,1.15,'out'],[1950,1.15,'lin'],[2100,1,'inout']]);
+      break;
+  }
+  return p;
+}
+
+/* ================================================================
+   ASLEEP — 9.0 s. Lids sink, the head and body sag, the eyewear slips,
+   z's drift up; a slow nod-off tips too far and it startles awake, wide-
+   eyed, eyewear snapped back, then settles to neutral and dozes off again.
+   ================================================================ */
+function asleep(s, tp){
+  const sway = s > 1500 && s < 6900 ? Math.sin(2 * Math.PI * (s - 1500) / 1100) * .06 : 0;
+  const lids = kf(s, [[0,1],[1500,.45,'inout'],[6300,.3,'lin'],[6900,.12,'out'],[7300,.12,'lin'],[7480,1.05,'back'],[8300,1,'lin']]);
+  const snore = tp.sleep === 'snore';
+  const zph = (a, len) => { const u = (s - a) / len; return u > 0 && u < 1 ? u : 0; };
+  const p = { ...neutral(tp),
+    /* slower, deeper breathing; whole cycles per loop keep the edges seamless */
+    breathe: breath(s, LEN.asleep, snore ? 3 : 4, 1) *
+             kf(s, [[0,.012],[1500,snore ? .034 : .024,'inout'],[7300,snore ? .034 : .024,'lin'],[7700,.012,'out']]),
+    headTilt: kf(s, [[0,0],[1500,9,'inout'],[6300,12,'lin'],[6900,18,'out'],[7300,18,'lin'],[7480,-5,'back'],[8200,-5,'lin'],[9000,0,'inout']]),
+    headDY: kf(s, [[0,0],[1500,1.6,'inout'],[6900,2.4,'lin'],[7300,2.4,'lin'],[7480,-.8,'back'],[8200,-.8,'lin'],[9000,0,'inout']]),
+    headDX: kf(s, [[0,0],[1500,.6,'inout'],[6900,1,'lin'],[7300,1,'lin'],[7480,-.4,'back'],[8200,-.4,'lin'],[9000,0,'inout']]),
+    bodyRot: kf(s, [[0,0],[1500,2.5,'inout'],[6900,4,'lin'],[7300,4,'lin'],[7480,-1,'back'],[8200,-1,'lin'],[9000,0,'inout']]),
+    crouch: .55 + kf(s, [[0,0],[1500,.25,'inout'],[7300,.25,'lin'],[7480,-.1,'back'],[8200,-.1,'lin'],[9000,0,'inout']]),
+    tailAng: kf(s, [[0,4],[1600,1,'inout'],[7300,1,'lin'],[7480,14,'back'],[7900,4,'out']]),
+    blink: (lids + sway) * blinks(s, 8550 + tp.ph),                // one settling re-blink
+    slip: kf(s, [[0,0],[1600,.6,'inout'],[6900,1,'lin'],[7300,1,'lin'],[7530,0,'back']]),
+    z1: zph(2000, 1300) || zph(4600, 1300),
+    z2: zph(2700, 1200) || zph(5300, 1200),
+    brow: kf(s, [[0,tp.brow],[1500,-.3,'inout'],[6900,-.45,'lin'],[7300,-.45,'lin'],[7480,1,'back'],[8200,1,'lin'],[9000,tp.brow,'inout']]),
+  };
+  switch (tp.sleep){
+    case 'twitch': {   // little jerks in the doze; the crest flicks with them
+      const tw = kf(s, [[3300,0],[3380,-3,'out'],[3600,0,'out'],[5100,0,'lin'],[5170,-2.5,'out'],[5400,0,'out']]);
+      p.headTilt += tw; p.headDX += tw * .12; break; }
+    case 'lean':       // sags sideways more than forward: head on a shoulder
+      p.headDX += kf(s, [[0,0],[1500,-.6,'inout'],[7300,-.9,'lin'],[7480,0,'back']]);
+      p.headTilt += kf(s, [[0,0],[1500,-4,'inout'],[7300,-5,'lin'],[7480,0,'back']]); break;
+    case 'droop':      // the loupe droops off the headband as it dozes
+      p.lensRot = kf(s, [[0,0],[1600,10,'inout'],[6900,22,'lin'],[7300,22,'lin'],[7530,0,'back']]); break;
+    case 'jolt': {     // a half-startle mid-doze: checks, finds nothing, re-sinks
+      const j = kf(s, [[4200,0],[4300,1,'out'],[4500,1,'lin'],[5100,0,'inout']]);
+      p.blink = Math.max(p.blink, .6 * j); p.headTilt -= 5 * j; p.brow += .5 * j; p.slip -= .3 * j; break; }
+  }
+  return p;
+}
+
+/* ================================================================
+   Rig. Mascot geometry verbatim from setup-overlay.ts ("Monocle Guy").
+   The avatar is a BUST crop: the svg viewBox is a square in mascot units
+   around the head; the circle mask comes from the .av element.
+   ================================================================ */
+const K = 2.5;                          // mascot-units → rig-units (channels were authored in rig units)
+const FEET = { x: 12.35, y: 15.7 };
+const BODY_D = "M19.9 10.0 C 19.5 7.9, 17.6 6.3, 15.4 6.5 C 13.9 6.5, 12.5 6.8, 11.4 7.4 C 9.4 7.6, 7.4 6.2, 5.7 6.7 C 5.1 6.9, 5.2 7.6, 5.9 8.1 C 7.0 8.9, 7.7 10.1, 8.5 11.1 C 9.6 12.7, 10.9 14.4, 12.6 14.4 C 14.0 14.4, 15.2 13.9, 16.1 13.0 C 17.1 12.4, 18.0 11.9, 18.6 11.2 C 19.1 10.9, 19.6 10.6, 19.9 10.0 Z";
+const BEAK_D = "M17.4 9.4 L 21.9 10.3 L 18.2 11.35 Z";
+const BROW_N = [15.9,7.3, 16.55,7.25, 17.3,7.5, 17.9,8.0];
+const BROW_R = [15.75,6.55, 16.6,6.15, 17.45,6.35, 18.0,7.15];
+function browD(r){
+  const p = BROW_N.map((v, i) => v + (BROW_R[i] - v) * r);
+  return `M${p[0].toFixed(2)} ${p[1].toFixed(2)} C ${p[2].toFixed(2)} ${p[3].toFixed(2)}, ${p[4].toFixed(2)} ${p[5].toFixed(2)}, ${p[6].toFixed(2)} ${p[7].toFixed(2)}`;
+}
+const VIEW = "10.5 4.0 11.8 11.8";      // bust: centre (16.4, 9.9), radius 5.9 mascot units
+
+const NS = "http://www.w3.org/2000/svg";
+const el = (n, at) => { const e = document.createElementNS(NS, n); for (const k in at) e.setAttribute(k, at[k]); return e; };
+
+/* signatures: flat silhouettes in the bird's own style, one fill (the tag
+   colour), ink details. Eyewear lives in the face group so it rides the
+   head peek and the slip channel; crest and bow tie ride the body. */
+const CREST_D = "M14.1 6.9 L14.8 5.4 L15.5 6.5 L16.1 4.75 L16.8 6.4 L17.5 5.5 L17.9 6.9 Z";
+const BOW_L = "M17.3 12.4 L15.7 11.45 L15.7 13.35 Z", BOW_R = "M17.3 12.4 L18.9 11.55 L18.9 13.25 Z";
+function buildEyewear(kind, tag){
+  const g = el("g", {});
+  const st = { fill: "none", stroke: tag, "stroke-linecap": "round" };
+  let chain = null;
+  switch (kind){
+    case "monocle":
+      g.append(el("circle", { cx: 17, cy: 9, r: 1.95, ...st, "stroke-width": .6 }));
+      chain = el("path", { d: "M17.6 10.8 C 17.8 11.7, 17.5 12.5, 16.9 13.1", ...st, "stroke-width": .5 });
+      g.append(chain); break;
+    case "rect":
+      g.append(el("rect", { x: 15.25, y: 7.55, width: 3.6, height: 2.9, rx: .55, ...st, "stroke-width": .55 }),
+               el("path", { d: "M15.25 8.2 L13.4 7.7", ...st, "stroke-width": .5 })); break;
+    case "round":
+      g.append(el("circle", { cx: 17, cy: 9, r: 2.25, ...st, "stroke-width": .8 }),
+               el("path", { d: "M14.75 8.75 L13.1 8.15", ...st, "stroke-width": .55 })); break;
+    case "loupe":
+      g.append(el("path", { d: "M16.2 7.0 C 15.1 6.2, 13.8 6.25, 12.8 6.95", ...st, "stroke-width": .55 }),
+               el("circle", { cx: 17, cy: 9, r: 1.8, ...st, "stroke-width": .6 }),
+               /* the barrel: one solid piece so it still reads as a lump at 28 px */
+               el("path", { d: "M18.4 7.7 L 19.9 8.15 L 19.9 9.85 L 18.4 10.3 Z", fill: tag, "stroke-linejoin": "round" })); break;
+    case "goggles":
+      g.append(el("path", { d: "M14.9 8.4 C 13.7 7.85, 12.5 7.85, 11.4 8.45", ...st, "stroke-width": .75 }),
+               el("rect", { x: 14.9, y: 7.3, width: 4.4, height: 3.4, rx: 1.4, fill: tag, "fill-opacity": .18,
+                            stroke: tag, "stroke-width": .6 })); break;
+  }
+  return { g, chain };
+}
+/* how each eyewear slips (sleep) and pops (waiting): the loupe hinges at
+   its headband, everything else drifts down the face like the monocle */
+function lensT(kind, p){
+  const s = p.slip, f = v => v.toFixed(2);
+  switch (kind){
+    case "monocle": return `translate(${f(s*.25)} ${f(s*.55 + p.lensDY)}) rotate(${f(p.lensRot)} 17 9)`;
+    case "loupe":   return `translate(0 ${f(p.lensDY)}) rotate(${f(s*22 + p.lensRot)} 16.5 7.3)`;
+    case "goggles": return `translate(${f(s*-.1)} ${f(s*.45 + p.lensDY)}) rotate(${f(s*5 + p.lensRot)} 17 9)`;
+    default:        return `translate(${f(s*.15)} ${f(s*.4 + p.lensDY)}) rotate(${f(s*12 + p.lensRot)} 17 9)`;
+  }
+}
+
+function buildAvatar(tp){
+  const svg = el("svg", { viewBox: VIEW, "aria-hidden": "true" });
+  const legL = el("path", { d: "M11.3 14.1 V 15.7", stroke: "currentColor", "stroke-width": 1, "stroke-linecap": "round", fill: "none" });
+  const legR = el("path", { d: "M13.4 14.1 V 15.7", stroke: "currentColor", "stroke-width": 1, "stroke-linecap": "round", fill: "none" });
+  const trunk = el("g", {}), breatheG = el("g", {});
+  const body = el("path", { d: BODY_D, fill: "currentColor" });
+  const beak = el("path", { d: BEAK_D, fill: "currentColor" });
+  const face = el("g", {});
+  const brow = el("path", { d: browD(0), fill: "none", stroke: "var(--eye)", "stroke-width": .75, "stroke-linecap": "round" });
+  const eye = el("ellipse", { cx: 17, cy: 9, rx: .95, ry: .95, fill: "var(--eye)" });
+  const ew = buildEyewear(tp.eyewear, "var(--tag)");
+  face.append(eye, ew.g, brow);          // brow on top: the thick rings must not bury the attitude
+  let crest = null, bow = null;
+  if (tp.sig === "crest")
+    crest = el("path", { d: CREST_D, fill: "currentColor", stroke: "currentColor", "stroke-width": .3, "stroke-linejoin": "round" });
+  if (tp.sig === "bowtie"){
+    bow = el("g", {});
+    bow.append(el("path", { d: BOW_L, fill: "var(--tag)" }), el("path", { d: BOW_R, fill: "var(--tag)" }),
+               el("circle", { cx: 17.3, cy: 12.4, r: .38, fill: "var(--eye)" }));
+    if (ew.chain) ew.chain.setAttribute("d", "M17.6 10.8 C 17.8 11.3, 17.7 11.8, 17.35 12.15");   // chain tucks into the tie
+  }
+  breatheG.append(body, ...(crest ? [crest] : []), beak, face, ...(bow ? [bow] : []));
+  trunk.append(breatheG);
+  svg.append(legL, legR, trunk);
+
+  /* note pad: a tiny sheet under the beak; lines appear as it writes */
+  const pad = el("g", {});
+  pad.style.visibility = "hidden";
+  const padInk = { fill: "none", stroke: "var(--eye)", "stroke-linecap": "round", "stroke-width": .32,
+                   pathLength: 1, "stroke-dasharray": 1, "stroke-dashoffset": 1 };
+  pad.append(el("rect", { x: 0, y: 0, width: 3.3, height: 2.4, rx: .35, fill: "currentColor", opacity: .92 }));
+  const l1 = el("path", { ...padInk, d: "M.5 .85 C .9 .6, 1.2 1.05, 1.6 .8 C 2.0 .6, 2.3 1.0, 2.8 .8" });
+  const l2 = el("path", { ...padInk, d: "M.5 1.65 C .9 1.4, 1.2 1.85, 1.6 1.6 C 1.9 1.45, 2.1 1.7, 2.3 1.6" });
+  pad.append(l1, l2);
+  svg.append(pad);
+
+  /* z's: drawn strokes, not glyphs; drift up-right off the crown */
+  const mkZ = () => {
+    const z = el("path", { d: "M0 0 H1.5 L0 1.3 H1.5", fill: "none", stroke: "currentColor",
+                           "stroke-width": .38, "stroke-linejoin": "round", "stroke-linecap": "round" });
+    z.style.visibility = "hidden"; svg.append(z); return z;
+  };
+  const zB = mkZ(), zS = mkZ();
+
+  function apply(p, lag = 0){
+    const dy = (p.bob + p.crouch * 2.2) / K;
+    const tilt = p.bodyRot + p.headTilt * .55 - p.tailAng * .12;
+    trunk.setAttribute("transform", `translate(0 ${dy.toFixed(3)}) rotate(${tilt.toFixed(2)} 13 11.5)`);
+    breatheG.setAttribute("transform",
+      `translate(${FEET.x} ${FEET.y}) scale(1 ${(1 + p.breathe).toFixed(4)}) translate(${-FEET.x} ${-FEET.y})`);
+    face.setAttribute("transform", `translate(${(p.headDX * .35).toFixed(2)} ${(p.headDY * .35).toFixed(2)})`);
+    brow.setAttribute("d", browD(p.brow));
+    eye.setAttribute("rx", (.95 * p.pupil).toFixed(2));
+    eye.setAttribute("ry", (.95 * p.pupil * p.blink).toFixed(2));
+    eye.setAttribute("cx", (17 + p.look).toFixed(2));
+    ew.g.setAttribute("transform", lensT(tp.eyewear, p));
+    /* follow-through: whatever hangs or sticks out lags the head's velocity */
+    if (ew.chain) ew.chain.setAttribute("transform", `rotate(${(lag * 1.8).toFixed(2)} 17.6 10.8)`);
+    if (crest) crest.setAttribute("transform", `rotate(${(-lag * 1.4).toFixed(2)} 16 6.7)`);
+    if (bow) bow.setAttribute("transform", `rotate(${(-lag * .5).toFixed(2)} 17.3 12.4)`);
+
+    if (p.padVis > .01){
+      pad.style.visibility = "visible";
+      pad.style.opacity = (p.padVis * (1 - p.padFlip)).toFixed(3);
+      pad.setAttribute("transform", `translate(17.8 ${(12.0 + (1 - p.padVis) * .9).toFixed(2)})` +
+        ` rotate(${(-12 + p.jitter * 2.5 - p.padFlip * 70).toFixed(2)})`);
+      l1.setAttribute("stroke-dashoffset", (1 - clamp01(p.scribble * 2)).toFixed(3));
+      l2.setAttribute("stroke-dashoffset", (1 - clamp01(p.scribble * 2 - 1)).toFixed(3));
+    } else pad.style.visibility = "hidden";
+
+    for (const [z, ph, sc] of [[zB, p.z1, 1], [zS, p.z2, .72]]){
+      if (ph > 0 && ph < 1){
+        z.style.visibility = "visible";
+        z.setAttribute("transform", `translate(${(17.8 - ph * 1.0).toFixed(2)} ${(5.9 - ph * 2.2).toFixed(2)}) scale(${sc})`);
+        z.style.opacity = (Math.sin(Math.PI * ph) * .8).toFixed(3);
+      } else z.style.visibility = "hidden";
+    }
+  }
+  return { svg, apply };
+}
+
+/* ================================================================
+   Player. One clock for the page; each avatar keeps its own state and
+   the time it entered it, so a switch restarts that state's loop at 0
+   (the loop's first 300 ms leave neutral) while a 300 ms blend from the
+   previous state's last pose covers whatever gesture it was mid-way in.
+   lag = head velocity over the last 70 ms, for the follow-through parts.
+   ================================================================ */
+const params = new URLSearchParams(location.search);
+const avatars = [];
+const mix = (a, b, u) => { const o = {}; for (const k in b) o[k] = a[k] + (b[k] - a[k]) * u; return o; };
+
+function mkAvatar(tp, state, size){
+  const box = document.createElement("div");
+  box.className = `av av--${size}`;
+  box.style.setProperty("--tag", tp.tag);
+  const scene = buildAvatar(tp);
+  box.append(scene.svg);
+  const a = { box, scene, tp, state, own: state, t0: 0, from: null, switchAt: 0, last: null };
+  avatars.push(a);
+  return a;
+}
+function frameAt(a, T){
+  const t = T - a.t0;
+  let p = pose(t, a.state, a.tp);
+  const lag = p.headTilt - pose(t - 70, a.state, a.tp).headTilt;
+  if (a.from){
+    const u = clamp01((T - a.switchAt) / 300);
+    if (u < 1) p = mix(a.from, p, EASES.out(u)); else a.from = null;
+  }
+  a.scene.apply(p, lag);
+  a.last = p;
+}
+function setState(a, state, T){
+  if (a.state === state) return;
+  a.from = a.last; a.switchAt = T; a.t0 = T; a.state = state;
+}
+
+/* ---------- filmstrip: ?strip=1&state=working&n=12 (no chrome) ---------- */
+if (params.has("strip")){
+  const state = STATES.includes(params.get("state")) ? params.get("state") : "idle";
+  const n = Math.max(2, Math.min(24, +params.get("n") || 12));
+  ROOT.classList.add("strip");
+  const grid = document.createElement("div");
+  grid.className = "strip-grid";
+  grid.style.gridTemplateColumns = `110px repeat(${n}, 96px)`;
+  const head = document.createElement("div");
+  head.className = "lab";
+  head.innerHTML = `<b>${state}</b>${LEN[state]} ms loop`;
+  grid.append(head);
+  for (let k = 0; k < n; k++){
+    const l = document.createElement("div");
+    l.className = "lab";
+    l.textContent = Math.round(LEN[state] * k / n) + " ms";
+    grid.append(l);
+  }
+  for (const tp of CAST){
+    const l = document.createElement("div");
+    l.className = "lab";
+    l.innerHTML = `<b>${tp.nick}</b>${tp.pos}<br>${tp.sigText}`;
+    grid.append(l);
+    for (let k = 0; k < n; k++){
+      const t = LEN[state] * k / n;
+      const f = document.createElement("div");
+      f.className = "frame";
+      const big = mkAvatar(tp, state, 96), small = mkAvatar(tp, state, 28);
+      f.append(big.box, small.box);
+      grid.append(f);
+      frameAt(big, t); frameAt(small, t);
+    }
+  }
+  ROOT.append(grid);
+  return;
+}
+
+/* ---------- the review page ---------- */
+ROOT.innerHTML = `
+  <h1>Team avatars, variant C: character first, one small signature</h1>
+  <p class="lede">Six bots, one bird. Each position gets a temperament that shows in how it idles and works,
+    plus one flat signature that rides the head (eyewear, crest, or collar) in its tag colour. The body stays
+    currentColor, so it inherits the row. Bust crop of the real Monocle Guy geometry; every state is a pure
+    pose(t) loop that starts and ends on the neutral perch.</p>
+  <table class="map"><tbody>${CAST.map(tp => `<tr>
+    <td><span class="swatch" style="--tag:${tp.tag}"></span>${tp.pos}</td>
+    <td>${tp.sigText}</td><td>${tp.act}</td></tr>`).join("")}</tbody></table>
+  <div class="controls">
+    <label>State <select id="state"><option value="">by column</option>${STATES.map(s => `<option value="${s}">${s}</option>`).join("")}</select></label>
+    <button id="play">Pause</button>
+    <input id="scrub" type="range" min="0" max="9000" step="10" value="0">
+    <span class="t-readout" id="readout">0.00 s</span>
+  </div>
+  <h2>Gallery: 96 px for review, 28 px as it sits in the room</h2>
+  <div class="gallery" id="gallery"></div>
+  <h2>In context</h2>
+  <div class="context"><div class="room" id="room"></div><div class="roster" id="roster"></div></div>`;
+
+const gallery = ROOT.querySelector("#gallery");
+gallery.insertAdjacentHTML("beforeend", `<div></div>` +
+  STATES.map(s => `<div class="colhead">${s} · ${LEN[s] / 1000} s loop</div>`).join(""));
+for (const tp of CAST){
+  const rh = document.createElement("div");
+  rh.className = "rowhead";
+  rh.innerHTML = `${tp.nick}<small>${tp.pos}</small><small>${tp.sigText}</small>`;
+  gallery.append(rh);
+  for (const s of STATES){
+    const cell = document.createElement("div");
+    cell.className = "cell";
+    const twin = document.createElement("div");
+    twin.className = "twin";
+    twin.append(mkAvatar(tp, s, 28).box);
+    cell.append(mkAvatar(tp, s, 96).box, twin);
+    gallery.append(cell);
+  }
+}
+
+/* room rows and roster, mirroring .tf-msg / .roster-bot in style.css */
+const ROOM = [
+  ["designer", "working", "18:05", "Pushed the hover tokens. The row still wants 2 px more breathing room at 125 %, looking at it now."],
+  ["backend",  "idle",    "18:06", "Migration is up. Ran the fixtures twice, both green."],
+  ["qa",       "waiting", "18:06", "The sidebar row still shifts on hover at 125 % scale. Fix it before the release, or log it?"],
+];
+const room = ROOT.querySelector("#room");
+for (const [id, st, time, text] of ROOM){
+  const tp = CAST.find(c => c.id === id);
+  const row = document.createElement("div");
+  row.className = "tf-msg";
+  row.append(mkAvatar(tp, st, 28).box);
+  row.insertAdjacentHTML("beforeend", `<div class="tf-msg__body"><div class="tf-msg__head">
+    <span class="tf-msg__name">${tp.nick}</span><span class="tf-msg__pos">${tp.pos}</span>
+    <span class="tf-msg__time">${time}</span></div><div class="tf-msg__text">${text}</div></div>`);
+  room.append(row);
+}
+const ROSTER = { lead: "working", frontend: "working", backend: "idle", designer: "working", analyst: "asleep", qa: "waiting" };
+const WORD = { idle: "idle · just now", working: "working · 2m", waiting: "needs you", asleep: "asleep · 40m" };
+const roster = ROOT.querySelector("#roster");
+roster.insertAdjacentHTML("beforeend", `<div class="roster__head">Team 6</div>`);
+for (const tp of CAST){
+  const st = ROSTER[tp.id];
+  const row = document.createElement("div");
+  row.className = "roster-bot";
+  row.append(mkAvatar(tp, st, 28).box);
+  row.insertAdjacentHTML("beforeend", `<div class="roster-bot__text"><span class="roster-bot__nick">${tp.nick}</span>
+    <span class="roster-bot__pos">${tp.pos}</span></div><div class="roster-bot__state" data-state="${st}">${WORD[st]}</div>`);
+  roster.append(row);
+}
+
+/* ---------- clock, controls, ?t= freeze ---------- */
+const scrub = ROOT.querySelector("#scrub"), readout = ROOT.querySelector("#readout");
+const playBtn = ROOT.querySelector("#play"), stateSel = ROOT.querySelector("#state");
+const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+let playing = !params.has("t") && !reduce;
+let T = +params.get("t") || 0;
+let last = performance.now();
+
+function drawAll(){
+  for (const a of avatars) frameAt(a, T);
+  scrub.value = T % 9000;
+  readout.textContent = (T / 1000).toFixed(2) + " s";
+}
+function tick(now){
+  const dt = Math.min(64, now - last); last = now;
+  if (playing) T += dt;
+  drawAll();
+  requestAnimationFrame(tick);
+}
+drawAll();                                    // deterministic first frame for ?t=
+requestAnimationFrame(tick);
+
+playBtn.onclick = () => { playing = !playing; playBtn.textContent = playing ? "Pause" : "Play"; };
+scrub.oninput = () => { playing = false; playBtn.textContent = "Play"; T = +scrub.value; for (const a of avatars){ a.from = null; a.t0 = 0; } };
+stateSel.onchange = () => { for (const a of avatars) setState(a, stateSel.value || a.own, T); };
+addEventListener("keydown", e => {
+  if (e.key === " "){ e.preventDefault(); playBtn.onclick(); }
+  if (e.key === "ArrowRight"){ playing = false; T += e.shiftKey ? 10 : 50; }
+  if (e.key === "ArrowLeft"){ playing = false; T = Math.max(0, T - (e.shiftKey ? 10 : 50)); }
+});
+})();
+</script>
+</body>
+</html>

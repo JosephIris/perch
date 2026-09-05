@@ -20,6 +20,12 @@ internal sealed class Project
     public string Path { get; set; } = "";
     public long AddedAtUnixMs { get; set; }
 
+    /// Hidden from the sidebar's project list (folded into its "Hidden" drawer).
+    /// Everything else about the registration survives — name, seeds, which
+    /// tabs file under it — so unhiding restores the group exactly as it was.
+    /// Distinct from unregistering, which severs the tabs' filing.
+    public bool Hidden { get; set; }
+
     /// Per-project override of what gets seeded into a new worktree (see
     /// Settings.WorktreeSeedPaths). Null or empty = inherit the global list.
     ///

@@ -156,6 +156,28 @@ public sealed class TranscriptReaderTests : IDisposable
     }
 
     [Fact]
+    public void ATeammatesMessage_IsAPeerRow_NotAPrompt()
+    {
+        // Shape captured from a real exchange (cc 2.1.258): the receiver gets a
+        // user row with origin.kind "peer", the sender's name and the body on
+        // the origin, and the same body wrapped in the message content.
+        WriteTranscript(
+            """{"type":"user","isMeta":true,"promptSource":"system","origin":{"kind":"peer","from":"uds:pipe-1","name":"shabtay","body":"Hey big_dawg, shabtay here.","msg_id":"m1","fromMode":"prompting"},"timestamp":"2026-09-02T19:18:27Z","message":{"content":"Another Claude session sent a message:\n<cross-session-message from=\"uds:pipe-1\" from-name=\"shabtay\">Hey big_dawg, shabtay here.</cross-session-message>"}}""",
+            Assistant(TextBlock, ts: "2026-09-02T19:18:35Z"));
+
+        var d = Read(new TranscriptReader());
+
+        Assert.DoesNotContain(d.Events, e => e.Kind == "prompt");
+        var peer = Assert.Single(d.Events, e => e.Kind == "peer");
+        Assert.Equal("shabtay", peer.Target);
+        Assert.Equal("Hey big_dawg, shabtay here.", peer.Text);
+        Assert.Equal("from", peer.Verb);
+        Assert.Equal("Hey big_dawg, shabtay here.", peer.Note);
+        // The turn it started still reads: the beat follows it.
+        Assert.Equal(new[] { "peer", "beat" }, d.Events.Select(e => e.Kind).ToArray());
+    }
+
+    [Fact]
     public void MissingOriginMetadata_ReadsAsHuman_SoOlderTranscriptsKeepTheirPrompts()
     {
         // Older transcripts carry no origin/promptSource/isMeta. A missing signal

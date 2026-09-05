@@ -56,23 +56,52 @@ const CHECK_PATH = "M20 6L9 17l-5-5";
 
 let openMenu: HTMLElement | null = null;
 
+// Codex's catalogue, ferried with every state push (see StateProjection). It
+// is codex's own list, not ours, so a model OpenAI ships tomorrow shows up
+// without a Perch release. Empty when codex isn't installed.
+let codexOptions: ModelOption[] = [];
+
+/** Store the host's latest codex model catalogue. Called from the state
+ *  message handler, alongside setModelLimits. */
+export function setCodexModels(
+  next: { slug: string; label: string }[] | undefined
+): void {
+  codexOptions = (next ?? []).map((m) => ({ alias: m.slug, label: m.label }));
+}
+
+/** The list a pane's picker offers. Claude's four aliases, or codex's own
+ *  catalogue — "Default" first either way, meaning "whatever the agent picks".
+ *  Exported for test: which list a pane gets is the whole decision here. */
+export function optionsFor(agent: string | undefined): ModelOption[] {
+  if (agent !== "codex") return MODEL_OPTIONS;
+  return [{ alias: "", label: "Default" }, ...codexOptions];
+}
+
 /** Show the model menu anchored under `anchor` for `paneId`, marking
- *  `currentModel` (the pane's selected alias, "" for default). */
+ *  `currentModel` (the pane's selected alias, "" for default). `agent` picks
+ *  which catalogue is offered. */
 export function showModelMenu(
   anchor: HTMLElement,
   paneId: string,
-  currentModel: string
+  currentModel: string,
+  agent?: string
 ): void {
   dismissModelMenu();
+
+  const options = optionsFor(agent);
+  // Nothing to choose from (codex installed but its catalogue unreadable):
+  // showing an empty popover would read as broken, so show none at all.
+  if (options.length <= 1 && agent === "codex") return;
 
   const menu = document.createElement("div");
   menu.className = "model-menu";
   menu.setAttribute("role", "menu");
 
-  for (const opt of MODEL_OPTIONS) {
+  for (const opt of options) {
     // Only fable/opus/sonnet can be limited; default/haiku never appear in the
-    // host's limit list, so the hint is null and they're always enabled.
-    const limitHint = modelLimitHint(opt.alias);
+    // host's limit list, so the hint is null and they're always enabled. The
+    // limits are Anthropic's, so a codex model is never annotated.
+    const limitHint = agent === "codex" ? null : modelLimitHint(opt.alias);
     const disabled = limitHint !== null;
 
     const btn = document.createElement("button");

@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Tree connectors + working spinner</title>
+<style>
+  :root{
+    --sidebar-surface:#181818;
+    --stroke:rgba(255,255,255,0.08);
+    --stroke-strong:rgba(255,255,255,0.14);
+    --subtle-2:rgba(255,255,255,0.04);
+    --subtle-3:rgba(255,255,255,0.08);
+    --text-1:rgba(255,255,255,0.92);
+    --text-2:rgba(255,255,255,0.72);
+    --text-3:rgba(255,255,255,0.5);
+    --working:#4cc2ff;
+    --done:#6ccb5f;
+    --r-input:4px;
+    --font:"Segoe UI Variable Text","Segoe UI",-apple-system,system-ui,sans-serif;
+    --mono:"Cascadia Mono","Cascadia Code",Consolas,ui-monospace,monospace;
+    /* Trunk/tick amplified ~2.6x over the shipping --stroke so the connect vs
+       gap difference is legible on a web page; ratios are otherwise faithful. */
+    --tree:rgba(255,255,255,0.22);
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;padding:32px;background:#101010;color:var(--text-1);
+    font-family:var(--font);font-size:14px;line-height:1.4;
+    -webkit-font-smoothing:antialiased;
+  }
+  h1{font-size:20px;font-weight:600;margin:0 0 4px;letter-spacing:0}
+  .sub{color:var(--text-3);font-size:13px;margin:0 0 28px}
+  .cols{display:flex;gap:48px;flex-wrap:wrap;align-items:flex-start}
+  .col{display:flex;flex-direction:column;gap:16px}
+  .tag{
+    display:inline-flex;align-items:center;gap:8px;
+    font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;
+  }
+  .tag--cur{color:var(--text-3)}
+  .tag--new{color:var(--done)}
+  .tag .pip{width:8px;height:8px;border-radius:50%}
+  .tag--cur .pip{background:var(--text-3)}
+  .tag--new .pip{background:var(--done)}
+
+  /* ── mini sidebar ─────────────────────────────────────────── */
+  .side{
+    width:264px;background:var(--sidebar-surface);
+    border:1px solid var(--stroke);border-radius:8px;
+    padding:10px 8px 14px;
+  }
+  .phead{
+    display:flex;align-items:center;gap:8px;
+    padding:6px 8px;border-radius:var(--r-input);
+    color:var(--text-2);
+  }
+  .phead .chev{color:var(--text-3)}
+  .phead .pname{font-weight:600;font-size:13px;color:var(--text-2)}
+  .phead .pcount{
+    margin-left:2px;font-size:11px;color:var(--text-3);
+    font-variant-numeric:tabular-nums;
+  }
+
+  .nlist{position:relative;margin:2px 0 0}
+
+  /* rows share the base "card" geometry both current & proposed carry, so the
+     only differences are the ones under test */
+  .nrow{
+    position:relative;display:grid;
+    grid-template-columns:10px minmax(0,1fr) auto;
+    align-items:center;column-gap:8px;
+    border-radius:var(--r-input);
+  }
+  .lead{
+    display:flex;align-items:center;justify-content:center;
+    width:10px;height:10px;flex:0 0 auto;
+  }
+  .dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto}
+  .dot[data-s="done"]{background:var(--done)}
+  .dot[data-s="idle"]{background:transparent;box-shadow:inset 0 0 0 1px var(--text-3)}
+  .spin{
+    font-family:var(--mono);color:var(--working);line-height:1;
+    text-align:center;
+  }
+  .title{
+    font-size:13px;color:var(--text-1);white-space:nowrap;overflow:hidden;
+    text-overflow:ellipsis;min-width:0;
+  }
+  .chip{
+    justify-self:end;font-family:var(--mono);font-size:10px;
+    color:var(--text-3);font-variant-numeric:tabular-nums;padding-right:4px;
+  }
+  .nrow:hover{background:var(--subtle-2)}
+  .nrow.active{background:var(--subtle-3)}
+
+  /* ── CURRENT: the shipping geometry, bug and all ───────────── */
+  .cur .nrow{
+    padding:3px 8px 3px 24px;
+    border:1px solid transparent;           /* the culprit: 1px eats the trunk */
+  }
+  .cur .nrow::before{                        /* vertical trunk (per row) */
+    content:"";position:absolute;left:13px;top:0;bottom:0;width:1px;
+    background:var(--tree);
+  }
+  .cur .nrow:last-child::before{bottom:50%}
+  .cur .nrow::after{                         /* horizontal tick */
+    content:"";position:absolute;left:13px;top:50%;width:7px;height:1px;
+    background:var(--tree);
+  }
+  .cur .spin{width:10px;font-size:11px}      /* small, floats right of tick */
+
+  /* ── PROPOSED: connected trunk + node-anchored spinner ─────── */
+  .new .nrow{
+    padding:4px 8px 4px 24px;
+    border:0;                                /* drop the frame nested rows never used */
+  }
+  .new .nrow::before{                         /* trunk now spans the whole box → touches */
+    content:"";position:absolute;left:13px;top:0;bottom:0;width:1px;
+    background:var(--tree);
+  }
+  .new .nrow:last-child::before{bottom:50%}
+  .new .nrow::after{                          /* tick reaches the node (13 → 25) */
+    content:"";position:absolute;left:13px;top:50%;width:12px;height:1px;
+    background:var(--tree);
+  }
+  .new .spin{width:10px;font-size:13px}       /* bigger; flex-centered on the tick */
+
+  /* ── zoom inset ───────────────────────────────────────────── */
+  .zoom-wrap{display:flex;gap:16px;align-items:flex-start;margin-top:4px}
+  .zoom-label{font-size:11px;color:var(--text-3);width:40px;padding-top:44px}
+  .zoom{
+    width:150px;height:120px;overflow:hidden;
+    border:1px solid var(--stroke);border-radius:8px;background:var(--sidebar-surface);
+    position:relative;
+  }
+  .zoom .inner{transform:scale(4);transform-origin:22px 20px;position:absolute;inset:0}
+
+  .notes{max-width:300px;font-size:13px;color:var(--text-2);line-height:1.5}
+  .notes h3{font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-3);margin:0 0 8px;font-weight:600}
+  .notes ul{margin:0 0 20px;padding-left:18px}
+  .notes li{margin:6px 0}
+  .notes code{font-family:var(--mono);font-size:12px;color:var(--text-1);background:var(--subtle-3);padding:1px 5px;border-radius:4px}
+  .k{color:var(--done);font-weight:600}
+</style>
+</head>
+<body>
+  <h1>Tree connectors &amp; the working spinner</h1>
+  <p class="sub">Nested project&nbsp;→&nbsp;tab rows. Two working tabs (live braille spinner), one finished, one working last-child (to show the └ elbow).</p>
+
+  <div class="cols">
+    <!-- CURRENT -->
+    <div class="col">
+      <span class="tag tag--cur"><span class="pip"></span>Current</span>
+      <div class="side cur">
+        <div class="phead">
+          <span class="chev">⌄</span>
+          <span class="pname">perch</span>
+          <span class="pcount">4</span>
+        </div>
+        <div class="nlist">
+          <div class="nrow active">
+            <span class="lead"><span class="spin" data-spin>⠋</span></span>
+            <span class="title">animate</span>
+            <span class="chip">17m</span>
+          </div>
+          <div class="nrow">
+            <span class="lead"><span class="spin" data-spin>⠋</span></span>
+            <span class="title">public — let's se…</span>
+            <span class="chip">3m</span>
+          </div>
+          <div class="nrow">
+            <span class="lead"><span class="dot" data-s="done"></span></span>
+            <span class="title">docs sweep</span>
+            <span class="chip">2m</span>
+          </div>
+          <div class="nrow">
+            <span class="lead"><span class="spin" data-spin>⠋</span></span>
+            <span class="title">wire-mockup</span>
+            <span class="chip">just now</span>
+          </div>
+        </div>
+      </div>
+      <div class="zoom-wrap">
+        <span class="zoom-label">4× junction</span>
+        <div class="zoom">
+          <div class="inner">
+            <div class="side cur" style="width:120px;border:0;background:transparent;padding:0">
+              <div class="nlist">
+                <div class="nrow"><span class="lead"><span class="spin" data-spin>⠋</span></span><span class="title">animate</span></div>
+                <div class="nrow"><span class="lead"><span class="spin" data-spin>⠋</span></span><span class="title">public</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- PROPOSED -->
+    <div class="col">
+      <span class="tag tag--new"><span class="pip"></span>Proposed</span>
+      <div class="side new">
+        <div class="phead">
+          <span class="chev">⌄</span>
+          <span class="pname">perch</span>
+          <span class="pcount">4</span>
+        </div>
+        <div class="nlist">
+          <div class="nrow active">
+            <span class="lead"><span class="spin" data-spin>⠋</span></span>
+            <span class="title">animate</span>
+            <span class="chip">17m</span>
+          </div>
+          <div class="nrow">
+            <span class="lead"><span class="spin" data-spin>⠋</span></span>
+            <span class="title">public — let's se…</span>
+            <span class="chip">3m</span>
+          </div>
+          <div class="nrow">
+            <span class="lead"><span class="dot" data-s="done"></span></span>
+            <span class="title">docs sweep</span>
+            <span class="chip">2m</span>
+          </div>
+          <div class="nrow">
+            <span class="lead"><span class="spin" data-spin>⠋</span></span>
+            <span class="title">wire-mockup</span>
+            <span class="chip">just now</span>
+          </div>
+        </div>
+      </div>
+      <div class="zoom-wrap">
+        <span class="zoom-label">4× junction</span>
+        <div class="zoom">
+          <div class="inner">
+            <div class="side new" style="width:120px;border:0;background:transparent;padding:0">
+              <div class="nlist">
+                <div class="nrow"><span class="lead"><span class="spin" data-spin>⠋</span></span><span class="title">animate</span></div>
+                <div class="nrow"><span class="lead"><span class="spin" data-spin>⠋</span></span><span class="title">public</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- NOTES -->
+    <div class="notes">
+      <h3>What changed</h3>
+      <ul>
+        <li><span class="k">Trunk connects.</span> Nested rows carried a <code>1px</code> transparent border, so the trunk stopped 1px shy of each edge — a 2px gap at every junction. Drop the border on nested rows (they never showed a frame) and add it back as padding; the trunk now spans the whole box and touching rows meet.</li>
+        <li><span class="k">Tick reaches the node.</span> The horizontal tick grows <code>7px → 12px</code> so it terminates at the spinner/dot instead of pointing into empty space.</li>
+        <li><span class="k">Spinner sized as the node.</span> <code>11px → 13px</code>, flex-centered in its slot so it sits on the tick line rather than floating above it.</li>
+      </ul>
+      <h3>Files</h3>
+      <ul>
+        <li><code>style.css</code> — <code>.session-item--nested</code> border→padding; <code>::after</code> width; <code>.session-item__spinner</code> size.</li>
+      </ul>
+    </div>
+  </div>
+
+<script>
+  const FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
+  let i = 0;
+  setInterval(() => {
+    i = (i + 1) % FRAMES.length;
+    const ch = FRAMES[i];
+    document.querySelectorAll("[data-spin]").forEach(e => { e.textContent = ch; });
+  }, 100);
+</script>
+</body>
+</html>

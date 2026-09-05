@@ -102,6 +102,10 @@ internal sealed partial class AppController
     // Stateful on purpose: it tails by byte offset, so re-reading a pane after
     // the agent has appended a few rows costs only those rows.
     private readonly TranscriptReader _transcripts = new();
+    /// The same rail, fed from codex's rollout file instead of Claude's
+    /// transcript. Which one a pane uses is decided by which session id it
+    /// carries — see InspectorFor.
+    private readonly CodexTranscriptReader _codexTranscripts = new();
 
     // Above this, we don't pre-cache clipboard text to the page — a giant
     // cross-app copy would be ferried on every clipboard change for a paste
@@ -268,6 +272,18 @@ internal sealed partial class AppController
     // kicked at page-ready and polled by a 5-minute timer (whose ticks the
     // service no-ops until its own 10/30-minute gap elapses).
     private UsageService? _usage;
+    // The local half of the same question, and the only half that has ever
+    // produced an answer: a model Claude actually REFUSED in one of our panes,
+    // read off that pane's transcript. See ModelLimitWatch — the account-wide
+    // endpoint above 429s on every call, so without this the picker never
+    // greyed anything out and a team bot on a maxed model never moved.
+    private readonly ModelLimitWatch _localLimits = new();
+    private IReadOnlyList<ModelUsageLimit> _appliedLimits = Array.Empty<ModelUsageLimit>();
+    private int _limitScanTick;
+    /// pane → (its cc session id, that session's transcript path). See
+    /// SweepModelLimits: locating a transcript can cost a recursive scan, and
+    /// the answer only changes when the session does.
+    private readonly Dictionary<Guid, (string SessionId, string? Path)> _limitPaths = new();
     private CloudController? _cloud;
     private LocalController? _local;
     private IUiTimer? _usageTimer;
@@ -298,6 +314,68 @@ internal sealed partial class AppController
         _projects = ProjectStore.Load();
         // Before BuildRouter: the router registers a handler that reads it.
         _boardCtrl = new BoardController(OwningSession, a => _ui.Post(a));
+        // Host-agnostic on purpose: every native need (posting to the page,
+        // a UI-thread delay) goes through IWebViewHost / IUiThread so the
+        // same controller drives the room on Windows (WPF) and macOS
+        // (Photino). Never reach for a DispatcherTimer or WebView2 here.
+        _teamCtrl = new TeamController(new TeamHost
+        {
+            ProjectById = id => _projects.ById(id),
+            Projects = () => _projects.Projects,
+            SessionById = id => _store.Sessions.FirstOrDefault(s => s.Id == id),
+            Sessions = () => _store.Sessions,
+            ResolveCwd = ResolvePaneCwd,
+            ReadTranscript = (pane, sid, cwd) => _transcripts.Read(pane, sid, cwd),
+            TypeToClaude = TypeToClaude,
+            PressEnter = PressEnterInClaude,
+            Wake = WakeSession,
+            CreateTab = (proj, name, worktree, model, ccName) =>
+                CreateProjectTabAsync(proj, name, "claude", worktree, model, ccName),
+            CloseSession = (id, removeWorktree) =>
+                OnSessionClose(new SessionCloseMsg { Id = id, RemoveWorktree = removeWorktree }),
+            Post = payload => _web.PostJson(JsonSerializer.Serialize(payload)),
+            PushState = PushState,
+            Delay = (action, delay) =>
+            {
+                IUiTimer timer = null!;
+                timer = _ui.CreateTimer(delay, () => { timer.Stop(); timer.Dispose(); action(); });
+                timer.Start();
+            },
+            WriteRaw = (paneId, bytes) => { if (_panes.Has(paneId)) _panes.Write(paneId, bytes); },
+            ClearPrompt = paneId =>
+            {
+                // Same demotion the page's probe applies when a dialog leaves
+                // the screen: the state is a guess again until a hook speaks.
+                var s = OwningSession(paneId);
+                var pane = s == null ? null : FindPane(s, paneId);
+                if (pane == null || pane.AgentState is not (AgentState.Permission or AgentState.Waiting)) return;
+                pane.AgentState = AgentState.Working;
+                pane.StateInferred = true;
+                PushState();
+            },
+            SetPaneModel = (paneId, alias) => OnPaneModel(new PaneModelMsg { PaneId = paneId, Model = alias }),
+            HasPty = paneId => _panes.Has(paneId),
+            EnsureRunning = sess =>
+            {
+                // The lazy spawn only fires when the page lays the pane out,
+                // which never happens for a restored tab nobody has opened.
+                // Arm its resume exactly as waking does, then spawn its
+                // terminals now; the page's first pane.resize just resizes.
+                var cold = AllLeaves(sess.Root).Where(p => p.IsTerminal && !_panes.Has(p.Id)).ToList();
+                if (cold.Count == 0) return;
+                foreach (var p in cold) CancelPendingShutdown(p.Id);
+                if (_settings.ResumeAgentsOnLaunch)
+                {
+                    var resumable = cold.Where(p => Resumable(sess, p)).ToList();
+                    // No "Resuming session" lightbox here: the room's roster
+                    // already says the bot is coming up, and the box would
+                    // land on top of the room the owner is typing in.
+                    foreach (var p in resumable) _armedResumePanes.Add(p.Id);
+                }
+                foreach (var p in cold) SpawnPty(sess, p);
+                Log.Info("Team.start", $"session={sess.Id:N} spawned {cold.Count} cold pane(s) for a room post");
+            },
+        });
         WireBoardController();
         _router = BuildRouter();
         _panes = new PaneManager(_ui, ptyFactory);
@@ -315,11 +393,23 @@ internal sealed partial class AppController
         _panes.AgentSession += OnAgentSession;
         _panes.CloudStamped += OnCloudStamped;
         _panes.PeerMsg += OnPeerMsg;
+        // The team room records the same observed sends (full text) and a
+        // bot's `perch team post` notes; the pair note above stays as it was.
+        _panes.PeerMsg += (s, p, m) => _teamCtrl.OnPeerMsg(s, p, m);
+        _panes.TeamPost += (s, p, m) => _teamCtrl.OnTeamPost(s, p, m);
+        _panes.TeamTask += (s, p, m) => _teamCtrl.OnTeamTask(s, p, m);
+        _panes.TeamAsk += (s, p, m) => _teamCtrl.OnTeamAsk(s, p, m);
+        _panes.TeamReact += (s, p, m) => _teamCtrl.OnTeamReact(s, p, m);
+        _panes.TeamArtefact += (s, p, m) => _teamCtrl.OnTeamArtefact(s, p, m);
+        _panes.PermAsk += (s, p, m) => _teamCtrl.OnPermAsk(s, p, m);
+        _panes.PermDenied += (s, p, m) => _teamCtrl.OnPermDenied(s, p, m);
         // Usage poller for the model picker. Subscribe once here; a new snapshot
         // marshals back to the UI thread and re-pushes state so the menu picks
         // up freshly-disabled models. PushState guards on the webview being up.
         _usage = new UsageService();
-        _usage.Updated += () => _ui.Post(PushState);
+        // Bots move off a model that hit its limit (and back when it lifts);
+        // ApplyModelLimits ends in PushState.
+        _usage.Updated += () => _ui.Post(ApplyModelLimits);
         // Cloud resources. Inert unless gcloud is installed and authenticated.
         // LookupPaneState is the ONLY thing that decides orphan-vs-live: a machine
         // whose agent session no longer maps to a live pane is one nothing is
@@ -343,7 +433,12 @@ internal sealed partial class AppController
         // spawns until the one-time prompt (sent from OnPageReady) is answered.
         // Set here — before the page can send its first pane.resize — so the
         // deferral in OnPaneResize is in effect from the very first measure.
-        if (_settings.ResumeAgentsOnLaunch && AllResumablePanes().Any())
+        var resumableAtLaunch = _settings.ResumeAgentsOnLaunch ? AllResumablePanes().Count() : 0;
+        // Logged because "why didn't it offer to resume?" is otherwise
+        // unanswerable after the fact: the gate depends on a setting AND on
+        // each agent still having the conversation on disk.
+        Log.Info("Resume.gate", $"enabled={_settings.ResumeAgentsOnLaunch} resumable={resumableAtLaunch}");
+        if (resumableAtLaunch > 0)
             _resumeDecisionPending = true;
 
         // Page → host bridge and crash policy. Wired here (not in StartAsync)
@@ -642,7 +737,35 @@ internal sealed partial class AppController
         .Add("local.refresh", () => _ = _local?.RefreshAsync())
         .Add<LocalOpenMsg>("local.open", m => OpenLocalUrl(m.Port))
         .Add<LocalKillMsg>("local.kill", m => _ = _local?.KillAsync(m.Pid))
-        .Add("local.killLingering", () => _ = _local?.KillLingeringAsync());
+        .Add("local.killLingering", () => _ = _local?.KillLingeringAsync())
+        // Team room + new-bot dialog. The four-file rule applies (PageMessages,
+        // here, ProtocolTests, protocol-sync.test.ts).
+        .Add<TeamRequestMsg>("team.request", m => _teamCtrl.OnRequest(m))
+        .Add<TeamPostMsg>("team.post", m => _teamCtrl.OnPost(m))
+        .Add<TeamBotCreateMsg>("team.bot.create", m => _ = _teamCtrl.OnBotCreateAsync(m))
+        .Add<TeamBriefGenerateMsg>("team.brief.generate", m => _teamCtrl.OnBriefGenerate(m))
+        .Add<TeamBriefCancelMsg>("team.brief.cancel", m => _teamCtrl.OnBriefCancel(m))
+        .Add<TeamPositionUpdateMsg>("team.position.update", m => _teamCtrl.OnPositionUpdate(m))
+        .Add<TeamBotRemoveMsg>("team.bot.remove", m => _teamCtrl.OnBotRemove(m))
+        .Add<TeamBotStartMsg>("team.bot.start", m => _ = _teamCtrl.OnBotStartAsync(m))
+        .Add<TeamLeadSetMsg>("team.lead.set", m => _teamCtrl.OnLeadSet(m))
+        .Add<TeamTaskSetMsg>("team.task.set", m => _teamCtrl.OnTaskSet(m))
+        .Add<TeamTaskRenameMsg>("team.task.rename", m => _teamCtrl.OnTaskRename(m))
+        .Add<TeamTaskConfirmMsg>("team.task.confirm", m => _teamCtrl.OnTaskConfirm(m))
+        .Add<TeamTaskRejectMsg>("team.task.reject", m => _teamCtrl.OnTaskReject(m))
+        .Add<TeamTaskCloseMsg>("team.task.close", m => _teamCtrl.OnTaskClose(m))
+        .Add<TeamDeliverRetryMsg>("team.deliver.retry", m => _teamCtrl.OnDeliverRetry(m))
+        .Add<TeamArtefactOpenMsg>("team.artefact.open", m => _teamCtrl.OnArtefactOpen(m))
+        .Add<TeamArtefactListMsg>("team.artefact.list", m => _teamCtrl.OnArtefactList(m))
+        .Add<TeamArtefactTabMsg>("team.artefact.tab", OnArtefactTab)
+        .Add<TeamPermAnswerMsg>("team.perm.answer", m => _teamCtrl.OnPermAnswer(m))
+        .Add<TeamAskAnswerMsg>("team.ask.answer", m => _teamCtrl.OnAskAnswer(m))
+        .Add<TeamImageMsg>("team.image", m => _teamCtrl.OnImage(m))
+        .Add<TeamReactMsg>("team.react", m => _teamCtrl.OnReact(m))
+        .Add<TeamReferenceBrowseMsg>("team.reference.browse", OnTeamReferenceBrowse)
+        .Add<TeamRoomMsg>("team.room", m => _teamCtrl.OnRoom(m))
+        .Add<TeamBotAnswerMsg>("team.bot.answer", m => _teamCtrl.OnBotAnswer(m))
+        .Add<TeamPasteMsg>("team.paste", OnTeamPaste);
 
     private void OnWebMessage(string raw)
     {
@@ -805,8 +928,40 @@ internal sealed partial class AppController
     /// sessions so the launch prompt's count reflects everything resumable.
     private IEnumerable<(Session sess, PaneNode pane)> AllResumablePanes() =>
         _store.Sessions.SelectMany(s => AllLeaves(s.Root).Select(p => (sess: s, pane: p)))
-            .Where(t => !string.IsNullOrEmpty(t.pane.ClaudeSessionId)
-                        && ClaudeTranscripts.Exists(t.pane.ClaudeSessionId!, ResolvePaneCwd(t.sess, t.pane)));
+            .Where(t => Resumable(t.sess, t.pane));
+
+    /// Whether this pane can be put back into the conversation it was in.
+    /// Both agents can resume, and both are checked the same way: a saved id
+    /// AND that agent's own record of it on disk. The on-disk half is what
+    /// stops us firing a resume for a conversation the agent never persisted
+    /// (started, then closed before a turn), which just errors in the pane.
+    private bool Resumable(Session sess, PaneNode pane)
+        => ResumeCommand(pane, ResolvePaneCwd(sess, pane)) != null;
+
+    /// The command that puts this pane back into its conversation, or null when
+    /// there is nothing to resume. Claude wins if a pane somehow carries both
+    /// ids — it's the one the rest of Perch (peer names, the room, the LOC
+    /// chip) is built around.
+    private static string? ResumeCommand(PaneNode pane, string cwd)
+    {
+        if (!string.IsNullOrEmpty(pane.ClaudeSessionId)
+            && ClaudeTranscripts.Exists(pane.ClaudeSessionId!, cwd))
+            return $"claude --resume {pane.ClaudeSessionId}";
+        if (!string.IsNullOrEmpty(pane.CodexSessionId)
+            && (CodexTranscripts.Exists(pane.CodexSessionId)
+                || (pane.CodexTranscriptPath is { Length: > 0 } p && System.IO.File.Exists(p))))
+            return $"codex resume {pane.CodexSessionId}";
+        return null;
+    }
+
+    /// The journal for a pane, read from whichever agent's file backs it. A
+    /// pane carrying a codex thread reads codex's rollout; everything else
+    /// reads Claude's transcript, which is also the right answer for a pane
+    /// with neither (both return null and the rail shows its empty state).
+    private InspectorData? InspectorFor(PaneNode pane, string? claudeSessionId, string cwd)
+        => !string.IsNullOrEmpty(pane.CodexSessionId) && string.IsNullOrEmpty(claudeSessionId)
+            ? _codexTranscripts.Read(pane.Id, pane.CodexSessionId, pane.CodexTranscriptPath)
+            : _transcripts.Read(pane.Id, claudeSessionId, cwd);
 
     /// The cwd a pane spawns in: its own persisted cwd, then the session cwd,
     /// then the configured default. Single source so the resume pre-flight and
@@ -874,7 +1029,7 @@ internal sealed partial class AppController
         {
             var sess = OwningSession(id);
             var pane = sess == null ? null : AllLeaves(sess.Root).FirstOrDefault(p => p.Id == id);
-            if (pane == null || string.IsNullOrEmpty(pane.ClaudeSessionId)) continue;
+            if (pane == null || (string.IsNullOrEmpty(pane.ClaudeSessionId) && string.IsNullOrEmpty(pane.CodexSessionId))) continue;
             _restoreBatch[id] = false;
             panes.Add(new
             {
@@ -1027,9 +1182,9 @@ internal sealed partial class AppController
                 initialCommand = queued;
                 _armedResumePanes.Remove(pane.Id);
             }
-            if (initialCommand == null && _armedResumePanes.Remove(pane.Id) && !string.IsNullOrEmpty(pane.ClaudeSessionId))
+            if (initialCommand == null && _armedResumePanes.Remove(pane.Id) && ResumeCommand(pane, cwd) is { } resume)
             {
-                initialCommand = $"claude --resume {pane.ClaudeSessionId}";
+                initialCommand = resume;
                 NoteRestorePaneResuming(pane.Id);
             }
             // Reassert the pane's model selection to disk so wrap-claude picks
@@ -1042,6 +1197,10 @@ internal sealed partial class AppController
             // Same %TEMP% mechanism as the model state above, for the same
             // reason: the per-pane pipe only runs the other way.
             _boardCtrl.PublishMarkers(sess);
+            // Likewise a team bot's brief (--append-system-prompt-file at the
+            // launch) and the roster its prompt hook injects; cleared for any
+            // pane that isn't a bot's.
+            _teamCtrl.PublishMarkers(sess);
             // Shell.BuildStartupCommandLine injects PERCH_PIPE / PERCH_PANE_ID
             // env vars per-pane so agents inside the shell can call back
             // into our IPC layer (stage 4 reactivates that pipe).
@@ -1171,9 +1330,22 @@ internal sealed partial class AppController
     {
         var pane = FindPane(sess, paneId);
         if (pane == null) return;
+        // Before the coalescing below: the team controller reads the raw hook
+        // (a prompt-submit confirms a typed post; a state change frees a
+        // parked one), and a repeat it would skip can still be that.
+        _teamCtrl.OnAgentStatus(sess, msg);
         var prev = pane.AgentState;
         var newState  = StateProjection.ParseAgentState(msg.State);
         var newDetail = msg.Detail ?? "";
+        // A team bot's permission prompt that the owner already answered from
+        // the room's card: Claude's own "prompt shown" notice can land after
+        // the answer, and no dialog is on screen to dismiss — so it is not a
+        // wait for a person. Keep the pane working.
+        if (newState == AgentState.Permission && _teamCtrl.PromptAnsweredRecently(paneId))
+        {
+            Log.Info("Team.perm.notice", $"pane={paneId:N} prompt notice after a room answer — ignored");
+            newState = AgentState.Working;
+        }
         // Coalesce no-op repeats. PostToolUse fires once per tool — many/sec
         // during agentic work — and almost all are working→working with no
         // detail change. If the authoritative state and detail are unchanged
@@ -1311,6 +1483,70 @@ internal sealed partial class AppController
             }
         }
         if (changed) PushState();
+        // Rate-limit sweep rides this timer rather than owning one: it wants the
+        // same "look at every pane" walk, just far less often. Every 20th tick
+        // (~20 s) is fast enough that a bot moves off a maxed model within one
+        // failed turn, and slow enough that the file reads are invisible.
+        if (++_limitScanTick >= 20) { _limitScanTick = 0; SweepModelLimits(); }
+    }
+
+    /// Read each agent pane's transcript for a "you've reached your X limit"
+    /// refusal, and re-apply the merged limit set when it changed. Also the
+    /// EXPIRY path: ModelLimitWatch.Current() drops holds older than its window,
+    /// so this is what eventually moves a bot back to its preferred model.
+    private void SweepModelLimits()
+    {
+        try
+        {
+            foreach (var sess in _store.Sessions)
+                foreach (var pane in AllLeaves(sess.Root))
+                {
+                    if (!pane.IsTerminal || string.IsNullOrEmpty(pane.ClaudeSessionId)) continue;
+                    var cwd = _paneCwd.TryGetValue(pane.Id, out var c) ? c : pane.Cwd;
+                    if (string.IsNullOrEmpty(cwd)) continue;
+                    // Locate's fallback is a recursive scan of the whole
+                    // projects tree — fine once, not every 20 s on the UI
+                    // thread — so the answer is cached until the pane's cc
+                    // session changes (a relaunch or /clear).
+                    if (!_limitPaths.TryGetValue(pane.Id, out var hit)
+                        || hit.SessionId != pane.ClaudeSessionId)
+                    {
+                        hit = (pane.ClaudeSessionId!, ClaudeTranscripts.Locate(pane.ClaudeSessionId!, cwd!));
+                        _limitPaths[pane.Id] = hit;
+                    }
+                    _localLimits.Scan(hit.Path, pane.Model);
+                }
+        }
+        catch (Exception ex) { Log.Error("ModelLimit.sweep", ex); }
+
+        var now = EffectiveModelLimits();
+        if (SameLimits(now, _appliedLimits)) return;
+        ApplyModelLimits();
+    }
+
+    /// The account-wide limits (usually none — the endpoint 429s) merged with
+    /// the ones we watched a pane get refused for.
+    private IReadOnlyList<ModelUsageLimit> EffectiveModelLimits()
+        => ModelLimitWatch.Merge(_usage?.CurrentLimits(), _localLimits.Current());
+
+    /// Hand the current limit set to the team (bots move off a maxed model and
+    /// back when it frees) and re-push so the picker greys the right rows.
+    private void ApplyModelLimits()
+    {
+        _appliedLimits = EffectiveModelLimits();
+        try { _teamCtrl.OnModelLimits(_appliedLimits); }
+        catch (Exception ex) { Log.Error("Team.model", ex); }
+        PushState();
+    }
+
+    private static bool SameLimits(IReadOnlyList<ModelUsageLimit> a, IReadOnlyList<ModelUsageLimit> b)
+    {
+        if (a.Count != b.Count) return false;
+        foreach (var x in a)
+            if (!b.Any(y => string.Equals(x.Alias, y.Alias, StringComparison.OrdinalIgnoreCase)
+                            && x.ResetsAtMs == y.ResetsAtMs))
+                return false;
+        return true;
     }
 
     // The watchdog's sibling for the BLOCKED states, driven by the page. The
@@ -1434,7 +1670,28 @@ internal sealed partial class AppController
         var pane = FindPane(sess, paneId);
         if (pane == null) return;
         var id = string.IsNullOrWhiteSpace(msg.Id) ? null : msg.Id;
-        if (id != null && pane.ClaudeSessionId != id)
+        // Which agent's id this is. Absent means claude — that's every wrapper
+        // that shipped before codex had hooks, and the field it wrote.
+        var fromCodex = string.Equals(msg.Agent, "codex", StringComparison.OrdinalIgnoreCase);
+        // The model the agent says it is actually on. Arrives on session-start
+        // and, for codex, again on every prompt — so a `/model` typed inside
+        // the TUI is reflected rather than silently disagreeing with the chip.
+        if (!string.IsNullOrWhiteSpace(msg.Model) && pane.AgentModel != msg.Model)
+        {
+            pane.AgentModel = msg.Model!.Trim();
+            _store.Save();
+            PushState();
+        }
+        if (id != null && fromCodex && pane.CodexSessionId != id)
+        {
+            pane.CodexSessionId = id;
+            pane.CodexTranscriptPath = string.IsNullOrWhiteSpace(msg.Path) ? null : msg.Path;
+            // Same reasoning as the claude branch below: a new thread is a
+            // different rollout file, so the parsed tail must go.
+            _codexTranscripts.Forget(paneId);
+            _store.Save();
+        }
+        else if (id != null && !fromCodex && pane.ClaudeSessionId != id)
         {
             pane.ClaudeSessionId = id;
             // A new session is a DIFFERENT transcript. Drop the parsed tail, or
@@ -1450,6 +1707,9 @@ internal sealed partial class AppController
             pane.PeerName = msg.Name;
             _store.Save();
         }
+        // The session's inbox address — what a teammate's reply may be sent
+        // to instead of the name. Transient; a new launch binds a new one.
+        if (!string.IsNullOrWhiteSpace(msg.Socket)) pane.MessagingSocket = msg.Socket!.Trim();
         // A pairing made while this tab's Claude was down: deliver the parked
         // introduction now. A few seconds' delay so the TUI has painted and
         // the typed line lands in a real input box, not the boot noise.
@@ -1470,6 +1730,9 @@ internal sealed partial class AppController
             });
             timer.Start();
         }
+        // A team post parked while this bot's Claude was down lands now, on
+        // the same settle delay as the pairing intro.
+        _teamCtrl.OnAgentUp(sess);
         MarkRestorePaneReady(paneId);
         // cc is listening — but NOT yet painted. This only arms the boot cover's
         // quiet-watch; the cover drops once cc's paint settles and the pane's
@@ -1701,6 +1964,9 @@ internal sealed partial class AppController
         st.Cap?.Stop();
         Log.Info("Setup", $"pane {paneId:N} quiet before session-start ({st.PreSessionBytes}B painted, no hook) — cc is on an interactive prompt (trust/theme/login); uncovering so it can be answered");
         PostToPage(new { type = "pane.setup", paneId = paneId.ToString("D"), show = false, colorIndex = 0 });
+        // A team bot's question goes to the room as a card the owner can
+        // answer without hunting for the terminal.
+        if (OwningSession(paneId) is Session bsess) _teamCtrl.OnPromptStuck(bsess, paneId);
     }
 
     private static void RestartSetupQuiet(SetupState st)
@@ -2170,9 +2436,12 @@ internal sealed partial class AppController
         var pane = sess == null ? null : AllLeaves(sess.Root).FirstOrDefault(p => p.Id == id);
         if (sess == null || pane == null) return;
         // While the launch resume prompt is unanswered, park a resumable
-        // pane's spawn so the prompt gates the first `claude --resume`
-        // instead of racing it. Non-resumable panes spawn immediately.
-        if (_resumeDecisionPending && !string.IsNullOrEmpty(pane.ClaudeSessionId))
+        // pane's spawn so the prompt gates the first resume instead of racing
+        // it. Non-resumable panes spawn immediately. The SAME predicate the
+        // prompt counted with — when this asked only about Claude, a codex
+        // pane spawned a bare shell two seconds before the prompt it was
+        // supposed to be waiting for.
+        if (_resumeDecisionPending && Resumable(sess, pane))
         {
             Log.Info($"Pane.resize.defer pane={id:N} (awaiting resume decision)");
             _deferredSpawns[id] = (cols, rows);
@@ -2238,6 +2507,7 @@ internal sealed partial class AppController
         var next = wasActive ? _store.PickActiveAfter(sess) : null;
 
         _store.SetDormant(sess, true);
+        _teamCtrl.OnSessionSlept(sess);
 
         if (wasActive)
         {
@@ -2263,6 +2533,7 @@ internal sealed partial class AppController
     private void WakeSession(Session sess)
     {
         _store.SetDormant(sess, false);
+        _teamCtrl.OnSessionWoke(sess);
         // A polite exit from the sleep may still be in flight, and Spawn refuses
         // a pane id that still owns a live PTY — cut the grace short or the
         // woken tab comes up dead.
@@ -2271,13 +2542,13 @@ internal sealed partial class AppController
         if (!_settings.ResumeAgentsOnLaunch) return;
         // Only panes whose transcript actually exists — a saved id with no
         // on-disk conversation would just error "No conversation found".
-        var resumable = AllLeaves(sess.Root)
-            .Where(p => !string.IsNullOrEmpty(p.ClaudeSessionId)
-                        && ClaudeTranscripts.Exists(p.ClaudeSessionId!, ResolvePaneCwd(sess, p)))
-            .ToList();
+        var resumable = AllLeaves(sess.Root).Where(p => Resumable(sess, p)).ToList();
         if (resumable.Count == 0) return;
         foreach (var p in resumable) _armedResumePanes.Add(p.Id);
-        BeginRestoreProgress(resumable.Select(p => p.Id).ToList());
+        // A team bot woken from the room shows its progress in the roster;
+        // the lightbox is for tabs the user is about to look at.
+        if (_teamCtrl.BotOfSession(sess.Id) == null)
+            BeginRestoreProgress(resumable.Select(p => p.Id).ToList());
     }
 
     private void OnSessionSelect(SessionRef msg)
@@ -2392,23 +2663,62 @@ internal sealed partial class AppController
     /// title (the name its NEXT launch will use).
     private string PeerNameOf(Session sess)
         => AllLeaves(sess.Root).FirstOrDefault(p => p.IsTerminal && !string.IsNullOrEmpty(p.PeerName))?.PeerName
-           ?? ClaudePeerNames.Sanitize(sess.Title);
+           ?? ClaudePeerNames.ForTitle(sess.Title);
+
+    /// The session's running Claude pane, or null when no Claude is up here.
+    private PaneNode? ClaudePaneOf(Session sess)
+        => AllLeaves(sess.Root).FirstOrDefault(p => p.IsTerminal && p.AgentType == "claude" && _panes.Has(p.Id));
 
     /// Type one line into the session's running Claude pane (the same PTY
     /// mechanism as the /model live switch). False when no running Claude.
     private bool TypeToClaude(Session sess, string line)
     {
-        var pane = AllLeaves(sess.Root)
-            .FirstOrDefault(p => p.IsTerminal && p.AgentType == "claude" && _panes.Has(p.Id));
+        var pane = ClaudePaneOf(sess);
         if (pane == null) return false;
         try
         {
-            _panes.Write(pane.Id, System.Text.Encoding.UTF8.GetBytes(line + "\r"));
+            // The text and the Enter go in SEPARATE writes, a beat apart. A
+            // whole sentence landing in one write trips Claude Code's paste
+            // detection, and an Enter inside a paste is a newline, not a
+            // submit — the line just sat in the input box (seen with a team
+            // post; the pairing intro had the same exposure). 150 ms was not
+            // always enough: two bots got the same post in the same instant,
+            // one submitted, the other's Enter vanished and the line sat there
+            // for three minutes. So the gap is wider, and the team controller
+            // watches the prompt-submit hook and presses Enter again if it
+            // has to (TeamController.CheckSubmitted).
+            var paneId = pane.Id;
+            _panes.Write(paneId, System.Text.Encoding.UTF8.GetBytes(line));
+            IUiTimer timer = null!;
+            timer = _ui.CreateTimer(TimeSpan.FromMilliseconds(400), () =>
+            {
+                timer.Stop();
+                timer.Dispose();
+                try { if (_panes.Has(paneId)) _panes.Write(paneId, new byte[] { (byte)'\r' }); }
+                catch (Exception ex) { Log.Info("Pair", $"enter into {paneId:N} failed: {ex.Message}"); }
+            });
+            timer.Start();
             return true;
         }
         catch (Exception ex)
         {
             Log.Info("Pair", $"type into {pane.Id:N} failed: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// Press Enter in the session's running Claude pane: the retry for a typed
+    /// team post the prompt-submit hook never reported. Harmless on an empty
+    /// input box; the controller never calls it on a pane that is asking
+    /// something (Enter there would be an answer).
+    private bool PressEnterInClaude(Session sess)
+    {
+        var pane = ClaudePaneOf(sess);
+        if (pane == null) return false;
+        try { _panes.Write(pane.Id, new byte[] { (byte)'\r' }); return true; }
+        catch (Exception ex)
+        {
+            Log.Info("Team", $"enter into {pane.Id:N} failed: {ex.Message}");
             return false;
         }
     }
@@ -2453,10 +2763,9 @@ internal sealed partial class AppController
     {
         foreach (var s in _store.Sessions)
             foreach (var p in AllLeaves(s.Root))
-                if (p.IsTerminal && string.Equals(p.PeerName, name, StringComparison.OrdinalIgnoreCase))
+                if (p.IsTerminal && ClaudePeerNames.Matches(p.PeerName, name))
                     return s;
-        return _store.Sessions.FirstOrDefault(
-            s => string.Equals(ClaudePeerNames.Sanitize(s.Title), name, StringComparison.OrdinalIgnoreCase));
+        return _store.Sessions.FirstOrDefault(s => ClaudePeerNames.Matches(s.Title, name));
     }
 
     /// Keep every live pane's --name file equal to its tab title (deduped
@@ -2487,17 +2796,22 @@ internal sealed partial class AppController
                 s.PairNoteAtMs = 0;
             }
 
-            var baseName = ClaudePeerNames.Sanitize(s.Title);
             var ordinal = 0;
             foreach (var p in AllLeaves(s.Root))
             {
                 if (!p.IsTerminal) continue;
                 ordinal++;
+                // A bot's address is pinned at creation and never follows the
+                // title; everything else is the title's slug (the same spelling
+                // the launch command uses, so the hook and the sweep agree).
+                var baseName = !string.IsNullOrWhiteSpace(p.PinnedPeerName)
+                    ? p.PinnedPeerName!
+                    : ClaudePeerNames.ForTitle(s.Title);
                 var suffix = ordinal;
                 string candidate;
                 do
                 {
-                    candidate = suffix <= 1 ? baseName : $"{baseName} {suffix}";
+                    candidate = suffix <= 1 ? baseName : $"{baseName}-{suffix}";
                     suffix++;
                 } while (used.Contains(candidate)
                          || (liveNames.Contains(candidate)
@@ -2534,6 +2848,8 @@ internal sealed partial class AppController
         // agent stops messaging a ghost); the closing side skips its own note —
         // that pane is about to get its polite /exit.
         BreakPair(sess, notifySelf: false, notifyPartner: true);
+        // A bot whose tab closes stays on its team's roster as "not running".
+        _teamCtrl.OnSessionClosed(sess);
         var leaves = AllLeaves(sess.Root).ToList();
 
         var wtPath = sess.WorktreePath;
@@ -2588,10 +2904,7 @@ internal sealed partial class AppController
         {
             // Only arm panes whose transcript actually exists — a saved id with
             // no on-disk conversation would just error "No conversation found".
-            var resumable = AllLeaves(sess.Root)
-                .Where(p => !string.IsNullOrEmpty(p.ClaudeSessionId)
-                            && ClaudeTranscripts.Exists(p.ClaudeSessionId!, ResolvePaneCwd(sess, p)))
-                .ToList();
+            var resumable = AllLeaves(sess.Root).Where(p => Resumable(sess, p)).ToList();
             foreach (var p in resumable) _armedResumePanes.Add(p.Id);
             // Open the lightbox before PushState so it's tracking these panes
             // by the time their spawns (and resumed hooks) fire.
@@ -2663,6 +2976,11 @@ internal sealed partial class AppController
         if (msg.LocalPerchOnly is bool perchOnly && _settings.LocalPerchOnly != perchOnly)
         {
             _settings.LocalPerchOnly = perchOnly;
+            dirty = true;
+        }
+        if (msg.TeamFacesColor is bool faces && _settings.TeamFacesColor != faces)
+        {
+            _settings.TeamFacesColor = faces;
             dirty = true;
         }
         if (dirty) _settings.Save();
@@ -2862,7 +3180,7 @@ internal sealed partial class AppController
 
         try
         {
-            var data = _transcripts.Read(id, sessionId, cwd);
+            var data = InspectorFor(pane, sessionId, cwd);
             var detail = string.IsNullOrEmpty(cwd)
                 ? null
                 : await GitProc.SessionDetailAsync(baseline, cwd, untracked, filter, touched);
@@ -2872,6 +3190,9 @@ internal sealed partial class AppController
                 type = "inspector.data",
                 paneId = id.ToString("D"),
                 hasAgent = data != null,
+                // Which agent's journal this is, so the rail can name it in its
+                // own prose instead of always saying "Claude".
+                agent = pane.AgentType ?? "",
                 events = (data?.Events ?? Array.Empty<InspectorEvent>()).Select(e => new
                 {
                     kind = e.Kind,
@@ -3023,6 +3344,74 @@ internal sealed partial class AppController
 
     private void OnProjectAdd(ProjectAddMsg msg) => AddProject(msg.Path, msg.Name);
 
+    /// A picture pasted into the room's composer. The clipboard is read HERE
+    /// (the page can't reach it), the bitmap saved as PNG under the team's
+    /// local folder, and the path handed back for the composer to attach.
+    /// Same clipboard rules as the board's paste: a locked clipboard is a
+    /// "try again", not an error worth a log.
+    private void OnTeamPaste(TeamPasteMsg msg)
+    {
+        string? path = null, error = null;
+        try
+        {
+            var store = _teamCtrl.StoreFor(msg.ProjectId);
+            // The host reads the clipboard (WPF Clipboard / NSPasteboard) and
+            // hands back PNG bytes; a null tuple is a locked clipboard.
+            var clip = store == null ? null : _host.ReadClipboardForBoard();
+            if (store == null) error = "This project has no team.";
+            else if (clip == null) error = "Couldn't read the clipboard just then. Try again.";
+            else
+            {
+                var png = clip.Value.Png;
+                if (png == null) error = "No picture on the clipboard.";
+                else
+                {
+                    var dir = System.IO.Path.Combine(store.LocalDir, "images");
+                    System.IO.Directory.CreateDirectory(dir);
+                    path = System.IO.Path.Combine(dir, $"paste-{DateTime.Now:yyyyMMdd-HHmmss}.png");
+                    AtomicFile.WriteAllBytes(path, png);
+                    Log.Info("Team.paste", $"project={msg.ProjectId:N} bytes={png.Length} path={path}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Team.paste.clipboard", ex);
+            error = "Couldn't read the clipboard just then. Try again.";
+        }
+        try
+        {
+            _web.PostJson(JsonSerializer.Serialize(new
+            {
+                type = "team.paste.data", projectId = msg.ProjectId.ToString("D"), path, error,
+            }));
+        }
+        catch (Exception ex) { Log.Error("OnTeamPaste.post", ex); }
+    }
+
+    /// The new-bot dialog's "Browse…" for a reference folder. Same native
+    /// picker as adding a project; the answer is keyed by the page's request id
+    /// so a dialog that was closed meanwhile can drop it.
+    private async void OnTeamReferenceBrowse(TeamReferenceBrowseMsg msg)
+    {
+        string? picked = null;
+        try
+        {
+            var proj = _projects.ById(msg.ProjectId);
+            picked = await _host.PickFolderAsync(
+                proj?.Path ?? _settings.ResolveDefaultCwd(), "Reference folder for the brief");
+        }
+        catch (Exception ex) { Log.Error("OnTeamReferenceBrowse", ex); }
+        try
+        {
+            _web.PostJson(JsonSerializer.Serialize(new
+            {
+                type = "team.reference.picked", requestId = msg.RequestId, path = picked,
+            }));
+        }
+        catch (Exception ex) { Log.Error("OnTeamReferenceBrowse.post", ex); }
+    }
+
     private void AddProject(string path, string? name = null)
     {
         var p = _projects.Add(path, name);
@@ -3107,115 +3496,171 @@ internal sealed partial class AppController
             // color comes from the project's unused hues like any other tab.
             if ((msg.Agent ?? "") == "browser")
             {
-                var url = (msg.Url ?? "").Trim();
-                if (url.Length == 0) return;
-                var typed = (msg.Name ?? "").Trim();
-                var bTitle = typed.Length > 0 ? typed : BrowserTabTitle(url);
-                var bs = _store.AddNew();
-                bs.Title = bTitle;
-                bs.IsAutoTitle = typed.Length == 0;   // untyped title may improve later
-                bs.ProjectId = proj.Id;
-                bs.Root.Url = url;
-                bs.Root.ColorIndex = _store.PickUnusedColorForProject(proj.Id);
-                bs.Root.Name = bTitle;
-                // A typed name is the user's; keep it. An auto host-title stays
-                // auto so the webview's <title> can replace it once it loads.
-                bs.Root.IsUserNamed = typed.Length > 0;
-                bs.Root.IsAutoName = typed.Length == 0;
-                PlaceNewTab(bs);
-                _store.ActiveSessionId = bs.Id;
-                _activePaneId = bs.Root.Id;
-                _store.Save();
-                PushState();
+                OpenBrowserTab(proj, (msg.Url ?? "").Trim(), (msg.Name ?? "").Trim());
                 return;
             }
 
-            var name = (msg.Name ?? "").Trim();
-            if (name.Length == 0) name = proj.Name;
-
-            // Worktree first: if it fails we must NOT fall back to opening in the
-            // main checkout. That's the exact collision the worktree prevents (two
-            // agents in one directory silently overwriting each other), so a
-            // failure has to stop the tab, loudly.
-            string cwd = proj.Path, wtPath = "", wtBranch = "";
-            if (msg.Worktree == true)
-            {
-                var (path, branch, error) = await Worktree.CreateAsync(_settings, proj, name);
-                if (error != null || path == null)
-                {
-                    PostToast($"Couldn't create the worktree: {error}", "error", Guid.Empty);
-                    return;
-                }
-                cwd = wtPath = path;
-                wtBranch = branch ?? "";
-            }
-
-            var s = _store.AddNew();
-
-            // Pick the color BEFORE filing the tab under the project. AddNew has
-            // already stamped a globally-unused color on the new leaf, so if it
-            // were already a member of the project, the pick would treat its own
-            // placeholder as "taken" and skip a hue — three tabs came out 0, 2, 3
-            // instead of 0, 1, 2.
-            var colorIndex = _store.PickUnusedColorForProject(proj.Id);
-
-            s.Title = name;
-            s.IsAutoTitle = false;          // a name you typed is never overwritten by OSC 7
-            s.ProjectId = proj.Id;
-            s.Cwd = cwd;
-            s.Root.Cwd = cwd;               // the PANE cwd is what the git signals measure
-            s.WorktreePath = wtPath;
-            s.WorktreeRepo = wtPath.Length > 0 ? proj.Path : "";
-            s.WorktreeBranch = wtBranch;
-            AutoName(s.Root);
-            s.Root.ColorIndex = colorIndex;   // first hue unused by THIS project's tabs
-
-            var agent = msg.Agent ?? "claude";
-            if (agent == "claude")
-            {
-                // Mint the session id ourselves instead of learning it from the
-                // hook afterwards. It makes resume deterministic, and it's what
-                // lets several agents share a repo without `--continue` lassoing
-                // each other's conversations.
-                var sid = Guid.NewGuid().ToString();
-                s.Root.ClaudeSessionId = sid;
-                // --name gets the SLUG, not the raw name. The command is spliced
-                // into the shell's own startup line (pwsh -Command "…"), which
-                // escapes an inner double quote as `" — so `--name "loc diff fix"`
-                // reached claude as the three tokens `"loc`, `diff`, `fix"`, and
-                // the session came up called `"loc`. A slug has no spaces, needs
-                // no quoting, and survives every shell we spawn. (It's also what
-                // Termic passes.) Our own sidebar keeps the name you typed.
-                var ccName = GitProc.Slugify(name);
-                if (ccName.Length == 0) ccName = "tab";
-                _pendingInitialCommand[s.Root.Id] = $"claude --session-id {sid} --name {ccName}";
-                // Creation-time model pick. Set on the PaneNode NOW — the PTY
-                // spawns lazily AFTER the PushState below (page renders → first
-                // pane.resize → SpawnPty), and SpawnPty writes the wrap-claude
-                // state file from pane.Model before starting the shell, so the
-                // very first `claude` launch in this tab gets --model. Clamped
-                // to the same allowlist as pane.model; anything else → default.
-                var modelAlias = (msg.Model ?? "").Trim().ToLowerInvariant();
-                if (modelAlias.Length > 0 && !ModelAliases.Contains(modelAlias)) modelAlias = "";
-                s.Root.Model = modelAlias;
-            }
-            else if (agent == "codex")
-            {
-                _pendingInitialCommand[s.Root.Id] = "codex";
-            }
-
-            PlaceNewTab(s);
-            _store.ActiveSessionId = s.Id;
-            _activePaneId = s.Root.Id;
-            _store.Save();
-            PushState();   // the page renders the stage → pane.resize → lazy spawn
+            await CreateProjectTabAsync(proj, msg.Name, msg.Agent ?? "claude", msg.Worktree == true, msg.Model, null);
         }
         catch (Exception ex) { Log.Error("OnProjectTabNew", ex); }
     }
 
-    // Rename a project, or override what its worktrees get seeded with. Both
-    // optional — only the keys present are applied, so the settings dialog can
-    // send a partial update.
+    /// A tab whose root leaf is a webview rather than a terminal. No name is
+    /// required (the webview auto-titles from its &lt;title&gt;), no worktree, no
+    /// PTY, no agent. Filed under the project so it groups there; the color
+    /// comes from the project's unused hues like any other tab.
+    private void OpenBrowserTab(Project proj, string url, string typedTitle)
+    {
+        if (url.Length == 0) return;
+        var title = typedTitle.Length > 0 ? typedTitle : BrowserTabTitle(url);
+        var bs = _store.AddNew();
+        bs.Title = title;
+        bs.IsAutoTitle = typedTitle.Length == 0;   // untyped title may improve later
+        bs.ProjectId = proj.Id;
+        bs.Root.Url = url;
+        bs.Root.ColorIndex = _store.PickUnusedColorForProject(proj.Id);
+        bs.Root.Name = title;
+        // A typed name is the user's; keep it. An auto host-title stays auto so
+        // the webview's <title> can replace it once it loads.
+        bs.Root.IsUserNamed = typedTitle.Length > 0;
+        bs.Root.IsAutoName = typedTitle.Length == 0;
+        PlaceNewTab(bs);
+        _store.ActiveSessionId = bs.Id;
+        _activePaneId = bs.Root.Id;
+        _store.Save();
+        PushState();
+    }
+
+    /// "Open in a tab" from the room's artefact panel. The page hands us the
+    /// finished document (it owns the markdown renderer and the theme); we put
+    /// it on disk under Perch's own data dir and open a browser tab on it.
+    ///
+    /// The file is named from the artefact id, so opening the same artefact
+    /// twice rewrites one file instead of littering — and re-opening a tab
+    /// saved from a previous run still finds its document.
+    private void OnArtefactTab(TeamArtefactTabMsg msg)
+    {
+        try
+        {
+            var proj = _projects.ById(msg.ProjectId);
+            if (proj == null) return;
+            var html = msg.Html ?? "";
+            if (html.Length == 0) return;
+            // Id comes from our own index, but it lands in a path, so keep it to
+            // the shape we mint: hex. Anything else is a page bug, not a file.
+            var id = new string((msg.Id ?? "").Where(char.IsLetterOrDigit).Take(40).ToArray());
+            if (id.Length == 0) return;
+
+            var dir = System.IO.Path.Combine(AppPaths.DataRoot, "perch", "artefact-tabs");
+            System.IO.Directory.CreateDirectory(dir);
+            var path = System.IO.Path.Combine(dir, id + ".html");
+            AtomicFile.WriteAllText(path, html);
+
+            var title = (msg.Title ?? "").Trim();
+            OpenBrowserTab(proj, new Uri(path).AbsoluteUri, title.Length > 40 ? title.Substring(0, 40) : title);
+            Log.Info("Team.artefact.tab", $"project={proj.Id:N} id={id} chars={html.Length}");
+        }
+        catch (Exception ex) { Log.Error("Team.artefact.tab", ex); }
+    }
+
+    /// Open a named agent tab under a project — the body of "New tab in
+    /// <project>", shared with team-bot creation. `pinnedPeerName`, when
+    /// given, is the session name the tab launches under instead of the
+    /// title's slug (a bot's address, minted unique app-wide by the team
+    /// controller); it is pinned on the pane so a rename never moves it.
+    /// Returns the session, or null when the tab could not be made (the
+    /// reason has already been toasted).
+    private async Task<Session?> CreateProjectTabAsync(
+        Project proj, string? rawName, string agent, bool worktree, string? model, string? pinnedPeerName)
+    {
+        var name = (rawName ?? "").Trim();
+        if (name.Length == 0) name = proj.Name;
+
+        // Worktree first: if it fails we must NOT fall back to opening in the
+        // main checkout. That's the exact collision the worktree prevents (two
+        // agents in one directory silently overwriting each other), so a
+        // failure has to stop the tab, loudly.
+        string cwd = proj.Path, wtPath = "", wtBranch = "";
+        if (worktree)
+        {
+            var (path, branch, error) = await Worktree.CreateAsync(_settings, proj, name);
+            if (error != null || path == null)
+            {
+                PostToast($"Couldn't create the worktree: {error}", "error", Guid.Empty);
+                return null;
+            }
+            cwd = wtPath = path;
+            wtBranch = branch ?? "";
+        }
+
+        var s = _store.AddNew();
+
+        // Pick the color BEFORE filing the tab under the project. AddNew has
+        // already stamped a globally-unused color on the new leaf, so if it
+        // were already a member of the project, the pick would treat its own
+        // placeholder as "taken" and skip a hue — three tabs came out 0, 2, 3
+        // instead of 0, 1, 2.
+        var colorIndex = _store.PickUnusedColorForProject(proj.Id);
+
+        s.Title = name;
+        s.IsAutoTitle = false;          // a name you typed is never overwritten by OSC 7
+        s.ProjectId = proj.Id;
+        s.Cwd = cwd;
+        s.Root.Cwd = cwd;               // the PANE cwd is what the git signals measure
+        s.WorktreePath = wtPath;
+        s.WorktreeRepo = wtPath.Length > 0 ? proj.Path : "";
+        s.WorktreeBranch = wtBranch;
+        AutoName(s.Root);
+        s.Root.ColorIndex = colorIndex;   // first hue unused by THIS project's tabs
+
+        if (agent == "claude")
+        {
+            // Mint the session id ourselves instead of learning it from the
+            // hook afterwards. It makes resume deterministic, and it's what
+            // lets several agents share a repo without `--continue` lassoing
+            // each other's conversations.
+            var sid = Guid.NewGuid().ToString();
+            s.Root.ClaudeSessionId = sid;
+            // --name gets the SLUG, not the raw name. The command is spliced
+            // into the shell's own startup line (pwsh -Command "…"), which
+            // escapes an inner double quote as `" — so `--name "loc diff fix"`
+            // reached claude as the three tokens `"loc`, `diff`, `fix"`, and
+            // the session came up called `"loc`. A slug has no spaces, needs
+            // no quoting, and survives every shell we spawn. (It's also what
+            // Termic passes.) Our own sidebar keeps the name you typed.
+            var ccName = pinnedPeerName ?? ClaudePeerNames.ForTitle(name);
+            // Record the address this launch will answer to, in the SAME
+            // spelling — the sweep and the session-start hook confirm it,
+            // and an observed SendMessage target resolves back to this row.
+            s.Root.PeerName = ccName;
+            s.Root.PinnedPeerName = pinnedPeerName;
+            _pendingInitialCommand[s.Root.Id] = $"claude --session-id {sid} --name {ccName}";
+            // Creation-time model pick. Set on the PaneNode NOW — the PTY
+            // spawns lazily AFTER the PushState below (page renders → first
+            // pane.resize → SpawnPty), and SpawnPty writes the wrap-claude
+            // state file from pane.Model before starting the shell, so the
+            // very first `claude` launch in this tab gets --model. Clamped
+            // to the same allowlist as pane.model; anything else → default.
+            var modelAlias = (model ?? "").Trim().ToLowerInvariant();
+            if (modelAlias.Length > 0 && !ModelAliases.Contains(modelAlias)) modelAlias = "";
+            s.Root.Model = modelAlias;
+        }
+        else if (agent == "codex")
+        {
+            _pendingInitialCommand[s.Root.Id] = "codex";
+        }
+
+        PlaceNewTab(s);
+        _store.ActiveSessionId = s.Id;
+        _activePaneId = s.Root.Id;
+        _store.Save();
+        PushState();   // the page renders the stage → pane.resize → lazy spawn
+        return s;
+    }
+
+    // Rename a project, hide/show it, or override what its worktrees get
+    // seeded with. All optional — only the keys present are applied, so the
+    // settings dialog can send a partial update.
     private void OnProjectUpdate(ProjectUpdateMsg msg)
     {
         var p = _projects.ById(msg.Id);
@@ -3225,6 +3670,11 @@ internal sealed partial class AppController
         if (msg.Name is string n && n.Trim().Length > 0 && p.Name != n.Trim())
         {
             p.Name = n.Trim();
+            dirty = true;
+        }
+        if (msg.Hidden is bool hidden && p.Hidden != hidden)
+        {
+            p.Hidden = hidden;
             dirty = true;
         }
         if (msg.SeedPaths is List<string> seeds)
@@ -3274,6 +3724,7 @@ internal sealed partial class AppController
                 defaultCwdResolved = _settings.ResolveDefaultCwd(),
                 fontSize = _settings.FontSize,
                 resumeAgentsOnLaunch = _settings.ResumeAgentsOnLaunch,
+                teamFacesColor = _settings.TeamFacesColor,
                 newTabPosition = _settings.NewTabPosition,
                 projectScanRoots = _settings.ProjectScanRoots.ToArray(),
                 worktreeRoot = _settings.WorktreeRoot,
@@ -3288,6 +3739,7 @@ internal sealed partial class AppController
                     name = p.Name,
                     path = p.Path,
                     seedPaths = (p.SeedPaths ?? new List<string>()).ToArray(),
+                    hidden = p.Hidden,
                 }).ToArray(),
                 appVersion = _updates?.CurrentVersion,
                 updatable = _updates?.IsUpdatable ?? false,
@@ -3325,6 +3777,11 @@ internal sealed partial class AppController
         if (msg.ResumeAgentsOnLaunch is bool b && _settings.ResumeAgentsOnLaunch != b)
         {
             _settings.ResumeAgentsOnLaunch = b;
+            dirty = true;
+        }
+        if (msg.TeamFacesColor is bool faces && _settings.TeamFacesColor != faces)
+        {
+            _settings.TeamFacesColor = faces;
             dirty = true;
         }
         // Clamped like every other string enum here: an unknown value is
@@ -3681,7 +4138,13 @@ internal sealed partial class AppController
         var pane = AllLeaves(sess.Root).FirstOrDefault(p => p.Id == msg.PaneId);
         if (pane == null) return;
         var alias = (msg.Model ?? "").Trim().ToLowerInvariant();
-        if (alias.Length > 0 && !ModelAliases.Contains(alias)) return;
+        // Two vocabularies behind one picker. A Claude pane takes one of the
+        // four aliases; a codex pane takes a slug out of codex's own catalogue,
+        // checked against that catalogue rather than a character class because
+        // the value ends up on a command line (`codex -m <slug>`). "" means the
+        // account default for both.
+        var forCodex = pane.AgentType == "codex";
+        if (alias.Length > 0 && !(forCodex ? CodexModels.IsKnown(alias) : ModelAliases.Contains(alias))) return;
 
         pane.Model = alias;
         // wrap-claude reads this at the next launch; writing it here (not just
@@ -3694,12 +4157,23 @@ internal sealed partial class AppController
         // `/model` slash command, so type it into the TUI (same mechanism as
         // the /color choreography). Only when cc is actually running here —
         // otherwise the stored selection just waits for the next launch.
+        //
+        // Codex is deliberately NOT switched live. Its `/model` opens a picker
+        // rather than taking the name on the line, so "typing the command"
+        // would leave a menu open in the pane waiting for arrow keys — worse
+        // than not switching. The choice applies at the next launch (the
+        // wrapper passes `-m`), and the header keeps showing what codex says
+        // it is actually running until then, so the two never lie to you.
         if (pane.AgentType == "claude" && _panes.Has(pane.Id))
         {
             var cmd = alias.Length == 0 ? "/model default" : $"/model {alias}";
             try { _panes.Write(pane.Id, System.Text.Encoding.UTF8.GetBytes(cmd + "\r")); }
             catch (Exception ex) { Log.Info("PaneModel", $"live switch skipped: {ex.Message}"); }
         }
+        else if (forCodex && _panes.Has(pane.Id))
+            PostToast(alias.Length == 0
+                ? "Codex will use its default model next time it starts here"
+                : $"Codex will use {alias} next time it starts here", "info", pane.Id);
         PushState();
     }
 
@@ -3786,6 +4260,7 @@ internal sealed partial class AppController
     /// _urlPaneCtrl, because it needs no WebView2 environment — it only reads
     /// and writes files.
     private readonly BoardController _boardCtrl;
+    private readonly TeamController _teamCtrl;
 
     /// Wire the board controller's outbound events to the page. Called from the
     /// constructor; kept separate so the field initializer stays a one-liner.
@@ -3985,6 +4460,7 @@ internal sealed partial class AppController
         // And its board marker, so a temp file left behind can't point a future
         // pane at a board that was never its own.
         BoardController.ClearMarker(id);
+        TeamMarkers.Clear(id);
         var sess = OwningSession(id);
         if (sess == null) return;
         // Closing the only leaf in a session = close the session. The worktree is
@@ -4167,8 +4643,10 @@ internal sealed partial class AppController
             SweepPeerNames();
             var snap = StateProjection.BuildSnapshot(
                 _store, _activePaneId, _settings.FontSize, _settings.OnboardingSeen,
-                _projects, _settings.SidebarMode, _usage?.CurrentLimits(), _settings.InspectorOpen,
-                _settings.WideLayout, _settings.LocalPerchOnly);
+                _projects, _settings.SidebarMode, EffectiveModelLimits(), _settings.InspectorOpen,
+                _settings.WideLayout, _settings.LocalPerchOnly, _teamCtrl.ProjectTeamView,
+                teamFacesColor: _settings.TeamFacesColor,
+                codexModels: CodexModels.List());
             _web.PostJson(JsonSerializer.Serialize(snap));
         }
         catch (Exception ex) { Log.Error("PushState", ex); }
@@ -4373,6 +4851,16 @@ internal sealed partial class AppController
                         foreach (var leaf in AllLeaves(s.Root))
                             if (_panes.TryGet(leaf.Id, out var pty))
                                 Log.Info("FlowStats", $"FLOW pane={leaf.Id:D} max={pty.MaxOutstanding}");
+                }
+                break;
+            case "team.dump":
+                // The project's team plus the room ledger's tail, as one
+                // TEAM_DUMP{json} log line for scripts/test-team.ps1.
+                {
+                    var pid = root.TryGetProperty("projectId", out var pj) && Guid.TryParse(pj.GetString(), out var g)
+                        ? g
+                        : _projects.Projects.FirstOrDefault()?.Id ?? Guid.Empty;
+                    Log.Info("TEAM_DUMP" + _teamCtrl.Dump(pid));
                 }
                 break;
             case "state.dump":

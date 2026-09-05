@@ -42,7 +42,32 @@ if (-not (Test-Path $idFile)) {
   throw "packaging/identity.json missing. Copy identity.example.json to identity.json and fill in the Partner Center values."
 }
 $id = Get-Content $idFile -Raw | ConvertFrom-Json
+
+# Version precedence: -Version > git tag > identity.json.
+#
+# identity.json is gitignored, so a version living only in that file is a
+# version no commit records: the Store and the Velopack channel drift apart
+# and nothing in the repo says which commit a Store user is running. The git
+# tag is the same source build.yml uses for the Velopack channel, so deriving
+# from it keeps both channels on one number. The Store reserves the 4th part,
+# so a 3-part tag (v1.41.0) becomes 1.41.0.0.
+if (-not $Version) {
+  $tag = & git -C $root describe --tags --abbrev=0 2>$null
+  if ($LASTEXITCODE -eq 0 -and $tag -match '^v?(\d+)\.(\d+)\.(\d+)$') {
+    $Version = "$($Matches[1]).$($Matches[2]).$($Matches[3]).0"
+    Write-Host "Version from git tag '$tag': $Version"
+  } else {
+    Write-Warning "No usable git tag; falling back to identity.json Version ($($id.Version))."
+  }
+}
 if ($Version) { $id.Version = $Version }
+# Only the submission artifact has to honour the reserved 4th part. Local
+# sideload testing legitimately bumps it (1.41.0.1, .2, ...) because
+# Add-AppxPackage needs a higher version to upgrade in place, and those builds
+# are self-signed and never leave the machine.
+if (-not $Sign -and $id.Version -notmatch '^\d+\.\d+\.\d+\.0$') {
+  throw "Version '$($id.Version)' must be 4-part with a trailing .0; the Store reserves the 4th part and rejects anything else. (Use -Sign for local test builds, which may bump it.)"
+}
 foreach ($k in 'Name','Publisher','PublisherDisplayName','Version') {
   if (-not $id.$k -or "$($id.$k)" -match 'XXXX|PublisherName|Your Name') {
     throw "identity.json field '$k' is still a placeholder ($($id.$k))."

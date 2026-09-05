@@ -39,6 +39,13 @@ public partial class App : System.Windows.Application
         // it to silence a cosmetic warning.
         try { VelopackApp.Build().Run(); } catch (Exception ex) { Log.Error("Velopack.Run", ex); }
 
+        // Second launch against the same data dir? Focus the window that's
+        // already there and get out. Runs AFTER the Velopack hooks (those are
+        // short-lived non-UI invocations that must still complete during an
+        // update) and BEFORE we touch the console, PATH, or spawn anything, so
+        // a deferred launch leaves no trace.
+        if (!SingleInstance.TryAcquire()) Environment.Exit(0);
+
         // Detach from any inherited console state BEFORE we ever spawn a
         // shell. The danger path: a console parent (`dotnet run`, bash,
         // Tabby) launches us with STARTF_USESTDHANDLES forwarding its
@@ -90,6 +97,22 @@ public partial class App : System.Windows.Application
             }
         }
         catch (Exception ex) { Log.Error("PATH.perchTools", ex); }
+
+        // Perch launched from inside a Claude Code session (a dev running it
+        // from an agent's terminal, a test harness) inherits that session's
+        // markers, and every pane's `claude` then believes it is a CHILD of it:
+        // transcript saving off, no journal, no resume. Scrub the markers here
+        // so children start clean; user configuration (CLAUDE_CONFIG_DIR, the
+        // git-bash path) is deliberately left alone.
+        foreach (var name in new[]
+        {
+            "CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PID",
+            "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_EXECPATH", "CLAUDE_CODE_BRIDGE_SESSION_ID",
+            "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_EFFORT",
+        })
+        {
+            try { Environment.SetEnvironmentVariable(name, null); } catch { }
+        }
 
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
             Log.Error("AppDomain.UnhandledException", e.ExceptionObject as Exception);

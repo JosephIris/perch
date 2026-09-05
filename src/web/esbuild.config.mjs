@@ -54,7 +54,12 @@ const opts = {
   // served at runtime by WebView2's virtual host. esbuild rewrites them
   // verbatim into the output.
   external: ["/fonts/*"],
-  sourcemap: "linked",
+  // Dev only. A "linked" sourcemap in a release build ships app.js.map and
+  // app.css.map inside the installer and the Store package, which is the entire
+  // TypeScript source handed to every user. Production stack traces get worse
+  // (the bundle is minified); rebuild the same commit with --watch when you
+  // need to symbolicate one.
+  sourcemap: watch ? "linked" : false,
   // Minify in non-watch builds — the page load is local, but smaller bundles
   // mean faster startup.
   minify: !watch,

@@ -19,6 +19,7 @@ import { send, onMessage, type InspectorDataMessage, type InspectorEventView,
          type PaneTreeView, type StateMessage } from "./bridge.js";
 import { copyText } from "./clipboard.js";
 import { showToast } from "./toast.js";
+import { appendInline, hhmm } from "./text.js";
 
 // ---- Data layer ------------------------------------------------------------
 // Same request/reply + cache shape as commits.ts. The cache exists so switching
@@ -181,35 +182,8 @@ function compact(n: number): string {
   return `${(n / 1_000_000).toFixed(1)}M`;
 }
 
-/** Local wall-clock "19:32" — the journal is read against the terminal beside
- *  it, and the terminal shows local time. */
-function hhmm(iso: string): string {
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return "";
-  const d = new Date(t);
-  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-}
-
-/** Render the two bits of inline markdown an agent actually uses in prose:
- *  **bold** and `code`. Left raw, they're pure noise — a beat reads as
- *  "**Pushed to home-tools** (branch `user-cache-restrict`)", asterisks and all,
- *  which is worse than either rendering them or stripping them.
- *
- *  Tokenized into DOM nodes rather than assigned as innerHTML: transcript text
- *  is agent output, and agent output is not something we hand to an HTML parser.
- *  Anything more than these two forms (headings, lists, links) stays literal —
- *  a 336px rail is not a markdown viewer. */
-function appendInline(host: HTMLElement, text: string): void {
-  const re = /\*\*([^*]+)\*\*|`([^`]+)`/g;
-  let last = 0;
-  for (let m = re.exec(text); m; m = re.exec(text)) {
-    if (m.index > last) host.append(text.slice(last, m.index));
-    if (m[1] !== undefined) host.appendChild(elText("strong", "beat__strong", m[1]));
-    else host.appendChild(elText("code", "beat__code", m[2]));
-    last = m.index + m[0].length;
-  }
-  if (last < text.length) host.append(text.slice(last));
-}
+// hhmm() and appendInline() live in text.ts now — the team room renders beats
+// with the same tokenizer, so there is exactly one.
 
 // ---- Copy ------------------------------------------------------------------
 // Double-click any row to copy it. The rail is where you read what the agent
@@ -250,6 +224,9 @@ function eventText(e: InspectorEventView): string {
     // on a text clipboard, and its single click already opens the lightbox.
     case "image":
       return "";
+    // A teammate's message: the sender and the whole body.
+    case "peer":
+      return `${e.target}: ${e.text}`;
     default:
       // "Skill deep-research", "Edit GitProc.cs", "Bash dotnet test". Note is
       // the qualifier the row shows beside the target when it has one; the ×N
@@ -257,6 +234,29 @@ function eventText(e: InspectorEventView): string {
       return [e.kind === "skill" ? "Skill" : e.verb, e.target, e.note]
         .filter(Boolean).join(" ");
   }
+}
+
+// NOTE: prompt and beat rows briefly carried a "show in the terminal" button
+// that scrolled the pane to the matching line. It was removed because it can
+// never work: Claude Code renders into the terminal's ALTERNATE screen buffer,
+// which by definition keeps no scrollback, so xterm holds only the ~30 rows cc
+// is painting right now. The journal reads the transcript and is therefore the
+// only place a pane's history exists — there is nothing upstream to jump to.
+
+/** Prompt indices whose turn was stopped before the agent did ANYTHING — the
+ *  very next event is the interrupt. Claude Code's own chat quietly drops
+ *  these, so the journal is the only place they'd still read as asked-and-
+ *  answered; the strike-through says what actually happened. A prompt whose
+ *  turn produced work or prose before the Esc is NOT canceled — it was
+ *  partially executed, and striking it would claim otherwise. Exported for
+ *  test. */
+export function canceledPrompts(
+  events: readonly Pick<InspectorEventView, "kind">[],
+): Set<number> {
+  const out = new Set<number>();
+  for (let i = 0; i < events.length; i++)
+    if (events[i].kind === "prompt" && events[i + 1]?.kind === "interrupt") out.add(i);
+  return out;
 }
 
 /** Rows whose double-click copies. Everything the rail renders as a discrete
@@ -408,7 +408,7 @@ function renderChanges(host: HTMLElement, data: InspectorDataMessage, open: bool
   });
 }
 
-function renderEvent(e: InspectorEventView, i: number): HTMLElement {
+function renderEvent(e: InspectorEventView, i: number, canceled = false): HTMLElement {
   if (e.kind === "interrupt") {
     // You hit Esc / Ctrl-C. Painted as an alarm — red row, "!" badge — so a
     // stopped turn is obvious at a glance instead of hiding as another prompt.
@@ -429,6 +429,12 @@ function renderEvent(e: InspectorEventView, i: number): HTMLElement {
     // (the event list is append-only) so it survives the poll re-render.
     const p = el("div", expanded.has(i) ? "turn-prompt turn-prompt--open" : "turn-prompt");
     p.dataset.i = String(i);
+    // Struck through: this message never ran — the very next event is your
+    // interrupt. cc's own chat quietly drops these; see canceledPrompts.
+    if (canceled) {
+      p.classList.add("turn-prompt--canceled");
+      p.title = "Canceled — you interrupted before the agent responded";
+    }
     p.appendChild(elText("span", "turn-prompt__time", hhmm(e.ts)));
     p.appendChild(elText("span", "turn-prompt__caret", ">"));
     p.appendChild(elText("span", "turn-prompt__text", e.text));
@@ -498,6 +504,22 @@ function renderEvent(e: InspectorEventView, i: number): HTMLElement {
     return row;
   }
 
+  if (e.kind === "peer") {
+    // A teammate's message arriving. Quiet, in the work row's shape: it says
+    // why a turn started that you didn't; the body is a hover away and the
+    // team room shows the exchange in full.
+    const p = el("div", "work work--peer");
+    p.appendChild(elText("span", "work__time", hhmm(e.ts)));
+    p.appendChild(elText("span", "work__rail", "│"));
+    const what = el("span", "work__what");
+    what.appendChild(elText("span", "work__verb", "message from"));
+    what.appendChild(elText("span", "work__target", e.target));
+    p.appendChild(what);
+    if (e.note) p.appendChild(elText("span", "work__note", e.note));
+    p.title = e.text;
+    return p;
+  }
+
   if (e.kind === "skill") {
     // A skill invocation — coloured violet and glyph-marked so a packaged
     // capability reads apart from the dim tool-call texture around it.
@@ -537,14 +559,28 @@ function renderEvent(e: InspectorEventView, i: number): HTMLElement {
  *  Exported for test: this is the whole decision, and it is worth pinning
  *  without standing up a DOM. */
 export function emptyState(
-  data: Pick<InspectorDataMessage, "hasAgent" | "pending">,
+  data: Pick<InspectorDataMessage, "hasAgent" | "pending" | "agent">,
 ): { title: string; body: string } {
   if (data.pending)  return { title: "Reading…", body: "Still waiting on this pane." };
   if (data.hasAgent) return { title: "Nothing yet", body: "The agent hasn't said anything yet." };
+  // Name the agent that IS here when we know it — a codex pane being told to
+  // "start Claude" was the whole complaint. With no agent running, the
+  // invitation names both, because either one fills this rail.
+  const name = agentLabel(data.agent);
   return {
     title: "No agent in this pane",
-    body: "Start Claude here and its work shows up in this rail.",
+    body: name
+      ? `Start ${name} here and its work shows up in this rail.`
+      : "Start Claude or Codex here and its work shows up in this rail.",
   };
+}
+
+/** How an agent is written in prose. "" for a shell pane, where the rail
+ *  should name no one in particular. */
+export function agentLabel(agent: string | undefined): string {
+  if (agent === "claude") return "Claude";
+  if (agent === "codex") return "Codex";
+  return "";
 }
 
 function renderStream(host: HTMLElement, data: InspectorDataMessage): void {
@@ -570,8 +606,9 @@ function renderStream(host: HTMLElement, data: InspectorDataMessage): void {
   // every poll, so without this gate the whole list would re-cascade each tick; a
   // freshly-shown pane (prevEventCount 0) shows its history at rest.
   const fresh = prevEventCount;
+  const canceled = canceledPrompts(data.events);
   data.events.forEach((ev, i) => {
-    const row = renderEvent(ev, i);
+    const row = renderEvent(ev, i, canceled.has(i));
     copySource.set(row, eventText(ev));
     if (fresh > 0 && i >= fresh) row.classList.add("row-enter");
     frag.appendChild(row);
@@ -710,6 +747,11 @@ function apply(data: InspectorDataMessage): void {
   // list, and a poll appending rows below must not move you.
   const pinned = !query && isNearBottom(streamEl);
   const prevTop = streamEl.scrollTop;
+
+  // The "agent messages" chip names whichever agent is in this pane. A chip
+  // reading "Claude" over a codex journal is a small lie the eye trips on.
+  const label = document.getElementById("filter-label-claude");
+  if (label) label.textContent = agentLabel(data.agent) || "Agent";
 
   renderChanges(changesEl, data, changesOpen);
   renderStream(streamEl, data);

@@ -62,8 +62,9 @@ internal interface IWindowHost
     /// locked clipboard — the caller tells the user to retry.
     (byte[]? Png, string? Text)? ReadClipboardForBoard();
 
-    /// Native folder picker; null on cancel.
-    Task<string?> PickFolderAsync(string? initialDir);
+    /// Native folder picker; null on cancel. `title` is the dialog caption
+    /// (null = the host's "Add project" default).
+    Task<string?> PickFolderAsync(string? initialDir, string? title = null);
 
     /// Native multi-select file picker; null/empty on cancel.
     Task<string[]?> PickFilesAsync(string? initialDir);

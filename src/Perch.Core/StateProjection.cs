@@ -80,7 +80,9 @@ internal static class StateProjection
         SessionStore store, Guid? activePaneId, int fontSize, bool onboardingSeen,
         ProjectStore? projects = null, string sidebarMode = "sessions",
         IReadOnlyList<ModelUsageLimit>? modelLimits = null, bool inspectorOpen = true,
-        bool wideLayout = false, bool localPerchOnly = false)
+        bool wideLayout = false, bool localPerchOnly = false,
+        Func<Guid, object?>? teamOf = null, bool teamFacesColor = false,
+        IReadOnlyList<CodexModel>? codexModels = null)
     {
         return new
         {
@@ -91,7 +93,7 @@ internal static class StateProjection
             // Code abbreviates the home dir in its file recaps) into a real
             // file:// URL for the HTML-file link menu.
             homeDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            prefs = new { fontSize, onboardingSeen, sidebarMode, inspectorOpen, wideLayout, localPerchOnly },
+            prefs = new { fontSize, onboardingSeen, sidebarMode, inspectorOpen, wideLayout, localPerchOnly, teamFacesColor },
             // Account-wide model rate limits (usually empty — the endpoint 429s).
             // Only the AT-LIMIT models ship: the picker disables exactly these
             // and annotates each with its reset time. Empty / absent → every
@@ -99,6 +101,13 @@ internal static class StateProjection
             modelLimits = (modelLimits ?? Array.Empty<ModelUsageLimit>())
                 .Where(l => l.AtLimit)
                 .Select(l => new { alias = l.Alias, resetsAtMs = l.ResetsAtMs })
+                .ToArray(),
+            // What the model picker offers on a CODEX pane. Read from codex's
+            // own catalogue rather than hardcoded, so the list can't rot; empty
+            // when codex isn't installed, and the picker then stays hidden for
+            // codex panes exactly as it did before.
+            codexModels = (codexModels ?? Array.Empty<CodexModel>())
+                .Select(m => new { slug = m.Slug, label = m.Label })
                 .ToArray(),
             // Registered repos, for the sidebar's project mode. Ferried with
             // every push like prefs — the list is tiny and the page then never
@@ -108,6 +117,11 @@ internal static class StateProjection
                 id = p.Id.ToString("D"),
                 name = p.Name,
                 path = p.Path,
+                hidden = p.Hidden,
+                // The project's team (bots + positions), or null when it has
+                // none. Bots are also ordinary rows in `sessions`; this is
+                // what lets the sidebar badge them and show the room's door.
+                team = teamOf?.Invoke(p.Id),
             }).ToArray(),
             sessions = store.Sessions.Select(ProjectSession).ToArray(),
             // Recently-closed sessions for the sidebar's restore list. Just
@@ -123,7 +137,10 @@ internal static class StateProjection
                     // Boards excluded: this count answers "how much was running
                     // in that tab", and a board is never running anything.
                     paneCount = leaves.Count(p => !p.IsBoard),
-                    resumableCount = leaves.Count(p => !string.IsNullOrEmpty(p.ClaudeSessionId)),
+                    // Either agent's saved conversation counts — both can be
+                    // resumed, just with different commands (see ResumeCommand).
+                    resumableCount = leaves.Count(p => !string.IsNullOrEmpty(p.ClaudeSessionId)
+                                                    || !string.IsNullOrEmpty(p.CodexSessionId)),
                     closedAtMs = s.ClosedAtUnixMs,
                 };
             }).ToArray(),
@@ -279,10 +296,16 @@ internal static class StateProjection
                 // Which agent runs here ("claude" / "codex" / "") — drives the
                 // small CC badge in the header.
                 agentType = node.AgentType,
-                // Per-pane Claude model selection ("fable"/"opus"/… or "" for
-                // account default) — drives the header's quiet model label and
-                // the checkmark in the model menu.
-                model = node.Model,
+                // The model label under the pane's name. Two sources, and the
+                // agent decides which is true: Perch CHOOSES Claude's (the
+                // alias the user picked, which the launcher passes), so that's
+                // the honest one there — while codex resolves its own and its
+                // user can change it inside the TUI, so for codex the only
+                // truthful answer is what the agent reported. Falls back to the
+                // picked alias when nothing has been reported yet.
+                model = node.AgentType == "codex" && !string.IsNullOrEmpty(node.AgentModel)
+                    ? node.AgentModel
+                    : node.Model,
                 activityDetail = node.ActivityDetail,
                 branch = node.Branch,
                 ports  = node.Ports,

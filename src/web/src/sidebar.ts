@@ -27,6 +27,11 @@ import { elapsedSpan, agoSpan, ageSpan } from "./elapsed.js";
 import { spinnerSpan } from "./spinner.js";
 import { attachCommitsHover, openCommitsLightbox } from "./commits-view.js";
 import { showPairMenu } from "./pair-menu.js";
+import { showProjectMenu } from "./project-menu.js";
+import { showBotMenu } from "./bot-menu.js";
+import { isTeamRoomOpen, openTeamRoom, closeTeamRoom, unreadFor } from "./team-room.js";
+import { teamSummary } from "./team.js";
+import type { TeamBotView } from "./bridge.js";
 
 /** Flatten a pane tree to its leaves. */
 function leaves(node: PaneTreeView): Array<Extract<PaneTreeView, { kind: "leaf" }>> {
@@ -201,7 +206,49 @@ export function groupByProject(
   };
 }
 
+/**
+ * Partitions project groups into the ones the list shows and the ones folded
+ * into the "Hidden" drawer. Hiding is a property of the REGISTRATION (host-
+ * persisted Project.Hidden), not of the tabs: a hidden project keeps its tabs
+ * filed under it — they render inside the drawer when it's open, and while
+ * it's shut the drawer head wears their most-urgent state as a dot, so hiding
+ * a project can never hide an agent that's blocked on you.
+ */
+export function splitHidden(groups: ProjectGroup[]): {
+  shown: ProjectGroup[];
+  hidden: ProjectGroup[];
+} {
+  return {
+    shown: groups.filter((g) => !g.project.hidden),
+    hidden: groups.filter((g) => g.project.hidden),
+  };
+}
+
+/** The right-pointing chevron every fold in the sidebar turns. An SVG, not a
+ *  "›" glyph: the glyph's ink sits off-centre in its em box, so rotating it
+ *  swung the mark around a point that isn't its middle — it visibly lurched
+ *  sideways instead of pivoting. An SVG rotates about the centre of its own
+ *  viewBox. Callers set the data attribute their CSS turns on. */
+function chevronSvg(className: string): SVGSVGElement {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("class", className);
+  svg.setAttribute("viewBox", "0 0 12 12");
+  svg.setAttribute("width", "12");
+  svg.setAttribute("height", "12");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", "M4.5 2.5 L8 6 L4.5 9.5");   // points right; CSS turns it down
+  path.setAttribute("stroke", "currentColor");
+  path.setAttribute("stroke-width", "1.4");
+  path.setAttribute("stroke-linecap", "round");
+  path.setAttribute("stroke-linejoin", "round");
+  svg.appendChild(path);
+  return svg;
+}
+
 const COLLAPSED_KEY = "perch.projects.collapsed";
+const CLOSED_MIN_KEY = "perch.closed.min";
 
 export class Sidebar {
   private readonly listEl: HTMLElement;
@@ -235,6 +282,32 @@ export class Sidebar {
   /** Same one-render opt-in as `justToggled`, for the Idle chevron. */
   private justToggledIdle: string | null = null;
 
+  /** Projects whose "Bots" drawer is open. Not persisted, like `idleOpen`:
+   *  the room is where you talk to the team, so the drawer starts shut every
+   *  launch. It does open by itself when a bot's tab becomes the active one
+   *  (the room's roster sent you there), so the selection isn't invisible. */
+  private readonly botsOpen = new Set<string>();
+
+  /** Same one-render opt-in as `justToggled`, for the Bots chevron. */
+  private justToggledBots: string | null = null;
+
+  /** The active tab as of the last render — to notice it MOVING to a bot. */
+  private lastActiveId = "";
+
+  /** Whether the "Hidden" drawer (hidden projects) is unfolded. NOT persisted,
+   *  same reasoning as `idleOpen`: hidden is the resting state you chose, and a
+   *  peek that outlived the session would just be the full list again, one
+   *  launch later. */
+  private hiddenOpen = false;
+
+  /** "Recently closed" minimized to its title row. Persisted (localStorage),
+   *  unlike the drawers: it's a standing layout choice — you shrank the list
+   *  to reclaim sidebar height, and it should stay shrunk next launch. */
+  private closedMin = false;
+
+  /** Same one-render opt-in as `justToggled`, for the drawer chevron. */
+  private justToggledHidden = false;
+
   /** Idle count per project as of the LAST render, so a slept tab can bump the
    *  count on a CLOSED group — where the count is the only signal that anything
    *  happened. Cleared per render like the toggles above. */
@@ -260,12 +333,18 @@ export class Sidebar {
    *  live tab as a candidate, not just the sub-list its row rendered from. */
   private allSessions: SessionView[] = [];
 
+  /** Which sessions are team bots (and under which project) — a bot's row
+   *  wears its position and opens the bot menu instead of the pair menu.
+   *  Rebuilt from `projects[].team` on every render. */
+  private botBySession = new Map<string, { bot: TeamBotView; project: ProjectView }>();
+
   constructor(listEl: HTMLElement, newSessionBtn: HTMLElement, closedEl: HTMLElement) {
     this.listEl = listEl;
     this.newSessionBtn = newSessionBtn;
     this.closedEl = closedEl;
 
     this.newSessionBtn.addEventListener("click", () => {
+      closeTeamRoom();   // the new tab is where you're going
       send({ type: "session.new" });
     });
 
@@ -282,6 +361,11 @@ export class Sidebar {
       if (raw) for (const id of JSON.parse(raw) as string[]) this.collapsed.add(id);
     } catch {
       /* corrupt/unavailable storage → start expanded. Not worth failing over. */
+    }
+    try {
+      this.closedMin = localStorage.getItem(CLOSED_MIN_KEY) === "1";
+    } catch {
+      /* unavailable storage → start expanded */
     }
   }
 
@@ -376,6 +460,15 @@ export class Sidebar {
     mode: SidebarMode = "sessions"
   ) {
     this.allSessions = sessions;
+    this.botBySession = new Map();
+    for (const p of projects)
+      for (const bot of p.team?.bots ?? [])
+        if (bot.sessionId) this.botBySession.set(bot.sessionId, { bot, project: p });
+    if (activeId !== this.lastActiveId) {
+      this.lastActiveId = activeId;
+      const b = this.botBySession.get(activeId);
+      if (b) this.botsOpen.add(b.project.id);
+    }
     this.renderClosed(closed);
     this.markRegrouped(sessions);
     const modeChanged = this.lastMode !== null && mode !== this.lastMode;
@@ -470,6 +563,7 @@ export class Sidebar {
       return;
     }
     this.closedEl.hidden = false;
+    this.closedEl.classList.toggle("recently-closed--min", this.closedMin);
 
     const frag = document.createDocumentFragment();
 
@@ -482,14 +576,48 @@ export class Sidebar {
     count.className = "recently-closed__count";
     count.textContent = String(closed.length);
     header.append(label, count);
+
+    // Minimize ⇄ restore. Minimized, the section is just this title row stuck
+    // above the footer — the count still says how much is stashed in it.
+    const min = document.createElement("button");
+    min.type = "button";
+    min.className = "recently-closed__min";
+    const minTitle = this.closedMin ? "Show the recently closed list" : "Minimize to the title";
+    min.title = minTitle;
+    min.setAttribute("aria-label", minTitle);
+    min.setAttribute("aria-expanded", String(!this.closedMin));
+    const chev = chevronSvg("recently-closed__min-chev");
+    chev.dataset.min = String(this.closedMin);
+    min.appendChild(chev);
+    min.addEventListener("click", (ev) => {
+      ev.stopPropagation();   // the minimized header is itself a toggle target
+      this.toggleClosedMin();
+    });
+    header.appendChild(min);
+
+    // Minimized, the whole title row is the way back — a bar that begs to be
+    // clicked shouldn't make you hunt for its one 16px button.
+    if (this.closedMin) header.addEventListener("click", () => this.toggleClosedMin());
     frag.appendChild(header);
 
-    const list = document.createElement("div");
-    list.className = "recently-closed__list";
-    for (const c of closed) list.appendChild(this.renderClosedRow(c));
-    frag.appendChild(list);
+    if (!this.closedMin) {
+      const list = document.createElement("div");
+      list.className = "recently-closed__list";
+      for (const c of closed) list.appendChild(this.renderClosedRow(c));
+      frag.appendChild(list);
+    }
 
     this.closedEl.replaceChildren(frag);
+  }
+
+  private toggleClosedMin(): void {
+    this.closedMin = !this.closedMin;
+    try {
+      localStorage.setItem(CLOSED_MIN_KEY, this.closedMin ? "1" : "0");
+    } catch {
+      /* best-effort */
+    }
+    this.rerender?.();
   }
 
   private renderClosedRow(c: ClosedSessionView): HTMLElement {
@@ -591,44 +719,22 @@ export class Sidebar {
     // of the session list. The two modes now answer different questions, and
     // Sessions mode (one click away) is where an unfiled session lives.
     const { groups } = groupByProject(sessions, projects);
+    const { shown, hidden } = splitHidden(groups);
 
-    for (const { project, tabs } of groups) {
-      const collapsed = this.collapsed.has(project.id);
-      const animate = this.justToggled === project.id;
-      frag.appendChild(
-        this.projectHeader(project, tabs, collapsed, aggregateState(tabs), animate)
-      );
-      // Collapsed means collapsed — every tab folds away, including the active
-      // one. Keeping the active tab visible under a closed chevron made the
-      // control contradict itself: the arrow said "shut" while a row sat right
-      // below it. You don't lose your place — the pane header and status bar
-      // still name the session — and an agent that needs you can't hide, because
-      // the header wears its group's state as a dot.
-      if (!collapsed && tabs.length) {
-        // Tabs you deliberately slept live in their own drawer at the foot of
-        // the branch, so the active list only ever shows work in progress.
-        // Both partitions are stable, so each keeps the host's order — which
-        // for these two runs already means newest-first (see PlaceAtProjectTop
-        // / PlaceAtDormantTop).
-        const live = tabs.filter((t) => !t.dormant);
-        const idle = tabs.filter((t) => t.dormant);
+    for (const g of shown) this.appendGroup(frag, g, activeId);
 
-        if (live.length) {
-          const list = this.sessionList(live, activeId, true);
-          // A drawer below means the branch keeps going — don't close the elbow.
-          if (idle.length) list.classList.add("session-list--continues");
-          // Only the just-unfolded group animates in. (Folding shut is immediate:
-          // animating a removal means keeping the node alive past its state, and a
-          // fold that lingers reads as lag, not polish.)
-          if (animate) list.classList.add("session-list--enter");
-          frag.appendChild(list);
-        }
-        if (idle.length) frag.appendChild(this.idleGroup(project.id, idle, activeId));
-        this.lastIdleCount.set(project.id, idle.length);
-      }
+    // Projects you've hidden fold into one drawer at the foot of the list.
+    // Open, they render as normal (dimmed) groups so their tabs stay
+    // reachable; right-click a header to show the project again.
+    if (hidden.length) {
+      frag.appendChild(this.hiddenDrawer(hidden));
+      if (this.hiddenOpen) for (const g of hidden) this.appendGroup(frag, g, activeId);
     }
+
     this.justToggled = null;   // one render only
     this.justToggledIdle = null;
+    this.justToggledBots = null;
+    this.justToggledHidden = false;
 
     // A PERMANENT way to add another project. This used to live only in the
     // empty state — which vanishes the moment you register your first repo, so
@@ -636,6 +742,172 @@ export class Sidebar {
     // and have nothing anywhere to act on them.
     frag.appendChild(this.renderAddProject());
     return frag;
+  }
+
+  /** One project group: its header plus (unless collapsed) the live tab list
+   *  and Idle drawer. Shared by the visible list and the open Hidden drawer,
+   *  so a hidden project's group renders exactly like a shown one. */
+  private appendGroup(
+    frag: DocumentFragment,
+    { project, tabs }: ProjectGroup,
+    activeId: string
+  ): void {
+    const collapsed = this.collapsed.has(project.id);
+    const animate = this.justToggled === project.id;
+    frag.appendChild(
+      this.projectHeader(project, tabs, collapsed, aggregateState(tabs), animate)
+    );
+    // The door to the room, directly under the header when the project has
+    // bots. Stays visible when the group is folded: it's the one row that
+    // summarizes the team, and an unread count must not fold out of sight.
+    const bots = project.team?.bots ?? [];
+    if (bots.length > 0) frag.appendChild(this.teamRow(project, bots));
+    // Collapsed means collapsed — every tab folds away, including the active
+    // one. Keeping the active tab visible under a closed chevron made the
+    // control contradict itself: the arrow said "shut" while a row sat right
+    // below it. You don't lose your place — the pane header and status bar
+    // still name the session — and an agent that needs you can't hide, because
+    // the header wears its group's state as a dot.
+    if (!collapsed && tabs.length) {
+      // A bot's tab lives under the team row, behind a "Bots" chevron that
+      // starts shut: the room is where you talk to the team, and a row per
+      // bot in the main list invites focusing on one — the opposite of the
+      // point. Slept bots fold in there too, not in Idle.
+      const botTabs = tabs.filter((t) => this.botBySession.has(t.id));
+      const own = tabs.filter((t) => !this.botBySession.has(t.id));
+      // Tabs you deliberately slept live in their own drawer at the foot of
+      // the branch, so the active list only ever shows work in progress.
+      // Both partitions are stable, so each keeps the host's order — which
+      // for these two runs already means newest-first (see PlaceAtProjectTop
+      // / PlaceAtDormantTop).
+      const live = own.filter((t) => !t.dormant);
+      const idle = own.filter((t) => t.dormant);
+
+      if (botTabs.length)
+        frag.appendChild(this.botsGroup(project.id, botTabs, activeId, live.length + idle.length > 0));
+
+      if (live.length) {
+        const list = this.sessionList(live, activeId, true);
+        // A drawer below means the branch keeps going — don't close the elbow.
+        if (idle.length) list.classList.add("session-list--continues");
+        // Only the just-unfolded group animates in. (Folding shut is immediate:
+        // animating a removal means keeping the node alive past its state, and a
+        // fold that lingers reads as lag, not polish.)
+        if (animate) list.classList.add("session-list--enter");
+        frag.appendChild(list);
+      }
+      if (idle.length) frag.appendChild(this.idleGroup(project.id, idle, activeId));
+      this.lastIdleCount.set(project.id, idle.length);
+    }
+  }
+
+  /** The project's "Team room" row: a people glyph, the name, a one-line
+   *  summary ("2 working · 1 waiting"), and an unread count. Wears the
+   *  selected pill while the room is open — the room is what's on screen, so
+   *  the row that opened it reads as the current selection. */
+  private teamRow(p: ProjectView, bots: TeamBotView[]): HTMLElement {
+    const open = isTeamRoomOpen(p.id);
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "team-row" + (open ? " team-row--active" : "");
+    row.dataset.projectId = p.id;
+    row.title = `Open ${p.name}'s team room`;
+    row.setAttribute("aria-pressed", String(open));
+
+    const glyph = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    glyph.setAttribute("class", "team-row__glyph");
+    glyph.setAttribute("width", "14");
+    glyph.setAttribute("height", "14");
+    glyph.setAttribute("viewBox", "0 0 24 24");
+    glyph.setAttribute("fill", "none");
+    glyph.setAttribute("stroke", "currentColor");
+    glyph.setAttribute("stroke-width", "1.7");
+    glyph.setAttribute("stroke-linecap", "round");
+    glyph.setAttribute("stroke-linejoin", "round");
+    glyph.setAttribute("aria-hidden", "true");
+    for (const d of [
+      "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2",
+      "M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
+      "M22 21v-2a4 4 0 0 0-3-3.87",
+      "M16 3.13a4 4 0 0 1 0 7.75",
+    ]) {
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("d", d);
+      glyph.appendChild(path);
+    }
+    row.appendChild(glyph);
+
+    const text = document.createElement("span");
+    text.className = "team-row__text";
+    const name = document.createElement("span");
+    name.className = "team-row__name";
+    name.textContent = "Team room";
+    text.appendChild(name);
+    const summary = teamSummary(bots, this.allSessions);
+    if (summary) {
+      const sub = document.createElement("span");
+      sub.className = "team-row__summary";
+      sub.textContent = summary;
+      text.appendChild(sub);
+    }
+    row.appendChild(text);
+
+    const unread = unreadFor(p.id);
+    if (unread > 0) {
+      const badge = document.createElement("span");
+      badge.className = "team-row__unread";
+      badge.textContent = unread > 99 ? "99+" : String(unread);
+      badge.title = `${unread} new in the room`;
+      row.appendChild(badge);
+    }
+
+    row.addEventListener("click", () => {
+      if (open) closeTeamRoom();
+      else openTeamRoom(p.id);
+    });
+    return row;
+  }
+
+  /** The "Hidden" drawer head: every hidden project folded into one quiet row.
+   *  Shut, it wears the hidden tabs' most-urgent state as a dot — hiding a
+   *  project must never be able to hide an agent that's blocked on you, the
+   *  same rule the collapsed header dot enforces. */
+  private hiddenDrawer(hidden: ProjectGroup[]): HTMLElement {
+    const open = this.hiddenOpen;
+    const head = document.createElement("button");
+    head.type = "button";
+    head.className = "hidden-drawer__head";
+    head.setAttribute("aria-expanded", String(open));
+
+    const chev = chevronSvg("hidden-drawer__chev");
+    chev.dataset.open = String(open);
+    if (this.justToggledHidden) chev.classList.add("hidden-drawer__chev--turning");
+    head.appendChild(chev);
+
+    const label = document.createElement("span");
+    label.textContent = "Hidden";
+    head.appendChild(label);
+
+    const count = document.createElement("span");
+    count.className = "hidden-drawer__count";
+    count.textContent = String(hidden.length);
+    head.appendChild(count);
+
+    const state = aggregateState(hidden.flatMap((g) => g.tabs));
+    if (!open && state !== "idle") {
+      const dot = document.createElement("span");
+      dot.className = "hidden-drawer__state";
+      dot.dataset.state = state;
+      dot.title = `Hidden projects: ${state}`;
+      head.appendChild(dot);
+    }
+
+    head.addEventListener("click", () => {
+      this.hiddenOpen = !this.hiddenOpen;
+      this.justToggledHidden = true;   // animate the chevron, this render only
+      this.rerender?.();
+    });
+    return head;
   }
 
   // `nested` = a project's tab list. Denser than the flat session list: the
@@ -707,8 +979,19 @@ export class Sidebar {
     const tabCount = tabs.length;
     const row = document.createElement("div");
     row.className = "project-header";
+    // Inside the open Hidden drawer the group renders in full, just dimmed —
+    // enough to say "you put this away" without making its tabs second-class.
+    if (p.hidden) row.classList.add("project-header--hidden");
     row.dataset.projectId = p.id;
     row.draggable = true;   // drag-reorder handle for the whole group
+
+    // Right-click: hide the project (or show it again). The one header action
+    // that shouldn't spend a permanent button on itself.
+    row.addEventListener("contextmenu", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      showProjectMenu(ev.clientX, ev.clientY, p);
+    });
 
     // The header body is the collapse toggle. A button (not the whole row) so
     // the "+" stays independently clickable and keyboard-reachable.
@@ -724,25 +1007,8 @@ export class Sidebar {
     toggle.disabled = empty;
     if (!empty) toggle.setAttribute("aria-expanded", String(!collapsed));
 
-    // An SVG chevron, not a "›" glyph. The glyph's ink sits off-centre in its em
-    // box, so rotating it swung the mark around a point that isn't its middle —
-    // it visibly lurched sideways instead of pivoting. An SVG rotates about the
-    // centre of its own viewBox, which is what the eye expects.
-    const chev = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    chev.setAttribute("class", "project-header__chev");
-    chev.setAttribute("viewBox", "0 0 12 12");
-    chev.setAttribute("width", "12");
-    chev.setAttribute("height", "12");
-    chev.setAttribute("fill", "none");
-    chev.setAttribute("aria-hidden", "true");
+    const chev = chevronSvg("project-header__chev");
     chev.dataset.collapsed = String(collapsed);
-    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    path.setAttribute("d", "M4.5 2.5 L8 6 L4.5 9.5");   // points right; CSS turns it down
-    path.setAttribute("stroke", "currentColor");
-    path.setAttribute("stroke-width", "1.4");
-    path.setAttribute("stroke-linecap", "round");
-    path.setAttribute("stroke-linejoin", "round");
-    chev.appendChild(path);
     if (animate) chev.classList.add("project-header__chev--turning");
     // Keep the slot even when empty, so names stay aligned down the column.
     if (empty) chev.style.visibility = "hidden";
@@ -830,19 +1096,8 @@ export class Sidebar {
     head.className = "idle-group__head";
     head.setAttribute("aria-expanded", String(open));
 
-    const chev = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    chev.setAttribute("class", "idle-group__chev");
-    chev.setAttribute("viewBox", "0 0 12 12");
-    chev.setAttribute("fill", "none");
-    chev.setAttribute("aria-hidden", "true");
+    const chev = chevronSvg("idle-group__chev");
     chev.dataset.open = String(open);
-    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    path.setAttribute("d", "M4.5 2.5 L8 6 L4.5 9.5");
-    path.setAttribute("stroke", "currentColor");
-    path.setAttribute("stroke-width", "1.4");
-    path.setAttribute("stroke-linecap", "round");
-    path.setAttribute("stroke-linejoin", "round");
-    chev.appendChild(path);
     if (this.justToggledIdle === projectId) chev.classList.add("idle-group__chev--turning");
     head.appendChild(chev);
 
@@ -872,6 +1127,69 @@ export class Sidebar {
       const list = this.sessionList(idle, activeId, true);
       list.classList.add("session-list--idle");
       if (this.justToggledIdle === projectId) list.classList.add("session-list--enter");
+      wrap.appendChild(list);
+    }
+    return wrap;
+  }
+
+  /** A project's "Bots" drawer: the team's tabs, folded under the team row.
+   *  Same drawer as Idle (same classes, same chevron), shut by default. When
+   *  ordinary tabs follow it (`continues`) the tree's trunk runs on through.
+   *
+   *  Shut, the head wears the bots' most urgent state as a dot — folding
+   *  them away must never hide one that's blocked on you. */
+  private botsGroup(
+    projectId: string,
+    bots: SessionView[],
+    activeId: string,
+    continues: boolean
+  ): HTMLElement {
+    const open = this.botsOpen.has(projectId);
+    const wrap = document.createElement("div");
+    wrap.className = "idle-group idle-group--bots" + (continues ? " idle-group--mid" : "");
+
+    const head = document.createElement("button");
+    head.type = "button";
+    head.className = "idle-group__head";
+    head.setAttribute("aria-expanded", String(open));
+    head.title = open ? "Hide the bots' tabs" : "Show the bots' tabs";
+
+    const chev = chevronSvg("idle-group__chev");
+    chev.dataset.open = String(open);
+    if (this.justToggledBots === projectId) chev.classList.add("idle-group__chev--turning");
+    head.appendChild(chev);
+
+    const label = document.createElement("span");
+    label.textContent = "Bots";
+    head.appendChild(label);
+
+    const count = document.createElement("span");
+    count.className = "idle-group__count";
+    count.textContent = String(bots.length);
+    head.appendChild(count);
+
+    const state = aggregateState(bots);
+    if (!open && state !== "idle") {
+      const dot = document.createElement("span");
+      dot.className = "idle-group__state";
+      dot.dataset.state = state;
+      dot.title = `Bots: ${state}`;
+      head.appendChild(dot);
+    }
+
+    head.addEventListener("click", () => {
+      if (open) this.botsOpen.delete(projectId);
+      else this.botsOpen.add(projectId);
+      this.justToggledBots = projectId;
+      this.rerender?.();
+    });
+    wrap.appendChild(head);
+
+    if (open) {
+      const list = this.sessionList(bots, activeId, true);
+      list.classList.add("session-list--bots");
+      if (continues) list.classList.add("session-list--continues");
+      if (this.justToggledBots === projectId) list.classList.add("session-list--enter");
       wrap.appendChild(list);
     }
     return wrap;
@@ -1000,10 +1318,14 @@ export class Sidebar {
 
     // Right-click: pair this tab with another (or unpair). The one row action
     // that isn't a hover button — it needs a target list.
+    const teamBot = this.botBySession.get(s.id);
     item.addEventListener("contextmenu", (ev) => {
       ev.preventDefault();
       ev.stopPropagation();
-      showPairMenu(ev.clientX, ev.clientY, s, this.allSessions);
+      // A bot's row offers the bot actions (edit brief, remove); pairing is
+      // for ordinary tabs — a bot already has its whole team to talk to.
+      if (teamBot) showBotMenu(ev.clientX, ev.clientY, teamBot.project, teamBot.bot);
+      else showPairMenu(ev.clientX, ev.clientY, s, this.allSessions);
     });
 
     // Status column. At rest it's the state dot (CSS colors it via
@@ -1024,7 +1346,12 @@ export class Sidebar {
     } else {
       statusEl = document.createElement("span");
       statusEl.className = "session-item__dot";
-      statusEl.dataset.state = s.agentState;
+      // A slept tab keeps whatever agentState it wore when you slept it — and
+      // you usually sleep one right after the agent hands the turn back, so the
+      // row lands in the Idle drawer still showing a green "done" dot. Inside a
+      // drawer literally labelled Idle that reads as live. Dormant outranks the
+      // agent state: the agent isn't running, so it has no state to report.
+      statusEl.dataset.state = s.dormant ? "dormant" : s.agentState;
     }
     // Status column is a fixed 10px slot (keeps every title left-aligned). A tab
     // that owns a live dev server gets a small amber "serving" pip in the corner
@@ -1051,6 +1378,15 @@ export class Sidebar {
     title.className = "session-item__title";
     title.textContent = s.title;
     primary.appendChild(title);
+    // A team bot's row names its position, quietly, after the nickname —
+    // the roster in the room is the full picture; this just says "bot" here.
+    if (teamBot) {
+      const pos = document.createElement("span");
+      pos.className = "session-item__pos";
+      pos.textContent = teamBot.bot.positionName;
+      pos.title = `${teamBot.bot.nickname} · ${teamBot.bot.positionName}`;
+      primary.appendChild(pos);
+    }
     item.appendChild(primary);
 
     // The tab's /color tag deliberately does NOT mark the sidebar row: we
@@ -1298,6 +1634,9 @@ export class Sidebar {
     item.appendChild(close);
 
     item.addEventListener("click", () => {
+      // The tab is where you're going: the team room (if it's up) lifts so
+      // the workspace under it shows, even when this tab is already active.
+      closeTeamRoom();
       if (!active) send({ type: "session.select", id: s.id });
     });
 

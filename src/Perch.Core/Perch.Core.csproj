@@ -21,6 +21,19 @@
        here with the rest of the portable code. -->
   <ItemGroup>
     <Compile Include="..\..\tools\perch-cli\GcloudLabels.cs" Link="GcloudLabels.cs" />
+    <!-- Same reason for BinResolver: the host's own PATH is prefixed with its
+         tools dir (App.xaml.cs / Program.cs), so a headless `claude -p`
+         launched from the host would resolve to our claude shim. The resolver
+         that skips every perch tools dir is the one the shim already trusts. -->
+    <Compile Include="..\..\tools\perch-cli\BinResolver.cs" Link="BinResolver.cs" />
+    <!-- And PeerVerdict: the hook decides whether a bot's SendMessage landed,
+         the room shows that verdict, and both must read a response the same
+         way — so the rule lives once, here, where Perch.Tests can reach it. -->
+    <Compile Include="..\..\tools\perch-cli\PeerVerdict.cs" Link="PeerVerdict.cs" />
+    <!-- And CodexPatch, for the same reason: a codex edit names its files only
+         inside the patch text, and that parse decides both what the pane says
+         it is doing and which files its line counts are billed for. -->
+    <Compile Include="..\..\tools\perch-cli\CodexPatch.cs" Link="CodexPatch.cs" />
   </ItemGroup>
 
 </Project>

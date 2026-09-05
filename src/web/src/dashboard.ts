@@ -15,6 +15,7 @@ import type { PaneTreeView, SessionView, AgentStateName } from "./bridge.js";
 import { send, bytesToB64 } from "./bridge.js";
 import { elapsedSpan, agoSpan } from "./elapsed.js";
 import { openCommitsLightbox } from "./commits-view.js";
+import { closeTeamRoom } from "./team-room.js";
 
 const enc = new TextEncoder();
 
@@ -100,8 +101,10 @@ export class Dashboard {
     this.isOpen() ? this.hide() : this.show();
   }
 
-  /** Navigate to a project: select it in the host and close the dashboard. */
+  /** Navigate to a tab: select it in the host and close the dashboard (and
+   *  the team room, if it was up — the tab is what you asked to see). */
   private navigate(id: string) {
+    closeTeamRoom();
     send({ type: "session.select", id });
     this.hide();
   }

@@ -36,13 +36,74 @@
           ]
         };
       }
+      function reply(obj, delayMs) {
+        var wire = JSON.stringify(obj);
+        setTimeout(function () { listeners.forEach(function (l) { l({ data: wire }); }); }, delayMs || 0);
+      }
       window.chrome = window.chrome || {};
       window.chrome.webview = {
         postMessage: function (wire) {
           var msg; try { msg = JSON.parse(wire); } catch (e) { return; }
-          if (msg && msg.type === "commits.request") {
-            var reply = JSON.stringify(sample(msg.paneId));
-            setTimeout(function () { listeners.forEach(function (l) { l({ data: reply }); }); }, 120);
+          if (!msg) return;
+          if (msg.type === "commits.request") {
+            reply(sample(msg.paneId), 120);
+          }
+          // Team room: harness.ts parks its fixture on window.__teamFixture;
+          // answer team.request with it so the room fetches the way it would
+          // from the host.
+          if (msg.type === "team.request" && window.__teamFixture) {
+            reply(window.__teamFixture, 80);
+          }
+          // Your post echoes back as a ledger row so the pending row settles.
+          if (msg.type === "team.post" && window.__teamFixture) {
+            var fx = window.__teamFixture;
+            var seq = fx.lastSeq + 1;
+            var to = msg.to === null ? ["Ada"] : msg.to;
+            var row = { seq: seq, ts: new Date().toISOString(), kind: "user", from: "you", to: to, text: msg.text, clientId: msg.clientId };
+            fx.entries.push(row); fx.lastSeq = seq;
+            reply({ type: "team.data", projectId: msg.projectId, entries: [row], lastSeq: seq }, 400);
+          }
+          // A shared screenshot: answer team.image with a tiny picture (a 4×3
+          // PNG scaled by the thumbnail's CSS), so the thumb and the lightbox
+          // render without a host.
+          if (msg.type === "team.image") {
+            reply({ type: "team.image.data", projectId: msg.projectId, path: msg.path, mediaType: "image/png",
+              data: "iVBORw0KGgoAAAANSUhEUgAAAAQAAAADCAIAAAA7ljmRAAAAF0lEQVQIW2NkYPjPwMDAwMDAyMDA8B8ACg8CAyeB8x4AAAAASUVORK5CYII=" }, 120);
+          }
+          // Reactions and card answers echo back as ledger rows, the way the
+          // host records them.
+          function echo(row) {
+            var fx = window.__teamFixture;
+            if (!fx) return;
+            row.seq = ++fx.lastSeq;
+            row.ts = new Date().toISOString();
+            fx.entries.push(row);
+            reply({ type: "team.data", projectId: msg.projectId, entries: [row], lastSeq: fx.lastSeq }, 250);
+          }
+          if (msg.type === "team.react") echo({ kind: "reaction", from: "you", text: msg.emoji, note: String(msg.seq) });
+          if (msg.type === "team.perm.answer") echo({ kind: "system", from: "perch", event: "permission.answered", note: msg.id,
+            text: (msg.decision === "allow" ? "You allowed " : "You denied ") + "Bo's command" });
+          if (msg.type === "team.ask.answer") echo({ kind: "system", from: "perch", event: "ask.answered", note: msg.id, text: "You answered Cy: " + msg.answer });
+          // Brief generation: progress ticks, then a result (or an error for
+          // the #newbot-error view).
+          if (msg.type === "team.brief.generate") {
+            var view = location.hash.replace("#", "");
+            var phases = ["Reading the repo…", "Looking at src/web…", "Writing the brief…"];
+            phases.forEach(function (p, i) {
+              reply({ type: "team.brief.progress", jobId: msg.jobId, phase: p, elapsedMs: (i + 1) * 900 }, 300 + i * 900);
+            });
+            if (view === "newbot-generating") return;   // stay in progress for the shot
+            if (view === "newbot-error") {
+              reply({ type: "team.brief.result", jobId: msg.jobId, error: "stopped at the cost cap" }, 3200);
+            } else {
+              reply({ type: "team.brief.result", jobId: msg.jobId, costUsd: 0.42, brief:
+                "## Role\nYou are the frontend developer for storefront-web: the sidebar, the panes, the dialogs and the CSS tokens under `src/web`.\n\n" +
+                "## What you own\n- `src/web/src/sidebar.ts`, `workspace.ts`, `pane.ts` and every dialog under `src/web/src`\n- `src/web/src/style.css` and `tokens.css`\n\n" +
+                "## What you never touch\n- Anything under `src/Perch` (the host) — ask the backend dev\n- `tools/perch-cli`\n\n" +
+                "## Who you ask\n- The backend dev, for a new host message or a changed `state` shape\n- The designer, before inventing a new surface\n\n" +
+                "## Definition of done\n`npm run typecheck` and `npm test` green, a harness screenshot for anything visual, and the constitution's checklist honoured.\n\n" +
+                "## How you communicate on the team\nMessage a teammate with SendMessage by session name when you need something from them; post a note to the room when something others depend on lands." }, 3200);
+            }
           }
         },
         addEventListener: function (type, listener) { if (type === "message") listeners.push(listener); }
@@ -78,22 +139,33 @@
         </button>
       </div>
       <div id="sidebar-scroll" class="sidebar__scroll"></div>
-      <!-- Mirrors index.html so #cloud / #cloud-sidebar can be captured here. -->
-      <div id="cloud-area" class="cloud-area" hidden>
-        <div class="cloud-area__label">Cloud</div>
-        <button id="cloud-card" class="cloud-card" type="button" aria-label="Cloud resources">
-          <span class="cloud-card__head">
-            <span class="cloud-card__dot" aria-hidden="true"></span>
-            <span class="cloud-card__title" id="cloud-card-title"></span>
-            <span class="cloud-card__rate" id="cloud-card-rate"></span>
-          </span>
-          <span class="cloud-card__sub" id="cloud-card-sub"></span>
-          <span class="cloud-card__alert" id="cloud-card-alert" hidden>
-            <span class="cloud-card__alert-dot" aria-hidden="true"></span>
-            <span class="cloud-card__alert-text" id="cloud-card-alert-text"></span>
-            <span class="cloud-card__alert-cost" id="cloud-card-alert-cost"></span>
-          </span>
+      <!-- Mirrors index.html so #cloud / #cloud-sidebar can be captured here
+           (wrapper + toggle included for fidelity; the toggle is inert — the
+           harness never calls initUtilityMini). -->
+      <div id="utility-areas" class="utility-areas">
+        <button id="utility-mini-toggle" class="utility-mini-toggle" type="button">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+            <path d="M2.5 4.5 L6 8 L9.5 4.5" stroke="currentColor" stroke-width="1.4"
+                  stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
         </button>
+        <div id="cloud-area" class="cloud-area" hidden>
+          <div class="cloud-area__label">Cloud</div>
+          <button id="cloud-card" class="cloud-card" type="button" aria-label="Cloud resources">
+            <span class="cloud-card__head">
+              <span class="cloud-card__dot" aria-hidden="true"></span>
+              <span class="cloud-card__mini" id="cloud-card-mini"></span>
+              <span class="cloud-card__title" id="cloud-card-title"></span>
+              <span class="cloud-card__rate" id="cloud-card-rate"></span>
+            </span>
+            <span class="cloud-card__sub" id="cloud-card-sub"></span>
+            <span class="cloud-card__alert" id="cloud-card-alert" hidden>
+              <span class="cloud-card__alert-dot" aria-hidden="true"></span>
+              <span class="cloud-card__alert-text" id="cloud-card-alert-text"></span>
+              <span class="cloud-card__alert-cost" id="cloud-card-alert-cost"></span>
+            </span>
+          </button>
+        </div>
       </div>
       <footer class="sidebar__footer">
         <button class="sidebar__identity" type="button" title="Perch" aria-label="Perch">

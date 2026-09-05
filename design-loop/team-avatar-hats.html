@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Perch — team avatars, variant A: hats</title>
+<style>
+  body{margin:0;background:#141414;color:#e9eef4;
+    font-family:"Inter var","Inter","Segoe UI Variable Text","Segoe UI",sans-serif;font-size:14px;line-height:1.4}
+  /* ---- everything scoped under .av-hats so siblings can sit beside it ---- */
+  .av-hats{
+    --surface:#1f1f1f; --ink:#e9eef4; --dim:#aab3bd; --eye:#15233b; --accent:#76B9ED;
+    --tag-0:#76B9ED; --tag-1:#6CCB5F; --tag-2:#FCE100; --tag-3:#FF9E5E; --tag-4:#FF99A4; --tag-5:#C792EA;
+    --hair:rgba(255,255,255,.08); --hair-soft:rgba(255,255,255,.05);
+    max-width:1240px; margin:0 auto; padding:32px 24px 48px; color:var(--ink);
+  }
+  .av-hats *{box-sizing:border-box}
+  .av-hats h1{font-size:20px;font-weight:600;line-height:1.2;margin:0 0 4px}
+  .av-hats h2{font-size:16px;font-weight:600;line-height:1.2;margin:32px 0 12px}
+  .av-hats .lede{color:var(--dim);margin:0 0 24px;max-width:70ch}
+  .av-hats table{border-collapse:collapse;width:100%;font-size:14px}
+  .av-hats th{text-align:left;font-weight:600;font-size:12px;color:var(--dim);padding:0 12px 8px 0}
+  .av-hats td{padding:6px 12px 6px 0;border-top:1px solid var(--hair-soft);vertical-align:top}
+  .av-hats td.pos{font-weight:500;white-space:nowrap}
+  .av-hats td.why{color:var(--dim)}
+  .av-hats .sw{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:8px;vertical-align:1px;background:var(--tag)}
+
+  /* ---- the avatar: same box as .tf-msg__avatar in the room ---- */
+  .av-hats .av{--sz:28px;width:var(--sz);height:var(--sz);flex:0 0 auto;border-radius:50%;overflow:hidden;
+    color:var(--tag);--ring:var(--accent);
+    background:color-mix(in srgb,var(--tag) 16%,transparent);
+    box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--tag) 32%,transparent)}
+  .av-hats .av svg{display:block;width:100%;height:100%}
+  .av-hats .av--96{--sz:96px}
+  .av-hats .av--80{--sz:80px}
+
+  /* ---- controls ---- */
+  .av-hats .ctl{display:flex;align-items:center;gap:12px;margin:0 0 16px;font-size:12px;color:var(--dim)}
+  .av-hats .ctl button,.av-hats .ctl select{font:inherit;color:var(--ink);background:rgba(255,255,255,.06);
+    border:1px solid var(--hair);border-radius:4px;padding:4px 12px;cursor:pointer}
+  .av-hats .ctl input[type=range]{flex:1;accent-color:var(--accent)}
+  .av-hats .ctl .t{font-variant-numeric:tabular-nums;min-width:64px}
+
+  /* ---- gallery ---- */
+  .av-hats .gal{display:grid;grid-template-columns:168px repeat(4,1fr);gap:8px 12px;align-items:center}
+  .av-hats .gal .h{font-size:12px;font-weight:600;color:var(--dim);padding:0 0 4px}
+  .av-hats .gal .rl{font-size:14px;font-weight:500}
+  .av-hats .gal .rl small{display:block;font-size:12px;font-weight:400;color:var(--dim)}
+  .av-hats .cell{display:flex;align-items:flex-end;gap:16px;padding:12px;border-radius:8px;
+    background:rgba(255,255,255,.025);border:1px solid var(--hair-soft)}
+  .av-hats .cell .av--28{margin-bottom:8px}
+
+  /* ---- context: mock room rows + mock roster on the pane surface ---- */
+  .av-hats .ctx{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:16px}
+  .av-hats .pane{background:var(--surface);border:1px solid var(--hair-soft);border-radius:8px;padding:8px}
+  .av-hats .msg{display:grid;grid-template-columns:28px minmax(0,1fr);column-gap:12px;padding:8px 12px;border-radius:8px}
+  .av-hats .msg .head{display:flex;align-items:baseline;gap:8px}
+  .av-hats .msg .name{font-weight:500}
+  .av-hats .msg .pos{font-size:12px;color:var(--dim)}
+  .av-hats .msg .time{font-size:11px;color:#7c8590;margin-left:auto;font-variant-numeric:tabular-nums}
+  .av-hats .msg .text{color:#cfd6dd;margin-top:4px}
+  .av-hats .roster{display:flex;flex-direction:column;gap:4px}
+  .av-hats .roster .kicker{font-size:12px;font-weight:600;color:var(--dim);padding:4px 8px 8px}
+  .av-hats .rb{display:grid;grid-template-columns:28px minmax(0,1fr) 8px;column-gap:8px;align-items:center;padding:6px 8px;border-radius:8px}
+  .av-hats .rb:hover{background:rgba(255,255,255,.04)}
+  .av-hats .rb .nick{font-weight:500;line-height:1.2}
+  .av-hats .rb .pos{font-size:12px;color:var(--dim);line-height:1.3}
+  .av-hats .rb .dot{width:8px;height:8px;border-radius:50%;box-shadow:inset 0 0 0 1px var(--dim)}
+  .av-hats .rb .dot[data-s=working]{background:var(--accent);box-shadow:none}
+  .av-hats .rb .dot[data-s=waiting]{background:var(--tag-2);box-shadow:none}
+  .av-hats .rb .dot[data-s=asleep]{background:#6e767e;box-shadow:none;opacity:.65}
+
+  /* ---- filmstrip mode: no chrome, one row per position ---- */
+  .av-hats--strip{padding:16px}
+  .av-hats--strip .strip{display:grid;grid-template-columns:140px repeat(var(--n),1fr);gap:6px 6px;align-items:start}
+  .av-hats--strip .strip .h{font-size:11px;color:var(--dim);font-variant-numeric:tabular-nums}
+  .av-hats--strip .strip .rl{font-size:12px;font-weight:500;padding-top:28px}
+  .av-hats--strip .strip .rl small{display:block;color:var(--dim);font-weight:400}
+  .av-hats--strip .sc{display:flex;flex-direction:column;gap:4px;align-items:flex-start}
+</style>
+</head>
+<body>
+<div class="av-hats" data-variant="hats"></div>
+<script>
+(function(){
+"use strict";
+const root = document.querySelector('[data-variant="hats"]');
+if (!root) return;
+const params = new URLSearchParams(location.search || location.hash.slice(1));
+
+/* ================================================================
+   Timeline engine — copied from setup-overlay.ts: pose(t, state) is a
+   pure function of milliseconds → rig parameters. No CSS animation on
+   the rig, so any t can be frozen, scrubbed, or filmstripped exactly.
+   ================================================================ */
+const clamp01 = u => Math.min(1, Math.max(0, u));
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const easeOutCubic   = u => 1 - Math.pow(1 - u, 3);
+const easeInOutCubic = u => u < .5 ? 4*u*u*u : 1 - Math.pow(-2*u + 2, 3)/2;
+const easeOutBack    = u => { const c = 1.4; return 1 + (c+1)*Math.pow(u-1,3) + c*Math.pow(u-1,2); };
+const EASES = { lin: u=>u, out: easeOutCubic, inout: easeInOutCubic, back: easeOutBack };
+function kf(t, keys){
+  if (t <= keys[0][0]) return keys[0][1];
+  for (let i = 1; i < keys.length; i++){
+    const [t1, v1, e] = keys[i], [t0, v0] = keys[i-1];
+    if (t <= t1){ const u = (EASES[e || 'inout'])(clamp01((t - t0)/(t1 - t0))); return v0 + (v1 - v0)*u; }
+  }
+  return keys[keys.length - 1][1];
+}
+/* blink: v-shaped closure around a center time, ~140ms total */
+function blink(t, at){ const d = Math.abs(t - at); return d > 70 ? 1 : Math.max(0.12, d/70); }
+const sin = Math.sin, PI = Math.PI;
+
+/* channels only some states drive; zero everywhere else */
+const CALM = { noteVis: 0, scribble: 0, jitter: 0, lineA: 1, padFlip: 1,
+               z1: 0, z2: 0, z3: 0, z4: 0, slip: 0, glint: 0, eyeScale: 1, pop: 0 };
+/* the neutral perched pose every state starts from and returns to */
+const PERCHED = { ...CALM, bob: 0, crouch: 0.55, bodyRot: 0, headTilt: 0, headDX: 0, headDY: 0,
+                  tailAng: 4, blink: 1, breathe: 0, brow: 0.25 };
+
+/* -------- idle (5.2 s): breathing, irregular blinks with one double, a
+   glance up-and-back, a peer down, the monocle catching light on the
+   way home from the glance -------- */
+const IDLE_MS = 5200;
+function idle(i){
+  return { ...PERCHED,
+    breathe: sin(2*PI*(2*i/IDLE_MS)) * 0.012,                       // 2 cycles → seamless
+    blink: Math.min(blink(i, 900), blink(i, 2650), blink(i, 2820), blink(i, 4350)),
+    headTilt: kf(i, [[1500,0],[1750,-7,'back'],[2450,-7,'lin'],[2850,0,'inout'],
+                     [3700,0],[3950,4,'inout'],[4350,4,'lin'],[4700,0,'inout']]),
+    headDX:   kf(i, [[1500,0],[1750,-.7,'back'],[2450,-.7,'lin'],[2850,0,'inout'],
+                     [3700,0],[3950,.6,'inout'],[4350,.6,'lin'],[4700,0,'inout']]),
+    headDY:   kf(i, [[1500,0],[1750,-.6,'back'],[2450,-.6,'lin'],[2850,0,'inout'],
+                     [3700,0],[3950,.4,'inout'],[4350,.4,'lin'],[4700,0,'inout']]),
+    brow:     kf(i, [[1500,.25],[1750,.8,'back'],[2450,.8,'lin'],[2850,.25,'inout'],
+                     [3700,.25],[3950,0,'inout'],[4350,0,'lin'],[4700,.25,'inout']]),
+    tailAng:  kf(i, [[2500,4],[2650,13,'back'],[3000,4,'out']]),
+    glint: (i - 2800) / 320,
+  };
+}
+
+/* -------- working (2.8 s): head down over a pad, two scribble bursts
+   (lines appear as he writes), a raised-brow think between them, a
+   satisfied lift while the page flips, back down -------- */
+const WORK_MS = 2800;
+function working(n){
+  const env = clamp01((n - 250)/100) * clamp01((1000 - n)/100)
+            + clamp01((n - 1600)/100) * clamp01((2300 - n)/100);
+  const jitter = env * sin(2*PI*n/115);
+  return { ...PERCHED,
+    breathe: sin(2*PI*(n/WORK_MS)) * 0.012,
+    noteVis: 1,
+    scribble: kf(n, [[250,0],[1000,.5,'lin'],[1600,.5],[2300,1,'lin']]),
+    lineA: n < 2350 ? 1 : kf(n, [[2350,1],[2470,0,'out']]),
+    padFlip: kf(n, [[2350,1],[2440,.72,'out'],[2560,1.06,'out'],[2700,1,'inout']]),
+    jitter,
+    headTilt: kf(n, [[0,0],[250,15,'inout'],[1000,15,'lin'],[1150,-6,'back'],[1450,-6,'lin'],
+                     [1600,15,'inout'],[2300,15,'lin'],[2520,-3,'back'],[2800,0,'inout']]) + jitter*1.6,
+    headDX:   kf(n, [[0,0],[250,2.2,'inout'],[1000,2.2,'lin'],[1150,-.4,'back'],[1450,-.4,'lin'],
+                     [1600,2.2,'inout'],[2300,2.2,'lin'],[2520,-.2,'back'],[2800,0,'inout']]),
+    headDY:   kf(n, [[0,0],[250,1.6,'inout'],[1000,1.6,'lin'],[1150,-.6,'back'],[1450,-.6,'lin'],
+                     [1600,1.6,'inout'],[2300,1.6,'lin'],[2520,-.3,'back'],[2800,0,'inout']]) + jitter*.35,
+    bodyRot:  kf(n, [[0,0],[250,3,'inout'],[2300,3,'lin'],[2800,0,'inout']]),
+    tailAng:  kf(n, [[2300,4],[2440,14,'back'],[2750,4,'out']]),
+    blink: Math.min(blink(n, 1300), blink(n, 2450)),
+    brow: kf(n, [[0,.25],[250,-.2,'inout'],[1000,-.2,'lin'],[1150,.8,'back'],[1450,.8,'lin'],
+                 [1600,-.2,'inout'],[2300,-.2,'lin'],[2520,.7,'back'],[2800,.25,'inout']]),
+  };
+}
+
+/* -------- waiting (4.6 s): brow up, a lean-in at the viewer with the eye
+   a touch wider; one attention beat — anticipation squat, a hop, the
+   landing pops the monocle which settles back — then he eases off to
+   neutral and leans in again on loop -------- */
+const WAIT_MS = 4600;
+function waiting(w){
+  return { ...PERCHED,
+    breathe: sin(2*PI*(2*w/WAIT_MS)) * 0.010,
+    bodyRot:  kf(w, [[0,0],[300,5,'back'],[4000,5,'lin'],[4600,0,'inout']]),
+    headTilt: kf(w, [[0,0],[300,-11,'back'],[1900,-11,'lin'],[1990,-6,'inout'],[2080,-15,'out'],
+                     [2250,-11,'out'],[4000,-11,'lin'],[4600,0,'inout']]),
+    headDX:   kf(w, [[0,0],[300,2.2,'back'],[4000,2.2,'lin'],[4600,0,'inout']]),
+    headDY:   kf(w, [[0,0],[300,-1.2,'back'],[4000,-1.2,'lin'],[4600,0,'inout']]),
+    eyeScale: kf(w, [[0,1],[300,1.2,'back'],[2140,1.2,'lin'],[2220,1.32,'back'],[2600,1.2,'inout'],
+                     [4000,1.2,'lin'],[4600,1,'inout']]),
+    brow: kf(w, [[0,.25],[300,1.05,'back'],[2140,1.05,'lin'],[2220,1.3,'back'],[2600,1.05,'inout'],
+                 [4000,1.05,'lin'],[4600,.25,'inout']]),
+    /* the hop: squat, launch, land with a squash, settle */
+    crouch: kf(w, [[1800,.55],[1930,.95,'out'],[2000,.1,'out'],[2140,.9,'out'],[2330,.55,'inout']]),
+    bob:    kf(w, [[1930,0],[2030,-2.6,'out'],[2140,0,'lin']]),
+    tailAng: kf(w, [[1930,4],[2040,15,'back'],[2400,4,'out']]),
+    pop: kf(w, [[2140,0],[2240,1,'back'],[2380,1,'lin'],[2700,0,'inout']]),
+    blink: Math.min(blink(w, 1200), blink(w, 3400)),
+  };
+}
+
+/* -------- asleep (8 s): lids sink fast, head and body sag, the monocle
+   slips, two pairs of z's drift; a slow nod-off tips too far and he
+   catches himself — wide-eyed for a blink, monocle snapped back — and
+   drifts off again on loop -------- */
+const SLEEP_MS = 8000;
+function asleep(s){
+  const env = clamp01((s - 1400)/600) * clamp01((6300 - s)/400);
+  const sway = sin(2*PI*(s - 1400)/1100) * 0.05 * env;
+  const lids = kf(s, [[0,1],[300,.5,'out'],[1400,.32,'inout'],[5600,.28,'lin'],[6300,.12,'out'],
+                      [6650,.12,'lin'],[6800,1.05,'back'],[7300,1,'lin']]);
+  return { ...PERCHED,
+    breathe: sin(2*PI*(3*s/SLEEP_MS)) *
+             kf(s, [[0,.012],[1400,.024,'inout'],[6300,.024,'lin'],[6800,.012,'out']]),
+    headTilt: kf(s, [[0,0],[300,5,'out'],[1400,9,'inout'],[5600,12,'lin'],[6300,18,'out'],
+                     [6650,18,'lin'],[6800,-4,'back'],[7300,-4,'lin'],[8000,0,'inout']]),
+    headDY:   kf(s, [[0,0],[300,.8,'out'],[1400,1.6,'inout'],[5600,2,'lin'],[6300,2.4,'out'],
+                     [6650,2.4,'lin'],[6800,-.6,'back'],[7300,-.6,'lin'],[8000,0,'inout']]),
+    headDX:   kf(s, [[0,0],[300,.3,'out'],[1400,.6,'inout'],[6300,1,'out'],
+                     [6650,1,'lin'],[6800,-.3,'back'],[7300,-.3,'lin'],[8000,0,'inout']]),
+    bodyRot:  kf(s, [[0,0],[300,1.2,'out'],[1400,2.5,'inout'],[6300,4,'out'],
+                     [6650,4,'lin'],[6800,-1,'back'],[7300,-1,'lin'],[8000,0,'inout']]),
+    crouch: .55 + kf(s, [[0,0],[300,.1,'out'],[1400,.25,'inout'],[6650,.25,'lin'],
+                         [6800,-.08,'back'],[7300,-.08,'lin'],[8000,0,'inout']]),
+    tailAng: kf(s, [[0,4],[1400,1,'inout'],[6650,1,'lin'],[6800,14,'back'],[7200,4,'out']]),
+    blink: Math.min(lids + sway, blink(s, 7550)),
+    slip: kf(s, [[0,0],[300,.2,'out'],[1500,.6,'inout'],[6300,1,'lin'],[6650,1,'lin'],[6850,0,'back']]),
+    z1: (s - 1600)/1500, z2: (s - 2500)/1400, z3: (s - 4000)/1500, z4: (s - 4900)/1400,
+    brow: kf(s, [[0,.25],[300,0,'out'],[1400,-.3,'inout'],[6300,-.45,'lin'],[6650,-.45,'lin'],
+                 [6800,1,'back'],[7300,1,'lin'],[8000,.25,'inout']]),
+  };
+}
+
+const STATES = {
+  idle:    { ms: IDLE_MS,  fn: idle },
+  working: { ms: WORK_MS,  fn: working },
+  waiting: { ms: WAIT_MS,  fn: waiting },
+  asleep:  { ms: SLEEP_MS, fn: asleep },
+};
+const STATE_NAMES = ["idle", "working", "waiting", "asleep"];
+
+/* ---------- the hat spring ----------
+   The hat is a mass on the head. Its displacement relative to the head is
+   the head's velocity convolved with a damped cosine (a spring's step
+   response: lag first, then overshoot, then settle). Sampling the pure
+   state function at a few past instants gives that convolution with no
+   hidden state, so the hat stays a pure function of t too — and because
+   every loop is seamless, sampling wraps around the loop edge cleanly. */
+const DT = 40, TAPS = 12;
+const gStiff = t => Math.exp(-t/110) * Math.cos(2*PI*t/240);   // the hat body
+const gSoft  = t => Math.exp(-t/190) * Math.cos(2*PI*t/430);   // bobble / strap / flop
+const headCh = p => ({
+  a: p.bodyRot + p.headTilt*0.55 - p.tailAng*0.12,              // trunk angle (deg)
+  y: (p.bob + p.crouch*2.2)/K + p.headDY*0.35,                  // head y (mascot units)
+  x: p.headDX*0.35,
+});
+function pose(t, state){
+  const st = STATES[state], L = st.ms;
+  const w = u => ((u % L) + L) % L;
+  const p = st.fn(w(t));
+  let rA = 0, rY = 0, rX = 0, sA = 0, sY = 0, sX = 0;
+  let prev = headCh(p);
+  for (let k = 1; k <= TAPS; k++){
+    const q = headCh(st.fn(w(t - k*DT)));
+    const gs = gStiff(k*DT), gf = gSoft(k*DT);
+    rA -= gs*(prev.a - q.a); rY -= gs*(prev.y - q.y); rX -= gs*(prev.x - q.x);
+    sA -= gf*(prev.a - q.a); sY -= gf*(prev.y - q.y); sX -= gf*(prev.x - q.x);
+    prev = q;
+  }
+  p.rA = rA; p.rY = rY; p.rX = rX; p.sA = sA; p.sY = sY; p.sX = sX;
+  return p;
+}
+function lerpPose(a, b, u){ const o = {}; for (const k in b) o[k] = a[k] + (b[k] - a[k])*u; return o; }
+
+/* ================================================================
+   Rig. Mascot geometry lifted verbatim from setup-overlay.ts
+   ("Monocle Guy") — one merged silhouette; the rig is trunk-rotation
+   + an animated face. The bust crop is a square viewBox in mascot
+   units, centred on the monocle, and the circle clips the rest.
+   ================================================================ */
+const K = 2.5;
+const FEET = { x: 12.35, y: 15.7 };
+const BODY_D = "M19.9 10.0 C 19.5 7.9, 17.6 6.3, 15.4 6.5 C 13.9 6.5, 12.5 6.8, 11.4 7.4 C 9.4 7.6, 7.4 6.2, 5.7 6.7 C 5.1 6.9, 5.2 7.6, 5.9 8.1 C 7.0 8.9, 7.7 10.1, 8.5 11.1 C 9.6 12.7, 10.9 14.4, 12.6 14.4 C 14.0 14.4, 15.2 13.9, 16.1 13.0 C 17.1 12.4, 18.0 11.9, 18.6 11.2 C 19.1 10.9, 19.6 10.6, 19.9 10.0 Z";
+const BEAK_D = "M17.4 9.4 L 21.9 10.3 L 18.2 11.35 Z";
+const BROW_N = [15.9,7.3, 16.55,7.25, 17.3,7.5, 17.9,8.0];
+const BROW_R = [15.75,6.55, 16.6,6.15, 17.45,6.35, 18.0,7.15];
+function browD(r){
+  const p = BROW_N.map((v, i) => v + (BROW_R[i] - v)*r);
+  return `M${p[0].toFixed(2)} ${p[1].toFixed(2)} C ${p[2].toFixed(2)} ${p[3].toFixed(2)}, ${p[4].toFixed(2)} ${p[5].toFixed(2)}, ${p[6].toFixed(2)} ${p[7].toFixed(2)}`;
+}
+const VB = { cx: 16.7, cy: 8.35, r: 6.7 };  // bust crop (head, monocle, beak, upper body), headroom for hats
+const CROWN = { x: 15.6, y: 6.6 };          // where a hat sits; hats pivot here
+
+const NS = "http://www.w3.org/2000/svg";
+const el = (n, at) => { const e = document.createElementNS(NS, n); for (const k in at) e.setAttribute(k, at[k]); return e; };
+const FILL = { fill: "currentColor" };
+const ink = (w, o) => ({ fill: "none", stroke: "var(--eye)", "stroke-width": String(w),
+  "stroke-linecap": "round", "stroke-linejoin": "round", ...(o ? { opacity: String(o) } : {}) });
+
+/* ---------- the hats: flat silhouettes in the bird's own fill, ink
+   details, all authored in mascot units on the crown. Each returns its
+   group, the lag gains for its mass, and a secondary-motion hook. ---------- */
+const HATS = {
+  cap: { name: "captain's cap", gains: { rot: .45, dy: .6 }, build(g){
+    g.append(
+      /* tall crown, higher at the front; long visor with an ink top edge */
+      el("path", { ...FILL, d: "M12.6 7.2 C 12.7 5.7, 13.7 4.9, 15.2 4.65 C 16.7 4.4, 17.9 4.3, 18.5 4.75 C 18.75 5.0, 18.3 5.9, 18.05 6.65 C 16.4 7.0, 14.4 7.2, 12.6 7.2 Z" }),
+      el("path", { ...FILL, d: "M16.2 6.85 C 17.7 6.4, 19.3 6.35, 20.6 6.7 C 19.6 7.2, 18.0 7.3, 16.3 7.15 Z" }),
+      el("path", { ...ink(.4), d: "M12.8 7.1 C 14.5 7.2, 16.3 7.0, 18.05 6.7" }),
+      el("path", { ...ink(.4), d: "M16.4 6.82 C 17.8 6.42, 19.3 6.38, 20.55 6.7" }),
+    );
+    return null;
+  }},
+  beanie: { name: "beanie", gains: { rot: .5, dy: .7 }, build(g){
+    g.append(
+      el("path", { ...FILL, d: "M12.7 7.3 C 12.55 5.6, 13.9 4.15, 15.8 4.1 C 17.65 4.05, 18.75 5.4, 18.6 7.2 C 16.7 7.0, 14.6 7.1, 12.7 7.3 Z" }),
+      el("path", { ...ink(.42), d: "M12.8 7.1 C 14.6 6.9, 16.7 6.85, 18.55 7.0" }),
+      el("path", { ...ink(.3, .7), d: "M12.85 6.45 C 14.7 6.25, 16.6 6.2, 18.5 6.4" }),
+    );
+    const bobble = el("circle", { cx: "15.8", cy: "3.75", r: ".72", ...FILL, stroke: "var(--eye)", "stroke-width": ".3" });
+    g.append(bobble);
+    return p => bobble.setAttribute("transform",
+      `translate(${clamp(p.sX*.9 + p.sA*.035, -.6, .6).toFixed(3)} ${clamp(p.sY*.9, -.42, .35).toFixed(3)})`);  // floats, never detaches
+  }},
+  hardhat: { name: "hard hat", gains: { rot: .4, dy: .65 }, build(g){
+    g.append(
+      el("path", { ...FILL, d: "M12.5 7.15 C 12.55 5.5, 13.9 4.45, 15.7 4.4 C 17.5 4.35, 18.9 5.45, 19.0 7.05 Z" }),
+      el("path", { ...FILL, d: "M11.8 7.35 C 13.5 6.95, 17.5 6.85, 19.9 7.1 C 19.65 7.6, 17.6 7.8, 15.6 7.75 C 13.8 7.72, 12.4 7.72, 11.8 7.35 Z" }),
+      el("path", { ...ink(.4), d: "M12.0 7.3 C 13.6 6.98, 17.4 6.9, 19.8 7.12" }),
+    );
+    /* chin strap hangs from the back of the brim, short and quiet */
+    const strap = el("path", { ...ink(.34, .6), d: "M0 0 C -0.15 0.7, -0.3 1.4, -0.1 2.0" });
+    const sg = el("g", { transform: "translate(12.9 7.7)" });
+    sg.append(strap); g.append(sg);
+    return p => strap.setAttribute("transform", `rotate(${clamp(-p.sX*35 + p.sA*1.0, -28, 28).toFixed(2)})`);
+  }},
+  beret: { name: "beret", gains: { rot: .5, dy: .7 }, build(g){
+    const disc = el("g", {});
+    disc.append(
+      /* wide disc, slumped well past the nape */
+      el("path", { ...FILL, d: "M10.5 7.0 C 11.0 5.45, 14.0 4.8, 16.7 5.2 C 18.0 5.4, 18.7 6.1, 18.4 6.68 C 16.6 6.88, 14.0 7.15, 11.8 7.4 C 11.0 7.45, 10.4 7.3, 10.5 7.0 Z" }),
+      el("path", { ...ink(.36), d: "M11.6 7.28 C 14.0 7.08, 16.6 6.85, 18.3 6.62" }),
+      el("circle", { cx: "14.3", cy: "4.95", r: ".34", ...FILL, stroke: "var(--eye)", "stroke-width": ".28" }),
+    );
+    g.append(disc);
+    /* the flop: the disc pivots at the front of the crown so the overhang swings */
+    return p => disc.setAttribute("transform", `rotate(${clamp(p.sA*.9, -9, 9).toFixed(2)} 17.3 6.6)`);
+  }},
+  deerstalker: { name: "deerstalker", gains: { rot: .45, dy: .65 }, build(g){
+    g.append(
+      /* two brims that actually stick out, a sparse tweed, a bow of tied flaps */
+      el("path", { ...FILL, d: "M12.5 7.2 C 12.65 5.45, 13.95 4.7, 15.7 4.7 C 17.45 4.7, 18.6 5.45, 18.7 7.1 Z" }),
+      el("path", { ...FILL, d: "M17.2 6.95 C 18.4 6.5, 19.9 6.45, 20.9 6.9 C 20.0 7.35, 18.4 7.38, 17.2 7.25 Z" }),
+      el("path", { ...FILL, d: "M13.4 7.3 C 12.2 7.0, 10.9 7.05, 10.1 7.5 C 10.9 7.9, 12.4 7.85, 13.4 7.6 Z" }),
+      el("path", { ...ink(.36), d: "M12.6 7.05 C 14.6 6.9, 16.7 6.85, 18.6 6.95" }),
+      el("path", { ...ink(.22, .5), d: "M13.6 6.75 L 15.3 4.95 M15.4 6.75 L 17.1 5.0 M14.4 5.15 L 16.2 6.75" }),
+    );
+    const bow = el("path", { ...FILL, stroke: "var(--eye)", "stroke-width": ".24", "stroke-linejoin": "round",
+      d: "M-0.85 0.1 C -1.3 -0.6, -0.4 -0.95, 0 -0.2 C 0.4 -0.95, 1.3 -0.6, 0.85 0.1 Z" });
+    const bg = el("g", { transform: "translate(15.7 4.8) scale(1.3)" });
+    bg.append(bow); g.append(bg);
+    return p => bow.setAttribute("transform",
+      `translate(0 ${clamp(p.sY*.5, -.5, .3).toFixed(3)}) rotate(${clamp(p.sA*.7, -10, 10).toFixed(2)})`);
+  }},
+  tophat: { name: "top hat", gains: { rot: .9, dy: .6 }, build(g){
+    g.append(
+      el("path", { ...FILL, d: "M13.3 6.95 L 13.45 3.7 C 14.5 3.3, 17.1 3.32, 18.15 3.75 L 18.2 6.55 C 16.5 6.9, 15.0 7.05, 13.3 6.95 Z" }),
+      el("path", { ...FILL, d: "M12.2 7.2 C 14.0 6.72, 17.5 6.55, 19.55 6.8 C 19.35 7.3, 17.4 7.48, 15.6 7.48 C 14.0 7.48, 12.6 7.5, 12.2 7.2 Z" }),
+      el("path", { ...ink(.4), d: "M12.4 7.15 C 14.1 6.72, 17.4 6.6, 19.45 6.8" }),
+      el("path", { ...ink(.46), d: "M13.4 6.35 C 15.0 6.08, 16.8 5.98, 18.15 6.12" }),
+    );
+    return null;
+  }},
+};
+
+/* position → hat. Tag colours follow the room's palette order. */
+const POSITIONS = [
+  { pos: "Team lead",      nick: "Cap",    hat: "cap",         tag: "var(--tag-0)", accentTag: true,
+    why: "the peaked crown says in charge of the ship from across the room; its visor is the only straight line in the set" },
+  { pos: "Frontend dev",   nick: "Pixel",  hat: "beanie",      tag: "var(--tag-1)",
+    why: "the casual one; the bobble is a free bit of secondary motion that shows the head moving" },
+  { pos: "Backend dev",    nick: "Rack",   hat: "hardhat",     tag: "var(--tag-3)",
+    why: "infrastructure. The widest, lowest dome in the set; the chin strap swings on a landing" },
+  { pos: "Designer",       nick: "Mo",     hat: "beret",       tag: "var(--tag-5)",
+    why: "the slump to the back is the tell, and it flops whenever the head moves" },
+  { pos: "QA",             nick: "Sherl",  hat: "deerstalker", tag: "var(--tag-2)",
+    why: "the inspector. Front and back brims plus the bow on top; nothing else has two brims" },
+  { pos: "Senior analyst", nick: "Ledger", hat: "tophat",      tag: "var(--tag-4)",
+    why: "the tallest silhouette in the set; next to the monocle it reads senior at a glance" },
+];
+
+function buildBust(hatId){
+  const svg = el("svg", { viewBox: `${VB.cx - VB.r} ${VB.cy - VB.r} ${2*VB.r} ${2*VB.r}`, "aria-hidden": "true" });
+  const mascot = el("g", {});                  // mascot coordinates
+  const legL = el("path", { d: "M11.3 14.1 V 15.7", stroke: "currentColor", "stroke-width": "1.0", "stroke-linecap": "round", fill: "none" });
+  const legR = el("path", { d: "M13.4 14.1 V 15.7", stroke: "currentColor", "stroke-width": "1.0", "stroke-linecap": "round", fill: "none" });
+  const trunk = el("g", {}), breatheG = el("g", {});
+  const body = el("path", { d: BODY_D, ...FILL });
+  const beak = el("path", { d: BEAK_D, ...FILL });
+
+  const hatDef = HATS[hatId];
+  const hat = el("g", {});
+  const hatSecondary = hatDef.build(hat);
+
+  const face = el("g", {});
+  const brow = el("path", { d: browD(0), ...ink(.75) });
+  const eye = el("ellipse", { cx: "17", cy: "9", rx: ".95", ry: ".95", fill: "var(--eye)" });
+  const ring = el("circle", { cx: "17", cy: "9", r: "1.95", fill: "none", stroke: "var(--ring)", "stroke-width": ".6" });
+  const chain = el("path", { d: "M17.6 10.8 C 17.8 11.7, 17.5 12.5, 16.9 13.1", fill: "none",
+    stroke: "var(--ring)", "stroke-width": ".5", "stroke-linecap": "round" });
+  /* the glint: a short bright arc that sweeps once around the ring */
+  const glint = el("circle", { cx: "17", cy: "9", r: "1.95", fill: "none", stroke: "#fff", "stroke-width": ".7",
+    pathLength: "1", "stroke-dasharray": ".13 .87", "stroke-linecap": "round" });
+  glint.style.visibility = "hidden";
+  face.append(brow, eye, ring, chain, glint);
+
+  breatheG.append(body, beak, hat, face);      // hat under the face ink, over the body
+  trunk.append(breatheG);
+  mascot.append(legL, legR, trunk);
+
+  /* note pad: sits in front of him, low right, under where the beak lands */
+  const pad = el("g", {});
+  const padFlipG = el("g", {});
+  padFlipG.append(el("rect", { x: "0", y: "0", width: "4.8", height: "3.4", rx: ".35", ...FILL, stroke: "var(--eye)", "stroke-width": ".3" }));
+  const mkLine = d => el("path", { ...ink(.36), pathLength: "1", "stroke-dasharray": "1", "stroke-dashoffset": "1", d });
+  const line1 = mkLine("M0.7 1.05 C 1.2 0.75, 1.7 1.25, 2.3 0.95 C 2.8 0.7, 3.3 1.15, 3.9 0.95");
+  const line2 = mkLine("M0.7 2.2 C 1.2 1.9, 1.7 2.4, 2.2 2.15 C 2.6 1.95, 2.9 2.2, 3.1 2.1");
+  padFlipG.append(line1, line2);
+  pad.append(padFlipG);
+  pad.style.visibility = "hidden";
+  mascot.append(pad);
+
+  /* sleepy z's: a stroked zigzag (no font dependency), drifts up-right off the crown */
+  const zs = [1.5, 1.1, 1.5, 1.1].map(sc => {
+    const z = el("path", { d: "M0 0 H1.3 L0 1.3 H1.3", fill: "none", stroke: "currentColor",
+      "stroke-width": (.42/sc).toFixed(3), "stroke-linecap": "round", "stroke-linejoin": "round" });
+    z.dataset.sc = sc; z.style.visibility = "hidden"; mascot.append(z); return z;
+  });
+  svg.append(mascot);
+
+  function apply(p){
+    const dy = (p.bob + p.crouch*2.2)/K;
+    const tilt = p.bodyRot + p.headTilt*0.55 - p.tailAng*0.12;
+    trunk.setAttribute("transform", `translate(0 ${dy.toFixed(3)}) rotate(${tilt.toFixed(2)} 13 11.5)`);
+    breatheG.setAttribute("transform",
+      `translate(${FEET.x} ${FEET.y}) scale(1 ${(1 + p.breathe).toFixed(4)}) translate(${-FEET.x} ${-FEET.y})`);
+    const fx = p.headDX*0.35, fy = p.headDY*0.35;
+    face.setAttribute("transform", `translate(${fx.toFixed(2)} ${fy.toFixed(2)})`);
+    brow.setAttribute("d", browD(p.brow));
+    eye.setAttribute("rx", (0.95*p.eyeScale).toFixed(2));
+    eye.setAttribute("ry", (0.95*p.eyeScale*p.blink).toFixed(2));
+    /* monocle: slip drifts it down the cheek; pop lifts it off the eye */
+    const mx = p.slip*0.25 + p.pop*0.15, my = p.slip*0.55 - p.pop*0.7;
+    ring.setAttribute("transform", `translate(${mx.toFixed(2)} ${my.toFixed(2)})`);
+    chain.setAttribute("transform", `translate(${mx.toFixed(2)} ${my.toFixed(2)}) rotate(${(-14*p.pop).toFixed(1)} 17.6 10.8)`);
+    if (p.glint > 0 && p.glint < 1){
+      glint.style.visibility = "visible";
+      glint.setAttribute("stroke-dashoffset", (0.62 - p.glint*0.55).toFixed(3));
+      glint.style.opacity = (sin(PI*p.glint)*0.9).toFixed(3);
+      glint.setAttribute("transform", ring.getAttribute("transform"));
+    } else glint.style.visibility = "hidden";
+
+    /* the hat rides the face translation, lags the head through its spring */
+    const gn = hatDef.gains;
+    const hRot = clamp(p.rA*gn.rot, -9, 9);
+    const hDY = clamp(p.rY*gn.dy, -1.2, 0.3);   // may float up a lot, sink in only a little
+    const hDX = clamp(p.rX*0.4, -.5, .5);
+    hat.setAttribute("transform",
+      `translate(${(fx + hDX).toFixed(3)} ${(fy + hDY).toFixed(3)}) rotate(${hRot.toFixed(2)} ${CROWN.x} ${CROWN.y})`);
+    if (hatSecondary) hatSecondary(p);
+
+    if (p.noteVis > 0.01){
+      pad.style.visibility = "visible";
+      pad.style.opacity = p.noteVis.toFixed(3);
+      pad.setAttribute("transform",
+        `translate(18.6 ${(11.5 + (1 - p.noteVis)*1.5).toFixed(2)}) rotate(${(p.jitter*2.5).toFixed(2)})`);
+      padFlipG.setAttribute("transform", `scale(1 ${p.padFlip.toFixed(3)})`);
+      const la = p.lineA.toFixed(3);
+      line1.setAttribute("stroke-dashoffset", (1 - clamp01(p.scribble*2)).toFixed(3));
+      line2.setAttribute("stroke-dashoffset", (1 - clamp01(p.scribble*2 - 1)).toFixed(3));
+      line1.style.opacity = la; line2.style.opacity = la;
+    } else pad.style.visibility = "hidden";
+
+    [p.z1, p.z2, p.z3, p.z4].forEach((ph, i) => {
+      const z = zs[i];
+      if (ph > 0 && ph < 1){
+        const sc = +z.dataset.sc;
+        z.style.visibility = "visible";
+        z.setAttribute("transform", `translate(${(18.3 + ph*1.7).toFixed(2)} ${(6.3 - ph*3.1).toFixed(2)}) scale(${sc})`);
+        z.style.opacity = (sin(PI*ph)*0.75).toFixed(3);
+      } else z.style.visibility = "hidden";
+    });
+  }
+  return { svg, apply };
+}
+
+function mkAvatar(posIdx, size){
+  const P = POSITIONS[posIdx];
+  const d = document.createElement("div");
+  d.className = `av av--${size}`;
+  d.style.setProperty("--tag", P.tag);
+  /* the accent-coloured tag would swallow an accent monocle: fall back to ink there */
+  if (P.accentTag) d.style.setProperty("--ring", "var(--eye)");
+  const b = buildBust(P.hat);
+  d.append(b.svg);
+  return { el: d, apply: b.apply };
+}
+
+/* ================================================================
+   Modes: filmstrip (?strip=1&state=working&n=12) | page (?t=ms freezes)
+   ================================================================ */
+if (params.has("strip")){
+  root.classList.add("av-hats--strip");
+  const state = STATE_NAMES.includes(params.get("state")) ? params.get("state") : "idle";
+  const n = Math.max(2, +params.get("n") || 12);
+  const L = STATES[state].ms;
+  /* default: n frames across one loop (last frame == first, so stop short);
+     &from=&to= (ms) zooms the sampling onto one beat */
+  const from = +params.get("from") || 0;
+  const to = params.has("to") ? +params.get("to") : L*(n - 1)/n;
+  const at = i => from + (to - from)*i/(n - 1);
+  const grid = document.createElement("div");
+  grid.className = "strip";
+  grid.style.setProperty("--n", n);
+  grid.insertAdjacentHTML("beforeend", `<div class="h">${state} · ${L} ms</div>`);
+  for (let i = 0; i < n; i++)
+    grid.insertAdjacentHTML("beforeend", `<div class="h">${Math.round(at(i))} ms</div>`);
+  POSITIONS.forEach((P, pi) => {
+    grid.insertAdjacentHTML("beforeend", `<div class="rl">${P.pos}<small>${HATS[P.hat].name}</small></div>`);
+    for (let i = 0; i < n; i++){
+      const t = at(i);
+      const p = pose(t, state);
+      const c = document.createElement("div"); c.className = "sc";
+      for (const sz of [80, 28]){ const a = mkAvatar(pi, sz); a.apply(p); c.append(a.el); }
+      grid.append(c);
+    }
+  });
+  root.append(grid);
+} else {
+  root.insertAdjacentHTML("beforeend", `
+    <h1>Team avatars, variant A: hats</h1>
+    <p class="lede">Monocle Guy as every bot's face; the position is the hat. Same rig, same geometry, same
+      acting vocabulary as the setup overlay. The 96 px cell is for review, the 28 px twin is the real size
+      in the room. Every state is a seamless pose(t) loop that starts from the neutral perch.</p>
+    <table><thead><tr><th>Position</th><th>Hat</th><th>Why</th></tr></thead><tbody>${
+      POSITIONS.map(P => `<tr><td class="pos"><span class="sw" style="--tag:${P.tag}"></span>${P.pos}</td>
+        <td>${HATS[P.hat].name}</td><td class="why">${P.why}</td></tr>`).join("")}</tbody></table>
+    <h2>States</h2>
+    <div class="ctl">
+      <select id="av-state"><option value="columns">By column</option>${
+        STATE_NAMES.map(s => `<option value="${s}">All: ${s}</option>`).join("")}</select>
+      <button id="av-play">Pause</button>
+      <input id="av-scrub" type="range" min="0" max="${SLEEP_MS}" step="10" value="0">
+      <span class="t" id="av-t">0.00 s</span>
+    </div>
+    <div class="gal" id="av-gal"><div class="h"></div>${STATE_NAMES.map(s => `<div class="h">${s}</div>`).join("")}</div>
+    <h2>In context</h2>
+    <div class="ctx">
+      <div class="pane" id="av-room"></div>
+      <div class="pane roster" id="av-roster"><div class="kicker">Team · 6 bots</div></div>
+    </div>`);
+
+  const cells = [];   // { state, t0, prev, switchAt, apply(p) }
+  const gal = root.querySelector("#av-gal");
+  POSITIONS.forEach((P, pi) => {
+    gal.insertAdjacentHTML("beforeend", `<div class="rl">${P.pos}<small>${HATS[P.hat].name}</small></div>`);
+    STATE_NAMES.forEach(s => {
+      const c = document.createElement("div"); c.className = "cell";
+      const a96 = mkAvatar(pi, 96), a28 = mkAvatar(pi, 28);
+      c.append(a96.el, a28.el); gal.append(c);
+      cells.push({ column: s, state: s, t0: 0, prev: null, switchAt: -1,
+        apply(p){ a96.apply(p); a28.apply(p); } });
+    });
+  });
+
+  /* mock room rows + roster: 28 px next to real text */
+  const room = root.querySelector("#av-room");
+  const ROOM = [
+    [3, "working", "Swapped the roster dot for the face; the dot was carrying state the face now carries."],
+    [1, "waiting", "Two ways to crop the bust. Tighter reads better at 28 but loses the top hat. Which do you want?"],
+    [0, "idle",    "Agreed. Ship the tight crop and give the top hat 2 units of headroom. Rack, can you take the sidebar?"],
+  ];
+  ROOM.forEach(([pi, s, text], i) => {
+    const P = POSITIONS[pi];
+    const row = document.createElement("div"); row.className = "msg";
+    const a = mkAvatar(pi, 28);
+    row.append(a.el);
+    row.insertAdjacentHTML("beforeend", `<div><div class="head"><span class="name">${P.nick}</span>
+      <span class="pos">${P.pos}</span><span class="time">${["10:41","10:42","10:44"][i]}</span></div>
+      <div class="text">${text}</div></div>`);
+    room.append(row);
+    cells.push({ column: s, state: s, t0: 0, prev: null, switchAt: -1, apply: a.apply });
+  });
+  const roster = root.querySelector("#av-roster");
+  const ROSTER_STATES = ["idle", "waiting", "working", "working", "asleep", "idle"];
+  POSITIONS.forEach((P, pi) => {
+    const row = document.createElement("div"); row.className = "rb";
+    const a = mkAvatar(pi, 28); row.append(a.el);
+    row.insertAdjacentHTML("beforeend",
+      `<div><div class="nick">${P.nick}</div><div class="pos">${P.pos}</div></div><span class="dot" data-s="${ROSTER_STATES[pi]}"></span>`);
+    roster.append(row);
+    cells.push({ column: ROSTER_STATES[pi], state: ROSTER_STATES[pi], t0: 0, prev: null, switchAt: -1, apply: a.apply });
+  });
+
+  const scrub = root.querySelector("#av-scrub"), readout = root.querySelector("#av-t");
+  const playBtn = root.querySelector("#av-play"), sel = root.querySelector("#av-state");
+  const frozen = params.has("t");
+  let T = frozen ? +params.get("t") : 0;
+  let playing = !frozen;
+  let last = performance.now();
+
+  function draw(){
+    for (const c of cells){
+      let p = pose(T - c.t0, c.state);
+      if (c.prev){
+        const u = clamp01((T - c.switchAt)/300);        // 300 ms cross-fade on a state switch
+        p = u < 1 ? lerpPose(c.prev, p, EASES.out(u)) : (c.prev = null, p);
+      }
+      c.last = p;
+      c.apply(p);
+    }
+    scrub.value = T % (SLEEP_MS + 10);
+    readout.textContent = (T/1000).toFixed(2) + " s";
+  }
+  function frame(now){
+    const dt = Math.min(64, now - last); last = now;
+    if (playing) T += dt;
+    draw();
+    requestAnimationFrame(frame);
+  }
+  if (frozen) draw(); else requestAnimationFrame(frame);
+
+  sel.onchange = () => {
+    for (const c of cells){
+      const s = sel.value === "columns" ? c.column : sel.value;
+      if (s === c.state) continue;
+      c.prev = c.last; c.switchAt = T; c.t0 = T; c.state = s;
+    }
+  };
+  playBtn.onclick = () => { playing = !playing; playBtn.textContent = playing ? "Pause" : "Play"; };
+  scrub.oninput = () => { playing = false; playBtn.textContent = "Play"; T = +scrub.value; if (frozen) draw(); };
+  addEventListener("keydown", e => {
+    if (e.key === " "){ e.preventDefault(); playBtn.onclick(); }
+    if (e.key === "ArrowRight"){ playing = false; playBtn.textContent = "Play"; T += e.shiftKey ? 10 : 50; }
+    if (e.key === "ArrowLeft"){ playing = false; playBtn.textContent = "Play"; T = Math.max(0, T - (e.shiftKey ? 10 : 50)); }
+  });
+}
+})();
+</script>
+</body>
+</html>

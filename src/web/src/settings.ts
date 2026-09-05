@@ -19,6 +19,7 @@ import { Dropdown } from "./dropdown.js";
 import { showOnboarding } from "./onboarding.js";
 import { confirmDialog } from "./confirm.js";
 import { buildSettingsMascot } from "./settings-mascot.js";
+import { setFaceColorMode } from "./bot-face.js";
 
 let overlay: HTMLElement | null = null;
 let shellDropdown: Dropdown | null = null;
@@ -29,6 +30,7 @@ let seedsInput: HTMLTextAreaElement | null = null;
 let projectListEl: HTMLElement | null = null;
 let fontInput: HTMLInputElement | null = null;
 let resumeToggle: HTMLButtonElement | null = null;
+let facesToggle: HTMLButtonElement | null = null;
 let newTabDropdown: Dropdown | null = null;
 let updateCheckBtn: HTMLButtonElement | null = null;
 let updateStatusEl: HTMLElement | null = null;
@@ -58,6 +60,7 @@ export function closeSettings(): void {
   projectListEl = null;
   fontInput = null;
   resumeToggle = null;
+  facesToggle = null;
   newTabDropdown?.dispose();
   newTabDropdown = null;
   updateCheckBtn = null;
@@ -101,6 +104,8 @@ export function applySettingsData(msg: SettingsDataMessage): void {
   // Default the toggle ON when the host omits the flag — matches the
   // Settings.ResumeAgentsOnLaunch code default (resume is opt-out).
   setToggle(resumeToggle, msg.resumeAgentsOnLaunch ?? true);
+  // Faces default to plain ink; colour is the opt-in.
+  if (facesToggle) setToggle(facesToggle, msg.teamFacesColor ?? false);
 
   // Absent → "top", matching the host's Settings.NewTabPosition default.
   newTabDropdown?.setOptions(
@@ -169,6 +174,7 @@ function renderProjectList(msg: SettingsDataMessage): void {
   for (const p of projects) {
     const row = document.createElement("div");
     row.className = "settings-project";
+    if (p.hidden) row.classList.add("settings-project--hidden");
 
     const head = document.createElement("div");
     head.className = "settings-project__head";
@@ -190,6 +196,25 @@ function renderProjectList(msg: SettingsDataMessage): void {
       if (e.key === "Enter") name.blur();
     });
     head.appendChild(name);
+
+    // Hide ⇄ show in the sidebar. No confirm — it's fully reversible and the
+    // button itself flips to the undo. The sidebar's project mode folds hidden
+    // projects into its "Hidden" drawer.
+    const hide = document.createElement("button");
+    hide.type = "button";
+    hide.className = "settings-btn settings-btn--subtle settings-project__hide";
+    hide.textContent = p.hidden ? "Show" : "Hide";
+    hide.title = p.hidden
+      ? "Show this project in the sidebar again"
+      : "Fold this project into the sidebar's Hidden drawer";
+    hide.addEventListener("click", () => {
+      send({ type: "project.update", id: p.id, hidden: !p.hidden });
+      // The host replies with a state push, not fresh settings.data — flip the
+      // local copy and re-render this list so the row doesn't read stale.
+      p.hidden = !p.hidden;
+      renderProjectList(msg);
+    });
+    head.appendChild(hide);
 
     const remove = document.createElement("button");
     remove.type = "button";
@@ -262,6 +287,7 @@ function save(): void {
     defaultCwd: cwdInput.value.trim(),
     fontSize,
     resumeAgentsOnLaunch: resumeToggle ? getToggle(resumeToggle) : undefined,
+    teamFacesColor: facesToggle ? getToggle(facesToggle) : undefined,
     newTabPosition: newTabDropdown
       ? (newTabDropdown.value as NewTabPosition)
       : undefined,
@@ -531,6 +557,19 @@ function buildSkeleton(): void {
       "Resume Claude sessions on launch",
       "When Perch starts, offer to reopen the Claude conversations that were running.",
       resumeToggle,
+    ),
+  );
+
+  // Team bot faces: plain ink by default (the mascot as it is everywhere
+  // else); colour is the opt-in. Applied on the spot so the room shows the
+  // change while the dialog is still open; the host persists it on save.
+  facesToggle = makeToggle("Bot faces in colour");
+  facesToggle.addEventListener("click", () => setFaceColorMode(getToggle(facesToggle!)));
+  sessions.appendChild(
+    makeRow(
+      "Bot faces in colour",
+      "The bird itself takes the bot's colour. Off keeps the bird in plain ink; the circle behind it is always the bot's colour.",
+      facesToggle,
     ),
   );
 

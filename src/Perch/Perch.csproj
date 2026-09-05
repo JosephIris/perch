@@ -64,7 +64,11 @@
     <WebSource Include="$(MSBuildThisFileDirectory)..\web\index.html" />
     <WebSource Include="$(MSBuildThisFileDirectory)..\web\esbuild.config.mjs" />
   </ItemGroup>
+  <!-- `dotnet build -p:SkipWebBundle=true` compiles the host without touching
+       the page: for host-only test runs while the page is mid-edit (a
+       broken import would otherwise fail the C# build too). Never set in CI. -->
   <Target Name="BundleWeb" BeforeTargets="BeforeBuild"
+          Condition="'$(SkipWebBundle)' != 'true'"
           Inputs="@(WebSource)"
           Outputs="$(MSBuildThisFileDirectory)wwwroot\app.js">
     <Exec Command="npm --prefix &quot;$(MSBuildThisFileDirectory)..\web&quot; run build"

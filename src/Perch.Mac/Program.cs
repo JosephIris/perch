@@ -16,6 +16,27 @@ internal static class Program
         // update/uninstall invocations short-circuit (same as the WPF App).
         VelopackApp.Build().Run();
 
+        // Second launch against the same data dir? Focus the window that's
+        // already there and get out — same rule as the WPF host's
+        // SingleInstance, before anything touches PATH or spawns.
+        if (!MacSingleInstance.TryAcquire()) return;
+
+        // Perch launched from inside a Claude Code session (a dev running it
+        // from an agent's terminal, a test harness) inherits that session's
+        // markers, and every `claude` we start — pane shells AND the headless
+        // `claude -p` jobs the team room runs — would then believe it is a
+        // CHILD of it: transcript saving off, no journal, no resume. Same
+        // list as App.xaml.cs; UnixPty additionally filters the pane env.
+        foreach (var name in new[]
+        {
+            "CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PID",
+            "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_EXECPATH", "CLAUDE_CODE_BRIDGE_SESSION_ID",
+            "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_EFFORT",
+        })
+        {
+            try { Environment.SetEnvironmentVariable(name, null); } catch { }
+        }
+
         // Thumbnails via sips (bundled with macOS) — assigned before any
         // controller can ask for one.
         ImageThumb.Codec = SipsCodec.JpegBase64;

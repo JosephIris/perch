@@ -262,6 +262,48 @@ public class ProtocolTests
             "{\"type\":\"peer.msg\",\"phase\":\"sent\",\"target\":\"weekly-digest\",\"text\":\"t\",\"ok\":false}",
             IpcJson.Options)!;
         Assert.False(sent.Ok);
+        // The pre-team shape carries no body: Message/Summary default null
+        // rather than failing the parse of an older hook binary.
+        Assert.Null(sent.Message);
+        Assert.Null(sent.Summary);
+
+        // The team-room shape: the full body (newlines intact) and the
+        // sender's own summary ride alongside the unchanged one-line cut.
+        var full = JsonSerializer.Deserialize<PeerMsgMessage>(
+            "{\"type\":\"peer.msg\",\"phase\":\"sent\",\"target\":\"bo\",\"text\":\"Schema done\",\"ok\":true,"
+            + "\"message\":\"Schema done.\\nThe column is tenant_id.\",\"summary\":\"Schema done\"}",
+            IpcJson.Options)!;
+        Assert.True(full.Ok);
+        Assert.Equal("Schema done.\nThe column is tenant_id.", full.Message);
+        Assert.Equal("Schema done", full.Summary);
+        Assert.Equal("Schema done", full.Text);
+    }
+
+    [Fact]
+    public void TeamPost_PipeShape()
+    {
+        // `perch team post <text>` from inside a bot's pane: text only.
+        var post = JsonSerializer.Deserialize<TeamPostMessage>(
+            "{\"type\":\"team.post\",\"text\":\"Sidebar mockup is in design-loop/team.html\"}",
+            IpcJson.Options)!;
+        Assert.Equal("Sidebar mockup is in design-loop/team.html", post.Text);
+        // A bare post (no text) still parses; the host drops it.
+        Assert.Null(JsonSerializer.Deserialize<TeamPostMessage>("{\"type\":\"team.post\"}", IpcJson.Options)!.Text);
+
+        // `perch team artefact --file …`: the CLI sends an absolute path and
+        // the extension it read from it; --text sends the body instead.
+        var fromFile = JsonSerializer.Deserialize<TeamArtefactMessage>(
+            "{\"type\":\"team.artefact\",\"title\":\"draft.md\",\"summary\":\"for Galina\","
+            + "\"path\":\"C:\\\\repo\\\\draft.md\",\"text\":null,\"ext\":\"md\"}",
+            IpcJson.Options)!;
+        Assert.Equal(@"C:\repo\draft.md", fromFile.Path);
+        Assert.Equal("md", fromFile.Ext);
+        Assert.Equal("for Galina", fromFile.Summary);
+        var inline = JsonSerializer.Deserialize<TeamArtefactMessage>(
+            "{\"type\":\"team.artefact\",\"title\":\"Counters\",\"text\":\"| a |\\n|---|\"}", IpcJson.Options)!;
+        Assert.Equal("Counters", inline.Title);
+        Assert.Null(inline.Path);
+        Assert.Null(inline.Ext);
     }
 
     [Fact]
@@ -310,6 +352,11 @@ public class ProtocolTests
             $"{{\"type\":\"project.update\",\"id\":\"{G1}\",\"seedPaths\":[\"src/web/node_modules\"]}}");
         Assert.Null(upd.Name);                       // absent → leave the name alone
         Assert.Equal(new[] { "src/web/node_modules" }, upd.SeedPaths);
+        Assert.Null(upd.Hidden);                     // absent → leave visibility alone
+        Assert.True(Round<ProjectUpdateMsg>(
+            $"{{\"type\":\"project.update\",\"id\":\"{G1}\",\"hidden\":true}}").Hidden);
+        Assert.False(Round<ProjectUpdateMsg>(
+            $"{{\"type\":\"project.update\",\"id\":\"{G1}\",\"hidden\":false}}").Hidden);
     }
 
     [Fact]
@@ -475,6 +522,182 @@ public class ProtocolTests
     }
 
     // ---- Router mechanics ---------------------------------------------------
+
+    // ---- team ------------------------------------------------------------
+    // The team room and new-bot dialog, written exactly as team-room.ts /
+    // new-bot-dialog.ts send them.
+
+    [Fact]
+    public void TeamRequest_SinceSeqOptional()
+    {
+        var m = Round<TeamRequestMsg>($"{{\"type\":\"team.request\",\"projectId\":\"{G1}\"}}");
+        Assert.Equal(Guid.Parse(G1), m.ProjectId);
+        Assert.Null(m.SinceSeq);
+        Assert.Equal(41, Round<TeamRequestMsg>($"{{\"type\":\"team.request\",\"projectId\":\"{G1}\",\"sinceSeq\":41}}").SinceSeq);
+    }
+
+    [Fact]
+    public void TeamPost_ToIsPolymorphic()
+    {
+        // An array of nicknames, the string "everyone", or null (unaddressed —
+        // the host routes it). All three must land intact.
+        var named = Round<TeamPostMsg>($"{{\"type\":\"team.post\",\"projectId\":\"{G1}\",\"text\":\"@Ada hi\",\"to\":[\"Ada\"],\"clientId\":\"c1\"}}");
+        Assert.Equal("@Ada hi", named.Text);
+        Assert.Equal("c1", named.ClientId);
+        Assert.Equal(JsonValueKind.Array, named.To!.Value.ValueKind);
+        Assert.Equal("Ada", named.To.Value[0].GetString());
+
+        var all = Round<TeamPostMsg>($"{{\"type\":\"team.post\",\"projectId\":\"{G1}\",\"text\":\"x\",\"to\":\"everyone\",\"clientId\":\"c2\"}}");
+        Assert.Equal("everyone", all.To!.Value.GetString());
+
+        var routed = Round<TeamPostMsg>($"{{\"type\":\"team.post\",\"projectId\":\"{G1}\",\"text\":\"x\",\"to\":null,\"clientId\":\"c3\"}}");
+        Assert.True(routed.To == null || routed.To.Value.ValueKind == JsonValueKind.Null);
+    }
+
+    [Fact]
+    public void TeamBotCreate_NewOrExistingPosition()
+    {
+        var fresh = Round<TeamBotCreateMsg>(
+            $"{{\"type\":\"team.bot.create\",\"projectId\":\"{G1}\",\"nickname\":\"Ada\",\"worktree\":true," +
+            "\"position\":{\"name\":\"Frontend dev\",\"purpose\":\"Owns src/web\",\"referencePath\":\"C:\\\\repo\",\"model\":\"sonnet\",\"brief\":\"## Role\\nYou own src/web.\"}}");
+        Assert.Equal("Ada", fresh.Nickname);
+        Assert.True(fresh.Worktree);
+        Assert.Null(fresh.PositionSlug);
+        Assert.Equal("Frontend dev", fresh.Position!.Name);
+        Assert.Equal(@"C:\repo", fresh.Position.ReferencePath);
+        Assert.Equal("## Role\nYou own src/web.", fresh.Position.Brief);
+
+        var reuse = Round<TeamBotCreateMsg>(
+            $"{{\"type\":\"team.bot.create\",\"projectId\":\"{G1}\",\"nickname\":\"Bo\",\"worktree\":false,\"positionSlug\":\"frontend-dev\"}}");
+        Assert.Equal("frontend-dev", reuse.PositionSlug);
+        Assert.False(reuse.Worktree);
+        Assert.Null(reuse.Position);
+        // perch test sends flags as strings.
+        Assert.True(Round<TeamBotCreateMsg>(
+            $"{{\"type\":\"team.bot.create\",\"projectId\":\"{G1}\",\"nickname\":\"Cy\",\"worktree\":\"true\",\"positionSlug\":\"x\"}}").Worktree);
+    }
+
+    [Fact]
+    public void TeamBriefMessages()
+    {
+        var g = Round<TeamBriefGenerateMsg>(
+            $"{{\"type\":\"team.brief.generate\",\"jobId\":\"j1\",\"projectId\":\"{G1}\",\"positionName\":\"Analyst\",\"purpose\":\"Reads the data\",\"referencePath\":\"C:\\\\repo\",\"model\":\"opus\"}}");
+        Assert.Equal("j1", g.JobId);
+        Assert.Equal("Analyst", g.PositionName);
+        Assert.Equal("Reads the data", g.Purpose);
+        Assert.Equal("opus", g.Model);
+        Assert.Equal("j1", Round<TeamBriefCancelMsg>("{\"type\":\"team.brief.cancel\",\"jobId\":\"j1\"}").JobId);
+    }
+
+    [Fact]
+    public void TeamPositionUpdate_PartialKeys()
+    {
+        var m = Round<TeamPositionUpdateMsg>(
+            $"{{\"type\":\"team.position.update\",\"projectId\":\"{G1}\",\"slug\":\"analyst\",\"brief\":\"## Role\\nnew\"}}");
+        Assert.Equal("analyst", m.Slug);
+        Assert.Equal("## Role\nnew", m.Brief);
+        Assert.Null(m.Purpose);
+        Assert.Null(m.Name);
+    }
+
+    [Fact]
+    public void TeamBotRemove_AndRoom_AndBrowse()
+    {
+        var r = Round<TeamBotRemoveMsg>(
+            $"{{\"type\":\"team.bot.remove\",\"projectId\":\"{G1}\",\"botId\":\"bo\",\"closeTab\":true}}");
+        Assert.Equal("bo", r.BotId);
+        Assert.True(r.CloseTab);
+        Assert.Null(r.RemoveWorktree);
+
+        var room = Round<TeamRoomMsg>($"{{\"type\":\"team.room\",\"projectId\":\"{G1}\",\"open\":true}}");
+        Assert.True(room.Open);
+
+        var b = Round<TeamReferenceBrowseMsg>($"{{\"type\":\"team.reference.browse\",\"requestId\":\"r1\",\"projectId\":\"{G1}\"}}");
+        Assert.Equal("r1", b.RequestId);
+        Assert.Equal(Guid.Parse(G1), b.ProjectId);
+    }
+
+    [Fact]
+    public void TeamMilestoneB_Verbs_RoundTrip()
+    {
+        var rename = Round<TeamTaskRenameMsg>($"{{\"type\":\"team.task.rename\",\"projectId\":\"{G1}\",\"taskId\":\"abcd1234\",\"title\":\"Dark footer\"}}");
+        Assert.Equal("abcd1234", rename.TaskId);
+        Assert.Equal("Dark footer", rename.Title);
+        var confirm = Round<TeamTaskConfirmMsg>($"{{\"type\":\"team.task.confirm\",\"projectId\":\"{G1}\",\"taskId\":\"abcd1234\"}}");
+        Assert.Equal("abcd1234", confirm.TaskId);
+        var reject = Round<TeamTaskRejectMsg>($"{{\"type\":\"team.task.reject\",\"projectId\":\"{G1}\",\"taskId\":\"abcd1234\",\"note\":\"footer shifts\"}}");
+        Assert.Equal("footer shifts", reject.Note);
+        var close = Round<TeamTaskCloseMsg>($"{{\"type\":\"team.task.close\",\"projectId\":\"{G1}\",\"taskId\":\"abcd1234\"}}");
+        Assert.Equal("abcd1234", close.TaskId);
+        var again = Round<TeamDeliverRetryMsg>($"{{\"type\":\"team.deliver.retry\",\"projectId\":\"{G1}\",\"seq\":803,\"botId\":\"alush\"}}");
+        Assert.Equal((803L, "alush"), (again.Seq, again.BotId));
+        var open = Round<TeamArtefactOpenMsg>($"{{\"type\":\"team.artefact.open\",\"projectId\":\"{G1}\",\"id\":\"9f2c11aa\"}}");
+        Assert.Equal("9f2c11aa", open.Id);
+        var list = Round<TeamArtefactListMsg>($"{{\"type\":\"team.artefact.list\",\"projectId\":\"{G1}\"}}");
+        Assert.Equal(Guid.Parse(G1), list.ProjectId);
+        var tab = Round<TeamArtefactTabMsg>(
+            $"{{\"type\":\"team.artefact.tab\",\"projectId\":\"{G1}\",\"id\":\"9f2c11aa\",\"title\":\"Draft ticket\",\"html\":\"<!doctype html><p>hi</p>\"}}");
+        Assert.Equal(("9f2c11aa", "Draft ticket"), (tab.Id, tab.Title));
+        Assert.Contains("<p>hi</p>", tab.Html);
+        var perm = Round<TeamPermAnswerMsg>($"{{\"type\":\"team.perm.answer\",\"projectId\":\"{G1}\",\"id\":\"p1\",\"decision\":\"allow\"}}");
+        Assert.Equal("allow", perm.Decision);
+        var ask = Round<TeamAskAnswerMsg>($"{{\"type\":\"team.ask.answer\",\"projectId\":\"{G1}\",\"id\":\"q1\",\"answer\":\"Ship it\"}}");
+        Assert.Equal("Ship it", ask.Answer);
+        var image = Round<TeamImageMsg>($"{{\"type\":\"team.image\",\"projectId\":\"{G1}\",\"path\":\"C:\\\\shots\\\\a.png\"}}");
+        Assert.Equal(@"C:\shots\a.png", image.Path);
+        var react = Round<TeamReactMsg>($"{{\"type\":\"team.react\",\"projectId\":\"{G1}\",\"seq\":42,\"emoji\":\"✅\"}}");
+        Assert.Equal(42, react.Seq);
+        Assert.Equal("✅", react.Emoji);
+    }
+
+    [Fact]
+    public void TeamMilestoneB_PipeShapes()
+    {
+        var ask = JsonSerializer.Deserialize<PermAskMessage>(
+            "{\"type\":\"perm.ask\",\"id\":\"p1\",\"tool\":\"Bash\",\"summary\":\"rm -rf build\",\"input\":\"{\\\"command\\\":\\\"rm -rf build\\\"}\",\"suggestions\":[\"Bash(rm *)\"]}",
+            IpcJson.Options)!;
+        Assert.Equal("p1", ask.Id);
+        Assert.Equal("Bash", ask.Tool);
+        Assert.Equal("rm -rf build", ask.Summary);
+        Assert.Equal("Bash(rm *)", Assert.Single(ask.Suggestions!));
+        var denied = JsonSerializer.Deserialize<PermDeniedMessage>("{\"type\":\"perm.denied\",\"tool\":\"Bash\",\"summary\":\"curl x\"}", IpcJson.Options)!;
+        Assert.Null(denied.Reason);
+        var post = JsonSerializer.Deserialize<TeamPostMessage>("{\"type\":\"team.post\",\"text\":\"look\",\"image\":\"C:\\\\a.png\"}", IpcJson.Options)!;
+        Assert.Equal(@"C:\a.png", post.Image);
+        var old = JsonSerializer.Deserialize<TeamPostMessage>("{\"type\":\"team.post\",\"text\":\"look\"}", IpcJson.Options)!;
+        Assert.Null(old.Image);
+        var q = JsonSerializer.Deserialize<TeamAskMessage>("{\"type\":\"team.ask\",\"id\":\"q1\",\"text\":\"Ship?\",\"choices\":[\"Yes\",\"No\"]}", IpcJson.Options)!;
+        Assert.Equal(2, q.Choices!.Length);
+        var r = JsonSerializer.Deserialize<TeamReactMessage>("{\"type\":\"team.react\",\"target\":\"#12\",\"emoji\":\"👀\"}", IpcJson.Options)!;
+        Assert.Equal("#12", r.Target);
+        var task = JsonSerializer.Deserialize<TeamTaskMessage>("{\"type\":\"team.task\",\"op\":\"assign\",\"taskId\":\"abcd1234\",\"bot\":\"ada\",\"title\":\"x\"}", IpcJson.Options)!;
+        Assert.Equal("abcd1234", task.TaskId);
+        var legacyTask = JsonSerializer.Deserialize<TeamTaskMessage>("{\"type\":\"team.task\",\"op\":\"mine\",\"status\":\"done\"}", IpcJson.Options)!;
+        Assert.Null(legacyTask.TaskId);
+        var session = JsonSerializer.Deserialize<SessionMessage>("{\"type\":\"session\",\"id\":\"abc\",\"name\":\"ada\",\"socket\":\"uds:\\\\\\\\.\\\\pipe\\\\LOCAL\\\\cc-msg-1\"}", IpcJson.Options)!;
+        Assert.Equal(@"uds:\\.\pipe\LOCAL\cc-msg-1", session.Socket);
+    }
+
+    [Fact]
+    public void TeamPost_MayCarryAPastedPicture_AndPasteAsksTheHost()
+    {
+        var m = Round<TeamPostMsg>(
+            $"{{\"type\":\"team.post\",\"projectId\":\"{G1}\",\"text\":\"\",\"to\":null,\"clientId\":\"c9\",\"image\":\"C:\\\\repo\\\\.perch\\\\team\\\\local\\\\images\\\\paste-1.png\"}}");
+        Assert.Equal(@"C:\repo\.perch\team\local\images\paste-1.png", m.Image);
+        Assert.Equal("", m.Text);
+        Assert.Null(Round<TeamPostMsg>($"{{\"type\":\"team.post\",\"projectId\":\"{G1}\",\"text\":\"x\",\"to\":null,\"clientId\":\"c1\"}}").Image);
+        Assert.Equal(Guid.Parse(G1), Round<TeamPasteMsg>($"{{\"type\":\"team.paste\",\"projectId\":\"{G1}\"}}").ProjectId);
+    }
+
+    [Fact]
+    public void TeamBotAnswer_CarriesTheChoice()
+    {
+        var m = Round<TeamBotAnswerMsg>(
+            $"{{\"type\":\"team.bot.answer\",\"projectId\":\"{G1}\",\"botId\":\"big-dawg\",\"answer\":\"trust\"}}");
+        Assert.Equal(Guid.Parse(G1), m.ProjectId);
+        Assert.Equal("big-dawg", m.BotId);
+        Assert.Equal("trust", m.Answer);
+    }
 
     [Fact]
     public void Router_DispatchesTypedAndPayloadless()

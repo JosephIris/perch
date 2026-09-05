@@ -23,11 +23,16 @@ import { showNewTabDialog } from "./new-tab-dialog.js";
 import { RestoreProgress } from "./restore-progress.js";
 import { openCommitsPopover, openCommitsLightbox } from "./commits-view.js";
 import { showCloudPanel, applyCloudData } from "./cloud-panel.js";
-import type { SessionView, PaneTreeView } from "./bridge.js";
+import type { SessionView, PaneTreeView, ProjectView, StateMessage, TeamDataMessage, TeamEntryView } from "./bridge.js";
+import { openTeamRoom, applyTeamState, onTeamRoomChange, feedTeamFixture, applyArtefact, applyArtefactIndex } from "./team-room.js";
+import { showNewBotDialog, applyBriefProgress, applyBriefResult, applyReferencePicked } from "./new-bot-dialog.js";
+import { onMessage as onHostMessage } from "./bridge.js";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { createSetupOverlay } from "./setup-overlay.js";
 import { initInspector } from "./inspector.js";
+import { createBotFace, setFaceColorMode, faceColorMode, freezeFaces, FACE_HATS, FACE_EYEWEAR, FACE_EXTRAS, FACE_TEMPERS, FACE_STATES } from "./bot-face.js";
+import type { BotLook, FaceHat, FaceState, FaceTemper } from "./bot-face.js";
 import "@xterm/xterm/css/xterm.css";
 
 type Leaf = Extract<PaneTreeView, { kind: "leaf" }>;
@@ -176,7 +181,14 @@ const sessions: SessionView[] = [
   },
 ];
 
-const view = location.hash.replace("#", "") || "sidebar";
+// The view is the hash. A `?k=v` tail on it (or the page's own search string)
+// carries view options — e.g. #botfaces?t=1200&color=1 — so a capture can pin
+// a frame by number without a second HTML shell.
+const hashRaw = location.hash.replace("#", "");
+const hashQ = hashRaw.indexOf("?");
+const view = (hashQ < 0 ? hashRaw : hashRaw.slice(0, hashQ)) || "sidebar";
+const viewParams = new URLSearchParams(location.search);
+if (hashQ >= 0) new URLSearchParams(hashRaw.slice(hashQ + 1)).forEach((v, k) => viewParams.set(k, v));
 
 // Live tickers, same as main.ts — the harness should breathe like the app
 // (elapsed labels count, working spinners spin) so captures look real.
@@ -269,13 +281,16 @@ const projectSessions: SessionView[] = [
     branch: "dag-fixes", doneAtMs: FOUR_MIN_AGO, linesAdded: 52, linesDeleted: 18, filesChanged: 3,
   }),
   // Two SLEPT tabs (the moon button) — they file into the project's collapsed
-  // "Idle" drawer instead of the active list, newest-slept first. Both wear the
-  // hollow ring, because sleeping a tab stops its agent. Two of them (not one)
-  // so the drawer's own tree connectors are visible: a trunk with an elbow.
+  // "Idle" drawer instead of the active list, newest-slept first. Two of them
+  // (not one) so the drawer's own tree connectors are visible: a trunk with an
+  // elbow. The first one keeps agentState "done" ON PURPOSE: you usually sleep
+  // a tab right after its agent hands the turn back, so the row arrives in the
+  // drawer carrying a green dot. Dormant has to win over that — see the
+  // [data-state="dormant"] rule in style.css.
   projectTab({
     id: "s-tab-sleep1", title: "cleanup ds2 gcs", dormant: true,
-    rootPane: leaf({ name: "cleanup ds2 gcs", agentState: "idle", branch: "main" }),
-    agentState: "idle", doneAtMs: 0, lastActivity: "3d ago",
+    rootPane: leaf({ name: "cleanup ds2 gcs", agentState: "done", branch: "main" }),
+    agentState: "done", doneAtMs: 0, lastActivity: "3d ago",
   }),
   projectTab({
     id: "s-tab-sleep2", title: "non_att_today", dormant: true,
@@ -797,6 +812,135 @@ if (view === "hero") {
 // case — and Fable at its weekly limit, disabled with a reset hint). The left
 // menu is a DOM clone of the real flyout (the module allows one live menu at a
 // time); the right one is live, so opening this page in a browser is clickable.
+// #botfaces — the team room's avatars (bot-face.ts). The six hats down the
+// rows and the four states across; then every eyewear and every extra on a
+// beanie (idle + working, so the tools act); the six temperaments; and a
+// colour-mode toggle. ?t=<ms> pins every face at that loop time (freezeFaces)
+// so a capture is a frame by number; ?color=1 opens in colour mode. The 96 px
+// cell is for review, the 28 px twin beside it is the real size in the room.
+if (view === "botfaces") {
+  document.getElementById("app")!.classList.add("app--inspector-collapsed");   // the grid wants the width
+  const stage = document.getElementById("workspace")!;
+  // Opaque stage on purpose: the workspace is transparent for Mica, and a
+  // headless capture drops everything drawn over that region (CLAUDE.md, "both
+  // capture methods lie"). The room's surface is what the faces sit on anyway.
+  stage.style.cssText = "display:block;overflow:auto;padding:24px 32px 48px;border-radius:var(--r-card);background:var(--color-terminal-bg);color:var(--color-text-primary);font:13px/1.4 var(--font-text)";
+  const css = document.createElement("style");
+  css.textContent = `
+    .bfh h2{font-size:16px;font-weight:600;line-height:1.2;margin:32px 0 12px}
+    .bfh h2:first-of-type{margin-top:0}
+    .bfh .grid{display:grid;gap:8px 12px;align-items:center}
+    .bfh .grid .hd{font-size:12px;color:var(--color-text-tertiary);padding-bottom:4px}
+    .bfh .grid .rl{font-size:14px;font-weight:500}
+    .bfh .grid .rl small{display:block;font-size:12px;font-weight:400;color:var(--color-text-tertiary)}
+    .bfh .cell{display:flex;align-items:flex-end;gap:16px;padding:12px;border-radius:8px;background:var(--color-layer);border:1px solid var(--color-stroke)}
+    .bfh .av{flex:none;display:block}
+    .bfh .cell .av--28{margin-bottom:8px}
+    .bfh .ctl{display:flex;align-items:center;gap:12px;margin:0 0 16px;font-size:12px;color:var(--color-text-tertiary)}
+    .bfh .ctl button{font:inherit;color:var(--color-text-primary);background:var(--color-subtle-tertiary);border:1px solid var(--color-stroke);border-radius:4px;padding:4px 12px;cursor:pointer}`;
+  stage.append(css);
+  const root = document.createElement("div");
+  root.className = "bfh";
+  stage.append(root);
+
+  // The positions the hats mean, with the temperament and tag each wore in
+  // its mockup (character variant's cast; hats variant's palette order).
+  const CAST: { hat: FaceHat; pos: string; temper: FaceTemper; tag: number }[] = [
+    { hat: "captain", pos: "Team lead", temper: "lead", tag: 0 },
+    { hat: "beanie", pos: "Frontend dev", temper: "quick", tag: 1 },
+    { hat: "hardhat", pos: "Backend dev", temper: "steady", tag: 3 },
+    { hat: "beret", pos: "Designer", temper: "curious", tag: 5 },
+    { hat: "deerstalker", pos: "QA", temper: "wary", tag: 2 },
+    { hat: "tophat", pos: "Senior analyst", temper: "keen", tag: 4 },
+  ];
+  const HAT_NAME: Record<FaceHat, string> = { captain: "captain's cap", beanie: "beanie", hardhat: "hard hat", beret: "beret", deerstalker: "deerstalker", tophat: "top hat" };
+
+  const cell = (look: BotLook, state: FaceState, tag: number): HTMLElement => {
+    const c = document.createElement("div");
+    c.className = "cell";
+    for (const sz of [96, 28]) {
+      const box = document.createElement("div");
+      box.className = `av av--${sz}`;
+      box.style.cssText = `width:${sz}px;height:${sz}px;--tag:var(--color-pane-tag-${tag})`;
+      box.append(createBotFace(look, tag, state, 0).el);
+      c.append(box);
+    }
+    return c;
+  };
+  const grid = (cols: string[], colWidth: string): HTMLElement => {
+    const g = document.createElement("div");
+    g.className = "grid";
+    g.style.gridTemplateColumns = `168px repeat(${cols.length}, ${colWidth})`;
+    g.insertAdjacentHTML("beforeend", `<div class="hd"></div>${cols.map((s) => `<div class="hd">${s}</div>`).join("")}`);
+    return g;
+  };
+  const rowLabel = (g: HTMLElement, title: string, sub: string) =>
+    g.insertAdjacentHTML("beforeend", `<div class="rl">${title}<small>${sub}</small></div>`);
+
+  // controls
+  const ctl = document.createElement("div");
+  ctl.className = "ctl";
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  const label = () => { toggle.textContent = faceColorMode() ? "Colour: on" : "Colour: off"; };
+  toggle.onclick = () => { setFaceColorMode(!faceColorMode()); label(); };
+  ctl.append(toggle);
+  const note = document.createElement("span");
+  note.textContent = "?t=<ms> pins a frame; ?color=1 opens in colour";
+  ctl.append(note);
+  root.append(ctl);
+
+  // 1. the hats × the states
+  root.insertAdjacentHTML("beforeend", `<h2>Hats (the position) × states</h2>`);
+  const g1 = grid([...FACE_STATES], "1fr");
+  for (const m of CAST) {
+    rowLabel(g1, m.pos, `${HAT_NAME[m.hat]} · ${m.temper}`);
+    for (const s of FACE_STATES) g1.append(cell({ hat: m.hat, eyewear: "monocle", extra: "none", temper: m.temper }, s, m.tag));
+  }
+  root.append(g1);
+
+  // 2. every eyewear, every extra — on a beanie, idle and working
+  root.insertAdjacentHTML("beforeend", `<h2>Eyewear, on a beanie</h2>`);
+  const g2 = grid(["idle", "working", "waiting"], "1fr");
+  FACE_EYEWEAR.forEach((e, i) => {
+    rowLabel(g2, e, "steady · none");
+    for (const s of ["idle", "working", "waiting"] as const) g2.append(cell({ hat: "beanie", eyewear: e, extra: "none", temper: "steady" }, s, i % 6));
+  });
+  root.append(g2);
+  root.insertAdjacentHTML("beforeend", `<h2>Extras, on a beanie</h2>`);
+  const g3 = grid(["idle", "working", "asleep"], "1fr");
+  FACE_EXTRAS.forEach((x, i) => {
+    rowLabel(g3, x, "steady · monocle");
+    for (const s of ["idle", "working", "asleep"] as const) g3.append(cell({ hat: "beanie", eyewear: "monocle", extra: x, temper: "steady" }, s, i % 6));
+  });
+  root.append(g3);
+
+  // 3. the temperaments — same bird, six different people
+  root.insertAdjacentHTML("beforeend", `<h2>Temperaments, on a beanie</h2>`);
+  const g4 = grid([...FACE_STATES], "1fr");
+  FACE_TEMPERS.forEach((t, i) => {
+    rowLabel(g4, t, "monocle · none");
+    for (const s of FACE_STATES) g4.append(cell({ hat: "beanie", eyewear: "monocle", extra: "none", temper: t }, s, i % 6));
+  });
+  root.append(g4);
+  void FACE_HATS;
+
+  // ?only=hats|eyewear|extras|tempers keeps one block, so a capture fits a window
+  const only = viewParams.get("only");
+  if (only) {
+    const keep: Record<string, HTMLElement> = { hats: g1, eyewear: g2, extras: g3, tempers: g4 };
+    for (const [k, g] of Object.entries(keep)) {
+      if (k === only) continue;
+      g.previousElementSibling?.remove();   // its heading
+      g.remove();
+    }
+  }
+
+  if (viewParams.get("color") === "1") setFaceColorMode(true);
+  label();
+  if (viewParams.has("t")) freezeFaces(+viewParams.get("t")! || 0);
+}
+
 if (view === "modelmenu") {
   const stage = document.getElementById("workspace")!;
   stage.style.cssText = "display:flex;gap:32px;padding:24px;align-items:flex-start;";
@@ -1220,4 +1364,272 @@ if (view === "dashboard") {
       },
     ],
   });
+}
+
+
+// ---- Team room ---------------------------------------------------------------
+// #team          — the room over a 3-bot team: Ada working (2m), Bo blocked on a
+//                  permission prompt, Cy asleep. ~20 ledger rows covering every
+//                  kind, two work folds, a peer message, a pending post, and the
+//                  "older messages aren't shown" banner.
+// #team-empty    — a project with a team folder but no bots yet.
+// #team-sidebar  — the sidebar alone: the team row (with an unread count) and
+//                  the Bots drawer open (a bot's tab is active), its rows
+//                  wearing their position tags.
+// #team-sidebar-shut — the same with an ordinary tab active: the drawer as
+//                  it starts, shut, wearing the bots' most urgent state.
+// #newbot*       — the dialog: fresh / mid-generation / reviewing the brief /
+//                  the failure recovery / the existing-position path.
+if (view === "team" || view === "team-activity" || view === "team-empty" || view.startsWith("team-sidebar") || view.startsWith("newbot")) {
+  const teamProjects: ProjectView[] = [
+    {
+      id: "p-ptp", name: "storefront-web", path: "C:\\dev\\storefront-web",
+      team: {
+        positions: [
+          { slug: "frontend-dev", name: "Frontend dev", purpose: "Owns everything under src/web: the sidebar, the panes, the dialogs and the CSS tokens.", model: "sonnet", hasBrief: true },
+          { slug: "backend-dev", name: "Backend dev", purpose: "Owns the WPF host, the IPC pipes, the hook handler and the CLI.", model: "", hasBrief: true },
+          { slug: "designer", name: "Designer", purpose: "Keeps every surface on the constitution; mocks new surfaces before code.", model: "", hasBrief: false },
+        ],
+        bots: [
+          { botId: "b-ada", nickname: "Ada", positionSlug: "frontend-dev", positionName: "Frontend dev", sessionId: "s-ada", peerName: "ada",
+            look: { hat: "beanie", eyewear: "monocle", extra: "scarf", temper: "quick" } },
+          { botId: "b-bo", nickname: "Bo", positionSlug: "backend-dev", positionName: "Backend dev", sessionId: "s-bo", peerName: "bo",
+            look: { hat: "hardhat", eyewear: "rect", extra: "spanner", temper: "steady" } },
+          { botId: "b-cy", nickname: "Cy", positionSlug: "designer", positionName: "Designer", sessionId: "s-cy", peerName: "cy-2",
+            look: { hat: "beret", eyewear: "round", extra: "pencil", temper: "curious" } },
+        ],
+        lead: "b-ada",
+        // The task column: two cards — one the lead has asked to confirm, one
+        // still moving.
+        tasks: [
+          {
+            id: "t2", title: "Loading states for KPI Performance: skeleton cards and charts, buttons disabled while data loads",
+            status: "open", setBy: "Ada", createdAtMs: Date.now() - 35 * 60_000,
+            items: [
+              { botId: "b-ada", bot: "Ada", title: "Gate: review the diff, then merge and push", status: "todo", note: "", updatedAtMs: Date.now() - 1800_000 },
+              { botId: "b-bo", bot: "Bo", title: "Template + harness for the loading states", status: "doing", note: "template patched, shooting now", updatedAtMs: Date.now() - 240_000 },
+            ],
+            wrapping: [],
+          },
+          {
+            id: "t1", title: "Ship the team room: faces in the roster, bots folded in the sidebar, no dropped posts",
+            status: "review", setBy: "Ada", reviewBy: "Ada", createdAtMs: Date.now() - 2 * 3600_000,
+            items: [
+              { botId: "b-ada", bot: "Ada", title: "Faces in the room and roster", status: "done", note: "harness shot is in", updatedAtMs: Date.now() - 600_000 },
+              { botId: "b-bo", bot: "Bo", title: "Ledger fan-out and the submit check", status: "done", note: "", updatedAtMs: Date.now() - 1200_000 },
+              { botId: "b-cy", bot: "Cy", title: "Empty-state mock", status: "blocked", note: "waiting on the copy", updatedAtMs: Date.now() - 300_000 },
+            ],
+            wrapping: [],
+          },
+        ],
+      },
+    },
+    { id: "p-gm", name: "home-tools", path: "C:\\dev\\home-tools", team: { positions: [], bots: [] } },
+  ];
+  const permAsk = { text: "Allow running `npm install` in the worktree?", level: "error" as const };
+  const teamSessions: SessionView[] = [
+    projectTab({
+      id: "s-ada", title: "Ada",
+      rootPane: leaf({ name: "Ada", agentState: "working", activityDetail: "editing sidebar.ts", branch: "team/ada", colorIndex: 0, ahead: 2, aheadMine: 2 }),
+      agentState: "working", activityDetail: "editing sidebar.ts", workingCount: 1, turnStartMs: TWO_MIN_AGO,
+      worktreeBranch: "team/ada", branch: "team/ada", linesAdded: 143, linesDeleted: 31, filesChanged: 4, ahead: 2, aheadMine: 2,
+    }),
+    projectTab({
+      id: "s-bo", title: "Bo",
+      rootPane: leaf({ name: "Bo", agentState: "permission", branch: "team/bo", colorIndex: 3, notification: permAsk }),
+      agentState: "permission", notification: permAsk, waitingCount: 1,
+      worktreeBranch: "team/bo", branch: "team/bo", linesAdded: 12, linesDeleted: 2, filesChanged: 1,
+    }),
+    projectTab({
+      id: "s-cy", title: "Cy",
+      rootPane: leaf({ name: "Cy", agentState: "done", branch: "team/cy", colorIndex: 5 }),
+      agentState: "done", dormant: true, doneAtMs: Date.now() - 41 * 60_000,
+      worktreeBranch: "team/cy", branch: "team/cy",
+    }),
+    projectTab({
+      id: "s-plain", title: "signup flow",
+      rootPane: leaf({ name: "signup flow", agentState: "done", branch: "main", colorIndex: 1 }),
+      doneAtMs: Date.now() - 47_000, linesAdded: 40, linesDeleted: 9, filesChanged: 2,
+    }),
+  ];
+  const teamState: StateMessage = {
+    type: "state",
+    activeSessionId: "s-ada",
+    activePaneId: (teamSessions[0].rootPane as Extract<PaneTreeView, { kind: "leaf" }>).paneId,
+    homeDir: "C:\\Users\\me",
+    sessions: teamSessions,
+    projects: teamProjects,
+    closedSessions: [],
+    prefs: { fontSize: 13, sidebarMode: "projects", inspectorOpen: true },
+  };
+
+  // The ledger. Times run backwards from now so continuation grouping (3 min)
+  // and the hover stamps read plausibly.
+  const at = (minsAgo: number, secs = 0) => new Date(Date.now() - minsAgo * 60_000 - secs * 1000).toISOString();
+  let seq = 40;   // truncated: the room starts mid-history
+  const row = (over: Partial<TeamEntryView> & { kind: TeamEntryView["kind"]; from: string; text: string; ts: string }): TeamEntryView =>
+    ({ seq: ++seq, ...over });
+  const work = (from: string, botId: string, ts: string, verb: string, target: string, repeat?: number) =>
+    row({ kind: "work", from, botId, ts, verb, target, text: "", ...(repeat ? { repeat } : {}) });
+  const entries: TeamEntryView[] = [
+    row({ kind: "system", from: "perch", ts: at(58), text: "Ada joined as Frontend dev", event: "joined" }),
+    row({ kind: "system", from: "perch", ts: at(57), text: "Bo joined as Backend dev", event: "joined" }),
+    row({ kind: "user", from: "you", ts: at(55), to: "everyone", text: "@everyone introduce yourselves in one line, then Ada: the sidebar's team row is misaligned when a project is collapsed. Bo: is `team.data` pushed while the room is open?" }),
+    row({ kind: "beat", from: "Ada", botId: "b-ada", ts: at(54, 40), text: "Ada, Frontend dev — I own **src/web**: the sidebar, panes, dialogs and tokens. I'll take the team row alignment now." }),
+    row({ kind: "beat", from: "Bo", botId: "b-bo", ts: at(54, 20), text: "Bo, Backend dev — host, IPC and the hook handler. Yes: while the room is open the host pushes `team.data` on every new ledger entry; the page's poll is only a fallback." }),
+    work("Ada", "b-ada", at(52), "Read", "sidebar.ts"),
+    work("Ada", "b-ada", at(51, 40), "Read", "style.css"),
+    work("Ada", "b-ada", at(51, 10), "Grep", "team-row"),
+    work("Ada", "b-ada", at(50), "Edit", "sidebar.ts"),
+    work("Ada", "b-ada", at(49, 30), "Edit", "style.css"),
+    work("Ada", "b-ada", at(49), "Bash", "npm test", 2),
+    row({ kind: "beat", from: "Ada", botId: "b-ada", ts: at(48), text: "Found it — the row sat inside the folded list, so it collapsed with the tabs. Moved it to a sibling of the header; it now stays visible when the group is shut, and the unread count can't fold away." }),
+    row({ kind: "peer", from: "Ada", botId: "b-ada", ts: at(47), to: ["Bo"], text: "Bo — I need `unread` in the team row. Can `team.data` carry `lastSeq` even when `entries` is empty? Then the page can count without a second request." }),
+    row({ kind: "beat", from: "Bo", botId: "b-bo", ts: at(46), text: "It already does: `lastSeq` is the ledger head on every reply, entries or not. Nothing to change on my side." }),
+    work("Bo", "b-bo", at(45), "Read", "TeamController.cs"),
+    work("Bo", "b-bo", at(44, 30), "Edit", "TeamController.cs"),
+    work("Bo", "b-bo", at(44), "Bash", "dotnet test src/Perch.Tests"),
+    row({ kind: "note", from: "Bo", botId: "b-bo", ts: at(43), text: "Pushed the ledger fan-out to `team.data` — the room now updates the instant a bot posts. Ada's page work can rely on it." }),
+    row({ kind: "system", from: "perch", ts: at(40), text: "Cy joined as Designer", event: "joined" }),
+    row({ kind: "user", from: "you", ts: at(38), to: ["Cy"], text: "@Cy before Ada polishes the room, mock the empty state — what does a project with no bots see?" }),
+    row({ kind: "beat", from: "Cy", botId: "b-cy", ts: at(36), text: "Mocked two options in `design-loop/team-empty-options.html`: a centered card with a single accent CTA, and a quieter inline line under the header. Recommending the card — it's the one place the constitution allows centering, and a first-run state should be unmissable." }),
+    row({ kind: "system", from: "perch", ts: at(30), text: "Cy is asleep", event: "asleep" }),
+    row({ kind: "user", from: "you", ts: at(6), to: ["Ada"], text: "Ada — ship the row fix and post when the harness shot is in." }),
+    row({ kind: "beat", from: "Ada", botId: "b-ada", ts: at(5, 30), text: "On it. Running the harness now; shot lands in `design-loop/team-sidebar.png`." }),
+    row({ kind: "beat", from: "Ada", botId: "b-ada", ts: at(4), text: "Typecheck and tests are green. Taking the screenshot." }),
+    // A hand-off, labelled: what the message IS, not just who it's for.
+    row({ kind: "peer", from: "Bo", botId: "b-bo", ts: at(3, 40), to: ["Ada"], note: "handoff", text: "Template and harness for the loading states are on branch bo (dad7d54e). Review the diff and merge when you're happy; I stopped the local server on 5103." }),
+    row({ kind: "peer", from: "Ada", botId: "b-ada", ts: at(3, 20), to: ["Bo"], note: "question", text: "Does the skeleton fall back to the plain spinner when the chart lib isn't loaded yet?" }),
+    // A screenshot shared to the room (the path becomes a thumbnail).
+    row({ kind: "note", from: "Bo", botId: "b-bo", ts: at(3), text: "Loading state, dark theme — the skeleton cards and the disabled buttons. Full set in the harness at http://localhost:5103/harness#kpi-loading", image: "C:\\dev\\storefront-web\\design-loop\\kpi-loading-bdm-dark.png" }),
+    // A permission card: Bo wants to run something auto mode won't approve.
+    row({ kind: "system", from: "perch", ts: at(2, 30), to: ["Bo"], note: "perm-7a1c", event: "permission",
+      text: "Bo wants to run Bash: git push origin bo",
+      summary: JSON.stringify({ command: "git push origin bo", description: "Push the loading-states branch", timeout: 120000 }) }),
+    // A question card with choices.
+    row({ kind: "system", from: "Cy", botId: "b-cy", ts: at(2), to: ["Cy"], note: "ask-3f9e", event: "ask",
+      text: "Which empty state should I build?", choices: ["Centered card", "Inline line"] }),
+    // A trust card and a review card, so every card kind's frame is in one shot.
+    row({ kind: "system", from: "perch", ts: at(2, 20), to: ["Cy"], event: "trust",
+      text: "Cy asks: trust its new folder?" }),
+    row({ kind: "system", from: "perch", ts: at(2, 10), taskId: "t-2", event: "task.review",
+      text: "Ada says \"Sidebar team row\" is done — confirm on its card" }),
+    // A bot's long piece of work: a card here, the document in the panel.
+    row({ kind: "artefact", from: "Bo", botId: "b-bo", ts: at(2, 5), target: "a1b2c3d4", note: "md",
+      text: "Draft ticket: bid-shading prepared table",
+      summary: "Scope, columns, acceptance — for Galina, not created yet" }),
+    // A message with real markdown in it: a table and a list, formatted.
+    row({ kind: "beat", from: "Bo", botId: "b-bo", ts: at(2, 2), text:
+      "Counter coverage as measured this morning:\n\n"
+      + "| Counter | Populated | Source |\n|---|---:|---|\n"
+      + "| `avgUserClearPrice` | 66% | bid_event |\n| `pbundle_loss_fixed` | 91% | loss_event |\n\n"
+      + "Two things follow:\n\n- the 66% column can't be a hard acceptance rule\n"
+      + "- `loss_event` is the only source that covers every SSP\n" }),
+    // Auto mode's classifier refusing a command: information only, but it has
+    // to be VISIBLE — this is what Joseph could not find in the room.
+    row({ kind: "system", from: "Bo", botId: "b-bo", ts: at(1, 55), event: "denied",
+      text: "Bo: auto mode blocked Bash: nohup python services/pricing-agent-monitor/app.py --port 5108 > C:/tmp/pam-local.log 2>&1 & — Blocked by classifier" }),
+    row({ kind: "system", from: "perch", ts: at(1, 50), text: "Copied to Ada for the board", event: "cc" }),
+    row({ kind: "user", from: "you", ts: at(1, 30), to: ["Bo"], text: "@Bo hold the push until Ada's review is in; I'll allow it then." }),
+    // Reactions: yours on Bo's hand-off (highlighted), Ada's on your post.
+    row({ kind: "reaction", from: "you", ts: at(1, 20), text: "👀", note: String(seq - 6) }),
+    row({ kind: "reaction", from: "Ada", botId: "b-ada", ts: at(1, 10), text: "✅", note: String(seq - 7) }),
+    row({ kind: "reaction", from: "Ada", botId: "b-ada", ts: at(1), text: "👋", note: String(seq - 2) }),
+  ];
+  const fixture: TeamDataMessage = { type: "team.data", projectId: "p-ptp", entries, lastSeq: seq, truncated: true };
+  (window as unknown as { __teamFixture: TeamDataMessage }).__teamFixture = fixture;
+  // Nothing for home-tools yet: an empty, non-truncated ledger.
+  const emptyFixture: TeamDataMessage = { type: "team.data", projectId: "p-gm", entries: [], lastSeq: 0 };
+
+  // The shot shows the room the way it opens: tool activity off (the header's
+  // toggle brings it back).
+  try { localStorage.setItem("perch.team.activity", view === "team-activity" ? "1" : "0"); } catch { /* file:// */ }
+
+  // #team-sidebar wants an unread count: pretend you last looked three rows ago.
+  if (view.startsWith("team-sidebar")) {
+    try { localStorage.setItem("perch.team.seen", JSON.stringify({ "p-ptp": seq - 3 })); } catch { /* file:// */ }
+    feedTeamFixture(fixture);
+  }
+
+  // main.ts isn't loaded here, so route the dialog's host replies ourselves.
+  onHostMessage((m) => {
+    if (m.type === "team.brief.progress") applyBriefProgress(m);
+    else if (m.type === "team.brief.result") applyBriefResult(m);
+    else if (m.type === "team.reference.picked") applyReferencePicked(m);
+  });
+
+  const sb = new Sidebar(list, newBtn, closedEl);
+  const activeTab = view === "team-sidebar-shut" ? "s-plain" : "s-ada";
+  sb.rerender = () => sb.render(teamSessions, activeTab, [], teamProjects, "projects");
+  sb.rerender();
+  onTeamRoomChange(() => sb.rerender?.());
+  applyTeamState(teamState);
+
+  if (view === "team" || view === "team-activity") {
+    feedTeamFixture(fixture);
+    openTeamRoom("p-ptp");
+    // No host here, so answer the panel's own requests: the recent list, then
+    // the document it opens.
+    applyArtefactIndex({
+      type: "team.artefact.index", projectId: "p-ptp",
+      items: [
+        { id: "a1b2c3d4", title: "Draft ticket: bid-shading prepared table", kind: "md", from: "Bo", tsMs: Date.now() - 125_000,
+          summary: "Scope, columns, acceptance — for Galina, not created yet" },
+        { id: "b2c3d4e5", title: "Counter validation plan", kind: "md", from: "Ada", tsMs: Date.now() - 3_600_000 },
+        { id: "c3d4e5f6", title: "Loss codes by SSP", kind: "csv", from: "Bo", tsMs: Date.now() - 7_200_000 },
+      ],
+    });
+    applyArtefact({
+      type: "team.artefact.data", projectId: "p-ptp", id: "a1b2c3d4", kind: "md", from: "Bo", tsMs: Date.now() - 125_000,
+      title: "Draft ticket: bid-shading prepared table",
+      content:
+        "# Bid shading: bid-level prepared table\n\n"
+        + "One row per outgoing bid, built daily on the existing ingestion. A condensed copy of the\n"
+        + "loss table with win and impression outcomes joined from `bid_event`.\n\n"
+        + "## Label\n\n"
+        + "`lossprice` where `losscode = 102` (lost to a higher bid). Other codes are not auction\n"
+        + "losses: excluded from the label, kept as `lossCode`.\n\n"
+        + "| Column | Populated | Note |\n|---|---:|---|\n"
+        + "| `lossminprice` | 2.5% | a carried column, never a label |\n"
+        + "| `bidPricePreShading` | 0% | null on the NN path until PK-7225 ships |\n\n"
+        + "## Acceptance\n\n"
+        + "- partitioned by day; bids per day match `bid_event`\n"
+        + "- `lossprice` coverage per SSP reported daily\n"
+        + "- shaded / shadable populated and consistent across all three tables\n\n"
+        + "> Open for Joseph: table name and retention, and whether \"condensed\" means all bids or\n"
+        + "> only shadable campaigns.\n",
+    });
+  } else if (view === "team-empty") {
+    feedTeamFixture(emptyFixture);
+    openTeamRoom("p-gm");
+  } else if (view.startsWith("newbot")) {
+    // A project with no positions yet for the plain dialog; the one with
+    // positions for the "existing position" path.
+    const fresh: ProjectView = { id: "p-gm", name: "home-tools", path: "C:\\dev\\home-tools", team: { positions: [], bots: [] } };
+    if (view === "newbot-reuse") {
+      showNewBotDialog(teamProjects[0], { positionSlug: "frontend-dev" });
+    } else {
+      showNewBotDialog(fresh);
+      if (view !== "newbot") {
+        // Fill the fields the way a person would, then press Generate; the
+        // harness.html stub answers with progress ticks and a result (or an
+        // error for #newbot-error, or nothing after progress for #newbot-generating).
+        setTimeout(() => {
+          const set = (sel: string, v: string) => {
+            const e = document.querySelector<HTMLInputElement | HTMLTextAreaElement>(sel);
+            if (!e) return;
+            e.value = v;
+            e.dispatchEvent(new Event("input", { bubbles: true }));
+          };
+          const inputs = Array.from(document.querySelectorAll<HTMLInputElement>(".newbot-card input.newtab-input"));
+          if (inputs[0]) { inputs[0].value = "Ada"; inputs[0].dispatchEvent(new Event("input", { bubbles: true })); }
+          if (inputs[1]) { inputs[1].value = "Frontend dev"; inputs[1].dispatchEvent(new Event("input", { bubbles: true })); }
+          set(".newbot-card textarea.newbot-area:not(.newbot-brief)",
+            "Owns everything under src/web — the sidebar, the panes, the dialogs and the CSS tokens. Keeps the chrome calm and on the constitution.");
+          const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>(".newbot-card .projects-card__btn"));
+          buttons.find((b) => b.textContent === "Generate brief")?.click();
+        }, 80);
+      }
+    }
+  }
 }

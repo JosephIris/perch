@@ -33,9 +33,14 @@ import { RestoreProgress } from "./restore-progress.js";
 import { invalidateCommits } from "./commits.js";
 import { initCloud } from "./cloud-panel.js";
 import { initLocal } from "./local-panel.js";
+import { initUtilityMini } from "./mini-mode.js";
 import { initInspector, toggleInspector, openInspectorSearch } from "./inspector.js";
-import { setModelLimits } from "./model-menu.js";
+import { setModelLimits, setCodexModels } from "./model-menu.js";
 import { initWebPaneSuppression } from "./webpane-suppress.js";
+import { applyTeamState, toggleTeamRoom, closeTeamRoom, onTeamRoomChange, applyPasteResult, applyArtefact, applyArtefactIndex } from "./team-room.js";
+import { setFaceColorMode } from "./bot-face.js";
+import { teamProjectFor } from "./team.js";
+import { applyBriefProgress, applyBriefResult, applyReferencePicked } from "./new-bot-dialog.js";
 import type { PaneTreeView } from "./bridge.js";
 
 // One shared 1Hz ticker keeps every "working · 2m" label live without
@@ -65,6 +70,9 @@ initCloud();
 // own sidebar card + host listener and stays invisible until something is
 // actually listening on loopback.
 initLocal();
+
+// The full ⇄ mini toggle over both of the above. Page-local layout preference.
+initUtilityMini();
 
 // Inspector rail (right column). Same self-wiring shape: owns its DOM, listens
 // for `state` itself to follow the focused pane, and fetches its own data via
@@ -109,6 +117,8 @@ function renderSidebar() {
   syncModeToggle(lastState.prefs?.sidebarMode ?? "sessions");
 }
 sidebar.rerender = renderSidebar;
+// The team row wears the selected pill while its room is open; redraw on flip.
+onTeamRoomChange(renderSidebar);
 
 const modeSessions = $<HTMLButtonElement>("mode-sessions");
 const modeProjects = $<HTMLButtonElement>("mode-projects");
@@ -212,10 +222,16 @@ onMessage((msg) => {
       // freshly-launched app opens at the right widths instead of flashing
       // Compact and then widening on the next tick.
       applyLayout(msg.prefs?.wideLayout ?? false);
+      // Bot faces: plain ink unless the owner opted into colour.
+      setFaceColorMode(msg.prefs?.teamFacesColor ?? false);
       // Account-wide model limits for the per-pane model menu (usually empty).
       setModelLimits(msg.modelLimits);
+      setCodexModels(msg.codexModels);
       maybeShowOnboarding(msg.prefs);
       renderSidebar();
+      // The room derives presence from the same session list; it re-renders
+      // when a bot's state moved and otherwise just refreshes its header.
+      applyTeamState(msg);
       // Pass the full session list + active id: the workspace keeps a stage
       // per session alive across switches (preserving terminal scrollback)
       // and disposes a stage only when its session drops out of this list.
@@ -320,6 +336,24 @@ onMessage((msg) => {
         msg.data ? `data:${msg.mediaType};base64,${msg.data}` : ""
       );
       break;
+    case "team.brief.progress":
+      applyBriefProgress(msg);
+      break;
+    case "team.brief.result":
+      applyBriefResult(msg);
+      break;
+    case "team.reference.picked":
+      applyReferencePicked(msg);
+      break;
+    case "team.paste.data":
+      applyPasteResult(msg);
+      break;
+    case "team.artefact.data":
+      applyArtefact(msg);
+      break;
+    case "team.artefact.index":
+      applyArtefactIndex(msg);
+      break;
     case "resume.prompt": {
       // One-time "reopen previous Claude sessions?" prompt. Until we answer,
       // the host holds the resumable panes' spawns, so a decision is required
@@ -328,10 +362,13 @@ onMessage((msg) => {
       resumePromptShown = true;
       const n = msg.paneCount;
       const sess = msg.sessionCount;
+      // "agent", not "Claude": a codex conversation resumes here too, and
+      // naming the wrong agent in the one dialog that asks about them is how
+      // you get told the feature doesn't work.
       const what =
         n === 1
-          ? "1 Claude session from your last run can be reopened."
-          : `${n} Claude sessions across ${sess} ${
+          ? "1 agent session from your last run can be reopened."
+          : `${n} agent sessions across ${sess} ${
               sess === 1 ? "project" : "projects"
             } can be reopened.`;
       confirmDialog({
@@ -434,6 +471,7 @@ window.addEventListener("keydown", (ev) => {
       ev.preventDefault(); ev.stopPropagation();
       break;
     case "KeyT":
+      closeTeamRoom();   // a new tab is where you're going; the room lifts
       send({ type: "session.new" });
       ev.preventDefault(); ev.stopPropagation();
       break;
@@ -474,6 +512,17 @@ window.addEventListener("keydown", (ev) => {
       openInspectorSearch();
       ev.preventDefault(); ev.stopPropagation();
       break;
+    case "KeyM": {
+      // Team room for the active tab's project (or the first project with
+      // bots). NOT Ctrl+Shift+R: that family is reload-class in Chromium and
+      // would fire at the browser level regardless of preventDefault.
+      ev.preventDefault(); ev.stopPropagation();
+      const pid = lastState ? teamProjectFor(lastState) : null;
+      if (!pid) { toast.show("No team yet — add a bot from a project's menu", "info", null); break; }
+      dashboard.hide();
+      toggleTeamRoom(pid);
+      break;
+    }
     // Ctrl+Shift+arrows: move the active pane within its split. The host
     // reorders it among its siblings (no-op if the direction is across the
     // split's axis or the pane is already at the edge).

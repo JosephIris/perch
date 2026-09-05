@@ -33,6 +33,14 @@ const WEBGL_DISABLED = new URLSearchParams(location.search).has("nowebgl");
 
 const utf8 = new TextEncoder();
 
+// Cursor show/hide accounting, across every pane. `churn` counts what the apps
+// asked for; `hidden`/`shown` count what actually reached the screen after
+// Pane.smoothCursorVisibility() collapsed a repaint's hide→show pairs. The
+// difference IS the fix, so it's what the harness asserts on
+// (`node scripts/cdp-eval.mjs "window.__perchCursor"` while codex works).
+const cursorStats = { churn: 0, hidden: 0, shown: 0 };
+(window as any).__perchCursor = cursorStats;
+
 export const DEFAULT_FONT_SIZE = 13;
 export const MIN_FONT_SIZE = 9;
 export const MAX_FONT_SIZE = 32;
@@ -183,6 +191,7 @@ export class Pane {
     this.term.loadAddon(this.fit);
     this.term.loadAddon(new Unicode11Addon());
     this.term.unicode.activeVersion = "11";
+    this.smoothCursorVisibility();
 
     // Custom link provider — always underlines URLs (decorations.underline:
     // true) and routes clicks to our link-action menu instead of opening
@@ -275,6 +284,16 @@ export class Pane {
       }, 0);
     });
   }
+
+  // NOTE: a journal row used to carry a "show in the terminal" button that
+  // scrolled this pane to the matching line via the xterm search addon. It
+  // could never work and has been removed. Claude Code takes the ALTERNATE
+  // screen buffer, which has no scrollback at all — xterm holds only the ~30
+  // currently-painted rows, and cc repaints those constantly. Measured on a
+  // live pane: buffer.type === "alternate", buffer.length === rows,
+  // baseY === 0. A prompt from two seconds earlier was already unfindable.
+  // Anything that wants to search an agent pane's history has to read the
+  // transcript (which is what the Inspector already does), not the terminal.
 
   // Re-entrancy guard for the readText() fallback below — set while a read is
   // in flight so a second right-click during the await can't queue a second
@@ -403,6 +422,70 @@ export class Pane {
       this.setupActive = false;
       if (this.isActive) this.term.focus();
     }
+  }
+
+  /** Stop a frame-oriented TUI from strobing the cursor.
+   *
+   * Codex draws its whole screen every frame, and each frame is bracketed with
+   * "hide the cursor" (CSI ?25l) … paint … "show the cursor" (CSI ?25h). While
+   * it works that is 20–60 hide/show pairs a second, and xterm honours every
+   * one of them, so the block cursor strobes — the "blinking like crazy" the
+   * owner hit the first time he ran codex in a pane. (Claude Code doesn't do
+   * this: it keeps the cursor hidden for a whole turn.) Nothing is wrong with
+   * either app; a real terminal's frame pacing just hides the churn and a
+   * DOM/WebGL renderer doesn't.
+   *
+   * So: a hide is DELAYED by {@link HIDE_SETTLE_MS}, and a show arriving
+   * before it lands cancels it. A repaint's hide→show pair (sub-millisecond)
+   * therefore changes nothing on screen, while a genuine hide — a TUI that
+   * really wants no cursor — still takes effect, a sixth of a second later
+   * than it asked. Only the exact sequence `CSI ? 25 h/l` is touched; every
+   * other private mode passes straight through.
+   *
+   * The replay counters are what let us hand a sequence back to xterm's own
+   * handler without our handler eating it again. A same-flush collision with a
+   * genuine app sequence is harmless: the two are byte-identical, so whichever
+   * one is treated as the replay, the resulting cursor state is the same.
+   */
+  private smoothCursorVisibility() {
+    const HIDE_SETTLE_MS = 150;
+    let pendingHide = 0;
+    let replayHide = 0;
+    let replayShow = 0;
+    let shown = true;
+
+    const pass = (visible: boolean) => {
+      if (visible) replayShow++; else replayHide++;
+      shown = visible;
+      this.term.write(visible ? "\x1b[?25h" : "\x1b[?25l");
+    };
+    // Exactly `CSI ? 25 <final>` — a multi-parameter private-mode set (rare,
+    // but legal) is left entirely alone.
+    const isCursorMode = (params: (number | number[])[]) =>
+      params.length === 1 && params[0] === 25;
+
+    this.term.parser.registerCsiHandler({ prefix: "?", final: "l" }, (params) => {
+      if (!isCursorMode(params)) return false;
+      if (replayHide > 0) { replayHide--; return false; }
+      cursorStats.churn++;
+      if (!pendingHide)
+        pendingHide = window.setTimeout(() => {
+          pendingHide = 0;
+          if (shown) { cursorStats.hidden++; pass(false); }
+        }, HIDE_SETTLE_MS);
+      return true;
+    });
+
+    this.term.parser.registerCsiHandler({ prefix: "?", final: "h" }, (params) => {
+      if (!isCursorMode(params)) return false;
+      if (replayShow > 0) { replayShow--; return false; }
+      cursorStats.churn++;
+      if (pendingHide) { clearTimeout(pendingHide); pendingHide = 0; }
+      if (shown) return true;          // already visible — the strobe's other half
+      cursorStats.shown++;
+      pass(true);
+      return true;
+    });
   }
 
   setActive(active: boolean) {

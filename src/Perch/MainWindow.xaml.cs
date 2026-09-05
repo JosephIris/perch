@@ -294,13 +294,13 @@ internal partial class MainWindow : FluentWindow, IWebViewHost, IWindowHost
         }
     }
 
-    public Task<string?> PickFolderAsync(string? initialDir)
+    public Task<string?> PickFolderAsync(string? initialDir, string? title = null)
     {
         try
         {
             var dlg = new Microsoft.Win32.OpenFolderDialog
             {
-                Title = "Add project",
+                Title = title ?? "Add project",
                 InitialDirectory = initialDir ?? "",
             };
             return Task.FromResult(dlg.ShowDialog(this) == true ? dlg.FolderName : null);

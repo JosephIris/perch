@@ -141,14 +141,13 @@ html.host-photino #app {
 .sidebar {
   grid-area: sidebar;
   display: grid;
-  /* mode · new-session · dashboard · scroll (the list) · recently-closed · footer.
-   * The row count MUST match the child count: a child with no explicit row
+  /* The row count MUST match the child count: a child with no explicit row
    * lands in an implicit `auto` track at the end, which silently shifts every
    * sibling up a row — the scroll list loses the 1fr and the row above it
    * inherits it, stretching into a dead gap. */
   /* One entry per direct child, in order: mode toggle · new-session · dashboard ·
-   * scroll(1fr) · recently-closed · update-banner · cloud-area · footer. The 1fr
-   * MUST stay on the scroll list (4th) — see the warning above. */
+   * scroll(1fr) · recently-closed · update-banner · utility-areas (cloud+local) ·
+   * footer. The 1fr MUST stay on the scroll list (4th) — see the warning above. */
   grid-template-rows: auto auto auto 1fr auto auto auto auto;
   /* Explicit column is REQUIRED. Without it the single implicit column is an
    * `auto` track, which is treated as indefinite-width — so every `width:100%`
@@ -361,6 +360,21 @@ html.host-photino #app {
 .session-item__dot[data-state="error"] {
   background: var(--color-state-error);
   box-shadow: none;
+}
+/* Dormant (slept) — solid tertiary gray, no ring. Deliberately NOT the moon
+ * glyph: the moon is the VERB (the sleep button), and one symbol meaning both
+ * "put this to sleep" and "is asleep" reads as a button on a row where there
+ * is no button. Staying in the dot family also keeps the three readings
+ * distinguishable at 8px without a legend:
+ *   colored fill  → live, agent has something to say
+ *   hollow ring   → live, agent at rest
+ *   gray fill     → not running at all
+ * Gray-filled is the offline convention everywhere else (Slack, Teams), and
+ * it can't be misread as green-means-go the way the inherited "done" dot was. */
+.session-item__dot[data-state="dormant"] {
+  background: var(--color-text-tertiary);
+  box-shadow: none;
+  opacity: 0.65;
 }
 
 /* Status column wrapper — fills the fixed 10px grid slot and anchors the
@@ -1938,8 +1952,11 @@ button.pane__chip--ports:hover {
 
 /* --- Pair menu (sidebar row right-click) --------------------------------
  * Same surface recipe as the model menu; its own class because the contents
- * differ (section label, per-tab candidates, hints). */
-.pair-menu {
+ * differ (section label, per-tab candidates, hints). The project menu
+ * (project-header right-click) shares every rule — grouped selectors, so the
+ * two popups can't drift apart. */
+.pair-menu,
+.project-menu {
   position: fixed;
   display: flex;
   flex-direction: column;
@@ -1962,7 +1979,8 @@ button.pane__chip--ports:hover {
   font-size: 11px;
   color: var(--color-text-tertiary);
 }
-.pair-menu__item {
+.pair-menu__item,
+.project-menu__item {
   display: flex;
   align-items: center;
   gap: var(--sp-8);
@@ -1976,17 +1994,21 @@ button.pane__chip--ports:hover {
   transition: background var(--dur-fast) var(--ease-entry);
 }
 .pair-menu__item:hover,
-.pair-menu__item:focus-visible {
+.pair-menu__item:focus-visible,
+.project-menu__item:hover,
+.project-menu__item:focus-visible {
   background: var(--color-subtle-secondary);
   outline: none;
 }
-.pair-menu__label {
+.pair-menu__label,
+.project-menu__label {
   flex: 1 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.pair-menu__hint {
+.pair-menu__hint,
+.project-menu__hint {
   font-family: var(--font-small);
   font-size: 11px;
   color: var(--color-text-tertiary);
@@ -2326,6 +2348,38 @@ button.pane__chip--ports:hover {
   font-size: 11px;
   color: var(--color-text-disabled);
 }
+/* Minimize ⇄ restore. Chevron down = fold to the title row; up = bring the
+ * list back. Quiet tertiary, same voice as the utility areas' toggle. */
+.recently-closed__min {
+  margin-left: auto;
+  align-self: center;
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--r-input);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+.recently-closed__min:hover {
+  background: var(--color-subtle-secondary);
+  color: var(--color-text-secondary);
+}
+.recently-closed__min:focus-visible {
+  outline: 1px solid var(--color-accent);
+  outline-offset: -1px;
+}
+.recently-closed__min-chev { transform: rotate(90deg); }
+.recently-closed__min-chev[data-min="true"] { transform: rotate(-90deg); }
+/* Minimized: the section is just its title row stuck above the footer, and
+ * the whole row is the way back — pill hover says so. */
+.recently-closed--min .recently-closed__header {
+  cursor: pointer;
+  border-radius: var(--r-input);
+}
+.recently-closed--min .recently-closed__header:hover { background: var(--color-subtle-secondary); }
 .recently-closed__list {
   display: flex;
   flex-direction: column;
@@ -2729,6 +2783,11 @@ button.pane__chip--ports:hover {
 .project-header__state[data-state="permission"] { background: var(--color-state-permission); }
 .project-header__state[data-state="done"]       { background: var(--color-state-done); }
 
+/* A hidden project's group, revealed inside the open Hidden drawer. Dimmed a
+ * step — "you put this away" — but fully functional: fold, "+", drag, tabs. */
+.project-header--hidden .project-header__name { color: var(--color-text-tertiary); }
+.project-header--hidden .project-header__toggle:disabled { color: var(--color-text-tertiary); }
+
 /* ── Nested tab rows ───────────────────────────────────────────────────────
  * A project's tabs. Deliberately DENSER than the flat session list: the header
  * already groups them, so the per-row card frame is redundant weight, and
@@ -2958,6 +3017,89 @@ button.pane__chip--ports:hover {
 .session-list--idle > .session-item--nested::before,
 .session-list--idle > .session-item--nested::after { left: 29px; }
 .session-list--idle .session-item__title { color: var(--color-text-secondary); }
+
+/* The Bots drawer: the same drawer, right under the team row. Its rows sit
+ * one step in like Idle's but keep their full title colour — these are live
+ * agents, not tabs you put away. With ordinary tabs following it the trunk
+ * runs on through the head instead of closing the branch. */
+.idle-group--bots { margin-bottom: 0; }
+.idle-group--mid > .idle-group__head::before { height: 100%; }
+.session-list--bots > .session-item--nested { padding-left: 40px; }
+.session-list--bots > .session-item--nested::before,
+.session-list--bots > .session-item--nested::after { left: 29px; }
+/* Shut, the head wears the bots' most urgent state (same dot as the Hidden
+ * drawer): a bot blocked on you can't be folded out of sight. */
+.idle-group__state {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  margin-left: auto;
+  border-radius: 50%;
+  background: var(--color-state-idle);
+}
+.idle-group__state[data-state="working"]    { background: var(--color-state-working); }
+.idle-group__state[data-state="waiting"]    { background: var(--color-state-waiting); }
+.idle-group__state[data-state="permission"] { background: var(--color-state-permission); }
+.idle-group__state[data-state="done"]       { background: var(--color-state-done); }
+
+/* ── The Hidden drawer ─────────────────────────────────────────────────────
+ * Projects you've hidden, folded into one quiet row at the foot of the list.
+ * Same voice as the Idle drawer, but top-level: it groups whole projects, not
+ * a branch's tabs, so no tree connectors and it aligns with the headers. */
+.hidden-drawer__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin-top: var(--sp-8);
+  padding: 4px var(--sp-8);
+  border: 0;
+  border-radius: var(--r-input);
+  background: transparent;
+  font-family: var(--font-small);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+  text-align: left;
+  cursor: pointer;
+}
+.hidden-drawer__head:hover {
+  background: var(--color-subtle-secondary);
+  color: var(--color-text-secondary);
+}
+.hidden-drawer__head[aria-expanded="true"] { color: var(--color-text-secondary); }
+.hidden-drawer__head:focus-visible {
+  outline: 1px solid var(--color-accent);
+  outline-offset: -1px;
+}
+.hidden-drawer__chev {
+  flex: none;
+  width: 11px;
+  height: 11px;
+  transform: rotate(0deg);
+  transform-origin: 50% 50%;
+}
+.hidden-drawer__chev[data-open="true"] { transform: rotate(90deg); }
+.hidden-drawer__chev--turning[data-open="true"] {
+  animation: chev-open var(--dur-normal) var(--ease-entry);
+}
+.hidden-drawer__chev--turning[data-open="false"] {
+  animation: chev-close var(--dur-normal) var(--ease-entry);
+}
+.hidden-drawer__count { font-variant-numeric: tabular-nums; }
+/* Shut, this dot is the only thing standing between an agent blocked inside a
+ * hidden project and total invisibility — same palette as every state dot. */
+.hidden-drawer__state {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  margin-left: auto;
+  border-radius: 50%;
+  background: var(--color-state-idle);
+}
+.hidden-drawer__state[data-state="working"]    { background: var(--color-state-working); }
+.hidden-drawer__state[data-state="waiting"]    { background: var(--color-state-waiting); }
+.hidden-drawer__state[data-state="permission"] { background: var(--color-state-permission); }
+.hidden-drawer__state[data-state="done"]       { background: var(--color-state-done); }
 
 /* A tab that just changed sides arrives at its new home. One render only (see
  * Sidebar.regrouped) — the sidebar rebuilds every push, so an unconditional
@@ -3586,11 +3728,16 @@ button.pane__chip--ports:hover {
   min-width: 0;
   width: auto;
 }
+.settings-project__hide,
 .settings-project__remove {
   flex: none;
   padding: 5px var(--sp-12);
   font-size: var(--type-caption-size);
 }
+/* Hidden registration: the row dims to echo the sidebar's treatment. The
+ * controls stay full-strength — Show is the row's point. */
+.settings-project--hidden .settings-project__name,
+.settings-project--hidden .settings-project__path { color: var(--color-text-tertiary); }
 .settings-project__path {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -5178,6 +5325,81 @@ body.show-dashboard .dashboard { display: flex; }
  *   cloud    running, all attributed  → teal
  *   caution  a machine has no agent   → the card LEAVES its class for caution
  *                                        and grows the alert row */
+/* ══ Utility areas wrapper (cloud + local) ══════════════════════════════════
+ * Exists for mini mode: full stacks the two labeled cards as always; mini
+ * compresses each to a one-line chip and lays them side by side, filling the
+ * sidebar's width. The chevron toggle pins to the wrapper's top-right — in
+ * full mode that's the label row of whichever area is up; in mini it joins
+ * the chip row as the trailing flex item. */
+.utility-areas { position: relative; display: flex; flex-direction: column; }
+/* Neither area up → nothing to size; the bare toggle must not float alone. */
+.utility-areas:not(:has(.cloud-area:not([hidden]), .local-area:not([hidden]))) { display: none; }
+
+.utility-mini-toggle {
+  position: absolute;
+  top: -2px;
+  right: var(--sp-4);
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--r-input);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+.utility-mini-toggle:hover {
+  background: var(--color-subtle-secondary);
+  color: var(--color-text-secondary);
+}
+.utility-mini-toggle:focus-visible {
+  outline: 1px solid var(--color-accent);
+  outline-offset: -1px;
+}
+/* The glyph is drawn pointing down ("shrink this downward"); mini flips it up. */
+.utility-areas--mini .utility-mini-toggle svg { transform: rotate(180deg); }
+
+.utility-areas--mini {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--sp-8);
+  padding-right: var(--sp-4);
+}
+.utility-areas--mini .utility-mini-toggle {
+  position: static;
+  order: 99;
+  flex: 0 0 auto;
+}
+.utility-areas--mini .cloud-area,
+.utility-areas--mini .local-area { flex: 1 1 0; min-width: 0; padding: 0; }
+/* The chip keeps dot + count + rate/port; everything wordy folds away. The
+ * escalation classes stay on the card, so caution/radar/live still color the
+ * chip — mini never mutes a state, it only drops the prose. */
+.utility-areas--mini .cloud-area__label,
+.utility-areas--mini .local-area__label,
+.utility-areas--mini .cloud-card__title,
+.utility-areas--mini .local-card__title,
+.utility-areas--mini .cloud-card__sub,
+.utility-areas--mini .local-card__sub,
+.utility-areas--mini .cloud-card__alert,
+.utility-areas--mini .local-card__alert { display: none; }
+.utility-areas--mini .cloud-card,
+.utility-areas--mini .local-card { padding: var(--sp-4) var(--sp-8); }
+
+/* Mini-only count (the full title says "4 machines"; half a sidebar fits "4"). */
+.cloud-card__mini,
+.local-card__mini {
+  display: none;
+  font-family: var(--font-small);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+.utility-areas--mini .cloud-card__mini,
+.utility-areas--mini .local-card__mini { display: inline; }
+
 .cloud-area { padding: 0 var(--sp-4) 0 0; }
 .cloud-area[hidden] { display: none; }
 .cloud-area__label {
@@ -5961,6 +6183,15 @@ body.show-dashboard .dashboard { display: flex; }
 .turn-prompt--expandable.turn-prompt--open .turn-prompt__chev::before { content: "\2303"; }   /* ⌃ */
 .turn-prompt--expandable .turn-prompt__chev { display: block; }
 
+/* Canceled — the very next journal event is your interrupt, so this message
+ * never ran. cc's chat quietly drops these; the strike keeps the journal
+ * honest without deleting the row (you did type it). */
+.turn-prompt--canceled .turn-prompt__text {
+  text-decoration: line-through;
+  color: var(--color-text-tertiary);
+}
+.turn-prompt--canceled .turn-prompt__caret { color: var(--color-text-disabled); }
+
 /* Interrupt — a turn you stopped (Esc / Ctrl-C). The one alarm in the stream:
  * error-tinted fill and a filled "!" badge so a halted turn is unmissable while
  * scanning, where a plain prompt row would let it slip past. Error-tint rgba
@@ -6548,3 +6779,1667 @@ body.show-dashboard .dashboard { display: flex; }
 @media (prefers-reduced-motion: reduce) {
   .setup-overlay__dots::after { animation: none; content: "…"; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * Team room
+ * ══════════════════════════════════════════════════════════════════════════
+ * One conversation across a project's bots. Sits IN #app's grid, spanning the
+ * workspace and inspector columns, so the sidebar stays put: its bot rows are
+ * the fastest jump to a terminal and back. The surface is one step lifted
+ * (--color-room-surface, like a pane) with a hairline, never a shadow.
+ *
+ * Feed rows share the journal's vocabulary where the content is the same
+ * (.work rows inside a fold are the inspector's own), and stay unframed:
+ * messages are not cards. Only YOUR rows carry a subtle fill. */
+
+.team-room {
+  grid-column: workspace-start / inspector-end;
+  grid-row: 1;
+  position: relative;
+  z-index: 20;                       /* above the stage, below flyouts (30) */
+  display: grid;
+  grid-template-rows: auto 1fr auto; /* head · main (or empty) · composer */
+  min-height: 0;
+  min-width: 0;
+  background: var(--color-room-surface);
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--r-card);
+  overflow: hidden;
+  font-family: var(--font-text);
+  color: var(--color-text-primary);
+  animation: settings-page-in var(--dur-normal) var(--ease-entry);
+}
+.team-room--closing {
+  animation: settings-fade-out var(--dur-fast) var(--ease-exit) forwards;
+  pointer-events: none;
+}
+
+/* ── Header ─────────────────────────────────────────────────────────────── */
+.team-room__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-12);
+  padding: var(--sp-12) var(--sp-12) var(--sp-12) var(--sp-24);
+  border-bottom: 1px solid var(--color-stroke);
+}
+.team-room__title {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-8);
+  min-width: 0;
+  font-family: var(--font-display);
+  font-size: var(--type-subtitle-size);
+  font-weight: 600;
+  line-height: var(--type-title-line);
+}
+.team-room__project {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.team-room__sep { color: var(--color-text-disabled); font-weight: 400; }
+.team-room__name { color: var(--color-text-secondary); font-weight: 400; }
+.team-room__counts { display: flex; gap: 6px; }
+.team-room__close {
+  margin-left: auto;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--type-body-size);
+  cursor: pointer;
+}
+.team-room__close:hover { background: var(--color-subtle-secondary); color: var(--color-text-primary); }
+.team-room__close:focus-visible { outline: 1px solid var(--color-accent); outline-offset: -1px; }
+
+/* ── Main: feed · task cards · roster ───────────────────────────────────── */
+/* Three columns. The feed takes what's left; the task column is one card per
+ * task on the board and scrolls on its own; the roster keeps its rail. */
+.team-room__main {
+  display: grid;
+  /* The chat has a reading width; whatever is left goes to the task cards,
+   * so on a wide monitor the cards start right after the chat instead of
+   * hugging the roster with dead space between. Below the measure the chat
+   * shrinks first. */
+  grid-template-columns: minmax(0, var(--team-feed-measure)) minmax(var(--team-tasks-width), 1fr) var(--team-roster-width);
+  min-height: 0;
+}
+.team-room__main[hidden] { display: none; }
+.team-room__feedwrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+.team-room__truncated {
+  padding: var(--sp-8) var(--sp-24);
+  border-bottom: 1px solid var(--color-stroke);
+  font-family: var(--font-small);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+}
+.team-room__truncated[hidden] { display: none; }
+.team-feed {
+  flex: 1;
+  min-height: 0;
+  padding: var(--sp-16) var(--sp-24);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+/* Cap the measure on a wide window; a bot's paragraph should not run the
+ * whole room. Rows keep their left edge — no centering. */
+.team-feed > * { width: 100%; max-width: var(--team-feed-measure); box-sizing: border-box; }
+.team-feed__jump { z-index: 1; }
+.tf-msg.row-enter,
+.tf-work.row-enter,
+.tf-sys.row-enter { animation: inspector-row-in var(--dur-normal) var(--ease-entry); }
+
+/* ── Messages ───────────────────────────────────────────────────────────── */
+.tf-msg {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  column-gap: var(--sp-12);
+  padding: var(--sp-8) var(--sp-12);
+  border-radius: var(--r-card);
+}
+.tf-msg--cont { padding-top: 2px; padding-bottom: 2px; }
+.tf-msg--user { background: var(--color-subtle-secondary); }
+.tf-msg--pending { opacity: 0.7; }
+.tf-msg--expandable { cursor: pointer; }
+.tf-msg--expandable:hover { background: var(--color-subtle-secondary); }
+.tf-msg--user.tf-msg--expandable:hover { background: var(--color-subtle-tertiary); }
+
+/* Avatar: the bot's pane hue at low tint, its initial on top. Your own rows
+ * get the journal's ">" caret instead of a letter — same "you" glyph the
+ * inspector uses for your prompts. */
+.tf-msg__avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-display);
+  font-size: var(--type-caption-size);
+  font-weight: 600;
+  color: var(--tag, var(--color-text-secondary));
+  background: color-mix(in srgb, var(--tag, var(--color-text-tertiary)) 16%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tag, var(--color-text-tertiary)) 32%, transparent);
+  user-select: none;
+}
+.tf-msg__avatar--you {
+  font-family: var(--font-mono);
+  color: var(--color-text-tertiary);
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--color-rail-faint);
+}
+/* A bot's face draws its own circle (bot-face.ts), so the letter-avatar's
+ * fill and ring come off and the ink colour goes back to the text colour. */
+.tf-msg__avatar--face {
+  background: transparent;
+  box-shadow: none;
+  color: var(--color-text-primary);
+  overflow: hidden;
+}
+.tf-msg__avatar--face > svg { width: 100%; height: 100%; display: block; }
+/* Continuation rows swap the avatar for a hover-revealed time in the same
+ * column, so a run of messages reads as one voice without losing the stamp. */
+.tf-msg .tf-msg__time--cont {
+  align-self: start;
+  margin: 0;
+  padding-top: 3px;
+  text-align: right;
+  font-family: var(--font-small);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: transparent;
+}
+.tf-msg:hover .tf-msg__time--cont { color: var(--color-text-disabled); }
+
+.tf-msg__body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+.tf-msg__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-8);
+  min-width: 0;
+}
+.tf-msg__name {
+  font-size: var(--type-body-size);
+  font-weight: 500;
+  color: var(--color-text-primary);
+  white-space: nowrap;
+}
+.tf-msg__pos,
+.tf-msg__tag {
+  font-family: var(--font-small);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tf-msg__arrow { color: var(--color-text-tertiary); }
+.tf-msg__time {
+  margin-left: var(--sp-4);
+  font-family: var(--font-small);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-disabled);
+}
+.tf-msg__text {
+  min-width: 0;   /* so a table or a code block inside can't widen the column */
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line);
+  color: var(--color-text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.tf-msg--user .tf-msg__text { color: var(--color-text-primary); }
+/* A bot's long message clamps; click opens it in place (keyed by seq, so the
+ * next poll's repaint keeps it open). Six lines: enough to know what it says. */
+.tf-msg--beat .tf-msg__text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 6;
+  overflow: hidden;
+}
+.tf-msg--open .tf-msg__text { -webkit-line-clamp: unset; overflow: visible; }
+.tf-msg__to {
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+}
+.tf-msg--held .tf-msg__to { color: var(--color-caution); }
+.tf-msg--failed .tf-msg__to { color: var(--color-error); }
+.tf-msg--failed { opacity: 1; }
+
+/* @mention chips — accent family: "this reached someone". */
+.tf-mention {
+  display: inline-block;
+  padding: 0 5px;
+  border-radius: var(--r-input);
+  background: var(--color-mention-faint);
+  color: var(--color-mention);
+  font-weight: 500;
+}
+.tf-mention--all {
+  background: var(--color-subtle-tertiary);
+  color: var(--color-text-primary);
+}
+
+/* ── Work folds ─────────────────────────────────────────────────────────── */
+/* A run of one bot's tool calls, folded to a quiet line. Texture, not
+ * content — the eye skips it and lands on the messages, and it opens when
+ * you want to know what actually happened between two of them. */
+.tf-work {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  column-gap: var(--sp-12);
+  padding: 0 var(--sp-12);
+}
+.tf-work__rail {
+  text-align: center;
+  font-size: 10px;
+  line-height: 20px;
+  color: var(--color-rail-faint);
+}
+.tf-work__line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-8);
+  min-width: 0;
+}
+.tf-work__summary {
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  font-family: var(--font-small);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tf-work__summary:hover,
+.tf-work[aria-expanded="true"] .tf-work__summary { color: var(--color-text-secondary); }
+.tf-work__summary:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 1px; border-radius: 2px; }
+.tf-work__time {
+  font-family: var(--font-small);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: transparent;
+}
+.tf-work:hover .tf-work__time { color: var(--color-text-disabled); }
+.tf-work__open {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  opacity: 0;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: opacity var(--dur-fast) var(--ease-entry);
+}
+.tf-work:hover .tf-work__open,
+.tf-work__open:focus-visible { opacity: 1; }
+.tf-work__open:hover { color: var(--color-accent); }
+.tf-work__rows { grid-column: 2; margin: 2px 0 var(--sp-4) calc(-1 * var(--sp-8)); }
+.tf-work__rows[hidden] { display: none; }
+
+/* ── System lines ───────────────────────────────────────────────────────── */
+.tf-sys {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  padding: var(--sp-4) var(--sp-12) var(--sp-4) var(--sp-24);
+  font-family: var(--font-small);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+}
+.tf-sys__dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-text-disabled);
+}
+.tf-sys[data-tone="attention"] { color: var(--color-text-secondary); }
+.tf-sys[data-tone="attention"] .tf-sys__dot { background: var(--color-caution); }
+.tf-sys[data-tone="error"] .tf-sys__dot { background: var(--color-error); }
+.tf-sys[data-event="joined"] .tf-sys__dot { background: var(--color-state-done); }
+.tf-sys__text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tf-sys__open {
+  padding: 1px var(--sp-8);
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--r-input);
+  background: transparent;
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+.tf-sys__open:hover { background: var(--color-subtle-secondary); color: var(--color-text-primary); }
+.tf-sys__time {
+  margin-left: auto;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-disabled);
+}
+
+/* ── Roster ─────────────────────────────────────────────────────────────── */
+.team-roster {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-left: 1px solid var(--color-stroke);
+}
+.team-roster__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  padding: var(--sp-16) var(--sp-12) var(--sp-8) var(--sp-16);
+}
+.team-roster__label {
+  font-family: var(--font-small);
+  font-size: 11px;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+}
+.team-roster__count { font-family: var(--font-small); font-size: 11px; color: var(--color-text-tertiary); }
+.team-roster__add {
+  margin-left: auto;
+  padding: 4px var(--sp-8);
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--r-input);
+  background: transparent;
+  font-family: var(--font-text);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+.team-roster__add:hover { background: var(--color-subtle-secondary); color: var(--color-text-primary); }
+.team-roster__add:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 1px; }
+.team-roster__list {
+  overflow-y: auto;
+  min-height: 0;
+  padding: 0 var(--sp-8) var(--sp-8);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+.roster-bot {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  column-gap: var(--sp-8);
+  row-gap: 1px;
+  align-items: center;
+  width: 100%;
+  padding: var(--sp-8) var(--sp-8);
+  border: 0;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--color-text-primary);
+  font-family: var(--font-text);
+  text-align: left;
+  cursor: pointer;
+}
+.roster-bot:hover { background: var(--color-subtle-secondary); }
+.roster-bot:focus-visible { outline: 1px solid var(--color-accent); outline-offset: -1px; }
+.roster-bot[data-state="offline"] { color: var(--color-text-secondary); cursor: default; }
+.roster-bot__lead {
+  grid-row: 1 / span 2;
+  width: 10px;
+  height: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+/* The dot IS the sidebar's dot (same class, same data-state palette); the
+ * roster only adds the two states the sidebar shows structurally. */
+.roster-bot__dot[data-state="offline"] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--color-text-disabled);
+}
+/* ── Task board ────────────────────────────────────────────────────────── */
+/* The middle column: one card per task on the board — what needs you first,
+ * then what's moving, then what's wrapping up. Cards read like roster rows
+ * (14px/500 title, 12px tertiary meta) and are separated by hairlines, never
+ * framed: a card inside a column inside a room would be card-in-card. */
+.team-roster__list { flex: 1 1 auto; }
+.team-tasks {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  border-left: 1px solid var(--color-stroke);
+}
+.team-tasks__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  padding: var(--sp-16) var(--sp-12) var(--sp-8) var(--sp-16);
+}
+/* The cards take the height they need; the artefacts panel takes what is left,
+ * down to its minimum. The cap only bites when there are more cards than the
+ * column can hold — and the grip below overrides all of it. */
+.team-tasks__body {
+  overflow-y: auto;
+  min-height: 0;
+  flex: 0 1 auto;
+  max-height: calc(100% - var(--team-artefact-min-height) - 44px);
+  padding: 0 0 var(--sp-12);
+  display: flex;
+  flex-direction: column;
+  font-size: var(--type-caption-size);
+}
+.team-tasks__remove { margin-left: auto; }
+
+/* The line between the cards and the artefacts panel. A hairline at rest, the
+ * accent while you drag it; double-click gives the cards their natural height
+ * back. */
+.team-tasks__grip {
+  flex: none;
+  height: 7px;
+  margin-top: -3px;
+  cursor: row-resize;
+  background: transparent;
+  touch-action: none;
+}
+.team-tasks__grip:hover { background: var(--color-accent-faint); }
+
+/* ── Artefacts ─────────────────────────────────────────────────────────── */
+/* Under the task cards: the one thing in the room with room to breathe. A
+ * bot's long piece of work — a draft ticket, a table, a plan — is a card in
+ * the feed and a document here, instead of a wall of text in the chat. */
+.team-arte {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: var(--team-artefact-min-height);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border-top: 1px solid var(--color-stroke);
+}
+.team-arte__head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sp-4) var(--sp-8);
+  padding: var(--sp-12) var(--sp-12) var(--sp-8) var(--sp-16);
+}
+/* The document's own name gets the line; who wrote it and what it is drop
+ * underneath rather than fighting the title for room. */
+.team-arte__meta { flex-basis: 100%; order: 3; }
+.team-arte__title {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-text);
+  font-size: var(--type-body-size);
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+.team-arte__meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-small);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+}
+.team-arte__recent { flex: none; }
+/* "Open in a tab" sits before "Recent" on the same line — both quiet subtle
+ * buttons, neither competing with the artefact's own title. */
+.team-arte__tab { flex: none; }
+.team-arte__menu {
+  position: absolute;
+  z-index: 2;
+  top: 40px;
+  right: var(--sp-12);
+  left: var(--sp-16);
+  max-height: 240px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding: var(--sp-4);
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--r-card);
+  background: var(--color-flyout);
+}
+/* `display: flex` on a class beats the browser's own rule for [hidden], so the
+ * closed menu was an empty framed bar sitting under the panel's title. */
+.team-arte__menu[hidden] { display: none; }
+.team-arte__item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--sp-8);
+  border: 0;
+  border-radius: var(--r-input);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.team-arte__item:hover { background: var(--color-subtle-secondary); }
+.team-arte__item--on { background: var(--color-subtle-tertiary); }
+.team-arte__item-title {
+  font-family: var(--font-text);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.team-arte__item-meta { font-family: var(--font-small); font-size: 11px; color: var(--color-text-tertiary); }
+.team-arte__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 var(--sp-16) var(--sp-16);
+}
+.team-arte__doc { font-size: var(--type-caption-size); color: var(--color-text-secondary); line-height: var(--type-body-line); }
+.team-arte__pre {
+  margin: 0;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--color-text-secondary);
+  white-space: pre;
+}
+.tf-arte__summary { font-family: var(--font-small); font-size: 11px; color: var(--color-text-tertiary); }
+.team-tasks__body > .team-tasks__editor { padding: var(--sp-4) var(--sp-16) var(--sp-12); }
+.team-tasks__empty { margin: 0; padding: var(--sp-4) var(--sp-16); color: var(--color-text-tertiary); line-height: 1.4; }
+.task-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-8);
+  padding: var(--sp-12) var(--sp-16);
+  border-top: 1px solid var(--color-stroke);
+}
+.task-card:first-of-type { border-top: 0; }
+.task-card__head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-8);
+  min-width: 0;
+}
+.task-card__head > .team-tasks__editor { flex: 1; }
+.task-card__title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-family: var(--font-text);
+  font-size: var(--type-body-size);
+  font-weight: 500;
+  color: var(--color-text-primary);
+  line-height: 1.35;
+  text-align: left;
+  text-wrap: balance;
+  cursor: text;
+}
+.task-card[data-status="done"] .task-card__title { cursor: default; color: var(--color-text-secondary); }
+.task-card__title:hover { color: var(--color-text-primary); }
+.task-card__title:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 2px; border-radius: 2px; }
+.task-card__status {
+  flex: none;
+  margin-top: 2px;
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  padding: 1px 6px;
+  border-radius: var(--r-pill);
+  background: var(--color-subtle-secondary);
+  white-space: nowrap;
+}
+.task-card__status:empty { display: none; }
+.task-card__status[data-status="review"] { color: var(--color-state-waiting); }
+.task-card__status[data-status="done"] { color: var(--color-state-done); }
+.task-card__meta { color: var(--color-text-tertiary); }
+.team-tasks__items { display: flex; flex-direction: column; gap: var(--sp-4); margin: 0; padding: 0; list-style: none; }
+.task-item--none { display: block; color: var(--color-text-tertiary); }
+.task-item {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr);
+  column-gap: var(--sp-8);
+  align-items: baseline;
+}
+.task-item__dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  align-self: center;
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--color-text-tertiary);
+}
+.task-item__dot[data-status="doing"]   { background: var(--color-state-working); box-shadow: none; }
+.task-item__dot[data-status="done"]    { background: var(--color-state-done); box-shadow: none; }
+.task-item__dot[data-status="blocked"] { background: var(--color-state-permission); box-shadow: none; }
+.task-item__who { font-weight: 500; color: var(--color-text-primary); }
+.task-item__what { color: var(--color-text-secondary); }
+.task-item__what--none { color: var(--color-text-tertiary); font-style: normal; }
+.task-item__note { grid-column: 2; color: var(--color-text-tertiary); }
+.team-tasks__actions { display: flex; gap: var(--sp-8); flex-wrap: wrap; align-items: center; }
+.team-tasks__say { flex-basis: 100%; color: var(--color-text-secondary); }
+.team-tasks__editor { display: flex; flex-direction: column; gap: var(--sp-8); }
+.team-tasks__input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: var(--sp-8);
+  border-radius: var(--r-input);
+  border: 1px solid var(--color-stroke);
+  background: var(--color-subtle-secondary);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: var(--type-body-size);
+  resize: vertical;
+  min-height: 56px;
+}
+.team-tasks__input:focus-visible { outline: 1px solid var(--color-accent); outline-offset: -1px; }
+.team-tasks__wrap { display: flex; flex-wrap: wrap; gap: var(--sp-4) var(--sp-8); color: var(--color-text-tertiary); }
+.team-tasks__wrap .pending { color: var(--color-state-working); }
+
+/* Roster rows lead with the bot's face instead of the 10 px dot: the
+ * column widens to the face and the two text rows centre on it. */
+.roster-bot--face { grid-template-columns: 28px minmax(0, 1fr); }
+.roster-bot__lead--face {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  overflow: hidden;
+  color: var(--color-text-primary);
+}
+.roster-bot__lead--face > svg { width: 100%; height: 100%; display: block; }
+.roster-bot__text {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-8);
+  min-width: 0;
+}
+.roster-bot__nick {
+  font-size: var(--type-body-size);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.roster-bot__pos {
+  font-family: var(--font-small);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.roster-bot__state {
+  grid-column: 2;
+  display: flex;
+  gap: var(--sp-4);
+  font-family: var(--font-small);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.roster-bot__state[data-state="working"] .roster-bot__word { color: var(--color-text-secondary); }
+.roster-bot__state[data-state="waiting"] { color: var(--color-caution); }
+.roster-bot__state[data-state="permission"] { color: var(--color-state-permission); }
+.roster-bot__dotsep { color: var(--color-text-disabled); }
+
+/* ── Activity toggle ────────────────────────────────────────────────────── */
+/* Tool calls are texture, off by default; the header's toggle brings the
+ * folds back for whoever wants to see what a bot actually did. */
+.team-room__activity {
+  padding: 4px var(--sp-8);
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--r-input);
+  background: transparent;
+  font-family: var(--font-text);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.team-room__activity:hover { background: var(--color-subtle-secondary); color: var(--color-text-primary); }
+.team-room__activity[aria-pressed="true"] { background: var(--color-subtle-tertiary); color: var(--color-text-primary); }
+.team-room__activity:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 1px; }
+
+/* ── Hand-off chips ─────────────────────────────────────────────────────── */
+/* What a bot-to-bot message IS, from the prefix the sender put on it. A
+ * quiet fill; a question wears the caution colour because it waits on
+ * someone. */
+.tf-chip {
+  flex: none;
+  padding: 0 6px;
+  border-radius: var(--r-pill);
+  background: var(--color-subtle-secondary);
+  font-family: var(--font-small);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  text-transform: lowercase;
+  letter-spacing: 0.2px;
+}
+.tf-chip[data-kind="question"] { color: var(--color-caution); }
+.tf-chip[data-kind="hand-off"] { color: var(--color-mention); background: var(--color-mention-faint); }
+.tf-chip[data-kind="report"] { color: var(--color-state-done); }
+
+/* ── Links, paths, pictures ─────────────────────────────────────────────── */
+.tf-link {
+  color: var(--color-accent);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--color-accent) 40%, transparent);
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+}
+.tf-link:hover { text-decoration-color: var(--color-accent); }
+.tf-path {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+  padding: 0 4px;
+  border-radius: var(--r-input);
+  background: var(--color-subtle-secondary);
+}
+.tf-thumbs { display: flex; flex-wrap: wrap; gap: var(--sp-8); margin-top: var(--sp-4); }
+.tf-thumb {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  max-width: 320px;
+  cursor: zoom-in;
+}
+.tf-thumb__img {
+  display: block;
+  /* A fixed box, filled when the bytes arrive: a picture that grows on load
+   * would push everything below it and knock the chat off its bottom pin. */
+  width: 320px;
+  height: 200px;
+  object-fit: cover;
+  object-position: top left;
+  border-radius: var(--r-input);
+  box-shadow: inset 0 0 0 1px var(--color-rail-faint);
+  background: var(--color-subtle-secondary);
+  object-fit: contain;
+}
+.tf-thumb--missing { cursor: default; }
+.tf-thumb--missing .tf-thumb__img { display: none; }
+.tf-thumb__caption {
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Reactions ──────────────────────────────────────────────────────────── */
+/* Pills under a row: the emoji and how many; names on hover. Yours is
+ * highlighted (accent-faint fill, accent keyline) so your feedback stands
+ * out from the bots'. The bar appears on hover or focus, in the row's own
+ * top-right corner, and never takes space in the flow. */
+.tf-msg { position: relative; }
+.tf-react { display: flex; flex-wrap: wrap; gap: var(--sp-4); margin-top: 2px; }
+.tf-react[hidden] { display: none; }
+.tf-react__pill {
+  padding: 1px var(--sp-8);
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--r-pill);
+  background: var(--color-subtle-secondary);
+  font-family: var(--font-small);
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  line-height: 18px;
+}
+.tf-react__pill:hover { background: var(--color-subtle-tertiary); color: var(--color-text-primary); }
+.tf-react__pill--mine {
+  background: var(--color-mention-faint);
+  border-color: var(--color-mention);
+  color: var(--color-text-primary);
+}
+.tf-reactbar {
+  position: absolute;
+  top: -12px;
+  right: var(--sp-12);
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--r-pill);
+  background: var(--color-room-surface);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-fast) var(--ease-entry);
+}
+.tf-msg:hover .tf-reactbar,
+.tf-msg:focus-within .tf-reactbar { opacity: 1; pointer-events: auto; }
+.tf-reactbar__btn {
+  width: 26px;
+  height: 22px;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: transparent;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.tf-reactbar__btn:hover { background: var(--color-subtle-tertiary); }
+.tf-reactbar__btn:focus-visible { outline: 1px solid var(--color-accent); outline-offset: -1px; }
+
+/* ── Cards ──────────────────────────────────────────────────────────────── */
+/* A system row you answer here: the permission prompt, a bot's question.
+ * Still a system row (dot, caption type), grown a body with its buttons. */
+.tf-sys--card { align-items: flex-start; }
+.tf-sys--card .tf-sys__dot { margin-top: 5px; }
+
+/* Every card wears its kind as a colour: a hairline frame, a thicker left
+ * edge, and a tint of the same hue. Reading the room, the frame answers
+ * "what is this?" before the sentence does. Tokens, one per kind, live in
+ * tokens.css; nothing here invents a colour. */
+.tf-sys--card {
+  /* No horizontal margin: the feed is a flex column whose items stretch, and
+   * side margins there push the row past the column and give the whole chat a
+   * horizontal scrollbar. The frame sits on the column's own inset. */
+  position: relative;   /* the kind label hangs on the bottom line */
+  margin: var(--sp-4) 0 var(--sp-8);
+  padding: var(--sp-8) var(--sp-12) var(--sp-12);
+  border: 1px solid var(--card-hue, var(--color-stroke));
+  border-left-width: 3px;
+  border-radius: var(--r-card);
+  background: var(--card-tint, transparent);
+}
+.tf-sys--card .tf-sys__dot { display: none; }   /* the frame is the marker now */
+/* A framed row wraps: a card is something you read and answer, so its sentence
+ * must not disappear into an ellipsis the way a narration line may. */
+.tf-sys--card .tf-sys__text {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  line-height: var(--type-body-line);
+}
+.tf-sys--card[data-event="permission"] { --card-hue: var(--team-card-permission); --card-tint: var(--team-card-permission-faint); }
+.tf-sys--card[data-event="trust"]      { --card-hue: var(--team-card-trust);      --card-tint: var(--team-card-trust-faint); }
+.tf-sys--card[data-event="ask"]        { --card-hue: var(--team-card-ask);        --card-tint: var(--team-card-ask-faint); }
+.tf-sys--card[data-event="task.review"]{ --card-hue: var(--team-card-review);     --card-tint: var(--team-card-review-faint); }
+.tf-sys--card[data-event="artefact"]   { --card-hue: var(--team-card-artefact);   --card-tint: var(--team-card-artefact-faint); }
+.tf-sys--card[data-event="denied"]     { --card-hue: var(--team-card-error);      --card-tint: var(--team-card-error-faint); }
+.tf-sys--card[data-tone="error"]       { --card-hue: var(--team-card-error);      --card-tint: var(--team-card-error-faint); }
+
+/* The kind, spelled out, so the colour isn't the only carrier — sitting ON the
+ * frame's bottom line at the right, where it labels the card without taking a
+ * line above the sentence. The patch behind it is the app ground plus the
+ * card's own tint, so the word breaks the line cleanly. */
+.tf-sys__kind {
+  position: absolute;
+  right: var(--sp-12);
+  bottom: -6px;
+  padding: 0 var(--sp-4);
+  background-color: var(--color-room-surface);
+  background-image: linear-gradient(var(--card-tint, transparent), var(--card-tint, transparent));
+  font-family: var(--font-small);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  text-transform: lowercase;
+  color: var(--card-hue, var(--color-text-tertiary));
+}
+
+/* A bot's name in the chat, in that bot's colour. */
+.tf-msg__name[data-color-index="0"] { color: var(--color-pane-tag-0); }
+.tf-msg__name[data-color-index="1"] { color: var(--color-pane-tag-1); }
+.tf-msg__name[data-color-index="2"] { color: var(--color-pane-tag-2); }
+.tf-msg__name[data-color-index="3"] { color: var(--color-pane-tag-3); }
+.tf-msg__name[data-color-index="4"] { color: var(--color-pane-tag-4); }
+.tf-msg__name[data-color-index="5"] { color: var(--color-pane-tag-5); }
+.tf-sys__body {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-8);
+  padding: var(--sp-4) 0;
+}
+.tf-sys__text--wrap { white-space: normal; overflow: visible; text-overflow: clip; color: var(--color-text-secondary); font-size: var(--type-caption-size); line-height: var(--type-body-line); }
+.tf-sys[data-tone="attention"] .tf-sys__text--wrap { color: var(--color-text-primary); }
+.tf-sys__more {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.tf-sys__more:hover { color: var(--color-text-secondary); }
+.tf-sys__details {
+  margin: 0;
+  padding: var(--sp-8);
+  max-width: 100%;
+  overflow-x: auto;
+  border-radius: var(--r-input);
+  background: var(--color-subtle-secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--color-text-secondary);
+  white-space: pre;
+}
+.tf-sys__details[hidden] { display: none; }
+.tf-sys__actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-8); }
+.tf-sys__open--primary { border-color: var(--color-accent); color: var(--color-text-primary); }
+.tf-sys__open--primary:hover { background: var(--color-mention-faint); }
+.tf-sys__open:disabled { opacity: 0.5; cursor: default; }
+.tf-sys__answered { font-family: var(--font-small); font-size: 11px; color: var(--color-text-disabled); }
+.tf-sys__form { display: flex; gap: var(--sp-8); align-items: center; flex: 1; min-width: 0; }
+.tf-sys__input {
+  flex: 1;
+  min-width: 160px;
+  padding: 4px var(--sp-8);
+  border-radius: var(--r-input);
+  border: 1px solid var(--color-stroke);
+  background: var(--color-subtle-secondary);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: var(--type-caption-size);
+}
+.tf-sys__input:focus-visible { outline: 1px solid var(--color-accent); outline-offset: -1px; }
+.tf-sys[data-event="cc"] { color: var(--color-text-disabled); }
+.tf-sys[data-event="denied"] .tf-sys__text { color: var(--color-text-secondary); }
+
+/* ── Empty state ────────────────────────────────────────────────────────── */
+/* Centered — the one place the constitution allows it. */
+.team-room__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-8);
+  padding: var(--sp-48);
+  text-align: center;
+}
+.team-room__empty[hidden] { display: none; }
+.team-room__empty-title {
+  font-family: var(--font-display);
+  font-size: var(--type-subtitle-size);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.team-room__empty-body {
+  max-width: 360px;
+  font-size: var(--type-caption-size);
+  line-height: var(--type-body-line);
+  color: var(--color-text-tertiary);
+}
+.team-room__empty-cta { margin-top: var(--sp-16); }
+/* A pasted picture waiting in the composer: one quiet chip above the box. */
+.team-composer__attach { display: flex; padding: 0 0 var(--sp-8); }
+.team-composer__attach[hidden] { display: none; }
+.team-composer__attach-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: 2px var(--sp-8);
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--r-pill);
+  font-family: var(--font-small);
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  background: var(--color-subtle-secondary);
+}
+.team-composer__attach-name { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The same words, inside the feed: bots exist, nothing has been said yet.
+ * The roster stays beside it (see render() — a pulled team starts from there). */
+.team-feed__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-8);
+  min-height: 100%;
+  padding: var(--sp-32);
+  text-align: center;
+}
+
+/* ── Composer ───────────────────────────────────────────────────────────── */
+/* Spans the feed and the task column; the roster's rail continues down its
+ * right edge, so the room reads as two regions: the conversation and its
+ * board, and the people. */
+.team-composer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-8);
+  width: calc(100% - var(--team-roster-width));
+  box-sizing: border-box;
+  padding: var(--sp-12) var(--sp-24) var(--sp-16);
+  border-top: 1px solid var(--color-stroke);
+  border-right: 1px solid var(--color-stroke);
+}
+.team-composer[hidden] { display: none; }
+.team-composer__to {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-4);
+  min-height: 20px;
+}
+.team-composer__to[hidden] { display: none; }
+.team-composer__route {
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+}
+.to-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px var(--sp-4) 1px var(--sp-8);
+  border-radius: 999px;
+  background: var(--color-mention-faint);
+  color: var(--color-mention);
+  font-family: var(--font-small);
+  font-size: 11px;
+  font-weight: 500;
+}
+.to-chip--all { background: var(--color-subtle-tertiary); color: var(--color-text-primary); }
+.to-chip__x {
+  width: 16px;
+  height: 16px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  line-height: 1;
+  opacity: 0.7;
+  cursor: pointer;
+}
+.to-chip__x:hover { opacity: 1; background: var(--color-subtle-tertiary); }
+.team-composer__row {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--sp-8);
+}
+.team-composer__input {
+  flex: 1;
+  min-width: 0;
+  min-height: 36px;
+  padding: var(--sp-8) var(--sp-12);
+  box-sizing: border-box;
+  resize: none;
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--r-card);
+  background: var(--color-subtle-secondary);
+  font-family: var(--font-text);
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line);
+  color: var(--color-text-primary);
+  transition: border-color var(--dur-fast) var(--ease-entry);
+}
+.team-composer__input:focus { outline: none; border-color: var(--color-accent); }
+.team-composer__input::placeholder { color: var(--color-text-disabled); }
+.team-composer__send {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--r-card);
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-entry);
+}
+.team-composer__send:hover { background: var(--color-accent-strong); }
+.team-composer__send:disabled {
+  background: var(--color-subtle-tertiary);
+  color: var(--color-text-disabled);
+  cursor: default;
+}
+.team-composer__send:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 2px; }
+
+/* The @ typeahead — a flyout, so the flyout recipe (surface, hairline, one
+ * shadow) applies. */
+.mention-pop {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  min-width: 220px;
+  max-width: 320px;
+  padding: var(--sp-4);
+  border-radius: var(--r-card);
+  border: 1px solid var(--color-stroke);
+  background: var(--color-flyout-surface);
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  box-shadow: var(--shadow-flyout);
+  font-family: var(--font-text);
+  color: var(--color-text-primary);
+}
+.mention-pop__item {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-8);
+  width: 100%;
+  padding: 6px var(--sp-8);
+  border: 0;
+  border-radius: var(--r-input);
+  background: transparent;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.mention-pop__item:hover,
+.mention-pop__item--active { background: var(--color-subtle-secondary); }
+.mention-pop__nick { font-weight: 500; }
+.mention-pop__pos,
+.mention-pop__hint {
+  margin-left: auto;
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+}
+
+/* ── New bot dialog ─────────────────────────────────────────────────────── */
+.newbot-card {
+  width: 560px;
+  overflow-y: auto;
+}
+/* The dialog hides whole fields by attribute (mode switch, brief stage); the
+ * field's own display:flex would otherwise beat the UA's [hidden] rule. */
+.newtab-field[hidden],
+.newtab-check[hidden] { display: none; }
+.newbot-input--prose {
+  width: 100%;
+  font-family: var(--font-text);
+  font-size: var(--type-body-size);
+}
+.newbot-area {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: var(--font-text);
+  font-size: var(--type-body-size);
+}
+.newbot-brief {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  min-height: 200px;
+}
+.newbot-path { display: flex; gap: var(--sp-8); }
+.newbot-path .settings-control--text { flex: 1; width: auto; min-width: 0; }
+.newbot-path__browse { flex: none; padding: 6px var(--sp-12); }
+.newtab-field__hint--error { color: var(--color-error); }
+.newbot-dropdown .dropdown__trigger { width: 100%; }
+.newbot-stage {
+  margin-bottom: var(--sp-16);
+  padding-top: var(--sp-16);
+  border-top: 1px solid var(--color-stroke);
+}
+.newbot-stage[hidden] { display: none; }
+.newbot-stage__progress {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  margin-bottom: var(--sp-16);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-secondary);
+}
+.newbot-stage__progress[hidden] { display: none; }
+.newbot-stage__spinner { font-family: var(--font-mono); color: var(--color-state-working); }
+.newbot-stage__elapsed { color: var(--color-text-tertiary); font-variant-numeric: tabular-nums; }
+.newbot-stage__hint { margin-left: auto; color: var(--color-text-tertiary); }
+.newbot-stage__error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-8);
+  margin-bottom: var(--sp-16);
+  font-size: var(--type-caption-size);
+  color: var(--color-error);
+}
+.newbot-stage__error[hidden] { display: none; }
+.newbot-stage__error-actions { display: flex; gap: var(--sp-8); margin-left: auto; }
+.newbot-stage__note {
+  margin-bottom: var(--sp-8);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+}
+
+/* ── Sidebar: the team row and bot tags ─────────────────────────────────── */
+/* The door to the room, directly under a project header. Wears the selected
+ * pill while the room is open — fill only, no stripe. */
+.team-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  width: 100%;
+  margin: 0 0 var(--sp-4);
+  padding: 6px var(--sp-12) 6px 24px;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: transparent;
+  font-family: var(--font-text);
+  color: var(--color-text-secondary);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-entry);
+}
+.team-row:hover { background: var(--color-subtle-secondary); color: var(--color-text-primary); }
+.team-row--active { background: var(--color-subtle-tertiary); color: var(--color-text-primary); }
+.team-row:focus-visible { outline: 1px solid var(--color-accent); outline-offset: -1px; }
+.team-row__glyph { flex: none; color: var(--color-text-tertiary); }
+.team-row--active .team-row__glyph,
+.team-row:hover .team-row__glyph { color: var(--color-text-secondary); }
+.team-row__text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.team-row__name { font-size: 13px; font-weight: 500; }
+.team-row__summary {
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.team-row__unread {
+  margin-left: auto;
+  min-width: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--color-accent-faint);
+  color: var(--color-accent);
+  font-family: var(--font-small);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+}
+/* A bot's tab row names its position after the nickname, quietly. */
+.session-item__pos {
+  flex: 0 0 auto;
+  margin-left: var(--sp-8);
+  padding: 0 6px;
+  max-width: 45%;
+  border-radius: var(--r-input);
+  background: var(--color-subtle-secondary);
+  font-family: var(--font-small);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The tag stays even next to a right-edge chip: it is the bot's identity, and
+ * hiding it only on some rows read as two different kinds of row (a hovered
+ * row kept it, its neighbour lost it). The chip is short; the tag ellipsizes. */
+.project-menu__item--danger { color: var(--color-error); }
+
+@media (prefers-reduced-motion: reduce) {
+  .team-room,
+  .team-room--closing,
+  .tf-msg.row-enter,
+  .tf-work.row-enter,
+  .tf-sys.row-enter { animation: none; }
+}
+
+/* ---- bot faces ---- */
+/* The team room's avatars (bot-face.ts): Monocle Guy bust-cropped into the
+ * room's circle, dressed for the position. The SVG fills its host and OWNS
+ * the circle — background, keyline, clip — so the colour mode is one class
+ * swap on the face root and nothing writes colour per frame.
+ *   The CIRCLE is always the bot's colour — the host's --tag if it sets one,
+ *     else the face's own colour index — the same tint and keyline the letter
+ *     avatar wore, so bots stay telling-apart-able in either mode.
+ *   off (default): the plain ink mascot on that circle, exactly the setup
+ *     overlay's bird; the monocle ring (and any neckwear) in the accent.
+ *   on (.bot-face--color): the bird itself takes the bot's colour too, and
+ *     the signature items stay accent, or fall back to ink where the tag IS
+ *     the accent hue (index 0), so they never vanish into the bird.
+ * --bf-ink is set by the rig itself: the eye ink, the one hex the bird owns. */
+.bot-face {
+  --bf-ring: var(--color-accent);
+  --bf-item: var(--color-accent);
+  --bf-tag: var(--color-text-tertiary);
+  display: block;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  border-radius: 50%;
+  overflow: hidden;
+  color: var(--color-text-primary);
+  /* a touch deeper than the letter avatar's 16 % — the colour is the whole
+   * point of the circle now, and an ink bird sits on it */
+  background: color-mix(in srgb, var(--tag, var(--bf-tag)) 24%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tag, var(--bf-tag)) 45%, transparent);
+  user-select: none;
+  pointer-events: none;
+}
+.bot-face[data-color-index="0"] { --bf-tag: var(--color-pane-tag-0); }
+.bot-face[data-color-index="1"] { --bf-tag: var(--color-pane-tag-1); }
+.bot-face[data-color-index="2"] { --bf-tag: var(--color-pane-tag-2); }
+.bot-face[data-color-index="3"] { --bf-tag: var(--color-pane-tag-3); }
+.bot-face[data-color-index="4"] { --bf-tag: var(--color-pane-tag-4); }
+.bot-face[data-color-index="5"] { --bf-tag: var(--color-pane-tag-5); }
+.bot-face--color {
+  color: var(--tag, var(--bf-tag));
+}
+/* the accent-coloured tag would swallow an accent monocle: ink there */
+.bot-face--color[data-color-index="0"] {
+  --bf-ring: var(--bf-ink);
+  --bf-item: var(--bf-ink);
+}
+/* A message-row avatar that holds a face hands its tint and keyline over to
+ * it (the face draws its own circle); the initial it would have shown is
+ * simply not rendered by the room. */
+.tf-msg__avatar:has(> .bot-face) {
+  background: transparent;
+  box-shadow: none;
+}
+
+/* ===========================================================================
+ * Block markdown in a room message (text.ts → appendBlocks)
+ *
+ * A bot's status report is a document, not a shout: paragraphs that breathe,
+ * real bullets, a fence that scrolls inside its own box, and a table that is
+ * a table. The renderer marks the body `md`, and `md--rich` when it built
+ * anything beyond plain paragraphs — that second class is what lets the rules
+ * below drop pre-wrap and clamp by height instead of by line count, without
+ * touching how a one-line beat has always looked.
+ *
+ * Everything is one step quieter than the prose around it: hairlines, no
+ * shadows, no fills except the code box. The eye should land on the words.
+ * =========================================================================== */
+
+.tf-msg__text.md { white-space: normal; }
+
+/* Paragraphs: the gap between two is the whole point — 8px reads as "these
+ * are separate thoughts" without pushing the message into an essay. */
+.md-p { margin: 0; }
+.md-p + .md-p { margin-top: var(--sp-8); }
+
+/* A block after prose (or prose after a block) gets the same air. */
+.md-p + .md-list,
+.md-p + .md-pre,
+.md-p + .md-quote,
+.md-p + .md-tablewrap,
+.md-list + .md-p,
+.md-pre + .md-p,
+.md-quote + .md-p,
+.md-tablewrap + .md-p,
+.md-list + .md-list,
+.md-tablewrap + .md-tablewrap { margin-top: var(--sp-8); }
+
+/* Headings are a strong LINE, never a display size: the row is 14px body and
+ * a bot's "## Scope" must not out-shout the sender's name above it. */
+.md-h {
+  margin: var(--sp-12) 0 var(--sp-4);
+  font-family: var(--font-text);
+  font-size: var(--type-body-size);
+  font-weight: 600;
+  line-height: var(--type-body-line);
+  color: var(--color-text-primary);
+}
+.md-h:first-child { margin-top: 0; }
+.md-h--3,
+.md-h--4 {
+  font-size: var(--type-caption-size);
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: var(--color-text-secondary);
+}
+
+/* Lists: the marker sits in the gutter so the text edge stays flush with the
+ * paragraphs above it. */
+.md-list {
+  margin: 0;
+  padding-left: var(--sp-16);
+  /* The app's reset strips every ul's marker (line 72), which left a bot's
+   * bullets as an unexplained indent. A list has to look like a list. */
+  list-style: disc outside;
+}
+.md-list--num { list-style: decimal outside; }
+.md-list--sub { list-style: circle outside; }
+.md-li { margin: 0; }
+.md-li + .md-li { margin-top: var(--sp-4); }
+.md-list--sub {
+  margin-top: var(--sp-4);
+  padding-left: var(--sp-12);
+}
+.md-list--sub > .md-li { color: var(--color-text-tertiary); }
+.md-list::marker,
+.md-li::marker { color: var(--color-text-disabled); }
+
+/* A fence keeps its own box and scrolls sideways; it never widens the feed
+ * column, which is the failure mode that made long messages unreadable. */
+.md-pre {
+  margin: 0;
+  padding: var(--sp-8) var(--sp-12);
+  overflow-x: auto;
+  background: var(--color-subtle-secondary);
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--r-input);
+}
+.md-code {
+  font-family: var(--font-mono);
+  font-size: var(--type-caption-size);
+  line-height: 1.5;
+  color: var(--color-text-primary);
+  white-space: pre;
+}
+
+/* A quote is a rule and a shade, nothing more — a bot quoting the owner
+ * shouldn't look like a second message. */
+.md-quote {
+  margin: 0;
+  padding-left: var(--sp-12);
+  border-left: 2px solid var(--color-stroke-strong);
+  color: var(--color-text-tertiary);
+}
+
+.md-hr {
+  height: 0;
+  margin: var(--sp-12) 0;
+  border: 0;
+  border-top: 1px solid var(--color-stroke);
+}
+
+/* Tables. The wrap scrolls, the table doesn't stretch the column, and the
+ * header is separated by a hairline rather than a fill — same discipline as
+ * the rest of the chrome. Numbers sit in tabular figures so a column of
+ * percentages lines up. */
+.md-tablewrap {
+  max-width: 100%;
+  /* A flex child's default min-width is its content, so a wide table pushed
+   * the whole feed sideways and gave the chat a horizontal scrollbar. The
+   * table scrolls inside this box; the column never moves. */
+  min-width: 0;
+  overflow-x: auto;
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--r-input);
+}
+.md-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: var(--type-caption-size);
+  line-height: var(--type-body-line);
+  font-variant-numeric: tabular-nums;
+}
+.md-th,
+.md-td {
+  padding: var(--sp-4) var(--sp-8);
+  text-align: left;
+  vertical-align: top;
+  white-space: nowrap;
+}
+.md-th {
+  font-weight: 600;
+  color: var(--color-text-primary);
+  border-bottom: 1px solid var(--color-stroke);
+}
+.md-td { color: var(--color-text-secondary); }
+.md-table tbody tr + tr .md-td { border-top: 1px solid var(--color-sidebar-stroke); }
+.md-th--right,
+.md-td--right { text-align: right; }
+.md-th--center,
+.md-td--center { text-align: center; }
+
+/* Inline forms the block renderer adds on top of the room's existing chips
+ * (.beat__strong, .beat__code, .tf-link, .tf-path, .tf-mention). */
+.md-em { font-style: italic; }
+.md-del {
+  text-decoration: line-through;
+  text-decoration-color: var(--color-text-disabled);
+  color: var(--color-text-tertiary);
+}
+
+/* A long beat still clamps — but a body with blocks in it can't be clamped by
+ * -webkit-line-clamp (a table inside a -webkit-box measures nothing like six
+ * lines), so it clamps by height instead. Same six-line feel, same click to
+ * open, and the room's scrollHeight test still decides when to offer it. */
+/* A rich body folds on a block boundary (clampBlocks in team-room.ts hides
+ * whole blocks), so a table is never cut through its third row. Only a single
+ * block taller than the fold has nowhere to break: that one is cut with a
+ * fade, which reads as "more below" rather than as a broken table. */
+.tf-msg--beat .tf-msg__text.md--rich {
+  display: block;
+  max-height: none;
+  overflow: hidden;
+}
+.tf-msg--beat .tf-msg__text.md--rich.md--cut {
+  max-height: 320px;
+  -webkit-mask-image: linear-gradient(to bottom, #000 76%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 76%, transparent 100%);
+}
+.tf-msg--open .tf-msg__text.md--rich {
+  max-height: none;
+  overflow: visible;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+
+/* ── Team room: fit, folds and overlays ─────────────────────────────────── */
+/* The chat keeps a reading width and the board gives first; when the room is
+ * too narrow for three columns the board and the team fold into a drawer the
+ * header's "Board" button opens. Container-sized, not viewport-sized: the room
+ * shares the window with the sidebar and the inspector. */
+.team-room { container-type: inline-size; container-name: room; }
+/* The room's one column never grows past the room: a header whose pills and
+ * buttons can't shrink was the widest child, and the track took its width and
+ * pushed every row past the window's edge. */
+.team-room { grid-template-columns: minmax(0, 1fr); }
+.team-room > * { min-width: 0; }
+.team-room__main {
+  grid-template-columns:
+    minmax(var(--team-feed-min), var(--team-feed-measure))
+    minmax(var(--team-tasks-min), 1fr)
+    var(--team-roster-width);
+}
+.team-room__board { display: none; }
+/* 1040 = the three floors (420 + 340 + 240) plus slack: the width below which
+ * the columns would have to overlap. */
+@container room (max-width: 1040px) {
+  .team-room__board { display: inline-flex; }
+  .team-room__head { flex-wrap: nowrap; }
+  .team-room__title { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  /* No room for the counts beside the title and the buttons; the sidebar's
+   * team row carries the same "1 waiting · 1 working". */
+  .team-room__counts { display: none; }
+  .team-room__main { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .team-room__feedwrap { grid-column: 1; grid-row: 1 / span 2; }
+  .team-tasks, .team-roster { display: none; }
+  .team-room__main { overflow: hidden; }
+  .team-room--board-open .team-room__main { grid-template-columns: minmax(0, 1fr) min(440px, 60%); }
+  /* The team folds above the board: a few rows, its own scroll past that. A
+   * fixed cap, not a percentage — a percentage of an auto grid row resolves
+   * against nothing and clipped the list to one row. */
+  .team-room--board-open .team-roster {
+    display: flex; grid-column: 2; grid-row: 1;
+    min-width: 0;
+    max-height: 200px;
+    border-left: 1px solid var(--color-stroke);
+    border-bottom: 1px solid var(--color-stroke);
+  }
+  .team-room--board-open .team-tasks { display: flex; grid-column: 2; grid-row: 2; min-width: 0; }
+  .team-room--reading .team-room__main { grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); }
+  .team-room--reading .team-tasks { display: flex; grid-column: 2; grid-row: 1 / span 2; }
+  .team-room--reading .team-roster { display: none; }
+  .team-composer { width: 100%; border-right: 0; }
+}
+
+/* Reading mode: the artefact takes the board's and the roster's columns and
+ * reads as a page beside the chat. */
+.team-room--reading .team-room__main { grid-template-columns: minmax(var(--team-feed-min), 1fr) minmax(0, 1.5fr); }
+.team-room--reading .team-roster { display: none; }
+.team-room--reading .team-tasks__head,
+.team-room--reading .team-tasks__body,
+.team-room--reading .team-tasks__grip { display: none; }
+.team-room--reading .team-arte { border-top: 0; }
+.team-room--reading .team-arte__body { padding: 0 var(--sp-24) var(--sp-24); }
+.team-room--reading .team-arte__doc { max-width: 76ch; font-size: var(--type-body-size); }
+.team-room--reading .team-composer { width: 100%; border-right: 0; }
+
+/* The cards region scrolls; a fade at the cut says so while there is more. */
+.team-tasks__body.is-more { mask-image: linear-gradient(to bottom, #000 calc(100% - 32px), transparent); }
+
+/* Artefact head: name and meta stacked on the left, the actions on one line. */
+.team-arte__head { align-items: flex-start; flex-wrap: nowrap; }
+.team-arte__titles { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.team-arte__actions { flex: none; display: flex; gap: var(--sp-4); }
+.team-arte__meta { flex-basis: auto; order: 0; }
+/* The recent list is a list in a panel, not a flyout: inline and opaque. */
+.team-arte__menu {
+  position: static; top: auto; right: auto; left: auto; max-height: none;
+  padding: 0 var(--sp-8) var(--sp-8);
+  background: var(--color-room-surface);
+  border-bottom: 1px solid var(--color-stroke);
+  box-shadow: none;
+}
+/* A narrow panel is the normal case: text cells wrap instead of running off. */
+.team-arte__doc .md-td { white-space: normal; overflow-wrap: break-word; }
+
+/* Cards: the kind is the card's first line, inside the frame; the sentence
+ * wraps and the buttons never do — on a narrow card they drop under it. */
+.tf-sys--card { flex-wrap: wrap; row-gap: var(--sp-4); }
+.tf-sys--card .tf-sys__kind {
+  position: static; flex-basis: 100%; order: -1;
+  padding: 0; background: none;
+  color: var(--card-hue, var(--color-text-tertiary));
+  line-height: 1.2;
+}
+/* Only the card's OWN sentence takes the row's slack; inside a body (a column
+ * flex) the same class must not turn 220px into a height. */
+.tf-sys--card > .tf-sys__text--wrap { flex: 1 1 220px; min-width: 0; }
+.tf-sys__open { white-space: nowrap; }
+.tf-sys--card > .tf-sys__details { flex-basis: 100%; }

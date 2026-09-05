@@ -119,6 +119,27 @@ Before writing XAML:
 
 Then write the XAML. Keep code-behind minimal; prefer bindings and commands.
 
+## Before every release: the delivery gate
+
+`scripts/verify-comms.ps1` MUST pass before a `v*.*.*` tag is pushed. No
+exceptions, and a red run is not something to explain away — it is a release
+that does not go out.
+
+It drives the real app with the real Claude Code CLI and proves the team
+room's one job: that a post reaches its bot. Warm (a running bot answers),
+cold (after a restart, a bot whose tab has no terminal is started, the post
+waits for its Claude instead of being typed into a booting shell, then lands
+and is answered), and "Send again" on a post that failed.
+
+Why it exists: every delivery bug in this feature has been a timing detail
+the unit tests cannot have — a fake host answers instantly, a real Claude
+takes ten to twenty seconds and paints a TUI over whatever was typed. Two of
+the owner's posts were lost to exactly that gap, and the gate reproduces it.
+It costs a few cents of haiku usage and about four minutes.
+
+Run it after `./scripts/build.ps1`, `dotnet test src/Perch.Tests` and
+`npm test`, and before `git tag`.
+
 ## Visual verification loop
 
 When iterating against a reference screenshot:

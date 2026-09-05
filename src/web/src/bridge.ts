@@ -158,7 +158,7 @@ export type OutMessage =
   /* User preferences (terminal font size, Inspector rail open/closed, wide
    * layout mode) — host persists to Settings.cs so they survive restart. Each
    * field is optional so the page can update one without asserting the others. */
-  | { type: "prefs.set"; fontSize?: number; inspectorOpen?: boolean; wideLayout?: boolean; localPerchOnly?: boolean }
+  | { type: "prefs.set"; fontSize?: number; inspectorOpen?: boolean; wideLayout?: boolean; localPerchOnly?: boolean; teamFacesColor?: boolean }
   /* Recap: page asks the host for the unpushed-commit list behind a pane's
    * "↑N" chip (the hover tooltip / lightbox open lazily fetch it). Host
    * replies with a commits.data message for the same paneId. */
@@ -190,6 +190,8 @@ export type OutMessage =
       defaultCwd?: string;
       fontSize?: number;
       resumeAgentsOnLaunch?: boolean;
+      /* Team bot faces in colour rather than plain ink. */
+      teamFacesColor?: boolean;
       newTabPosition?: NewTabPosition;
       projectScanRoots?: string[];
       worktreeRoot?: string;
@@ -212,9 +214,11 @@ export type OutMessage =
   | { type: "project.add"; path: string; name?: string }
   /* Unregister. The project's tabs are NOT closed — they fall back to "Other". */
   | { type: "project.remove"; id: string }
-  /* Rename a project, or override what its worktrees get seeded with. An EMPTY
-   * seedPaths means "inherit the global list", not "seed nothing". */
-  | { type: "project.update"; id: string; name?: string; seedPaths?: string[] }
+  /* Rename a project, hide/show it in the sidebar, or override what its
+   * worktrees get seeded with. An EMPTY seedPaths means "inherit the global
+   * list", not "seed nothing". `hidden` folds the project into (or out of)
+   * project mode's "Hidden" drawer without touching the registration. */
+  | { type: "project.update"; id: string; name?: string; seedPaths?: string[]; hidden?: boolean }
   /* Create a tab under a project. `name` becomes the tab title, the branch
    * (slugified), and the cc session's --name. `worktree` cuts it its own git
    * worktree so parallel agents can't overwrite each other's files (and so the
@@ -267,7 +271,84 @@ export type OutMessage =
    * npm → node children go with it. */
   | { type: "local.kill"; pid: number }
   /* "Kill all" in the lingering area — every server whose owning pane is gone. */
-  | { type: "local.killLingering" };
+  | { type: "local.killLingering" }
+  /* ---- Team room --------------------------------------------------------
+   * A project's bots and the one ledger they all post into. Bots are ordinary
+   * sessions (they keep their sidebar rows); these messages only add the team
+   * layer on top. */
+  /* Fetch the room's ledger. `sinceSeq` asks only for entries after that seq
+   * (the incremental poll); absent → the newest window the host keeps. */
+  | { type: "team.request"; projectId: string; sinceSeq?: number }
+  /* Your post. `to` is what the page resolved from the @mentions — nicknames,
+   * "everyone", or null when there were none (the host routes it, and the
+   * echoed entry carries the resolved recipients). `clientId` is page-minted so
+   * the optimistic row can be matched to its echo. */
+  | { type: "team.post"; projectId: string; text: string; to: string[] | "everyone" | null; clientId: string; image?: string }
+  /* A picture was pasted into the composer: the host reads the clipboard,
+   * saves the PNG under the team's local folder and answers team.paste.data. */
+  | { type: "team.paste"; projectId: string }
+  /* Create a bot: an existing position by slug, or a new one whose `brief` is
+   * the text the user accepted in the dialog (generated or hand-written). */
+  | { type: "team.bot.create"; projectId: string; nickname: string; worktree: boolean; positionSlug?: string;
+      position?: { name: string; purpose: string; referencePath: string; model: string; brief: string } }
+  /* The headless "read the repo, write the brief" job. `jobId` is page-minted
+   * so a reply for a dialog that has since closed can be dropped. */
+  | { type: "team.brief.generate"; jobId: string; projectId: string; positionName: string; purpose: string; referencePath: string; model: string }
+  | { type: "team.brief.cancel"; jobId: string }
+  /* Edit a saved position. Absent fields are left alone. */
+  | { type: "team.position.update"; projectId: string; slug: string; brief?: string; purpose?: string; name?: string }
+  /* Take a bot off the team. Its tab stays unless `closeTab`; the worktree
+   * stays unless `removeWorktree` (same option the close dialog offers). */
+  | { type: "team.bot.remove"; projectId: string; botId: string; closeTab: boolean; removeWorktree?: boolean }
+  /* Start a bot that has no tab on this machine (it came with a pull, or its
+   * tab was closed): a fresh tab under the same nickname, face and memory. */
+  | { type: "team.bot.start"; projectId: string; botId: string }
+  /* Answer a bot's start-up question from the room's card. "trust" picks
+   * "Yes, I trust this folder"; "exit" takes the dialog's default (No, exit). */
+  | { type: "team.bot.answer"; projectId: string; botId: string; answer: "trust" | "exit" }
+  /* Make a bot the team's one lead. */
+  | { type: "team.lead.set"; projectId: string; botId: string }
+  /* The task board — several tasks may be open, each a card. The owner opens a
+   * new one (`set`), renames one, confirms one is done (the bots on it wrap
+   * up and reset), or says not yet (back to open; the lead is told, with the
+   * note). */
+  | { type: "team.task.set"; projectId: string; title: string }
+  | { type: "team.task.rename"; projectId: string; taskId: string; title: string }
+  | { type: "team.task.confirm"; projectId: string; taskId: string }
+  | { type: "team.task.close"; projectId: string; taskId: string }
+  /* "Send again" on a post a bot never took: the host types the same line
+   * into that bot again, and no second post appears in the room. */
+  | { type: "team.deliver.retry"; projectId: string; seq: number; botId: string }
+  /* The artefacts panel: open one (the host answers with its text), and the
+   * list of recent ones for the panel's menu. */
+  | { type: "team.artefact.open"; projectId: string; id: string }
+  | { type: "team.artefact.list"; projectId: string }
+  /* "Open in a tab": the panel is a strip at the bottom of the room, and a
+   * plan or a draft ticket wants a whole tab. The PAGE renders the document
+   * (it already has the artefact's text and the markdown renderer) and sends
+   * the finished HTML; the host writes it beside the project and opens it as
+   * a browser tab, so the artefact can sit open next to the work it is
+   * about. */
+  | { type: "team.artefact.tab"; projectId: string; id: string; title: string; html: string }
+  | { type: "team.task.reject"; projectId: string; taskId: string; note?: string }
+  /* Answer a bot's permission prompt from its card in the room (the host
+   * hands the decision to Claude Code's PermissionRequest hook). `id` is the
+   * request id the card's row carried in `note`. */
+  | { type: "team.perm.answer"; projectId: string; id: string; decision: "allow" | "deny" }
+  /* Answer a bot's question (`perch team ask`) from its card; the host
+   * delivers the answer to that bot as a post. */
+  | { type: "team.ask.answer"; projectId: string; id: string; answer: string }
+  /* Fetch an image a row refers to (a screenshot path a bot shared); replies
+   * team.image.data. */
+  | { type: "team.image"; projectId: string; path: string }
+  /* React to a row with one of the room's four emoji. The host echoes a
+   * `reaction` row; clicking an existing pill sends the same (no un-react). */
+  | { type: "team.react"; projectId: string; seq: number; emoji: string }
+  /* Native folder picker for the reference repo; replies team.reference.picked. */
+  | { type: "team.reference.browse"; requestId: string; projectId: string }
+  /* Room opened/closed. While open the host pushes team.data on every new
+   * entry, so the page's poll is only a fallback. */
+  | { type: "team.room"; projectId: string; open: boolean };
 
 // ---- Incoming message shapes (host -> page) --------------------------------
 
@@ -464,6 +545,12 @@ export type ProjectView = {
   id: string;
   name: string;
   path: string;
+  /* Folded into project mode's "Hidden" drawer. Absent reads as visible. */
+  hidden?: boolean;
+  /* The project's team, when it has one. Absent or empty → no team row, no
+   * room. Bots are also ordinary rows in `sessions[]`; this is the layer that
+   * says which of them are bots and what position each holds. */
+  team?: TeamView;
 };
 
 export type StateMessage = {
@@ -497,6 +584,9 @@ export type StateMessage = {
     /* Local panel "Perch only" filter: count/show only servers Perch started,
      * hiding the "other" (started-outside-Perch) bucket. Off by default. */
     localPerchOnly?: boolean;
+    /* Team bot faces in colour (bird and circle in the bot's tag hue) rather
+     * than plain ink. Off by default. */
+    teamFacesColor?: boolean;
   };
   /* Account-wide Claude model rate limits — only the AT-LIMIT models appear, so
    * the model menu disables exactly these and annotates each with its reset
@@ -504,6 +594,10 @@ export type StateMessage = {
    * reads as "every model enabled, no annotations". resetsAtMs is Unix-ms (the
    * menu formats a local "resets 14:30") or null when the bucket had no reset. */
   modelLimits?: { alias: string; resetsAtMs: number | null }[];
+  /* What the model picker offers on a CODEX pane, read from codex's own
+   * catalogue by the host. Absent / empty when codex isn't installed, and the
+   * picker then stays closed for codex panes. */
+  codexModels?: { slug: string; label: string }[];
 };
 
 export type SidebarMode = "sessions" | "projects";
@@ -576,7 +670,9 @@ export type CommitsDataMessage = {
  * row ("Read perch.log ×6"). That's the thrash signal — the cheapest way to
  * see an agent spinning without reading a word. */
 export type InspectorEventView = {
-  kind: "prompt" | "beat" | "work" | "interrupt" | "skill" | "image";
+  /* "peer": a message from another session arrived (cross-session
+   * SendMessage) — target is the sender's name, text the body. */
+  kind: "prompt" | "beat" | "work" | "interrupt" | "skill" | "image" | "peer";
   ts: string;
   text: string;
   verb: string;
@@ -614,7 +710,7 @@ export type InspectorImageDataMessage = {
   data: string;
 };
 
-/* Reply to inspector.request. hasAgent=false means the pane has no Claude
+/* Reply to inspector.request. hasAgent=false means the pane has no agent
  * session (a plain shell, or an agent that hasn't started one yet) — the rail
  * shows its empty state rather than a misleading zeroed-out journal. `files`
  * can still be populated in that case: a shell pane in a repo has git changes
@@ -623,6 +719,10 @@ export type InspectorDataMessage = {
   type: "inspector.data";
   paneId: string;
   hasAgent: boolean;
+  /** Which agent's journal this is ("claude" / "codex" / "" for none). The
+   *  rail reads the same either way; this only names the agent in the prose
+   *  the rail writes about itself — its empty state and its filter chip. */
+  agent?: string;
   events: InspectorEventView[];
   vitals: InspectorVitalsView | null;
   files: InspectorFileView[];
@@ -634,6 +734,197 @@ export type InspectorDataMessage = {
    *  indistinguishable from an empty pane, and the rail flickers "No agent in
    *  this pane" whenever the machine is busy. */
   pending?: boolean;
+};
+
+// ---- Team room -------------------------------------------------------------
+
+/* A position is the job a bot holds: a purpose in plain language and the brief
+ * the host generated from it. Several bots can hold one position. */
+export type TeamPositionView = {
+  slug: string;
+  name: string;
+  purpose: string;
+  /* Model alias for bots in this position; "" = the default. */
+  model: string;
+  /* False while the brief has never been generated or written. */
+  hasBrief?: boolean;
+  /* The brief's text, when the host chooses to ferry it (it's what "Edit
+   * brief…" opens on). Absent → the editor starts empty and offers to
+   * regenerate. */
+  brief?: string;
+};
+
+export type TeamBotView = {
+  botId: string;
+  nickname: string;
+  positionSlug: string;
+  positionName: string;
+  /* Its tab — the session.select target. "" when the tab is gone (the bot is
+   * still on the roster, just not running). */
+  sessionId: string;
+  /* The Claude Code session name it answers to (what teammates put in
+   * SendMessage). Normally the nickname's slug; shown when it differs. */
+  peerName: string;
+  /* The face (bot-face.ts vocabulary): the hat means the position, the rest
+   * was drawn at random when the bot was created and is stored, so every
+   * machine renders the same bot. Absent on older hosts → defaults. */
+  look?: { hat?: string; eyewear?: string; extra?: string; temper?: string };
+};
+
+/* One bot's piece of the current task. */
+export type TeamTaskItemView = {
+  botId: string;
+  bot: string;
+  title: string;
+  status: "todo" | "doing" | "done" | "blocked" | string;
+  note: string;
+  updatedAtMs: number;
+};
+
+/* One task on the board — a card. open → review (the lead asked the owner to
+ * confirm) → done (confirmed; bots in `wrapping` are still writing their
+ * memory and being reset; when it empties the card is archived). */
+export type TeamTaskView = {
+  id: string;
+  title: string;
+  status: "open" | "review" | "done" | string;
+  /* Nickname, or "you". */
+  setBy: string;
+  reviewBy?: string;
+  createdAtMs: number;
+  doneAtMs?: number;
+  items: TeamTaskItemView[];
+  wrapping: string[];
+};
+
+export type TeamView = {
+  bots: TeamBotView[];
+  positions: TeamPositionView[];
+  /* The one lead's botId; absent when no bot leads yet. */
+  lead?: string;
+  /* Every task still on the board (open first). Absent on older hosts. */
+  tasks?: TeamTaskView[];
+};
+
+/* One row of the room's ledger.
+ *   user   — your post (from "you"; `to` is who it went to — a post naming
+ *            nobody goes to everyone).
+ *   beat   — what a bot SAID (an assistant text block from its transcript).
+ *   work   — what a bot DID (a tool call; verb/target/repeat as in the journal).
+ *   peer   — a bot messaged another bot (`to` = [nickname]).
+ *   note   — a bot posted to the room for you, pinging nobody.
+ *   reaction — an emoji on another row (`note` = that row's seq); rendered as
+ *            a pill under it, never as a row of its own.
+ *   system — the room narrating itself: joined / left / waiting / asleep …
+ *   artefact — a bot put something long somewhere the room can show it: a
+ *            draft ticket, a table, a plan. The row is a card; the thing
+ *            itself opens in the artefacts panel beside the task cards. */
+export type TeamEntryKind = "user" | "beat" | "work" | "peer" | "note" | "system" | "reaction" | "artefact";
+
+export type TeamEntryView = {
+  /* Ledger sequence; strictly increasing, the merge/dedupe key. */
+  seq: number;
+  ts: string;
+  kind: TeamEntryKind;
+  /* Nickname, or "you", or "perch" for system rows. */
+  from: string;
+  to?: string[] | "everyone";
+  text: string;
+  botId?: string;
+  paneId?: string;
+  /* work rows only, mirroring InspectorEventView. */
+  verb?: string;
+  target?: string;
+  /* work rows: the journal's annotation. peer rows: the hand-off label the
+   * sender put in front (handoff | report | question | answer | fyi). system
+   * rows: the request id a permission/ask card is about, or the seq a
+   * waiting/undelivered row is about. reaction rows: the target row's seq. */
+  note?: string;
+  repeat?: number;
+  /* user rows only — the echo of team.post's clientId. */
+  clientId?: string;
+  /* An image the row shares (an absolute path to a screenshot); rendered as a
+   * thumbnail under the text, fetched through team.image. */
+  image?: string;
+  /* system rows about the board: which task. */
+  taskId?: string;
+  /* ask rows: the answers offered as buttons; absent → a free-text answer. */
+  choices?: string[];
+  /* peer rows: the sender's one-line preview. permission rows: the raw tool
+   * input as JSON, for the card's details line. */
+  summary?: string;
+  /* system rows only. */
+  /* "waiting"/"undelivered" rows from a bot (botId set) are about one post
+   * (note = its seq): its pane is asking something, or the typed line never
+   * submitted. Both offer the bot's terminal. */
+  event?: "joined" | "left" | "waiting" | "permission" | "done" | "asleep" | "woke" | "error"
+        | "trust" | "trusted" | "exited"
+        | "delivered" | "undelivered"
+        /* the task board: a change, the lead asking to confirm, the owner
+         * confirming, a bot reset for the next task, a new lead */
+        | "task" | "task.review" | "task.done" | "reset" | "lead"
+        /* cards you answer in the room: a permission prompt (Allow / Deny),
+         * a bot's question (`perch team ask`); the rows that close them; a
+         * classifier block in auto mode; a post copied to the lead */
+        | "permission.answered" | "denied" | "ask" | "ask.answered" | "cc"
+        /* the room's card ran out of time: the prompt is in the bot's own
+         * terminal now, and Allow here would do nothing */
+        | "permission.expired"
+        /* a bot's message to a teammate never left */
+        | "peer.failed"
+        /* something too long for the feed; see kind "artefact" */
+        | "artefact";
+  /* user rows: false while the host is holding the post for a bot that has no
+   * Claude up yet (asleep, still booting). Flips true when it lands. */
+  delivered?: boolean;
+};
+
+/* Reply to team.request, and pushed unsolicited while the room is open. The
+ * page merges by seq, so a push and a poll landing together can't duplicate. */
+export type TeamDataMessage = {
+  type: "team.data";
+  projectId: string;
+  entries: TeamEntryView[];
+  lastSeq: number;
+  /* The host cut to the newest window; older rows exist but aren't sent. */
+  truncated?: boolean;
+  /** Page-side only, as on InspectorDataMessage: a payload the PAGE made up
+   *  because a request timed out — "not known yet", never "empty". */
+  pending?: boolean;
+};
+
+export type TeamBriefProgressMessage = {
+  type: "team.brief.progress";
+  jobId: string;
+  /* Short human phase ("Reading the repo…"). */
+  phase: string;
+  elapsedMs: number;
+};
+
+export type TeamBriefResultMessage = {
+  type: "team.brief.result";
+  jobId: string;
+  brief?: string;
+  error?: string;
+  costUsd?: number;
+};
+
+/* Reply to team.reference.browse. `path` null = the picker was cancelled. */
+export type TeamReferencePickedMessage = {
+  type: "team.reference.picked";
+  requestId: string;
+  path: string | null;
+};
+
+/* Reply to team.image: the file's bytes, base64, or `error` when it can't be
+ * read (gone, not an image, too big). */
+export type TeamImageDataMessage = {
+  type: "team.image.data";
+  projectId: string;
+  path: string;
+  mediaType?: string;
+  data?: string;
+  error?: string;
 };
 
 /* Reply to settings.request. shells is the host's detected-shell list;
@@ -650,6 +941,8 @@ export type SettingsDataMessage = {
   /* Whether the launch prompt to reopen previous Claude sessions is enabled
    * (Settings → "Resume Claude sessions on launch"). */
   resumeAgentsOnLaunch?: boolean;
+  /* Team bot faces in colour (Settings → "Bot faces in colour"). Absent → off. */
+  teamFacesColor?: boolean;
   /* Where a new tab is inserted in its project (Settings → "New tab position").
    * Absent → "top", matching the host's Settings.NewTabPosition default. */
   newTabPosition?: NewTabPosition;
@@ -662,9 +955,9 @@ export type SettingsDataMessage = {
   /* Default list of things seeded into a new worktree (.env*, node_modules, …).
    * A project can override it — see `projects[].seedPaths`. */
   worktreeSeedPaths?: string[];
-  /* Registered projects, so Settings can rename / re-seed / unregister them.
-   * An empty seedPaths means the project inherits the global list. */
-  projects?: { id: string; name: string; path: string; seedPaths: string[] }[];
+  /* Registered projects, so Settings can rename / re-seed / hide / unregister
+   * them. An empty seedPaths means the project inherits the global list. */
+  projects?: { id: string; name: string; path: string; seedPaths: string[]; hidden?: boolean }[];
   /* The running version (the release this copy installed from), or null when
    * it can't be determined (dev `dotnet run` / portable). Shown in the
    * Updates row. */
@@ -776,7 +1069,58 @@ export type InMessage =
   /* Every loopback server listening right now: dev servers you started, plus any
    * that outlived the pane that spawned them. Only appears while something is
    * actually listening. */
-  | LocalDataMessage;
+  | LocalDataMessage
+  /* Team room: the ledger, brief-generation progress/result, folder pick. */
+  | TeamDataMessage
+  | TeamBriefProgressMessage
+  | TeamBriefResultMessage
+  | TeamReferencePickedMessage
+  | TeamImageDataMessage
+  | TeamPasteDataMessage
+  | TeamArtefactDataMessage
+  | TeamArtefactIndexMessage;
+
+/** One artefact, opened: its text, ready to render in the panel. `truncated`
+ *  says the host cut a very large file; `error` says the file is gone. */
+export type TeamArtefactDataMessage = {
+  type: "team.artefact.data";
+  projectId: string;
+  id: string;
+  /** Absent when `error` is set — the host sends the failure alone. */
+  title?: string;
+  /** The extension, without the dot: md, txt, html, csv… */
+  kind?: string;
+  from?: string;
+  tsMs?: number;
+  content?: string;
+  truncated?: boolean;
+  error?: string | null;
+};
+
+/** The panel's menu: the recent artefacts, newest first. */
+export type TeamArtefactIndexMessage = {
+  type: "team.artefact.index";
+  projectId: string;
+  items: TeamArtefactItem[];
+};
+
+export type TeamArtefactItem = {
+  id: string;
+  title: string;
+  kind: string;
+  from: string;
+  tsMs: number;
+  summary?: string | null;
+};
+
+/** The host's answer to `team.paste`: where it saved the clipboard picture,
+ *  or why it couldn't ("No picture on the clipboard."). */
+export type TeamPasteDataMessage = {
+  type: "team.paste.data";
+  projectId: string;
+  path?: string | null;
+  error?: string | null;
+};
 
 /** One machine (or one Dataproc cluster — a cluster is ONE row, not five). */
 export interface CloudResourceView {

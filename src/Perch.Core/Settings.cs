@@ -63,6 +63,11 @@ public sealed class Settings
     /// filter sticks across launches.
     public bool LocalPerchOnly { get; set; } = false;
 
+    /// Team bot faces in colour: the bird and its circle take the bot's tag
+    /// hue and the signature items tint. Off by default — plain ink, the
+    /// mascot as it appears everywhere else in the app; colour is the opt-in.
+    public bool TeamFacesColor { get; set; } = false;
+
     /// Parent folders searched (ONE level deep) for repos to offer as projects.
     /// A list, not a single root, because a dev machine keeps code in several
     /// places — work repos here, side projects there. Empty by default: we

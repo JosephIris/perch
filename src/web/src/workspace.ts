@@ -22,6 +22,7 @@ import { UrlPane } from "./url-pane.js";
 import { BoardPane } from "./board-pane.js";
 import { PANE_LEAVE_MS } from "./anim.js";
 import { showPaneChooser } from "./pane-chooser.js";
+import { closeTeamRoom } from "./team-room.js";
 import { treeSignature, computeEdge, isStageEntry, type Edge } from "./layout.js";
 
 type LeafPane = Pane | UrlPane | BoardPane;
@@ -133,9 +134,10 @@ export class Workspace {
     };
 
     actions.appendChild(
-      card("New session", "A terminal in your default folder.", () =>
-        send({ type: "session.new" })
-      )
+      card("New session", "A terminal in your default folder.", () => {
+        closeTeamRoom();
+        send({ type: "session.new" });
+      })
     );
     actions.appendChild(
       card("New project", "Register a repo and keep its tabs together.", () =>

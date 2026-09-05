@@ -98,6 +98,12 @@ internal static class ProcRunner
     /// had: git sets UTF-8 explicitly (i18n.logOutputEncoding) while the others
     /// inherit the console codepage, and silently changing that would garble
     /// output rather than fix anything.
+    ///
+    /// `stdinText`, when given, is written to the child's stdin (UTF-8) and the
+    /// pipe closed before we wait — how a prompt reaches `claude -p` without
+    /// passing through cmd.exe's quoting. `env` adds or, for a null value,
+    /// REMOVES variables from the child's environment; the headless runner
+    /// strips PERCH_PIPE so a child never mistakes itself for a pane.
     public static async Task<(int Code, string Stdout, string Stderr)> RunAsync(
         string fileName,
         string arguments,
@@ -105,7 +111,9 @@ internal static class ProcRunner
         string? workingDir = null,
         int timeoutMs = 0,
         Encoding? stdoutEncoding = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? stdinText = null,
+        IReadOnlyDictionary<string, string?>? env = null)
     {
         Interlocked.Increment(ref _spawns);
         Sites.AddOrUpdate(site, 1, static (_, n) => n + 1);
@@ -128,6 +136,19 @@ internal static class ProcRunner
                 psi.StandardOutputEncoding = stdoutEncoding;
                 psi.StandardErrorEncoding = stdoutEncoding;
             }
+            if (stdinText != null)
+            {
+                psi.RedirectStandardInput = true;
+                psi.StandardInputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+            }
+            if (env != null)
+            {
+                foreach (var (key, value) in env)
+                {
+                    if (value == null) psi.Environment.Remove(key);
+                    else psi.Environment[key] = value;
+                }
+            }
 
             using var p = new Process { StartInfo = psi };
             if (!p.Start()) return (-1, "", $"failed to start {fileName}");
@@ -137,6 +158,18 @@ internal static class ProcRunner
             // forever on the write while we block forever on the exit.
             var outT = p.StandardOutput.ReadToEndAsync();
             var errT = p.StandardError.ReadToEndAsync();
+
+            if (stdinText != null)
+            {
+                // Write after the readers are armed, for the same reason: a
+                // child that echoes while we're still writing must not block us.
+                try
+                {
+                    await p.StandardInput.WriteAsync(stdinText);
+                    p.StandardInput.Close();
+                }
+                catch (Exception ex) { Log.Info($"ProcRunner.{site}", $"stdin write failed: {ex.Message}"); }
+            }
 
             if (timeoutMs > 0)
             {

@@ -323,10 +323,13 @@ internal sealed class MacHost : IWebViewHost, IWindowHost
         }
     }
 
-    public async Task<string?> PickFolderAsync(string? initialDir)
+    public async Task<string?> PickFolderAsync(string? initialDir, string? title = null)
     {
+        // The caption is interpolated into AppleScript source: escape the two
+        // characters that would end the string literal.
+        var prompt = (title ?? "Add project").Replace("\\", "\\\\").Replace("\"", "\\\"");
         var res = await OsaScriptAsync(
-            "POSIX path of (choose folder with prompt \"Add project\")");
+            $"POSIX path of (choose folder with prompt \"{prompt}\")");
         return res;
     }
 
