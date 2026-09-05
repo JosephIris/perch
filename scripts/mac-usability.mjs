@@ -417,4 +417,9 @@ console.log(`\n${results.length - failed.length}/${results.length} passed` +
   (failed.length ? ` — FAILED: ${failed.map((f) => f.name).join(", ")}` : ""));
 fs.writeFileSync(path.join(outDir, "results.json"), JSON.stringify(results, null, 2));
 console.log(`screenshots + results in ${outDir}`);
+// Leave nothing running: the instance is ours (see killApp). It used to stay
+// up after the last test, holding the control socket so the next suite
+// refused to start.
+killApp();
+await sleep(800);
 process.exit(failed.length);
