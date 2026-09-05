@@ -202,3 +202,47 @@ jobs:
             --publish true `
             --releaseName "Perch $env:GITHUB_REF_NAME" `
             --tag $env:GITHUB_REF_NAME
+
+  # The macOS host. Same Core, same web bundle, a different thin shell — and
+  # the only build that can tell when a change reached for WPF from Core or
+  # left a `.cmd` assumption in perch-cli. Read-only token (the job-level
+  # default above); nothing here publishes. Packaging (`packaging/pack-mac.sh`)
+  # and the real-Claude gate (`scripts/mac-e2e.mjs`) stay local for now: the
+  # gate needs a logged-in Claude Code and spends tokens.
+  mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Setup Node 20
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '20'
+
+      - name: Install web deps
+        working-directory: src/web
+        run: npm ci
+
+      - name: Build web bundle
+        working-directory: src/web
+        run: npm run build
+
+      # The mac host: Perch.Core + Perch.Mac + the perch CLI and shims
+      # published for osx-arm64 into bin/.../tools.
+      - name: Build mac host
+        run: dotnet build src/Perch.Mac/Perch.Mac.csproj -c Release --nologo
+
+      # The WPF host compiles on a mac too (EnableWindowsTargeting). It cannot
+      # run here, but a Core change that only builds against WPF is caught.
+      - name: Compile Windows host
+        run: dotnet build src/Perch/Perch.csproj -c Release --nologo -p:SkipWebBundle=true
+
+      # The cross-platform half of the suite (net8.0): everything but the
+      # Win32 job-object fixture.
+      - name: Host tests (net8.0)
+        run: dotnet test src/Perch.Tests/Perch.Tests.csproj -f net8.0 -c Release --nologo -p:SkipWebBundle=true
