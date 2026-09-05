@@ -1,13 +1,56 @@
 # UI Design Constitution — WebView2 + xterm.js Terminal App
 
-You are working on a .NET 8 Windows app whose host shell is a `FluentWindow`
-with Win11 Mica chrome and native window decorations, but whose entire UI
-content (chrome + terminal panes) renders inside a single WebView2 hosting
-xterm.js and a hand-rolled HTML/CSS chrome.
+You are working on a .NET 8 app that ships on Windows AND macOS from one
+`main`. On Windows the host shell is a `FluentWindow` with Win11 Mica chrome
+and native window decorations; on macOS it is a Photino window over
+WKWebView. On both, the entire UI content (chrome + terminal panes) renders
+inside a single webview hosting xterm.js and a hand-rolled HTML/CSS chrome.
 
-The WPF side is intentionally tiny: window lifetime, ConPTY processes, the
-existing IPC layer (PerchIpc, ControlIpcServer, ClaudeWrapper, HookHandler),
-SessionStore, Settings. Everything visible to the user is HTML/CSS/JS.
+The host sides are intentionally tiny: window lifetime, PTY processes, the
+native surfaces (clipboard, pickers, attention). Everything the app *does*
+lives in `src/Perch.Core` (AppController, TeamController, the IPC servers,
+SessionStore, Settings, the wrappers' shared pieces) and everything visible
+to the user is HTML/CSS/JS.
+
+## Two hosts, one Core — the rules that keep the mac build alive
+
+Every feature lands on both platforms or it is not done. Concretely:
+
+- **App logic goes in `src/Perch.Core`** (net8.0, no WPF). `src/Perch` is the
+  WPF host, `src/Perch.Mac` the Photino host; each is a thin adapter behind
+  the interfaces in `Perch.Core/Hosting.cs` (`IWebViewHost`, `IWindowHost`,
+  `IUrlPanes`, `IUpdateService`) and `UiThread.cs` (`IUiThread`, `IUiTimer`).
+  A new `.cs` file that does not mention `System.Windows`, `WebView2` or
+  `Microsoft.Win32` belongs in Core — the team room, codex readers and
+  RoomLedger were all written that way and moved there in one `git mv`.
+- **Never reach past the interfaces from Core.** Post to the page with
+  `_web.PostJson`, not `Web.CoreWebView2`; delay with `_ui.CreateTimer`, not
+  `DispatcherTimer`; read the clipboard or open a picker through `_host`.
+  When a need is not covered, extend the interface and implement it in BOTH
+  hosts (`MainWindow.xaml.cs`, `MacHost.cs`) in the same change.
+- **Windows-only APIs stay in `src/Perch`** (job objects, `SingleInstance`,
+  ConPty, FlashWindowEx). Their mac twins live in `src/Perch.Mac`
+  (`PtyOrphans`, `MacSingleInstance`, `UnixPty`, dock bounce). When you add
+  one, add the other, or a stub that logs.
+- **perch-cli runs on both** (`tools/perch-cli`). Gate Windows specifics on
+  `OperatingSystem.IsWindows()` (8.3 short paths, `.cmd` shims, `cmd.exe`),
+  use `Path.PathSeparator`, and remember a hook command on Unix is a plain
+  path, not a quoted `.exe`. The shims are `claude.cmd`/`codex.cmd` on
+  Windows and `claude`/`codex` shell scripts on mac.
+- **Tests run on macOS too.** `Perch.Tests` multi-targets net8.0 and
+  net8.0-windows; a fixture that needs a `.cmd` or a Win32 job is either
+  branched on `OperatingSystem.IsWindows()` (see ClaudeHeadlessTests) or
+  removed from the net8.0 build in the csproj. `dotnet test -f net8.0` must
+  stay green on a mac.
+- **Build both before you commit.** `dotnet build src/Perch.Mac` and
+  `dotnet build src/Perch -p:SkipWebBundle=true` both compile on a mac
+  (`EnableWindowsTargeting`); run the second one even when your change is
+  "mac only". CI builds the WPF host on `windows-latest` and the mac host +
+  net8.0 tests on `macos-latest`.
+- **The page is shared.** Anything keyboard-related uses `chordMod()` /
+  `modKeyLabel` (bridge.ts) — a hardcoded `ev.ctrlKey` or "Ctrl+" label is a
+  mac regression. `hostKind === "photino"` is the only host check the page
+  makes; style differences live under `html.host-photino`.
 
 The previous WPF + Microsoft.Terminal.Wpf implementation is preserved at tag
 `wpf-final` and branch `wpf-archive` — go back to that branch if the webview
@@ -121,9 +164,15 @@ Then write the XAML. Keep code-behind minimal; prefer bindings and commands.
 
 ## Before every release: the delivery gate
 
-`scripts/verify-comms.ps1` MUST pass before a `v*.*.*` tag is pushed. No
-exceptions, and a red run is not something to explain away — it is a release
-that does not go out.
+`scripts/verify-comms.ps1` (Windows) and `node scripts/mac-e2e.mjs` (macOS)
+MUST pass before a `v*.*.*` tag is pushed. No exceptions, and a red run is
+not something to explain away — it is a release that does not go out.
+
+The mac gate covers the same five room sections plus the two things that
+only ever broke on the mac: an app-started Claude (a project tab, a resume,
+a bot) under the Dock's bare PATH, and the codex shim writing its hooks
+profile. `--quick` runs those without the room, for a fast check after a
+host change. See docs/MAC-TESTING.md.
 
 It drives the real app with the real Claude Code CLI and proves the team
 room's one job: that a post reaches its bot. Warm (a running bot answers),
@@ -336,12 +385,40 @@ via `html.host-photino` scoped tokens:
   every user-visible shortcut label must use `modKeyLabel`, never a
   hardcoded "Ctrl". The native Edit menu (MacHost.BuildMenuBar) is what
   makes ⌘V paste work in WKWebView — do not remove it.
+- **PATH:** a Dock/Finder launch starts with launchd's bare PATH (no
+  ~/.local/bin, no Homebrew). `MacShellEnv.AdoptLoginShellPath` asks
+  `$SHELL -ilc` for the real one at startup, BEFORE the tools dir goes in
+  front. Without it every app-started `claude` — project tab, resume, team
+  bot, headless brief — fails with "real `claude` binary not found" while a
+  `claude` typed into a pane still works (zsh has run ~/.zshrc by then).
+  That asymmetry is the tell; check `ShellEnv` in errors.log first.
 - **Pane shells:** zsh through a generated ZDOTDIR wrapper so the bundled
   claude/codex shims win the PATH race against user rc files. Breaking
   this silently kills hook-driven agent state.
+- **Pipes are Unix sockets here.** .NET unlinks the socket when the last
+  `NamedPipeServerStream` for a name is disposed, and the accept loops
+  dispose one instance per client — so without the `_anchor` instance in
+  PerchIpcServer / ControlIpcServer a hook's five-message burst lost two or
+  three messages to the gap (often `session`). Keep the anchors; keep the
+  three-try Send in perch-cli; `PerchIpcBurstTests` guards it.
+- **One instance per data dir:** `MacSingleInstance` (flock on
+  `<data>/perch/instance.lock` + pid file, NSRunningApplication activate)
+  mirrors the WPF `SingleInstance`.
+- **Claude Code's nesting markers** are scrubbed in `Program.cs` (as in
+  App.xaml.cs) AND filtered per pane in `UnixPty.BuildEnv`; a Perch launched
+  from inside a Claude session must not make its panes child sessions.
 - **Screenshots:** capture by CGWindowID (`scripts/mac-window-id.swift` +
   `screencapture -l`) — never foreground the app to shoot it. There is no
   Mica caveat on mac; what you capture is what renders.
-- **Harness:** `scripts/mac-usability.mjs` (feature suite, screenshots,
-  exit code = failures) and `scripts/ctl.mjs` (raw control-pipe verbs).
-  Run the suite after any change to the mac host or the bridge.
+- **Harnesses:** `scripts/mac-e2e.mjs` (THE mac gate: real Claude, Dock
+  PATH, codex shim, the room), `scripts/mac-usability.mjs` (feature suite,
+  screenshots, exit code = failures) and `scripts/ctl.mjs` (raw
+  control-pipe verbs). Both suites kill only the PID they launched — never
+  `pkill Perch`, the user's own Perch.app is usually open. Test-IPC verbs
+  the suites rely on: `pty.send {paneId}`, `pty.tail` (PTY_TAIL log line,
+  base64 of the pane's last 16 KB — how a script sees Claude's trust
+  prompt), `state.dump` (now with `agentType`), `team.dump`.
+- **Claude's trust prompt** ("Quick safety check … ❯ No, exit / Yes, I
+  trust this folder") is Down+Enter to accept. The room answers it for a
+  bot (`team.bot.answer trust`); the suites answer it for a plain pane from
+  the tail text. Nobody should have to click through it for a test.

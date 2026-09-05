@@ -31,6 +31,10 @@ internal sealed class ControlIpcServer : IDisposable
     private readonly VerbHandler _onVerb;
     private Task? _acceptLoop;
     private bool _disposed;
+    /// See PerchIpcServer._anchor: the same Unix socket-unlink gap, the same
+    /// fix. Without it a harness sending two verbs back to back lost the
+    /// second one.
+    private NamedPipeServerStream? _anchor;
 
     public ControlIpcServer(IUiThread ui, VerbHandler onVerb)
     {
@@ -44,6 +48,9 @@ internal sealed class ControlIpcServer : IDisposable
     public void Start()
     {
         if (_acceptLoop != null) return;
+        if (!OperatingSystem.IsWindows())
+            _anchor = new NamedPipeServerStream(PipeName, PipeDirection.In,
+                NamedPipeServerStream.MaxAllowedServerInstances, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
         _acceptLoop = Task.Run(() => AcceptLoopAsync(_cts.Token));
         Log.Info("ControlIpc.start", $@"listening on \\.\pipe\{PipeName}");
     }
@@ -118,5 +125,7 @@ internal sealed class ControlIpcServer : IDisposable
         _disposed = true;
         try { _cts.Cancel(); } catch { }
         _cts.Dispose();
+        try { _anchor?.Dispose(); } catch { }
+        _anchor = null;
     }
 }

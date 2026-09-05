@@ -1493,7 +1493,7 @@ internal sealed class TeamController
     public async Task OnBotCreateAsync(TeamBotCreateMsg msg)
     {
         var proj = _h.ProjectById(msg.ProjectId);
-        if (proj == null) return;
+        if (proj == null) { Log.Info("Team.create", $"no project {msg.ProjectId:N}"); return; }
         var nickname = (msg.Nickname ?? "").Trim();
         if (!ValidNickname(nickname)) { Toast("That nickname won't work as an address. Letters, digits, - and _ only."); return; }
         var store = StoreOrCreate(proj);
@@ -2562,7 +2562,13 @@ internal sealed class TeamController
         });
     }
 
-    private void Toast(string text) => _h.Post(new { type = "toast", text, level = "warn" });
+    /// Also logged: a toast is the only trace some early exits leave, and a
+    /// harness (or a user reading errors.log) cannot see the page.
+    private void Toast(string text)
+    {
+        Log.Info("Team.toast", text);
+        _h.Post(new { type = "toast", text, level = "warn" });
+    }
 
     /// For the control pipe: the team as JSON plus the ledger's tail.
     public string Dump(Guid projectId)

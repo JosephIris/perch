@@ -101,6 +101,35 @@ internal sealed class PaneManager : IDisposable
     public bool TryGetLastOutputTicks(Guid paneId, out long ticks) =>
         _lastOutputTicks.TryGetValue(paneId, out ticks);
 
+    /// The most recent raw bytes the pane emitted (up to TailBytes). The host
+    /// keeps no screen buffer — xterm owns the screen — so this small ring is
+    /// what a test harness reads to see that Claude is sitting on its trust
+    /// prompt, or that a shim printed a complaint. Test-IPC only; never shown.
+    public byte[] Tail(Guid paneId)
+    {
+        lock (_tails)
+        {
+            if (!_tails.TryGetValue(paneId, out var ring)) return Array.Empty<byte>();
+            return ring.ToArray();
+        }
+    }
+    private const int TailBytes = 16 * 1024;
+    private readonly Dictionary<Guid, System.Collections.Generic.Queue<byte>> _tails = new();
+    private void RecordTail(Guid paneId, ReadOnlyMemory<byte> mem)
+    {
+        lock (_tails)
+        {
+            if (!_tails.TryGetValue(paneId, out var ring)) _tails[paneId] = ring = new System.Collections.Generic.Queue<byte>(TailBytes);
+            var bytes = mem.Span;
+            var skip = Math.Max(0, bytes.Length - TailBytes);
+            for (var i = skip; i < bytes.Length; i++)
+            {
+                if (ring.Count >= TailBytes) ring.Dequeue();
+                ring.Enqueue(bytes[i]);
+            }
+        }
+    }
+
     /// Start the pane's shell + its agent IPC pipe. `startCmd` is the fully
     /// built command line (Shell.BuildStartupCommandLine — PERCH_PIPE /
     /// PERCH_PANE_ID env are injected there). Throws on spawn failure; the
@@ -121,6 +150,7 @@ internal sealed class PaneManager : IDisposable
             lock (_bytesReceived)
                 _bytesReceived[paneId] = (_bytesReceived.TryGetValue(paneId, out var n) ? n : 0) + bytes.Length;
             _lastOutputTicks[paneId] = System.Diagnostics.Stopwatch.GetTimestamp();
+            if (ControlIpcServer.IsEnabled) RecordTail(paneId, bytes);
             Output?.Invoke(paneId, bytes);
         };
         pty.Exited += (_, code) =>

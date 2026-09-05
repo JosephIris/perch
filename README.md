@@ -111,18 +111,25 @@ The previous all-WPF renderer (`Microsoft.Terminal.Wpf`) is preserved at tag
 
 ## Build
 
-Requires the .NET 8 SDK and Node 20+ on Windows 10+.
+Requires the .NET 8 SDK and Node 20+. Windows 10+ or macOS 13+ (Apple
+silicon; x64 mac is untested).
 
 ```pwsh
 cd src/web && npm install && cd ../..   # once
-dotnet build src/Perch -c Release       # runs esbuild for you, then compiles
+dotnet build src/Perch -c Release       # Windows: runs esbuild for you, then compiles
+dotnet build src/Perch.Mac              # macOS: same bundle, Photino/WKWebView host
 ```
 
 Or run directly:
 
 ```pwsh
-dotnet run --project src/Perch
+dotnet run --project src/Perch          # Windows
+dotnet run --project src/Perch.Mac      # macOS
 ```
+
+Both hosts share `src/Perch.Core` and the web bundle; see the "Two hosts, one
+Core" chapter of [`CLAUDE.md`](CLAUDE.md) before adding a feature. Packaging
+the mac app: `bash packaging/pack-mac.sh <version>`.
 
 ## CI & releases
 
@@ -160,6 +167,8 @@ Get-FileHash .\Perch-Setup.exe -Algorithm SHA256
 | [`CLAUDE.md`](CLAUDE.md) | The UI design constitution: tokens, Fluent discipline, and the screenshot verification loop. Read it before touching the chrome. |
 | [`docs/DESIGN-BIBLE.md`](docs/DESIGN-BIBLE.md) | Long-form companion to the constitution. |
 | [`docs/SESSION-RESUME.md`](docs/SESSION-RESUME.md) | How Claude Code sessions survive crashes and restarts. |
+| [`docs/TEAMS.md`](docs/TEAMS.md) | Teams: bots with positions, the room, delivery, and the release gates. |
+| [`docs/MAC-TESTING.md`](docs/MAC-TESTING.md) | The macOS end-to-end gate and usability suite. |
 | [`docs/NOTIFICATIONS.md`](docs/NOTIFICATIONS.md) | OSC 9 to Windows toasts, from any pane. |
 | [`docs/RENDERER_NOTES.md`](docs/RENDERER_NOTES.md) | Why the terminal renders the way it does, and when to revisit. |
 | [`docs/CODE-SIGNING.md`](docs/CODE-SIGNING.md) | Signing the installer (partly stale; pipeline moved to Velopack). |

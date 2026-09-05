@@ -46,6 +46,21 @@ internal sealed class PerchIpcServer : IDisposable
     private readonly IUiThread _ui;
     private Task? _acceptLoop;
     private bool _disposed;
+    /// UNIX ONLY: an extra server instance that is never connected, held for
+    /// the server's lifetime. On Windows a named pipe is a kernel object and a
+    /// client's Connect waits for the next free instance. On macOS/Linux .NET
+    /// backs the pipe with a Unix domain socket that is UNLINKED the moment
+    /// the last NamedPipeServerStream for that name is disposed, and the
+    /// accept loop below disposes its instance after every client and only
+    /// then creates the next — so for a few hundred microseconds the socket
+    /// path does not exist. A hook that fires five messages back to back
+    /// (session-start: agent, status, session, name.reset, git.baseline) lost
+    /// two or three of them to that gap on every run, and which ones was
+    /// luck: `session` was among the casualties often enough that a Claude
+    /// started from a project tab never reported it. The anchor keeps the
+    /// shared listening socket alive, so connections queue instead of
+    /// failing. Never Connect on it; never remove it on the mac side.
+    private NamedPipeServerStream? _anchor;
 
     public PerchIpcServer(Guid paneId, IUiThread ui)
     {
@@ -56,8 +71,17 @@ internal sealed class PerchIpcServer : IDisposable
     public void Start()
     {
         if (_acceptLoop != null) return;
+        if (!OperatingSystem.IsWindows())
+            _anchor = NewServer($@"perch\{PaneId:N}");
         _acceptLoop = Task.Run(() => AcceptLoopAsync(_cts.Token));
     }
+
+    private static NamedPipeServerStream NewServer(string pipeName) => new(
+        pipeName,
+        PipeDirection.In,
+        NamedPipeServerStream.MaxAllowedServerInstances,
+        PipeTransmissionMode.Byte,
+        PipeOptions.Asynchronous);
 
     private async Task AcceptLoopAsync(CancellationToken ct)
     {
@@ -70,12 +94,7 @@ internal sealed class PerchIpcServer : IDisposable
             NamedPipeServerStream? server = null;
             try
             {
-                server = new NamedPipeServerStream(
-                    pipeName,
-                    PipeDirection.In,
-                    NamedPipeServerStream.MaxAllowedServerInstances,
-                    PipeTransmissionMode.Byte,
-                    PipeOptions.Asynchronous);
+                server = NewServer(pipeName);
 
                 await server.WaitForConnectionAsync(ct).ConfigureAwait(false);
                 await HandleClientAsync(server, ct).ConfigureAwait(false);
@@ -220,6 +239,8 @@ internal sealed class PerchIpcServer : IDisposable
         // WaitForConnectionAsync. Cancellation will unblock it and the task
         // will finish on its own. Dispose() must not block the UI thread.
         _cts.Dispose();
+        try { _anchor?.Dispose(); } catch { }
+        _anchor = null;
     }
 }
 

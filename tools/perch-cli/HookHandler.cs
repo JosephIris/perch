@@ -1050,21 +1050,29 @@ internal static class HookHandler
 
     private static void Send(string pipeName, object payload)
     {
-        try
+        var json = JsonSerializer.Serialize(payload, JsonOpts);
+        var bytes = Encoding.UTF8.GetBytes(json + "\n");
+        // Three tries. On macOS/Linux the pipe is a Unix socket whose path
+        // can be missing for an instant while the host recycles its listener
+        // (see PerchIpcServer._anchor for the fix on that side); a second
+        // attempt 100 ms later lands. Windows never needs the retry.
+        Exception? last = null;
+        for (var attempt = 0; attempt < 3; attempt++)
         {
-            using var client = new NamedPipeClientStream(".", pipeName, PipeDirection.Out);
-            client.Connect(2000);
-            var json = JsonSerializer.Serialize(payload, JsonOpts);
-            var bytes = Encoding.UTF8.GetBytes(json + "\n");
-            client.Write(bytes, 0, bytes.Length);
-            client.Flush();
+            try
+            {
+                using var client = new NamedPipeClientStream(".", pipeName, PipeDirection.Out);
+                client.Connect(2000);
+                client.Write(bytes, 0, bytes.Length);
+                client.Flush();
+                return;
+            }
+            catch (Exception ex) { last = ex; }
+            System.Threading.Thread.Sleep(100);
         }
-        catch (Exception ex)
-        {
-            // Hooks must never break the agent. Log to stderr (which Claude
-            // shows when verbose) and move on.
-            Console.Error.WriteLine($"perch hooks: send failed: {ex.Message}");
-        }
+        // Hooks must never break the agent. Log to stderr (which Claude
+        // shows when verbose) and move on.
+        Console.Error.WriteLine($"perch hooks: send failed: {last?.Message}");
     }
 
     private static readonly JsonSerializerOptions JsonOpts = new()

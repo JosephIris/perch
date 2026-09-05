@@ -283,16 +283,21 @@ internal static class CodexWrapper
 
     private static void SendAgent(string pipeName, string name)
     {
-        try
+        var json = JsonSerializer.Serialize(new { type = "agent", name });
+        var bytes = Encoding.UTF8.GetBytes(json + "\n");
+        for (var attempt = 0; attempt < 3; attempt++)
         {
-            using var client = new NamedPipeClientStream(".", pipeName, PipeDirection.Out);
-            client.Connect(1500);
-            var json = JsonSerializer.Serialize(new { type = "agent", name });
-            var bytes = Encoding.UTF8.GetBytes(json + "\n");
-            client.Write(bytes, 0, bytes.Length);
-            client.Flush();
+            try
+            {
+                using var client = new NamedPipeClientStream(".", pipeName, PipeDirection.Out);
+                client.Connect(1500);
+                client.Write(bytes, 0, bytes.Length);
+                client.Flush();
+                return;
+            }
+            catch { /* the badge is cosmetic — never let it break codex */ }
+            System.Threading.Thread.Sleep(100);
         }
-        catch { /* the badge is cosmetic — never let it break codex */ }
     }
 
     private static string? ExtractPipeName(string? pipePath)

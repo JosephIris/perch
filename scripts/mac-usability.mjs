@@ -50,7 +50,18 @@ function launchApp() {
 }
 
 function killApp(signal = "SIGTERM") {
-  try { execFileSync("pkill", ["-x", "Perch"]); } catch { /* none running */ }
+  // Only the instance this run launched. `pkill -x Perch` would also take
+  // down the user's real Perch.app; a stale test-IPC instance from an
+  // earlier aborted run is found by the control socket it still holds.
+  if (appProc?.pid) {
+    try { process.kill(appProc.pid, signal); } catch { /* already gone */ }
+    appProc = null;
+    return;
+  }
+  try {
+    const owners = execFileSync("lsof", ["-t", sockPath], { encoding: "utf8" }).trim().split("\n").filter(Boolean);
+    for (const pid of owners) { try { process.kill(Number(pid), signal); } catch { /* gone */ } }
+  } catch { /* nobody holds the socket */ }
 }
 
 /** Write one JSON line to the control pipe. */
@@ -88,7 +99,8 @@ async function ptyBytes() {
 
 function windowId() {
   if (cachedWinId) return cachedWinId;
-  const out = execFileSync("swift", [path.join(repo, "scripts/mac-window-id.swift")], {
+  // By PID, so the user's own Perch.app is never the one we shoot.
+  const out = execFileSync("swift", [path.join(repo, "scripts/mac-window-id.swift"), String(appProc?.pid ?? "")], {
     encoding: "utf8",
   }).trim();
   cachedWinId = out.split("\n")[0];
@@ -383,6 +395,7 @@ await test("16-persistence-across-restart", async () => {
   killApp();               // SIGTERM — the closing handler runs Shutdown()
   await sleep(1500);
   launchApp();
+  cachedWinId = null;
   await sleep(8000);
   const after = await dump();
   const namesAfter = after.sessions.map((s) => s.panes.length).join(",");

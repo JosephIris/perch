@@ -45,6 +45,13 @@ internal static class Program
         // kill-on-close job object) — before any new pane can spawn.
         PtyOrphans.ReapLeftovers();
 
+        // A Dock/Finder launch has launchd's bare PATH — no ~/.local/bin, no
+        // Homebrew — so the `claude` a project tab or a team bot starts, and
+        // the headless `claude -p` jobs, would not find the real binary. Ask
+        // the login shell what PATH really is and adopt it BEFORE the tools
+        // dir goes in front (see MacShellEnv for the story).
+        MacShellEnv.AdoptLoginShellPath();
+
         // Prepend the bundled tools dir (perch CLI + claude/codex shims) to
         // PATH so every pane shell inherits it — same trick as the Windows
         // App constructor, with ':' for ';'.

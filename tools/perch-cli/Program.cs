@@ -437,13 +437,22 @@ internal static class Program
 
     private static int Send(string pipeName, object payload)
     {
-        using var client = new NamedPipeClientStream(".", pipeName, PipeDirection.Out);
-        client.Connect(2000); // 2s — host should be up before the shell starts
         var json = JsonSerializer.Serialize(payload, JsonOpts);
         var bytes = Encoding.UTF8.GetBytes(json + "\n");
-        client.Write(bytes, 0, bytes.Length);
-        client.Flush();
-        return 0;
+        // Same three tries as HookHandler.Send — the Unix socket path can be
+        // missing for an instant while the host recycles its listener.
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                using var client = new NamedPipeClientStream(".", pipeName, PipeDirection.Out);
+                client.Connect(2000); // 2s — host should be up before the shell starts
+                client.Write(bytes, 0, bytes.Length);
+                client.Flush();
+                return 0;
+            }
+            catch when (attempt < 2) { System.Threading.Thread.Sleep(100); }
+        }
     }
 
     private static readonly JsonSerializerOptions JsonOpts = new()

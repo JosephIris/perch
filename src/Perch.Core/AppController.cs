@@ -11,11 +11,17 @@ using static Perch.PaneTree;
 namespace Perch;
 
 /// The application: every page↔host verb, pane/session/agent lifecycle,
-/// git stats, boards, updates, cloud/local polling. Extracted verbatim from
-/// the WPF MainWindow — hosts (WPF window, mac window) supply the native
+/// git stats, boards, teams, updates, cloud/local polling. Extracted verbatim
+/// from the WPF MainWindow — hosts (WPF window, mac window) supply the native
 /// surfaces via IWebViewHost / IWindowHost / IUrlPanes / IUiThread and call
 /// the lifecycle methods (StartAsync, OnActivated, OnWindowResized,
 /// Shutdown).
+///
+/// This file compiles for BOTH hosts. Nothing in it may name System.Windows,
+/// WebView2, Microsoft.Win32 or a Dispatcher: post to the page with
+/// _web.PostJson, time with _ui.CreateTimer, touch the clipboard or a picker
+/// through _host. The team wiring below is the worked example — see the
+/// "Two hosts, one Core" chapter of CLAUDE.md for the rest of the rules.
 internal sealed partial class AppController
 {
     private readonly IWebViewHost _web;
@@ -742,12 +748,12 @@ internal sealed partial class AppController
         // here, ProtocolTests, protocol-sync.test.ts).
         .Add<TeamRequestMsg>("team.request", m => _teamCtrl.OnRequest(m))
         .Add<TeamPostMsg>("team.post", m => _teamCtrl.OnPost(m))
-        .Add<TeamBotCreateMsg>("team.bot.create", m => _ = _teamCtrl.OnBotCreateAsync(m))
+        .Add<TeamBotCreateMsg>("team.bot.create", m => Track(_teamCtrl.OnBotCreateAsync(m), "team.bot.create"))
         .Add<TeamBriefGenerateMsg>("team.brief.generate", m => _teamCtrl.OnBriefGenerate(m))
         .Add<TeamBriefCancelMsg>("team.brief.cancel", m => _teamCtrl.OnBriefCancel(m))
         .Add<TeamPositionUpdateMsg>("team.position.update", m => _teamCtrl.OnPositionUpdate(m))
         .Add<TeamBotRemoveMsg>("team.bot.remove", m => _teamCtrl.OnBotRemove(m))
-        .Add<TeamBotStartMsg>("team.bot.start", m => _ = _teamCtrl.OnBotStartAsync(m))
+        .Add<TeamBotStartMsg>("team.bot.start", m => Track(_teamCtrl.OnBotStartAsync(m), "team.bot.start"))
         .Add<TeamLeadSetMsg>("team.lead.set", m => _teamCtrl.OnLeadSet(m))
         .Add<TeamTaskSetMsg>("team.task.set", m => _teamCtrl.OnTaskSet(m))
         .Add<TeamTaskRenameMsg>("team.task.rename", m => _teamCtrl.OnTaskRename(m))
@@ -4717,18 +4723,51 @@ internal sealed partial class AppController
     // Only genuinely control-only verbs (pty probes, *-active conveniences,
     // render.ping, state.dump) get cases here, and they construct typed DTOs
     // instead of fake JSON.
+    /// A fire-and-forget handler's task, observed: a fault is logged under
+    /// the verb that started it instead of dying as an unobserved task
+    /// exception. Before this, a bot whose creation threw on one host simply
+    /// never appeared, and errors.log had nothing to say about it.
+    private static void Track(Task task, string site)
+        => task.ContinueWith(t => Log.Error($"Verb.{site}", t.Exception!.GetBaseException()),
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously);
+
     private void OnControlVerb(string verb, JsonElement root)
     {
         switch (verb)
         {
             case "pty.send":
-                // Stage 2 compat: targets the active session's first leaf.
+                // Targets the active session's first leaf, or the pane named
+                // by an optional `paneId` — the e2e suites answer Claude's
+                // trust prompt in a tab they did not select.
                 {
                     var leaf = ActiveSession() is Session s ? FirstLeaf(s.Root) : null;
-                    if (leaf != null && root.TryGetProperty("text", out var t))
+                    if (root.TryGetProperty("paneId", out var pidEl) && Guid.TryParse(pidEl.GetString(), out var target))
+                    {
+                        leaf = null;
+                        foreach (var sess in _store.Sessions)
+                            if (FindPane(sess, target) is { } found) { leaf = found; break; }
+                    }
+                    if (leaf != null && root.TryGetProperty("text", out var t) && _panes.Has(leaf.Id))
                     {
                         _panes.Write(leaf.Id, System.Text.Encoding.UTF8.GetBytes(t.GetString() ?? ""));
                     }
+                }
+                break;
+            case "pty.tail":
+                // The pane's recent raw output, base64 on one log line
+                // (PTY_TAIL pane=<id> <b64>) so a harness can see what is on
+                // screen — Claude's trust prompt, a shim's error — without a
+                // screenshot. Targets `paneId`, else the active first leaf.
+                {
+                    var leaf = ActiveSession() is Session s ? FirstLeaf(s.Root) : null;
+                    if (root.TryGetProperty("paneId", out var pidEl) && Guid.TryParse(pidEl.GetString(), out var target))
+                    {
+                        leaf = null;
+                        foreach (var sess in _store.Sessions)
+                            if (FindPane(sess, target) is { } found) { leaf = found; break; }
+                    }
+                    if (leaf != null)
+                        Log.Info("PtyTail", $"PTY_TAIL pane={leaf.Id:N} {Convert.ToBase64String(_panes.Tail(leaf.Id))}");
                 }
                 break;
             case "pty.snapshot":
@@ -4877,6 +4916,9 @@ internal sealed partial class AppController
                             id = p.Id.ToString("D"),
                             name = p.Name,
                             agentState = StateProjection.StateToString(p.AgentState),
+                            // "claude" / "codex" / "" — which agent the pane's
+                            // shim reported; the mac e2e suite asserts it.
+                            agentType = p.AgentType,
                             notification = p.NotificationText,
                             // Resume-related persisted fields, surfaced so the
                             // self-test can assert capture/persistence.

@@ -21,7 +21,7 @@ answers what the bots ask, and never has to open a bot's terminal.
 
 ## The facts it is built on (verified against the docs, cc 2.1.259)
 
-- Cross-session messaging is on by default on Windows. Sessions address each
+- Cross-session messaging is on by default on Windows and macOS. Sessions address each
   other by `--name`. `SendMessage` is single-recipient. The receiver reads a
   message **between tool calls** of its current turn; an idle receiver gets a
   new turn.
@@ -234,6 +234,10 @@ a post.
   fifteen seconds late still runs the command; and a message from one bot to
   another reaches the other bot — which ACTS on it — both while it is idle and
   mid-turn. Must be green before a `v*.*.*` tag — see CLAUDE.md.
+- `scripts/mac-e2e.mjs` — the same gate on macOS (sections e1–e5 are the
+  five above), preceded by boot, a typed `claude`, a project tab's Claude
+  under the Dock's bare PATH, and the codex shim. `--quick` skips the room.
+  Also must be green before a tag — see docs/MAC-TESTING.md.
 - `scripts/e2e-team-real.ps1` — real Claude: brief from a repo, two bots up
   (trust card answered), replies in the room, bot-to-bot message recorded,
   ask card answered, a permission prompt (project ask rule) answered from the
