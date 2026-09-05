@@ -59,7 +59,10 @@ public class PerchIpcBurstTests
             foreach (var line in burst)
             {
                 using var client = new NamedPipeClientStream(".", pipeName, PipeDirection.Out);
-                client.Connect(2000);
+                // Generous on purpose: on Windows a client waits here for the
+                // server to recycle its one instance (that queueing IS the
+                // correct behaviour), and a loaded CI runner can take a while.
+                client.Connect(15_000);
                 var bytes = Encoding.UTF8.GetBytes(line + "\n");
                 client.Write(bytes, 0, bytes.Length);
                 client.Flush();

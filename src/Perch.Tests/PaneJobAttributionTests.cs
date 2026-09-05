@@ -78,7 +78,10 @@ public class PaneJobAttributionTests
             Assert.True(serverPid > 0, "the background server never started");
             await WaitUntilOrphaned(serverPid, shell.Id, TimeSpan.FromSeconds(30));
 
-            var poller = new LocalPoller();
+            // The poller no longer picks a probe by itself (Core is host-agnostic);
+            // a null probe makes ScanAsync report "scan failed" — the very null
+            // asserted against below — so the Windows probe is passed explicitly.
+            var poller = new LocalPoller(new WindowsSystemProbe());
             var withJob = new[] { new PaneProc(shell.Id, "pane1", "test-pane", "idle", job) };
             var noJob = new[] { new PaneProc(shell.Id, "pane1", "test-pane", "idle", null) };
 
