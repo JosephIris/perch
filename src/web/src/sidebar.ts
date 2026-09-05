@@ -25,6 +25,7 @@ import { confirmDialog, confirmWithOption } from "./confirm.js";
 import { showNewTabDialog } from "./new-tab-dialog.js";
 import { elapsedSpan, agoSpan, ageSpan } from "./elapsed.js";
 import { spinnerSpan } from "./spinner.js";
+import { agentGlyph } from "./agent-glyph.js";
 import { attachCommitsHover, openCommitsLightbox } from "./commits-view.js";
 import { showPairMenu } from "./pair-menu.js";
 import { showProjectMenu } from "./project-menu.js";
@@ -498,7 +499,7 @@ export class Sidebar {
       const list = document.createElement("div");
       list.className = "session-list";
       for (const s of needs)
-        list.appendChild(this.renderItem(s, s.id === activeId, true));
+        list.appendChild(this.renderItem(s, s.id === activeId && !isTeamRoomOpen(), true));
       frag.appendChild(list);
     }
 
@@ -507,7 +508,7 @@ export class Sidebar {
       const list = document.createElement("div");
       list.className = "session-list";
       for (const s of idle)
-        list.appendChild(this.renderItem(s, s.id === activeId, false));
+        list.appendChild(this.renderItem(s, s.id === activeId && !isTeamRoomOpen(), false));
       frag.appendChild(list);
     }
 
@@ -516,7 +517,7 @@ export class Sidebar {
       const list = document.createElement("div");
       list.className = "session-list";
       for (const s of rest)
-        list.appendChild(this.renderItem(s, s.id === activeId, false));
+        list.appendChild(this.renderItem(s, s.id === activeId && !isTeamRoomOpen(), false));
       frag.appendChild(list);
     }
 
@@ -960,7 +961,7 @@ export class Sidebar {
     rail: "first" | "last" | null
   ): HTMLElement {
     const needsNote = s.agentState === "waiting" || s.agentState === "permission";
-    const item = this.renderItem(s, s.id === activeId, needsNote, nested, rail);
+    const item = this.renderItem(s, s.id === activeId && !isTeamRoomOpen(), needsNote, nested, rail);
     if (nested) {
       item.classList.add("session-item--nested");
       item.draggable = true;                          // drag-reorder within its project
@@ -1374,6 +1375,16 @@ export class Sidebar {
     // the title the whole line for a single clean ellipsis.
     const primary = document.createElement("span");
     primary.className = "session-item__primary";
+    // Who runs here, before the title: the agent's own mark (Claude Code's
+    // creature, the Codex blob), one per distinct agent in the tab. A plain
+    // shell has none, and its title simply starts where the mark would.
+    for (const agent of (s.agents ?? []).slice(0, 2)) {
+      const glyph = agentGlyph(agent);
+      if (glyph) {
+        glyph.classList.add("session-item__agent");
+        primary.appendChild(glyph);
+      }
+    }
     const title = document.createElement("span");
     title.className = "session-item__title";
     title.textContent = s.title;

@@ -1474,6 +1474,7 @@ internal sealed partial class AppController
                     pane.DoneAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();  // turn-end clock for "finished · Xm ago"
                     changed = true;
                     Log.Info("IdleWatchdog", $"pane={pane.Id:N} working->done (output-silent)");
+                    _teamCtrl.OnPaneIdle(sess);
                 }
                 else if (pane.AgentState == AgentState.Done && pane.StateInferred && sustained)
                 {
@@ -3563,6 +3564,18 @@ internal sealed partial class AppController
             AtomicFile.WriteAllText(path, html);
 
             var title = (msg.Title ?? "").Trim();
+            if (string.Equals(msg.Where, "window", StringComparison.OrdinalIgnoreCase))
+            {
+                // A window of its own: the default browser's. ShellExecute on
+                // the local path picks the .html handler, on either host.
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = path,
+                    UseShellExecute = true,
+                });
+                Log.Info("Team.artefact.window", $"project={proj.Id:N} id={id} chars={html.Length}");
+                return;
+            }
             OpenBrowserTab(proj, new Uri(path).AbsoluteUri, title.Length > 40 ? title.Substring(0, 40) : title);
             Log.Info("Team.artefact.tab", $"project={proj.Id:N} id={id} chars={html.Length}");
         }

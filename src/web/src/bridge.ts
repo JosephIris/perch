@@ -329,7 +329,9 @@ export type OutMessage =
    * the finished HTML; the host writes it beside the project and opens it as
    * a browser tab, so the artefact can sit open next to the work it is
    * about. */
-  | { type: "team.artefact.tab"; projectId: string; id: string; title: string; html: string }
+  /* `where` picks the surface: a browser tab inside Perch (the default), or
+   * the default browser's own window. The host writes the same file either way. */
+  | { type: "team.artefact.tab"; projectId: string; id: string; title: string; html: string; where?: "tab" | "window" }
   | { type: "team.task.reject"; projectId: string; taskId: string; note?: string }
   /* Answer a bot's permission prompt from its card in the room (the host
    * hands the decision to Claude Code's PermissionRequest hook). `id` is the
@@ -524,6 +526,11 @@ export type SessionView = {
   /* Relative "last activity" string ("now" / "5m ago"), host-computed at push
    * time. Kept as a fallback for rows without a doneAtMs. */
   lastActivity: string;
+  /* Which agents run in this tab — "claude" / "codex", one entry per distinct
+   * agent in pane order, empty for plain shells. The sidebar row and the
+   * dashboard card wear one pixel mark per entry (agent-glyph.ts). Optional
+   * so harness fixtures need not carry it; the host always sends it. */
+  agents?: string[];
 };
 
 /* A row in the sidebar's "Recently closed" list. Summary only — the panes

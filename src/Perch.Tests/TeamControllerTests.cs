@@ -307,47 +307,56 @@ public class TeamControllerTests
         Assert.DoesNotContain(h.Ledger, e => e.Kind == "system" && e.Event is "undelivered" or "waiting");
 
         // No echo this time. Enter is pressed again on the first two checks;
-        // every later check only waits (a busy bot confirms a queued line
-        // minutes later), and only the last one tells the room.
+        // the third only waits — and when that budget is out the line is
+        // HELD, not retyped: the room hears the bot is mid-task, and the next
+        // turn-end presses Enter for it.
         h.Post("still there?", "[\"Ada\"]", "c2");
         h.RunLastDelayed();
         Assert.Single(h.Entered);
         h.RunLastDelayed();
         Assert.Equal(2, h.Entered.Count);
-        for (var i = TeamController.SubmitEnterTries; i < TeamController.SubmitChecks.Length; i++)
-        {
-            Assert.DoesNotContain(h.Ledger, e => e.Event == "undelivered");   // silent until the budget is out
-            h.RunLastDelayed();
-        }
+        Assert.DoesNotContain(h.Ledger, e => e.Event is "undelivered" or "waiting");
+        h.RunLastDelayed();                                  // the last, quiet check: out of budget
         Assert.Equal(2, h.Entered.Count);
-        // The budget running out types the line ONCE more before anything is
-        // said; only when that second attempt is unconfirmed too does the room
-        // hear about it.
-        Assert.DoesNotContain(h.Ledger, e => e.Event == "undelivered");
-        for (var i = 0; i < TeamController.SubmitChecks.Length; i++) h.RunLastDelayed();
+        Assert.Equal(2, h.Typed.Count);                      // never typed again on its own
+        var held = h.Ledger.Single(e => e.Event == "waiting");
+        Assert.Contains("mid-task", held.Text);
         Assert.Empty(h.Delayed);
-        var stuck = h.Ledger.Single(e => e.Event == "undelivered");
-        Assert.Equal("ada", stuck.From);
-        Assert.StartsWith("Ada didn't take the post", stuck.Text);
+
+        // The turn ends: Enter, then the hook confirms, and the room hears it
+        // landed.
+        h.Status(sess, "done");
+        h.RunLastDelayed();                                  // ResumeHeld
+        Assert.Equal(3, h.Entered.Count);
+        h.Status(sess, "working", "[Perch team] Joseph → @Ada: still there?");
+        Assert.Contains(h.Ledger, e => e.Event == "delivered" && e.Text == "Delivered to Ada");
+        Assert.DoesNotContain(h.Ledger, e => e.Event == "undelivered");
         TeamMarkers.Clear(sess.Root.Id);
     }
 
+    /// A bot whose turn stalled with no output: the host's watchdog thinks it
+    /// is idle, so the line is typed — and sits in its composer. Nobody
+    /// confirms it; it is held with a "mid-task" row, and the next quiet
+    /// moment the watchdog reports (OnPaneIdle) presses Enter for it. Never a
+    /// second copy of the line.
     [Fact]
-    public async Task Post_IntoAWorkingBot_IsQueued_NotStuck()
+    public async Task Post_IntoAStalledBot_IsHeld_AndEnteredWhenItComesFree()
     {
         var h = new Harness();
         await h.CreateBot("Ada");
         var sess = h.Sessions.Single();
-        sess.Root.AgentState = AgentState.Working;
         h.Post("one more thing", "[\"Ada\"]");
         Assert.Single(h.Typed);
-        // Mid-turn the line is queued and the hook only reports it later, so
-        // an unconfirmed submit is not a failure: Enter is retried (harmless
-        // on an empty box) but the room is told nothing.
-        h.RunLastDelayed();
-        h.RunLastDelayed();
-        h.RunLastDelayed();
-        Assert.Equal(2, h.Entered.Count);
+        for (var i = 0; i < TeamController.SubmitChecks.Length; i++) h.RunLastDelayed();
+        Assert.Equal(TeamController.SubmitEnterTries, h.Entered.Count);
+        Assert.Contains(h.Ledger, e => e.Event == "waiting" && e.Text.Contains("mid-task"));
+        Assert.DoesNotContain(h.Ledger, e => e.Event == "undelivered");
+
+        h.Ctrl.OnPaneIdle(sess);                             // the watchdog: output went quiet
+        Assert.Equal(TeamController.SubmitEnterTries + 1, h.Entered.Count);
+        Assert.Single(h.Typed);                              // never a second copy
+        h.Status(sess, "working", "[Perch team] Joseph → @Ada: one more thing");
+        Assert.Contains(h.Ledger, e => e.Event == "delivered" && e.Text == "Delivered to Ada");
         Assert.DoesNotContain(h.Ledger, e => e.Event == "undelivered");
         TeamMarkers.Clear(sess.Root.Id);
     }
@@ -371,20 +380,27 @@ public class TeamControllerTests
         Assert.False(h.Ledger.Single(e => e.Kind == "user").Delivered);
 
         // A status that isn't a prompt frees it: one flush is scheduled (not
-        // one per status), and it types once the pane really has moved on.
+        // one per status). It types once the pane has really moved on AND is
+        // not mid-turn — the answer lets the turn continue, and a line typed
+        // into a running turn just sits there, so the post waits for its end.
         h.Status(sess, "working");
         h.Status(sess, "working");
         Assert.Single(h.Delayed);
         sess.Root.AgentState = AgentState.Working;
         h.RunLastDelayed();
+        Assert.Empty(h.Typed);                               // still mid-turn
+        sess.Root.AgentState = AgentState.Done;
+        h.Status(sess, "done");
+        h.RunLastDelayed();                                  // the flush
         var (_, line) = Assert.Single(h.Typed);
         Assert.Matches(@"^\[Perch team\] #\d+ Joseph → @Ada: please fix the sidebar$", line);
         Assert.Contains(h.Ledger, e => e.Event == "delivered" && e.Text == "Delivered to Ada");
 
-        // Enter is never pressed on a pane that is asking something either.
-        h.Post("and the footer", "[\"Ada\"]", "c2");
+        // Enter is never pressed on a pane that is asking something either:
+        // the submit check finds the prompt and holds the line for after the
+        // answer, telling the room why.
         sess.Root.AgentState = AgentState.Waiting;
-        h.RunLastDelayed();
+        h.RunLastDelayed();                                  // the submit check
         Assert.Empty(h.Entered);
         Assert.Equal(2, h.Ledger.Count(e => e.Event == "waiting"));
         TeamMarkers.Clear(sess.Root.Id);
@@ -1116,7 +1132,7 @@ public class TeamControllerTests
     }
 
     [Fact]
-    public async Task APostThatNeverLands_IsTypedAgain_AndCanBeSentAgainFromTheRoom()
+    public async Task APostThatNeverLands_IsHeldForTheBotsFreeMoments_AndCanBeSentAgainFromTheRoom()
     {
         var h = new Harness();
         await h.CreateBot("Ada");
@@ -1124,16 +1140,26 @@ public class TeamControllerTests
         h.Post("did you see the ticket?", "[\"Ada\"]");
         Assert.Single(h.Typed);
 
-        // No echo through the whole budget: the line is typed ONCE more before
-        // the room is told anything — a post reaching its bot is the point.
+        // No echo through the budget: the line is never typed again on its
+        // own (that sent a post twice) — it is held, and the room hears why.
         for (var i = 0; i < TeamController.SubmitChecks.Length; i++) h.RunLastDelayed();
-        Assert.Equal(2, h.Typed.Count);
-        Assert.DoesNotContain(h.Ledger, e => e.Event == "undelivered");
-
-        // The second try fails too: now it says so, naming the post.
-        for (var i = 0; i < TeamController.SubmitChecks.Length; i++) h.RunLastDelayed();
-        var stuck = h.Ledger.Single(e => e.Event == "undelivered");
+        Assert.Single(h.Typed);
+        var waiting = h.Ledger.Single(e => e.Event == "waiting");
+        Assert.Contains("mid-task", waiting.Text);
         var postSeq = h.Ledger.Single(e => e.Kind == "user").Seq;
+        Assert.Equal(postSeq.ToString(), waiting.Note);
+
+        // Three free moments, each an Enter and a round of checks, none of
+        // them confirmed: now it says so, naming the post.
+        for (var hold = 1; hold <= TeamController.HoldLimit; hold++)
+        {
+            h.Status(sess, "done");
+            h.RunLastDelayed();                                  // ResumeHeld: Enter
+            for (var i = 0; i < TeamController.SubmitChecks.Length; i++) h.RunLastDelayed();
+        }
+        Assert.Single(h.Typed);
+        Assert.Single(h.Ledger, e => e.Event == "waiting");      // told once, not on every hold
+        var stuck = h.Ledger.Single(e => e.Event == "undelivered");
         Assert.Equal(postSeq.ToString(), stuck.Note);
         Assert.Contains("send it again from here", stuck.Text);
 
@@ -1144,6 +1170,40 @@ public class TeamControllerTests
         Assert.Contains("did you see the ticket?", again);
         Assert.Single(h.Ledger, e => e.Kind == "user");
         Assert.Contains(h.Ledger, e => e.Event == "delivered" && e.Text == "Sent to Ada again");
+        TeamMarkers.Clear(sess.Root.Id);
+    }
+
+    /// A bot mid-turn: Claude Code puts a typed line in its composer and
+    /// leaves it there until the turn ends, so the post is not typed at all
+    /// — it is parked, the room says the bot is mid-task, and the turn's end
+    /// types it (the hook then confirms it as usual).
+    [Fact]
+    public async Task APostToABotMidTurn_WaitsForTheTurnToEnd()
+    {
+        var h = new Harness();
+        await h.CreateBot("Ada");
+        var sess = h.Sessions.Single();
+        foreach (var leaf in PaneTree.AllLeaves(sess.Root)) leaf.AgentState = AgentState.Working;
+
+        h.Post("one more thing", "[\"Ada\"]");
+        Assert.Empty(h.Typed);
+        var waiting = h.Ledger.Single(e => e.Event == "waiting");
+        Assert.Contains("mid-task", waiting.Text);
+
+        // Its tool calls keep reporting "working": still nothing typed.
+        h.Status(sess, "working", "running npm");
+        h.RunLastDelayed();                                  // the flush, which declines
+        Assert.Empty(h.Typed);
+
+        // The turn ends: typed, and a "delivered" row lands.
+        foreach (var leaf in PaneTree.AllLeaves(sess.Root)) leaf.AgentState = AgentState.Done;
+        h.Status(sess, "done");
+        h.RunLastDelayed();                                  // the flush
+        h.RunLastDelayed();                                  // ResumeHeld (nothing held)
+        var (to, line) = Assert.Single(h.Typed);
+        Assert.Equal(sess.Id, to);
+        Assert.Contains("one more thing", line);
+        Assert.Contains(h.Ledger, e => e.Event == "delivered" && e.Text == "Delivered to Ada");
         TeamMarkers.Clear(sess.Root.Id);
     }
 
@@ -1551,6 +1611,31 @@ public class TeamControllerTests
         TeamMarkers.Clear(sess.Root.Id);
     }
 
+    /// A post to everyone reaches the whole roster, so on a pulled team it
+    /// starts every bot that has no tab here — the owner chose that over a
+    /// "Send again" click per bot (2026-09-05).
+    [Fact]
+    public async Task APostToEveryoneStartsEveryBotWithNoTabHere()
+    {
+        var h = new Harness();
+        var ada = await h.CreateBot("Ada");
+        var bo = await h.CreateBot("Bo");
+        foreach (var s in h.Sessions) TeamMarkers.Clear(s.Root.Id);
+        h.Sessions.Clear();
+        ada.SessionId = null;
+        bo.SessionId = null;
+
+        h.Post("stand-up in five", "\"everyone\"");
+
+        Assert.Equal(2, h.Sessions.Count);                 // a tab per bot
+        Assert.Equal(2, h.Ledger.Count(e => e.Event == "waiting" && e.Text.Contains("starting it")));
+        Assert.DoesNotContain(h.Ledger, e => e.Event == "undelivered");
+        Assert.Empty(h.Typed);                              // nothing typed into booting panes
+        Assert.Contains(h.Sessions, s => s.Id == ada.SessionId);
+        Assert.Contains(h.Sessions, s => s.Id == bo.SessionId);
+        foreach (var s in h.Sessions) TeamMarkers.Clear(s.Root.Id);
+    }
+
     [Fact]
     public async Task ASecondPostWhileTheBotStartsQueuesBehindTheFirst()
     {
@@ -1573,21 +1658,6 @@ public class TeamControllerTests
         Assert.Contains("one", h.Typed[0].Line);
         Assert.Contains("two", h.Typed[1].Line);
         TeamMarkers.Clear(sess.Root.Id);
-    }
-
-    [Fact]
-    public async Task APostToEveryoneDoesNotStartTheWholeTeam()
-    {
-        var h = new Harness();
-        var ada = await h.CreateBot("Ada");
-        foreach (var s in h.Sessions) TeamMarkers.Clear(s.Root.Id);
-        h.Sessions.Clear();
-        ada.SessionId = null;
-
-        h.Post("morning all", null);
-
-        Assert.Empty(h.Sessions);
-        Assert.Contains(h.Ledger, e => e.Event == "undelivered");
     }
 
     /// The lead handing work to a bot that isn't running starts it; a message
@@ -1633,10 +1703,15 @@ public class TeamControllerTests
         TeamMarkers.Clear(h.Sessions.Single().Root.Id);
         h.Sessions.Clear();
         ada.SessionId = null;
-        // A post from before this feature: it landed as "undelivered".
+        // The post starts a tab for Ada and waits for it — and then that tab
+        // is gone (closed, or this is another machine) before her Claude ever
+        // reported, so the post is still undelivered and she has no tab.
         h.Post("please", null);
         var post = h.Ledger.Single(e => e.Kind == "user");
-        Assert.Empty(h.Sessions);
+        foreach (var s in h.Sessions) TeamMarkers.Clear(s.Root.Id);
+        h.Sessions.Clear();
+        ada.SessionId = null;
+        Assert.False(post.Delivered);
 
         h.Ctrl.OnDeliverRetry(new TeamDeliverRetryMsg { ProjectId = h.Project.Id, Seq = post.Seq, BotId = ada.Slug });
 

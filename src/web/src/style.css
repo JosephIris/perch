@@ -1058,25 +1058,25 @@ button.pane__chip--ports:hover {
   color: var(--color-text-primary);
 }
 
-/* Agent badge — "CC" (Claude Code) / "CX" (codex). Compact tag right after
- * the pane name so you can tell at a glance which panes run an agent vs a
- * plain shell. Accent-tinted for Claude. Hidden (display:none) for shells. */
+/* Agent badge — the agent's pixel mark (agent-glyph.ts) right after the pane
+ * name, so you can tell at a glance which panes run an agent vs a plain
+ * shell. Hidden (display:none) for shells. */
 .pane__agent-badge {
-  font-family: var(--font-small);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.4px;
-  color: var(--color-text-secondary);
-  background: var(--color-subtle-tertiary);
-  padding: 1px 5px;
-  border-radius: var(--r-input);
-  line-height: 1.4;
+  display: flex;
+  align-items: center;
   flex: 0 0 auto;
 }
-.pane__agent-badge[data-agent="claude"] {
-  color: var(--color-accent);
-  background: var(--color-accent-faint);
-}
+
+/* Agent glyphs — the pixel marks that say which agent runs somewhere (see
+ * agent-glyph.ts): Claude Code's banner creature in Claude's terracotta, the
+ * Codex mark in the chrome's secondary ink. Sized by the SVG itself in whole
+ * pixels; CSS only colours and places them. */
+.agent-glyph { display: block; flex: 0 0 auto; }
+.agent-glyph--claude { color: var(--color-agent-claude); }
+.agent-glyph--codex  { color: var(--color-agent-codex); }
+/* Sidebar row: before the title, centred on the line (the primary line
+ * baseline-aligns its text; a glyph has no baseline worth aligning to). */
+.session-item__agent { align-self: center; }
 
 /* Model label — quiet, clickable text showing the pane's Claude model
  * selection ("default" / "opus" / …). Default-foreground, no color-coding
@@ -1223,6 +1223,21 @@ button.pane__chip--ports:hover {
   flex: 0 0 auto;
   padding-right: 2px;
 }
+/* "↓ Latest" — the chat's jump pill, over the terminal's bottom-right
+ * corner, shown only while the view is scrolled up (pane.ts updateLatest). */
+.pane__latest.inspector__jump {      /* outranks the chat pill's own rule */
+  position: absolute;
+  left: auto;
+  right: var(--sp-24);
+  bottom: 32px;                       /* clear of the 22px footer */
+  transform: none;
+  opacity: 1;
+  pointer-events: auto;
+  cursor: pointer;
+  z-index: 2;
+}
+.pane__latest.inspector__jump:hover { color: var(--color-text-primary); }
+.pane__latest[hidden] { display: none; }
 .pane__term {
   flex: 1 1 auto;
   min-height: 0;
@@ -7228,6 +7243,9 @@ body.show-dashboard .dashboard { display: flex; }
   flex-direction: column;
   min-height: 0;
   min-width: 0;
+  /* Whatever the column's parts add up to, none of it paints outside the
+   * column — never under the composer below. */
+  overflow: hidden;
   border-left: 1px solid var(--color-stroke);
 }
 .team-tasks__head {
@@ -7307,28 +7325,67 @@ body.show-dashboard .dashboard { display: flex; }
   font-size: var(--type-caption-size);
   color: var(--color-text-tertiary);
 }
-.team-arte__recent { flex: none; }
-/* "Open in a tab" sits before "Recent" on the same line — both quiet subtle
- * buttons, neither competing with the artefact's own title. */
-.team-arte__tab { flex: none; }
-.team-arte__menu {
-  position: absolute;
-  z-index: 2;
-  top: 40px;
-  right: var(--sp-12);
-  left: var(--sp-16);
-  max-height: 240px;
-  overflow-y: auto;
+/* Section head, the task board's twin: label + count, the glyph actions at
+ * the trailing edge. */
+.team-arte__sect {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  padding: var(--sp-12) var(--sp-12) var(--sp-4) var(--sp-16);
+}
+.team-arte__sect .team-arte__actions { margin-left: auto; }
+.team-arte__head[hidden] { display: none; }
+
+/* Framed glyph buttons on the panel heads (glyph-button.ts): a 24px square
+ * hairline frame around one single-stroke glyph, its name on hover via the
+ * app tooltip rather than a word beside it. The frame is the "Add bot"
+ * button's, without the text. */
+.team-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  flex: none;
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--r-input);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+.team-glyph svg { width: 14px; height: 14px; display: block; }
+.team-glyph:hover { background: var(--color-subtle-secondary); color: var(--color-text-primary); }
+.team-glyph:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 1px; }
+.team-glyph[aria-pressed="true"] { background: var(--color-subtle-tertiary); color: var(--color-text-primary); }
+.team-glyph[hidden] { display: none; }
+/* The task board's glyphs sit at the trailing edge, where "New task" was:
+ * the first one pushes right, the rest follow it at the head's gap. */
+.team-tasks__head .team-glyph { margin-left: auto; }
+.team-tasks__head .team-glyph + .team-glyph { margin-left: 0; }
+
+/* The board at reading size: the same cards, body type, room to read. */
+.team-tasks-lightbox { width: min(860px, 92vw); }
+.team-tasks-lightbox__body {
   display: flex;
   flex-direction: column;
-  padding: var(--sp-4);
-  border: 1px solid var(--color-stroke);
-  border-radius: var(--r-card);
-  background: var(--color-flyout);
+  max-height: 70vh;
+  overflow-y: auto;
+  margin-top: var(--sp-8);
+  font-size: var(--type-body-size);
 }
-/* `display: flex` on a class beats the browser's own rule for [hidden], so the
- * closed menu was an empty framed bar sitting under the panel's title. */
-.team-arte__menu[hidden] { display: none; }
+.team-tasks-lightbox .task-card { padding: var(--sp-16) var(--sp-8); }
+
+/* The list lightbox: the same rows the panel's list used, in a dialog. */
+.team-arte-lightbox { width: 520px; }
+.team-arte-lightbox__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 60vh;
+  overflow-y: auto;
+  margin-top: var(--sp-8);
+}
 .team-arte__item {
   display: flex;
   flex-direction: column;
@@ -7420,13 +7477,17 @@ body.show-dashboard .dashboard { display: flex; }
 .task-card__status[data-status="done"] { color: var(--color-state-done); }
 .task-card__meta { color: var(--color-text-tertiary); }
 .team-tasks__items { display: flex; flex-direction: column; gap: var(--sp-4); margin: 0; padding: 0; list-style: none; }
-.task-item--none { display: block; color: var(--color-text-tertiary); }
 .task-item {
   display: grid;
   grid-template-columns: 8px minmax(0, 1fr);
   column-gap: var(--sp-8);
   align-items: baseline;
 }
+/* The "no pieces yet" line has no dot, so it must not be the grid: as a grid
+ * its text became an anonymous item in the 8px dot column and wrapped one
+ * word per line beside an empty card. Both classes, so this outranks the
+ * grid rule above regardless of order. */
+.task-item.task-item--none { display: block; color: var(--color-text-tertiary); }
 .task-item__dot {
   width: 8px; height: 8px; border-radius: 50%;
   align-self: center;
@@ -8413,19 +8474,11 @@ body.show-dashboard .dashboard { display: flex; }
 /* The cards region scrolls; a fade at the cut says so while there is more. */
 .team-tasks__body.is-more { mask-image: linear-gradient(to bottom, #000 calc(100% - 32px), transparent); }
 
-/* Artefact head: name and meta stacked on the left, the actions on one line. */
-.team-arte__head { align-items: flex-start; flex-wrap: nowrap; }
+/* Artefact document head: name and meta stacked, under the section head. */
+.team-arte__head { align-items: flex-start; flex-wrap: nowrap; padding-top: 0; }
 .team-arte__titles { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .team-arte__actions { flex: none; display: flex; gap: var(--sp-4); }
 .team-arte__meta { flex-basis: auto; order: 0; }
-/* The recent list is a list in a panel, not a flyout: inline and opaque. */
-.team-arte__menu {
-  position: static; top: auto; right: auto; left: auto; max-height: none;
-  padding: 0 var(--sp-8) var(--sp-8);
-  background: var(--color-room-surface);
-  border-bottom: 1px solid var(--color-stroke);
-  box-shadow: none;
-}
 /* A narrow panel is the normal case: text cells wrap instead of running off. */
 .team-arte__doc .md-td { white-space: normal; overflow-wrap: break-word; }
 

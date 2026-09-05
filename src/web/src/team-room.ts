@@ -33,6 +33,7 @@ import {
 } from "./team.js";
 import { appendRich, appendBlocks, hhmm, imageLabel } from "./text.js";
 import { artefactDocument } from "./artefact-export.js";
+import { glyphButton, setGlyph } from "./glyph-button.js";
 import { elapsedSpan, agoSpan } from "./elapsed.js";
 import { buildComposer, type Composer } from "./mention-input.js";
 import { showNewBotDialog } from "./new-bot-dialog.js";
@@ -152,6 +153,11 @@ let composer: Composer | null = null;
 /* The task column. */
 let taskCountEl: HTMLElement;
 let newTaskBtn: HTMLButtonElement;
+let tasksBoardBtn: HTMLButtonElement;
+/* The board lightbox while it is open: its body (re-filled on every change)
+ * and the way to close it. */
+let tasksLightboxBody: HTMLElement | null = null;
+let closeTasksLightbox: (() => void) | null = null;
 let taskBodyEl: HTMLElement;
 /* Inline editors, by task id: renaming a card, the "not yet" note; plus the
  * new-task editor at the top of the column. */
@@ -159,15 +165,20 @@ let renameFor: string | null = null;
 let rejectFor: string | null = null;
 let newTaskOpen = false;
 
-/* The artefacts panel under the cards: what is on screen, what the "Recent"
- * menu offers, and which one we asked the host for. */
+/* The artefacts panel under the cards: what is on screen, the list its head
+ * opens in a lightbox, and which one we asked the host for. */
 let artefactTitleEl: HTMLElement;
 let artefactMetaEl: HTMLElement;
-let artefactMenuBtn: HTMLButtonElement;
+let artefactDocHeadEl: HTMLElement;
+let artefactCountEl: HTMLElement;
+let artefactListBtn: HTMLButtonElement;
 let artefactTabBtn: HTMLButtonElement;
-let artefactMenuEl: HTMLElement;
+let artefactWindowBtn: HTMLButtonElement;
 let artefactBodyEl: HTMLElement;
-let artefactMenuOpen = false;
+/* The list lightbox while it is open: its body (a fresh index refills it) and
+ * the way to close it (opening an artefact does). */
+let artefactListBodyEl: HTMLElement | null = null;
+let closeArtefactList: (() => void) | null = null;
 /* How tall the owner dragged the cards half, in px; null = let the cards take
  * the height they need. Kept per machine, like the activity toggle. */
 let taskSplitPx: number | null = null;
@@ -188,7 +199,13 @@ function writeTaskSplit(px: number | null): void {
 function setTaskSplit(px: number | null): void {
   taskSplitPx = px;
   if (!taskBodyEl) return;
-  taskBodyEl.style.flex = px === null ? "" : `0 0 ${Math.round(px)}px`;
+  // A dragged height is a wish, not a floor: it may shrink (flex-shrink 1)
+  // when the column is shorter than it was when dragged — a smaller window,
+  // or the value remembered from a taller one. With `0 0 <px>` the cards
+  // could not give way, the artefact panel kept its minimum, and the column
+  // overflowed the room: the artefact's text ran on under the composer.
+  taskBodyEl.style.flex = px === null ? "" : `0 1 ${Math.round(px)}px`;
+  taskBodyEl.style.minHeight = px === null ? "" : "48px";
 }
 
 let artefactIndex: TeamArtefactItem[] = [];
@@ -268,7 +285,15 @@ const feedFaces: BotFace[] = [];
 /* Which faces belong to which feed row, so a row that survives a render keeps
  * its avatar animating and a row that goes away stops paying for one. */
 let feedFacesByKey = new Map<string, BotFace[]>();
-const rosterFaces: BotFace[] = [];
+/* The roster's faces, by bot. Kept across renders: the roster re-renders on
+ * every state push, and a face built anew restarts its act from the first
+ * frame — the "avatars keep resetting" the owner saw. A kept face only takes
+ * a new state, look or colour, on its own continuous clock. */
+const rosterFacesByBot = new Map<string, { face: BotFace; look: string }>();
+function disposeRosterFaces(): void {
+  for (const r of rosterFacesByBot.values()) r.face.dispose();
+  rosterFacesByBot.clear();
+}
 
 function disposeFaces(list: BotFace[]): void {
   for (const f of list) f.dispose();
@@ -347,7 +372,6 @@ export function openTeamRoom(id: string): void {
   shownArtefact = null;
   artefactIndex = [];
   artefactLoading = null;
-  artefactMenuOpen = false;
   mount();
   send({ type: "team.room", projectId: id, open: true });
   send({ type: "team.artefact.list", projectId: id });
@@ -499,12 +523,17 @@ function mount(): void {
   tHead.appendChild(el("span", "team-roster__label", "Tasks"));
   taskCountEl = el("span", "team-roster__count");
   tHead.appendChild(taskCountEl);
-  newTaskBtn = button("team-roster__add", "New task", () => {
+  // A framed "+" at the trailing edge, named on hover; it turns into a "✕"
+  // while the composer is open (see render).
+  newTaskBtn = glyphButton("plus", "New task", () => {
     newTaskOpen = !newTaskOpen;
     renameFor = null;
     rejectFor = null;
     render();
   });
+  // The board at reading size, in a lightbox — the column is a strip.
+  tasksBoardBtn = glyphButton("expand", "Open the board large", openTasksLightbox);
+  tHead.appendChild(tasksBoardBtn);
   tHead.appendChild(newTaskBtn);
   tasks.appendChild(tHead);
   taskBodyEl = el("div", "team-tasks__body scroll");
@@ -546,43 +575,46 @@ function mount(): void {
   // ones. It fills the space the task cards leave.
   const arte = el("section", "team-arte");
   arte.setAttribute("aria-label", "Artefacts");
-  // Head: the document's name with its meta under it on the left, the three
-  // actions on one line to the right — never three stacked rows.
-  const aHead = el("div", "team-arte__head");
-  const aTitles = el("div", "team-arte__titles");
-  artefactTitleEl = el("span", "team-arte__title", "Artefacts");
-  aTitles.appendChild(artefactTitleEl);
-  artefactMetaEl = el("span", "team-arte__meta");
-  aTitles.appendChild(artefactMetaEl);
-  aHead.appendChild(aTitles);
+  // Section head, like the task board's: the label with a count, and the
+  // actions as framed glyphs (named on hover) at the trailing edge — the
+  // list, wide/narrow, open as a tab, open in a window.
+  const aSect = el("div", "team-arte__sect");
+  aSect.appendChild(el("span", "team-roster__label", "Artefacts"));
+  artefactCountEl = el("span", "team-roster__count");
+  aSect.appendChild(artefactCountEl);
   const aActions = el("div", "team-arte__actions");
+  artefactListBtn = glyphButton("list", "All artefacts", openArtefactList);
+  aActions.appendChild(artefactListBtn);
   // The panel is a strip; a plan or a draft ticket wants room. "Wide" gives
   // the document the board's and the roster's columns, beside the chat, so it
-  // can be read next to the conversation about it. "Tab" opens it as its own
-  // browser tab (which leaves the room; the tab is a snapshot).
-  readingBtn = button("team-roster__add team-arte__wide", "Wide", () => {
+  // can be read next to the conversation about it. A tab opens it as its own
+  // browser tab inside Perch; a window hands it to the default browser, so it
+  // can sit on another screen. Both are snapshots.
+  readingBtn = glyphButton("wide", "Read it wide, beside the chat", () => {
     readingWide = !readingWide;
     root?.classList.toggle("team-room--reading", readingWide);
     renderArtefacts();
     repinIfPinned();
   });
-  readingBtn.title = "Read it wide, beside the chat";
   readingBtn.setAttribute("aria-pressed", "false");
   aActions.appendChild(readingBtn);
-  artefactTabBtn = button("team-roster__add team-arte__tab", "Tab", openArtefactInTab);
-  artefactTabBtn.title = "Open this artefact as its own tab";
+  artefactTabBtn = glyphButton("tab", "Open as a tab", () => openArtefactIn("tab"));
   aActions.appendChild(artefactTabBtn);
-  artefactMenuBtn = button("team-roster__add team-arte__recent", "Recent", () => {
-    artefactMenuOpen = !artefactMenuOpen;
-    if (artefactMenuOpen && projectId) send({ type: "team.artefact.list", projectId });
-    renderArtefacts();
-  });
-  aActions.appendChild(artefactMenuBtn);
-  aHead.appendChild(aActions);
-  arte.appendChild(aHead);
-  artefactMenuEl = el("div", "team-arte__menu");
-  artefactMenuEl.hidden = true;
-  arte.appendChild(artefactMenuEl);
+  artefactWindowBtn = glyphButton("window", "Open in a new window", () => openArtefactIn("window"));
+  aActions.appendChild(artefactWindowBtn);
+  aSect.appendChild(aActions);
+  arte.appendChild(aSect);
+  // Under it, the document on screen: its name, with what it is and who wrote
+  // it beneath. Hidden while nothing is open.
+  artefactDocHeadEl = el("div", "team-arte__head");
+  artefactDocHeadEl.hidden = true;
+  const aTitles = el("div", "team-arte__titles");
+  artefactTitleEl = el("span", "team-arte__title");
+  aTitles.appendChild(artefactTitleEl);
+  artefactMetaEl = el("span", "team-arte__meta");
+  aTitles.appendChild(artefactMetaEl);
+  artefactDocHeadEl.appendChild(aTitles);
+  arte.appendChild(artefactDocHeadEl);
   artefactBodyEl = el("div", "team-arte__body scroll");
   arte.appendChild(artefactBodyEl);
   tasks.appendChild(arte);
@@ -644,10 +676,11 @@ function unmount(immediate: boolean): void {
     if (d) markSeen(projectId, d.lastSeq);
   }
   disposeFaces(feedFaces);
-  disposeFaces(rosterFaces);
+  disposeRosterFaces();
   boardOpen = false;
   readingWide = false;
-  artefactMenuOpen = false;
+  closeArtefactList?.();
+  closeTasksLightbox?.();
   renameFor = null;
   rejectFor = null;
   newTaskOpen = false;
@@ -841,11 +874,13 @@ function renderHead(project: ProjectView | null): void {
 }
 
 function renderRoster(project: ProjectView | null): void {
-  disposeFaces(rosterFaces);
   rosterListEl.replaceChildren();
   const count = root?.querySelector<HTMLElement>(".team-roster .team-roster__count");
   const bots = project?.team?.bots ?? [];
   if (count) count.textContent = bots.length > 0 ? String(bots.length) : "";
+  // Bots that left let their faces go; everyone still here keeps theirs.
+  const keep = new Set(bots.map((b) => b.botId));
+  for (const [id, r] of rosterFacesByBot) if (!keep.has(id)) { r.face.dispose(); rosterFacesByBot.delete(id); }
   if (!lastState || !project) return;
   for (const bot of rosterSort(bots, lastState.sessions)) {
     const s = sessionOf(bot);
@@ -861,9 +896,19 @@ function renderRoster(project: ProjectView | null): void {
     // circle takes the bot's tag hue in colour mode.
     const lead = el("span", "roster-bot__lead roster-bot__lead--face");
     lead.style.setProperty("--tag", `var(--color-pane-tag-${colorIndexFor(bot, bot.nickname)})`);
-    const face = createBotFace(normalizeLook(bot.look), colorIndexFor(bot, bot.nickname), faceStateOf(p), faceSeed(bot));
-    lead.appendChild(face.el);
-    rosterFaces.push(face);
+    const look = normalizeLook(bot.look);
+    const lookKey = JSON.stringify(look);
+    const hue = colorIndexFor(bot, bot.nickname);
+    let r = rosterFacesByBot.get(bot.botId);
+    if (r) {
+      if (r.look !== lookKey) { r.face.setLook(look); r.look = lookKey; }
+      r.face.setColorIndex(hue);
+      r.face.setState(faceStateOf(p));
+    } else {
+      r = { face: createBotFace(look, hue, faceStateOf(p), faceSeed(bot)), look: lookKey };
+      rosterFacesByBot.set(bot.botId, r);
+    }
+    lead.appendChild(r.face.el);
     row.appendChild(lead);
 
     const text = el("span", "roster-bot__text");
@@ -938,8 +983,10 @@ function renderTasks(project: ProjectView | null): void {
   const tasks = taskOrder(team?.tasks ?? []);
   taskBodyEl.replaceChildren();
   taskCountEl.textContent = tasks.length > 0 ? String(tasks.length) : "";
-  newTaskBtn.textContent = newTaskOpen ? "Cancel" : "New task";
+  setGlyph(newTaskBtn, newTaskOpen ? "close" : "plus", newTaskOpen ? "Cancel" : "New task");
   newTaskBtn.hidden = !project || bots.length === 0;
+  tasksBoardBtn.hidden = !project || tasks.length === 0;
+  if (tasksLightboxBody) fillTasksLightbox(tasksLightboxBody, project, tasks);
   if (!project) return;
 
   if (newTaskOpen) {
@@ -1017,7 +1064,7 @@ export function artefactKindWord(kind: string | undefined): string {
 function openArtefactById(id: string): void {
   if (!projectId) return;
   artefactLoading = id;
-  artefactMenuOpen = false;
+  closeArtefactList?.();
   send({ type: "team.artefact.open", projectId, id });
   renderArtefacts();
 }
@@ -1030,7 +1077,8 @@ export function applyArtefact(msg: TeamArtefactDataMessage): void {
   renderArtefacts();
 }
 
-/** The host answered with the recent list for the panel's menu. */
+/** The host answered with the list of artefacts (the head's count, the
+ *  lightbox's rows). */
 export function applyArtefactIndex(msg: TeamArtefactIndexMessage): void {
   if (projectId && msg.projectId !== projectId) return;
   artefactIndex = msg.items ?? [];
@@ -1043,35 +1091,23 @@ export function applyArtefactIndex(msg: TeamArtefactIndexMessage): void {
 function renderArtefacts(): void {
   if (!artefactBodyEl) return;
   const a = shownArtefact;
-  artefactTitleEl.textContent = a && !a.error ? (a.title ?? "Untitled") : "Artefacts";
-  artefactTitleEl.title = a?.title ?? "";
-  artefactMetaEl.textContent = a && !a.error
-    ? `${artefactKindWord(a.kind)} · from ${a.from}` + (a.truncated ? " · shortened" : "")
+  const doc = a && !a.error ? a : null;
+  artefactCountEl.textContent = artefactIndex.length > 0 ? String(artefactIndex.length) : "";
+  artefactDocHeadEl.hidden = !doc;
+  artefactTitleEl.textContent = doc ? (doc.title ?? "Untitled") : "";
+  artefactTitleEl.title = doc?.title ?? "";
+  artefactMetaEl.textContent = doc
+    ? `${artefactKindWord(doc.kind)} · from ${doc.from}` + (doc.truncated ? " · shortened" : "")
     : "";
-  artefactMenuBtn.hidden = artefactIndex.length === 0 && !a;
-  artefactMenuBtn.textContent = artefactMenuOpen ? "Close list" : "Recent";
-  // Only offer the tab and the wide view when there is a document to show.
-  artefactTabBtn.hidden = !a || !!a.error;
-  readingBtn.hidden = !a || !!a.error;
-  readingBtn.textContent = readingWide ? "Narrow" : "Wide";
+  // The list is always on offer; the other three need a document to act on.
+  artefactTabBtn.hidden = !doc;
+  artefactWindowBtn.hidden = !doc;
+  readingBtn.hidden = !doc;
+  setGlyph(readingBtn, readingWide ? "narrow" : "wide",
+    readingWide ? "Back to the panel" : "Read it wide, beside the chat");
   readingBtn.setAttribute("aria-pressed", String(readingWide));
-  if ((!a || a.error) && readingWide) { readingWide = false; root?.classList.remove("team-room--reading"); }
-
-  // The recent list is a list in a panel, not a flyout: it takes the body's
-  // place while it is open, so nothing draws over the document.
-  artefactMenuEl.hidden = !artefactMenuOpen;
-  artefactBodyEl.hidden = artefactMenuOpen;
-  if (artefactMenuOpen) {
-    artefactMenuEl.replaceChildren();
-    if (artefactIndex.length === 0) artefactMenuEl.appendChild(el("p", "team-tasks__empty", "Nothing yet."));
-    for (const it of artefactIndex) {
-      const row = button("team-arte__item", "", () => openArtefactById(it.id));
-      if (it.id === a?.id) row.classList.add("team-arte__item--on");
-      row.appendChild(el("span", "team-arte__item-title", it.title));
-      row.appendChild(el("span", "team-arte__item-meta", `${artefactKindWord(it.kind)} · ${it.from}`));
-      artefactMenuEl.appendChild(row);
-    }
-  }
+  if (!doc && readingWide) { readingWide = false; root?.classList.remove("team-room--reading"); }
+  if (artefactListBodyEl) fillArtefactList(artefactListBodyEl);
 
   artefactBodyEl.replaceChildren();
   if (artefactLoading) { artefactBodyEl.appendChild(el("p", "team-tasks__empty", "Opening…")); return; }
@@ -1097,9 +1133,10 @@ function renderArtefactDoc(a: TeamArtefactDataMessage): HTMLElement {
 }
 
 /** Send the artefact on screen to the host as a finished HTML document, which
- *  it writes out and opens as its own tab. Rendered here rather than host-side
- *  because this is the side that owns the markdown renderer and the theme. */
-function openArtefactInTab(): void {
+ *  it writes out and opens — as its own tab inside Perch, or in the default
+ *  browser's own window. Rendered here rather than host-side because this is
+ *  the side that owns the markdown renderer and the theme. */
+function openArtefactIn(where: "tab" | "window"): void {
   const a = shownArtefact;
   if (!projectId || !a || a.error) return;
   const title = a.title ?? "Artefact";
@@ -1110,7 +1147,102 @@ function openArtefactInTab(): void {
     id: a.id,
     title,
     html: artefactDocument(title, meta, renderArtefactDoc(a).outerHTML),
+    where,
   });
+}
+
+/** The task board at reading size, in a lightbox. The cards are the same
+ *  ones as the column's, with the same actions, and the board re-fills it on
+ *  every change while it is open. */
+function openTasksLightbox(): void {
+  if (!projectId || closeTasksLightbox) return;
+  const overlay = el("div", "settings-overlay");
+  const card = el("div", "settings-card team-tasks-lightbox");
+  card.setAttribute("role", "dialog");
+  card.setAttribute("aria-modal", "true");
+  card.appendChild(el("h2", "settings-card__title", "Tasks"));
+  const body = el("div", "team-tasks-lightbox__body");
+  card.appendChild(body);
+  overlay.appendChild(card);
+  document.body.appendChild(overlay);
+  tasksLightboxBody = body;
+  const project = projectFor(projectId);
+  fillTasksLightbox(body, project, taskOrder(project?.team?.tasks ?? []));
+  const finish = () => {
+    if (tasksLightboxBody !== body) return;
+    tasksLightboxBody = null;
+    closeTasksLightbox = null;
+    window.removeEventListener("keydown", onKey, true);
+    overlay.classList.add("settings-overlay--closing");
+    overlay.addEventListener("animationend", () => overlay.remove(), { once: true });
+    window.setTimeout(() => overlay.remove(), 260); // reduced-motion fallback
+  };
+  function onKey(ev: KeyboardEvent) {
+    if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); finish(); }
+  }
+  overlay.addEventListener("mousedown", (ev) => { if (ev.target === overlay) finish(); });
+  window.addEventListener("keydown", onKey, true);
+  closeTasksLightbox = finish;
+}
+
+function fillTasksLightbox(body: HTMLElement, project: ProjectView | null, tasks: TeamTaskView[]): void {
+  body.replaceChildren();
+  const team = project?.team;
+  if (!project || !team || tasks.length === 0) {
+    body.appendChild(el("p", "team-tasks__empty", "No tasks yet."));
+    return;
+  }
+  for (const t of tasks) body.appendChild(taskCard(project, team, t));
+}
+
+/** Everything the bots have written, in a lightbox: the head's list glyph
+ *  opens it, a row opens that artefact in the panel and closes the lightbox.
+ *  A fresh list is asked for each time it opens. */
+function openArtefactList(): void {
+  if (!projectId || closeArtefactList) return;
+  send({ type: "team.artefact.list", projectId });
+  const overlay = el("div", "settings-overlay");
+  const card = el("div", "settings-card team-arte-lightbox");
+  card.setAttribute("role", "dialog");
+  card.setAttribute("aria-modal", "true");
+  card.appendChild(el("h2", "settings-card__title", "Artefacts"));
+  const body = el("div", "team-arte-lightbox__body");
+  card.appendChild(body);
+  overlay.appendChild(card);
+  document.body.appendChild(overlay);
+  artefactListBodyEl = body;
+  fillArtefactList(body);
+  const finish = () => {
+    if (artefactListBodyEl !== body) return;
+    artefactListBodyEl = null;
+    closeArtefactList = null;
+    window.removeEventListener("keydown", onKey, true);
+    overlay.classList.add("settings-overlay--closing");
+    overlay.addEventListener("animationend", () => overlay.remove(), { once: true });
+    window.setTimeout(() => overlay.remove(), 260); // reduced-motion fallback
+  };
+  function onKey(ev: KeyboardEvent) {
+    if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); finish(); }
+  }
+  overlay.addEventListener("mousedown", (ev) => { if (ev.target === overlay) finish(); });
+  window.addEventListener("keydown", onKey, true);
+  closeArtefactList = finish;
+}
+
+function fillArtefactList(body: HTMLElement): void {
+  body.replaceChildren();
+  if (artefactIndex.length === 0) {
+    body.appendChild(el("p", "team-tasks__empty",
+      "Nothing yet — anything a bot writes that is longer than a message lands here."));
+    return;
+  }
+  for (const it of artefactIndex) {
+    const row = button("team-arte__item", "", () => openArtefactById(it.id));
+    if (it.id === shownArtefact?.id) row.classList.add("team-arte__item--on");
+    row.appendChild(el("span", "team-arte__item-title", it.title));
+    row.appendChild(el("span", "team-arte__item-meta", `${artefactKindWord(it.kind)} · ${it.from}`));
+    body.appendChild(row);
+  }
 }
 
 /** An artefact's row in the feed: a card that opens it beside the chat. */

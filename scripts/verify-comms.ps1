@@ -366,6 +366,32 @@ Never read a file, never write code, never run anything else.
     } 240)
     Check "no send failed on an ambiguous name" ((Log-Count 'Team.peer.failed') -eq 0)
 
+    # --- 6. a post to a bot mid-turn waits for the turn, then goes in --------
+    # Joseph, 2026-09-05: "messages to bots still hanging". Claude Code leaves
+    # a line typed mid-turn in its composer until the turn ends; Perch used to
+    # type anyway, wait two minutes in silence, then retype - and the bot got
+    # the post twice. Now the post parks with a "mid-task" row and goes in at
+    # the turn's end. Ada is kept busy with a slow command while it arrives.
+    Write-Host "`n[6] a post to a busy bot waits for its turn to end, then goes in"
+    [void](Send-Verb 'team.post' @{ projectId = $projectId; text = 'Run this exact shell command and then reply DONE: sleep 25'; to = '["Ada"]'; clientId = 'b1' })
+    Check "Ada took the slow task" (Wait-Until { (Log-Last 'Team.submit') -match 'confirmed' } 40)
+    Start-Sleep -Seconds 4
+    $parkedBefore = Log-Count 'Team.parked'
+    [void](Send-Verb 'team.post' @{ projectId = $projectId; text = 'Reply with exactly this word and nothing else: BUSYONE'; to = '["Ada"]'; clientId = 'b2' })
+    Check "the post was parked, not typed into the running turn" (Wait-Until { (Log-Count 'Team.parked') -gt $parkedBefore } 10)
+    Check "the room says Ada is mid-task" (Wait-Until {
+        Answer-Cards $projectId
+        $d = Team-Dump $projectId
+        @($d.ledger | Where-Object { $_.event -eq 'waiting' -and $_.text -match 'mid-task|question open' }).Count -ge 1
+    } 15)
+    Check "it went in when the turn ended, and was answered" (Wait-Until {
+        Answer-Cards $projectId
+        $d = Team-Dump $projectId
+        (@($d.ledger | Where-Object { $_.event -eq 'delivered' -and $_.text -match 'Delivered to Ada' }).Count -ge 1) -and
+        (@($d.ledger | Where-Object { ($_.kind -eq 'beat' -or $_.kind -eq 'note') -and $_.text -match 'BUSYONE' }).Count -ge 1)
+    } 200)
+    Check "no post was given up on" ((Log-Count 'gave up') -eq 0)
+
     Write-Host ""
     if ($fails.Count -gt 0) {
         Write-Host "DELIVERY GATE FAILED: $($fails -join ', ')" -ForegroundColor Red

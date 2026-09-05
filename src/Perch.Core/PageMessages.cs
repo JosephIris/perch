@@ -681,6 +681,9 @@ internal sealed record TeamArtefactTabMsg
     public required string Id { get; init; }
     public required string Title { get; init; }
     public required string Html { get; init; }
+    /// "tab" (default, a browser tab inside Perch) or "window" (the default
+    /// browser's own window, so the document can sit on another screen).
+    public string? Where { get; init; }
 }
 
 /// The owner reacting to a room row with an emoji.

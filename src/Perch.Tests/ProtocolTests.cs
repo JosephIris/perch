@@ -639,6 +639,10 @@ public class ProtocolTests
             $"{{\"type\":\"team.artefact.tab\",\"projectId\":\"{G1}\",\"id\":\"9f2c11aa\",\"title\":\"Draft ticket\",\"html\":\"<!doctype html><p>hi</p>\"}}");
         Assert.Equal(("9f2c11aa", "Draft ticket"), (tab.Id, tab.Title));
         Assert.Contains("<p>hi</p>", tab.Html);
+        Assert.Null(tab.Where);                                   // a tab, unless the page says otherwise
+        var win = Round<TeamArtefactTabMsg>(
+            $"{{\"type\":\"team.artefact.tab\",\"projectId\":\"{G1}\",\"id\":\"9f2c11aa\",\"title\":\"Draft ticket\",\"html\":\"<p>hi</p>\",\"where\":\"window\"}}");
+        Assert.Equal("window", win.Where);
         var perm = Round<TeamPermAnswerMsg>($"{{\"type\":\"team.perm.answer\",\"projectId\":\"{G1}\",\"id\":\"p1\",\"decision\":\"allow\"}}");
         Assert.Equal("allow", perm.Decision);
         var ask = Round<TeamAskAnswerMsg>($"{{\"type\":\"team.ask.answer\",\"projectId\":\"{G1}\",\"id\":\"q1\",\"answer\":\"Ship it\"}}");

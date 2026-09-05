@@ -156,8 +156,16 @@ internal sealed class TeamController
         public int Tries;
         /// Whether the line has already been typed a second time.
         public bool Retried;
+        /// How many times the line has been held for the pane to come free.
+        public int Holds;
+        /// Whether the room has been told this line is waiting.
+        public bool Announced;
     }
     private readonly Dictionary<Guid, PendingSubmit> _submits = new();
+    /// Typed lines nobody confirmed, kept for the pane's next free moment:
+    /// the line is on its screen, in the composer, and Claude Code takes it
+    /// only when the turn ends and Enter is pressed again (see Hold).
+    private readonly Dictionary<Guid, PendingSubmit> _held = new();
 
     /// Bots told to wrap up after the owner confirmed a task: session → the
     /// project, and whether the wrap-up post was seen submitted. A bot is
@@ -275,19 +283,15 @@ internal sealed class TeamController
 
     /// After typing: how long to wait for the hook's confirmation before
     /// looking again. The first two checks press Enter again (a line the paste
-    /// detector swallowed needs it); the rest only wait.
-    ///
-    /// The waiting is long on purpose. Claude reports a queued line when it
-    /// gets to it, which is when its current turn's tool calls finish — often
-    /// minutes. The old three-check, ten-second budget declared "didn't take
-    /// the post" while the bot was simply busy, which is the false alarm
-    /// Joseph kept seeing; the pane's state at that instant isn't proof
-    /// either, since a bot can look idle between two tool calls.
+    /// detector swallowed needs it); the last only waits. When the budget is
+    /// out the line is HELD, not retyped (see Hold): a bot that hasn't
+    /// confirmed in fifteen seconds is mid-turn, with the line sitting in its
+    /// composer, and the room is told so. The old two-minute silent budget
+    /// followed by a blind retype is what made a post look "hung" for four
+    /// minutes and then arrive twice (2026-09-05).
     internal static readonly TimeSpan[] SubmitChecks =
     {
-        TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(3),
-        TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(20), TimeSpan.FromSeconds(30),
-        TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(120),
+        TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(10),
     };
 
     /// How many of those checks press Enter again before it just waits.
@@ -1204,8 +1208,18 @@ internal sealed class TeamController
         if (state is AgentState.Working or AgentState.Done && _promptOnScreen.Count > 0)
             foreach (var leaf in PaneTree.AllLeaves(sess.Root)) _promptOnScreen.Remove(leaf.Id);
         var isPostEcho = state == AgentState.Working && (msg.Detail ?? "").StartsWith(TeamRender.PostPrefix, StringComparison.Ordinal);
-        if (isPostEcho && _submits.Remove(sess.Id, out var p))
+        if (isPostEcho && (_submits.Remove(sess.Id, out var p) || _held.Remove(sess.Id, out p)))
+        {
             Log.Info("Team.submit", $"session={sess.Id:N} seq={p.Seq} confirmed");
+            // A line the room was told is waiting gets its closing row.
+            if (p.Announced && BotOfSession(sess.Id) is { } hb)
+                Say(hb, p.Bot, "delivered", p.Seq, $"Delivered to {p.Bot.Nickname}");
+        }
+        // A turn ended (the Stop hook says so): a held line gets its Enter.
+        // Delayed a beat so the pane's own state has caught up with the hook
+        // (the host applies it after this call), and ResumeHeld reads it true.
+        if (state is AgentState.Done or AgentState.Idle)
+            _h.Delay(() => ResumeHeld(sess.Id), TimeSpan.FromMilliseconds(500));
         if (state is not (AgentState.Permission or AgentState.Waiting) && _parked.ContainsKey(sess.Id))
             FlushParked(sess.Id, TimeSpan.FromSeconds(1));
         // Wrapping up: the wrap-up post going in arms the reset; the next
@@ -1230,7 +1244,10 @@ internal sealed class TeamController
             var s = _h.SessionById(sid);
             if (s == null || !_parked.TryGetValue(sid, out var lines)) return;
             if (BotOfSession(sid) is not { } h) { _parked.Remove(sid); return; }
-            if (s.Dormant || Blocked(s)) return;   // not yet; the next state change tries again
+            // Not yet: asleep, asking something, or mid-turn — a line typed
+            // into a running turn sits in the composer unsent. The next
+            // state change tries again.
+            if (s.Dormant || Blocked(s) || Working(s)) return;
             // Still booting: the shell answers long before Claude does, and a
             // line typed into that gap is lost. OnAgentUp releases this.
             if (_coldStart.ContainsKey(sid)) return;
@@ -1279,12 +1296,9 @@ internal sealed class TeamController
         var nick = p.Bot.Nickname;
         if (Blocked(s))
         {
-            // Enter here would answer whatever Claude is asking. The line stays
-            // where it is; the owner answers the prompt and sends it by hand.
-            _submits.Remove(sid);
-            Log.Info("Team.submit", $"session={sid:N} seq={seq} blocked by a prompt in the pane");
-            Say(h, p.Bot, "waiting", seq,
-                $"{nick} has a question open — the post goes in as soon as it is answered");
+            // A question is open on its screen and the line sits in the
+            // composer behind it. Held: the pane coming free presses Enter.
+            Hold(sid, p, $"{nick} has a question open — this goes in as soon as it is answered");
             return;
         }
         p.Tries++;
@@ -1295,33 +1309,68 @@ internal sealed class TeamController
                 var ok = _h.PressEnter(s);
                 Log.Info("Team.submit", $"session={sid:N} seq={seq} enter-again={p.Tries} ok={ok}");
             }
-            // Past the Enter retries this only waits: the line is in the pane,
-            // and a busy bot confirms it when its turn reaches the queue.
             _h.Delay(() => CheckSubmitted(sid, seq), SubmitChecks[p.Tries]);
             return;
         }
+        // The budget is out and nothing confirmed. Whatever the pane's state
+        // says, this is what a bot mid-turn looks like from here: the line is
+        // in its composer and Claude Code will not take it until the turn
+        // ends. Retyping now would send it twice (it did). Hold it; the next
+        // "done" presses Enter.
+        Hold(sid, p, $"{nick} is mid-task — this goes in the moment it finishes");
+    }
+
+    /// How many times a line is held before the room is told it never went
+    /// in: three free moments with no confirmation is a pane that lost it.
+    internal const int HoldLimit = 3;
+
+    /// Keep a typed-but-unconfirmed line for the pane's next free moment, and
+    /// tell the room once why it is waiting.
+    private void Hold(Guid sid, PendingSubmit p, string why)
+    {
         _submits.Remove(sid);
-        if (Working(s))
+        if (BotOfSession(sid) is not { } h) return;
+        p.Holds++;
+        if (p.Holds > HoldLimit)
         {
-            // Still mid-turn after the whole budget. Not a failure — a long
-            // tool run is exactly where a post waits longest.
-            Log.Info("Team.submit", $"session={sid:N} seq={seq} unconfirmed, bot is working (queued)");
+            Log.Info("Team.submit", $"session={sid:N} seq={p.Seq} gave up after {HoldLimit} holds");
+            Say(h, p.Bot, "undelivered", p.Seq,
+                $"{p.Bot.Nickname} didn't take the post — open its terminal, or send it again from here");
             return;
         }
-        // The bot is idle and never took it: the line went somewhere it
-        // shouldn't have — a shell that was still starting, a screen that
-        // redrew over it. Type it once more before telling the owner it
-        // failed; the whole point of the room is that a post reaches its bot.
-        if (!p.Retried && _h.TypeToClaude(s, p.Line))
+        _held[sid] = p;
+        Log.Info("Team.submit", $"session={sid:N} seq={p.Seq} held ({p.Holds}): {why}");
+        if (!p.Announced)
         {
-            Log.Info("Team.submit", $"session={sid:N} seq={seq} typed again");
-            _submits[sid] = new PendingSubmit { Seq = seq, Bot = p.Bot, Line = p.Line, Retried = true };
-            _h.Delay(() => CheckSubmitted(sid, seq), SubmitChecks[0]);
-            return;
+            p.Announced = true;
+            Say(h, p.Bot, "waiting", p.Seq, why);
         }
-        Log.Info("Team.submit", $"session={sid:N} seq={seq} gave up");
-        Say(h, p.Bot, "undelivered", seq,
-            $"{nick} didn't take the post — open its terminal, or send it again from here");
+    }
+
+    /// The pane came free (a turn ended, a question was answered): a held
+    /// line gets its Enter and a fresh round of checks.
+    private void ResumeHeld(Guid sid)
+    {
+        if (!_held.TryGetValue(sid, out var p)) return;
+        var s = _h.SessionById(sid);
+        if (s == null) { _held.Remove(sid); return; }
+        if (Blocked(s) || Working(s)) return;              // not free after all; the next change tries again
+        _held.Remove(sid);
+        var ok = _h.PressEnter(s);
+        Log.Info("Team.submit", $"session={sid:N} seq={p.Seq} enter after hold {p.Holds} ok={ok}");
+        p.Tries = 0;
+        _submits[sid] = p;
+        _h.Delay(() => CheckSubmitted(sid, p.Seq), SubmitChecks[0]);
+    }
+
+    /// The host's idle watchdog decided a pane went quiet with no hook to say
+    /// so. Good enough to press a held line's Enter and type parked ones: if
+    /// the pane is in fact still busy, the line stays in its composer and the
+    /// next free moment tries again.
+    public void OnPaneIdle(Session sess)
+    {
+        ResumeHeld(sess.Id);
+        if (_parked.ContainsKey(sess.Id)) FlushParked(sess.Id, TimeSpan.FromSeconds(2));
     }
 
     /// A system row about one bot, tied to a post. From = the bot, so the
@@ -1406,6 +1455,7 @@ internal sealed class TeamController
         });
         _parked.Remove(sess.Id);
         _submits.Remove(sess.Id);
+        _held.Remove(sess.Id);
         var wasWrapping = _wrapping.Remove(sess.Id);
         RefreshRoster(h.Project, h.Store);
         PostEntries(h.Project.Id, h.Store, new[] { e });
@@ -1491,9 +1541,11 @@ internal sealed class TeamController
         // it exists (appends are single-threaded), so the typed line carries
         // it and a bot can react to `#<n>`.
         var seq = store.Ledger.NextSeq;
-        // Naming a bot that isn't running here starts it (Attempt, `wake`);
-        // a post to everyone does not — that would bring up the whole team.
-        var attempts = Attempt(targets, WithImage(text, image), everyone, seq, wake: everyone ? null : (proj, store));
+        // A bot that isn't running here is started for the post (Attempt,
+        // `wake`) — the one you named, or, for a post to everyone, every one
+        // on the roster with no tab on this machine. The owner chose the
+        // whole-team start over a "Send again" per bot (2026-09-05).
+        var attempts = Attempt(targets, WithImage(text, image), everyone, seq, wake: (proj, store));
         entry.Delivered = attempts.All(a => a.Ok);
         store.Ledger.Append(entry);
         var events = Record(store, entry, attempts);
@@ -2277,7 +2329,7 @@ internal sealed class TeamController
     /// Ok = the line was typed; Missing = the bot has no tab at all; Blocked =
     /// its pane is showing a prompt of its own; none of them = parked (asleep
     /// or booting).
-    private sealed record Attempted(TeamBot Bot, bool Ok, bool Missing, bool Blocked, string Line, Guid? SessionId, bool Starting = false);
+    private sealed record Attempted(TeamBot Bot, bool Ok, bool Missing, bool Blocked, string Line, Guid? SessionId, bool Starting = false, bool Busy = false);
 
     /// Try to type the post into each target's terminal now. Anything not
     /// typed is parked, to be flushed when the session is up and free.
@@ -2337,8 +2389,14 @@ internal sealed class TeamController
                 _h.Delay(() => ColdStartOverdue(waking), ColdStartGrace);
             }
             var blocked = !sess.Dormant && Blocked(sess);
-            var ok = !starting && !sess.Dormant && !blocked && _h.TypeToClaude(sess, line);
-            results.Add(new Attempted(bot, ok, false, blocked, line, sess.Id));
+            // Mid-turn, Claude Code leaves a typed line in its composer and
+            // Enter does nothing until the turn ends: the post would sit
+            // unsent for as long as the turn runs, with nothing in the room
+            // saying so. Parked instead; the turn's end (OnAgentStatus,
+            // "done") types it, and the room says it is waiting.
+            var busy = !starting && !sess.Dormant && !blocked && Working(sess);
+            var ok = !starting && !sess.Dormant && !blocked && !busy && _h.TypeToClaude(sess, line);
+            results.Add(new Attempted(bot, ok, false, blocked, line, sess.Id, Busy: busy));
         }
         return results;
     }
@@ -2388,6 +2446,12 @@ internal sealed class TeamController
                     {
                         Kind = "system", From = a.Bot.Slug, Event = "waiting", Note = post.Seq.ToString(),
                         Text = $"{a.Bot.Nickname} has a question open — this goes in as soon as it is answered",
+                    }));
+                else if (a.Busy)
+                    events.Add(store.Ledger.Append(new RoomEntry
+                    {
+                        Kind = "system", From = a.Bot.Slug, Event = "waiting", Note = post.Seq.ToString(),
+                        Text = $"{a.Bot.Nickname} is mid-task — this goes in the moment it finishes",
                     }));
             }
         }

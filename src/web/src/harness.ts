@@ -69,6 +69,7 @@ const sessions: SessionView[] = [
   // Working, single pane — sidebar shows "▸ {action}".
   {
     id: "s-working",
+    agents: ["claude"],
     title: "storefront live preview",
     shell: "pwsh",
     projectId: "",
@@ -95,6 +96,7 @@ const sessions: SessionView[] = [
   // Idle / done, multi-pane — sidebar shows "+142 −38 · ⎇ main ↑2" + breakdown.
   {
     id: "s-idle",
+    agents: ["codex"],
     title: "storefront-web",
     shell: "pwsh",
     projectId: "",
@@ -156,6 +158,7 @@ const sessions: SessionView[] = [
   // Permission — the genuine "Needs you" with an ask note.
   {
     id: "s-perm",
+    agents: ["claude"],
     title: "infra deploy",
     shell: "pwsh",
     projectId: "",
@@ -241,7 +244,7 @@ function projectTab(over: Partial<SessionView> & { id: string; title: string }):
 // and no two tabs reading the same uninformative number.
 const projectSessions: SessionView[] = [
   projectTab({
-    id: "s-tab1", title: "signup flow",
+    id: "s-tab1", title: "signup flow", agents: ["claude"],
     // colorIndex still set on fixtures (the pane header shows it); the
     // sidebar row deliberately renders no color mark — see renderItem.
     rootPane: leaf({ name: "signup flow", agentState: "done", branch: "main", colorIndex: 5, ahead: 6, aheadMine: 3 }),
@@ -253,7 +256,7 @@ const projectSessions: SessionView[] = [
   // must spin with a right-edge elapsed, not read "finished". turnStartMs is
   // projected from the working pane, exactly as the host does.
   projectTab({
-    id: "s-tab2", title: "generate sitemap",
+    id: "s-tab2", title: "generate sitemap", agents: ["codex"],
     rootPane: leaf({ name: "generate sitemap", agentState: "done", branch: "main", colorIndex: 1, ahead: 6, aheadMine: 2 }),
     doneAtMs: Date.now() - 31_000, linesAdded: 89, linesDeleted: 12, filesChanged: 3,
     paneCount: 2, ahead: 6, aheadMine: 2, workingCount: 1, turnStartMs: TWO_MIN_AGO,
@@ -268,7 +271,7 @@ const projectSessions: SessionView[] = [
   // a small caution "permission" tag on the right edge, ONE line (the two-line
   // note is sessions-mode only). The actual ask rides the tag's tooltip.
   projectTab({
-    id: "s-tab-perm", title: "disc vm",
+    id: "s-tab-perm", title: "disc vm", agents: ["claude", "codex"],
     rootPane: leaf({ name: "disc vm", agentState: "permission", branch: "main", notification: { text: "Allow running `gcloud compute instances delete`?", level: "error" } }),
     agentState: "permission", waitingCount: 1,
     notification: { text: "Allow running `gcloud compute instances delete`?", level: "error" },
@@ -1399,9 +1402,15 @@ if (view === "team" || view === "team-activity" || view === "team-empty" || view
             look: { hat: "beret", eyewear: "round", extra: "pencil", temper: "curious" } },
         ],
         lead: "b-ada",
-        // The task column: two cards — one the lead has asked to confirm, one
-        // still moving.
+        // The task column: three cards — one just set with no pieces yet, one
+        // the lead has asked to confirm, one still moving.
         tasks: [
+          {
+            id: "t3", title: "Permissions: hide net for users who may not see it",
+            status: "open", setBy: "Ada", createdAtMs: Date.now() - 2 * 60_000,
+            items: [],
+            wrapping: [],
+          },
           {
             id: "t2", title: "Loading states for KPI Performance: skeleton cards and charts, buttons disabled while data loads",
             status: "open", setBy: "Ada", createdAtMs: Date.now() - 35 * 60_000,
