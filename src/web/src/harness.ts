@@ -1383,7 +1383,7 @@ if (view === "dashboard") {
 //                  it starts, shut, wearing the bots' most urgent state.
 // #newbot*       — the dialog: fresh / mid-generation / reviewing the brief /
 //                  the failure recovery / the existing-position path.
-if (view === "team" || view === "team-activity" || view === "team-empty" || view.startsWith("team-sidebar") || view.startsWith("newbot")) {
+if (view === "team" || view === "team-activity" || view === "team-artefacts" || view === "team-empty" || view.startsWith("team-sidebar") || view.startsWith("newbot")) {
   const teamProjects: ProjectView[] = [
     {
       id: "p-ptp", name: "storefront-web", path: "C:\\dev\\storefront-web",
@@ -1574,7 +1574,31 @@ if (view === "team" || view === "team-activity" || view === "team-empty" || view
   onTeamRoomChange(() => sb.rerender?.());
   applyTeamState(teamState);
 
-  if (view === "team" || view === "team-activity") {
+  // A handle for scripts/test-room-churn.mjs. It pushes state the way a
+  // WORKING bot does - same states, a fresh elapsed clock each time - which is
+  // exactly the traffic that used to make the room rebuild itself several
+  // times a second. `bump` changes a bot's state for real, so the test can
+  // also prove the reuse guards are guards and not a freeze.
+  (window as unknown as Record<string, unknown>).__perchHarness = {
+    pushState(opts?: { bump?: boolean }) {
+      const next: StateMessage = JSON.parse(JSON.stringify(teamState));
+      let n = 0;
+      for (const sess of next.sessions) {
+        // What a working bot's pushes ACTUALLY change: the line describing
+        // what it is doing, and the relative-time string. NOT turnStartMs -
+        // that is stamped once when the turn begins and then stands, which is
+        // why the roster signs the stamp rather than the ticking text.
+        if (sess.agentState === "working") {
+          sess.activityDetail = `reading file ${++n}-${Date.now() % 997}`;
+          sess.lastActivity = "now";
+        }
+        if (opts?.bump) sess.agentState = sess.agentState === "working" ? "done" : "working";
+      }
+      applyTeamState(next);
+    },
+  };
+
+  if (view === "team" || view === "team-activity" || view === "team-artefacts") {
     feedTeamFixture(fixture);
     openTeamRoom("p-ptp");
     // No host here, so answer the panel's own requests: the recent list, then
@@ -1608,6 +1632,11 @@ if (view === "team" || view === "team-activity" || view === "team-empty" || view
         + "> Open for Joseph: table name and retention, and whether \"condensed\" means all bids or\n"
         + "> only shadable campaigns.\n",
     });
+    // The artefact list, open. Each row carries its own way out of the panel
+    // (a tab, a new window), so this view exists to check those read as
+    // actions on THAT row and don't out-shout the titles at rest.
+    if (view === "team-artefacts")
+      setTimeout(() => document.querySelector<HTMLButtonElement>('[data-glyph="list"]')?.click(), 60);
   } else if (view === "team-empty") {
     feedTeamFixture(emptyFixture);
     openTeamRoom("p-gm");

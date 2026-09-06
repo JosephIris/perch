@@ -878,20 +878,43 @@ function renderHead(project: ProjectView | null): void {
 }
 
 function renderRoster(project: ProjectView | null): void {
-  rosterListEl.replaceChildren();
   const count = root?.querySelector<HTMLElement>(".team-roster .team-roster__count");
   const bots = project?.team?.bots ?? [];
   if (count) count.textContent = bots.length > 0 ? String(bots.length) : "";
   // Bots that left let their faces go; everyone still here keeps theirs.
   const keep = new Set(bots.map((b) => b.botId));
   for (const [id, r] of rosterFacesByBot) if (!keep.has(id)) { r.face.dispose(); rosterFacesByBot.delete(id); }
-  if (!lastState || !project) return;
+  if (!lastState || !project) { rosterListEl.replaceChildren(); return; }
+
+  // Rows are REUSED, not rebuilt — the same rule the feed follows, for the
+  // same reason and one more. render() fires on every state push, and a
+  // working bot pushes many times a second; rebuilding each row re-parented
+  // its animated face (which restarts mid-blink) and dropped the hover under
+  // the owner's cursor. That churn WAS the room's flicker.
+  const alive = new Map<string, HTMLElement>();
+  for (const child of Array.from(rosterListEl.children) as HTMLElement[])
+    if (child.dataset.botId) alive.set(child.dataset.botId, child);
+  const nodes: HTMLElement[] = [];
+
   for (const bot of rosterSort(bots, lastState.sessions)) {
     const s = sessionOf(bot);
     const p = presenceOf(s);
+    // Everything the row's markup reads. The elapsed/ago spans tick
+    // themselves, so their START stamp is what belongs here, not their text.
+    const sig = [
+      bot.nickname, bot.positionName, bot.peerName ?? "", bot.sessionId ?? "",
+      bot.botId === project.team?.lead ? "lead" : "",
+      p.state, p.word, s?.turnStartMs ?? 0, s?.doneAtMs ?? 0,
+      JSON.stringify(normalizeLook(bot.look)), colorIndexFor(bot, bot.nickname),
+    ].join("|");
+    const prev = alive.get(bot.botId);
+    if (prev && prev.dataset.sig === sig) { nodes.push(prev); continue; }
+
     const row = document.createElement("button");
     row.type = "button";
     row.className = "roster-bot roster-bot--face";
+    row.dataset.botId = bot.botId;
+    row.dataset.sig = sig;
     row.dataset.state = p.state;
     row.title = bot.sessionId ? `Open ${bot.nickname}'s terminal` : `Start ${bot.nickname} on this machine`;
 
@@ -939,8 +962,9 @@ function renderRoster(project: ProjectView | null): void {
       ev.stopPropagation();
       showBotMenu(ev.clientX, ev.clientY, project, bot, () => closeTeamRoom());
     });
-    rosterListEl.appendChild(row);
+    nodes.push(row);
   }
+  rosterListEl.replaceChildren(...nodes);
 }
 
 // ---- Task cards ------------------------------------------------------------
@@ -979,18 +1003,38 @@ function editor(placeholder: string, initial: string, submitLabel: string,
   return form;
 }
 
+/** Signature of what the task column is showing, so a render that changes no
+ *  task leaves the cards — and any editor open inside one — alone. */
+let taskBodySig = "";
+
 /** The task column: one card per task on the board, what needs you first. */
 function renderTasks(project: ProjectView | null): void {
   if (!taskBodyEl) return;
   const team = project?.team;
   const bots = team?.bots ?? [];
   const tasks = taskOrder(team?.tasks ?? []);
-  taskBodyEl.replaceChildren();
   taskCountEl.textContent = tasks.length > 0 ? String(tasks.length) : "";
   setGlyph(newTaskBtn, newTaskOpen ? "close" : "plus", newTaskOpen ? "Cancel" : "New task");
   newTaskBtn.hidden = !project || bots.length === 0;
   tasksBoardBtn.hidden = !project || tasks.length === 0;
   if (tasksLightboxBody) fillTasksLightbox(tasksLightboxBody, project, tasks);
+
+  // Everything the cards read. A working bot pushes state many times a
+  // second; without this the column was rebuilt on each one, which closed
+  // whatever editor was open in a card and lost the column's scroll.
+  const sig = [
+    project?.id ?? "", team?.lead ?? "", newTaskOpen, renameFor ?? "", rejectFor ?? "",
+    tasks.map((t) => [
+      t.id, t.status, t.title, t.setBy, t.reviewBy ?? "", t.doneAtMs ?? 0,
+      t.wrapping.join("+"),
+      t.items.map((i) => `${i.botId}${i.status}${i.title}${i.note}${i.updatedAtMs}`).join("+"),
+    ].join(":")).join(","),
+    bots.map((b) => `${b.botId}:${b.nickname}`).join(","),
+  ].join("|");
+  if (sig === taskBodySig && taskBodyEl.childElementCount > 0) return;
+  taskBodySig = sig;
+
+  taskBodyEl.replaceChildren();
   if (!project) return;
 
   if (newTaskOpen) {
@@ -1065,10 +1109,25 @@ export function artefactKindWord(kind: string | undefined): string {
 }
 
 /** Ask the host for one artefact and show it. */
-function openArtefactById(id: string): void {
+/** An artefact the list asked to open in a tab / window. Its text has to be
+ *  fetched first (the index carries titles only), so the destination is parked
+ *  here and honoured when the host answers with the document. */
+let openWhenFetched: { id: string; where: "tab" | "window" } | null = null;
+
+/** "Open in a tab / a new window" from a LIST row, for any artefact — not
+ *  just the one currently in the panel. Opens it in the panel too, so the
+ *  panel and the window never disagree about what you are reading. */
+function openArtefactElsewhere(id: string, where: "tab" | "window"): void {
+  openWhenFetched = { id, where };
+  openArtefactById(id, true);
+}
+
+function openArtefactById(id: string, keepList = false): void {
   if (!projectId) return;
   artefactLoading = id;
-  closeArtefactList?.();
+  // Picking a row is done with the list; popping one OUT of the panel is not.
+  // Closing it there would make "open these three in windows" three trips.
+  if (!keepList) closeArtefactList?.();
   send({ type: "team.artefact.open", projectId, id });
   renderArtefacts();
 }
@@ -1079,6 +1138,13 @@ export function applyArtefact(msg: TeamArtefactDataMessage): void {
   artefactLoading = null;
   shownArtefact = msg;
   renderArtefacts();
+  // A list row asked for this one somewhere else. Now that its text is here,
+  // send it there. A document that failed to load is not worth a window.
+  if (openWhenFetched && openWhenFetched.id === msg.id) {
+    const { where } = openWhenFetched;
+    openWhenFetched = null;
+    if (!msg.error) openArtefactIn(where);
+  }
 }
 
 /** The host answered with the list of artefacts (the head's count, the
@@ -1091,6 +1157,11 @@ export function applyArtefactIndex(msg: TeamArtefactIndexMessage): void {
   if (!shownArtefact && !artefactLoading && artefactIndex.length > 0) openArtefactById(artefactIndex[0].id);
   else renderArtefacts();
 }
+
+/** Signature of what the artefact panel's BODY is showing, so a render that
+ *  changes nothing about the document leaves it (and the reader's scroll
+ *  position) alone. */
+let artefactBodySig = "";
 
 function renderArtefacts(): void {
   if (!artefactBodyEl) return;
@@ -1112,6 +1183,14 @@ function renderArtefacts(): void {
   readingBtn.setAttribute("aria-pressed", String(readingWide));
   if (!doc && readingWide) { readingWide = false; root?.classList.remove("team-room--reading"); }
   if (artefactListBodyEl) fillArtefactList(artefactListBodyEl);
+
+  // Re-rendering the document on every state push threw the reader back to
+  // the top of it several times a second while the bots worked. The body only
+  // depends on WHICH document is up and what state it is in, so when none of
+  // that changed, leave it — and leave the reader where they were.
+  const bodySig = `${artefactLoading ?? ""}|${a?.id ?? ""}|${a?.error ?? ""}|${a?.content?.length ?? 0}|${a?.truncated ?? false}`;
+  if (bodySig === artefactBodySig && artefactBodyEl.childElementCount > 0) return;
+  artefactBodySig = bodySig;
 
   artefactBodyEl.replaceChildren();
   if (artefactLoading) { artefactBodyEl.appendChild(el("p", "team-tasks__empty", "Opening…")); return; }
@@ -1241,11 +1320,29 @@ function fillArtefactList(body: HTMLElement): void {
     return;
   }
   for (const it of artefactIndex) {
-    const row = button("team-arte__item", "", () => openArtefactById(it.id));
-    if (it.id === shownArtefact?.id) row.classList.add("team-arte__item--on");
+    // The row is a row, not a button: it now carries its own actions, and a
+    // button inside a button is not valid markup (nor clickable).
+    const wrap = el("div", "team-arte__row");
+    if (it.id === shownArtefact?.id) wrap.classList.add("team-arte__row--on");
+
+    const row = button("team-arte__item", "", () => openArtefactById(it.id),
+      `Show ${it.title} beside the chat`);
     row.appendChild(el("span", "team-arte__item-title", it.title));
     row.appendChild(el("span", "team-arte__item-meta", `${artefactKindWord(it.kind)} · ${it.from}`));
-    body.appendChild(row);
+    wrap.appendChild(row);
+
+    // Each artefact gets its own way out of the panel. Before this, "open in a
+    // window" only existed for whichever document was already showing, so
+    // reading two side by side meant opening one, popping it, coming back, and
+    // opening the next — with the list closing under you each time.
+    const acts = el("span", "team-arte__row-actions");
+    acts.appendChild(glyphButton("tab", `Open ${it.title} as a tab`,
+      () => openArtefactElsewhere(it.id, "tab")));
+    acts.appendChild(glyphButton("window", `Open ${it.title} in a new window`,
+      () => openArtefactElsewhere(it.id, "window")));
+    wrap.appendChild(acts);
+
+    body.appendChild(wrap);
   }
 }
 
