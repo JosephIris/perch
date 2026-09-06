@@ -622,6 +622,13 @@ internal sealed record TeamTaskReopenMsg
     public required string TaskId { get; init; }
 }
 
+/// The owner stops a bot's run from its row in the room.
+internal sealed record TeamRunCancelMsg
+{
+    public required Guid ProjectId { get; init; }
+    public required string RunId { get; init; }
+}
+
 /// The owner says a task is not done yet (after the lead asked): back to
 /// open, with a note the lead gets.
 internal sealed record TeamTaskRejectMsg

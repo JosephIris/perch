@@ -85,11 +85,11 @@ public class TeamRenderTests
     public void Roster_StaysSmall_ForAFiveBotTeam()
     {
         var roster = TeamRender.Roster(Team(5), "perch");
-        // 5 KB: the hook inlines roster + board + memory (2 KB) under 8 KB per
-        // prompt, so the roster has to stay well inside its share. The
-        // orchestration rules (claim before work, no pushing, one voice) are
-        // what took it past 4 KB.
-        Assert.True(Encoding.UTF8.GetByteCount(roster) < 5120, $"roster is {Encoding.UTF8.GetByteCount(roster)} bytes");
+        // 6 KB: the hook inlines roster + board + team knowledge (3 KB) +
+        // skills + memory (2 KB) under 14 KB per prompt, so the roster has to
+        // stay well inside its share. The orchestration rules (claim before
+        // work, no pushing, one voice, runs do the work) are what it is.
+        Assert.True(Encoding.UTF8.GetByteCount(roster) < 6144, $"roster is {Encoding.UTF8.GetByteCount(roster)} bytes");
     }
 
     [Fact]

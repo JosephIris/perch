@@ -207,6 +207,40 @@ owner post carries its number: `[Perch team] #123 Joseph → @Ada: …`.
   the next model that isn't and says so in the room; it switches back when the
   limit lifts.
 
+## Knowledge, skills, runs
+
+Three things keep a bot's own conversation small and the team consistent.
+All three travel with the repository under `.perch/team/`.
+
+- **Team knowledge** (`knowledge.md`): facts every bot needs — which table a
+  product reads, an environment quirk, a rule from the owner. `perch team
+  learn "<fact>"` appends one signed line (a repeat adds nothing and says
+  so); the first 3 KB ride in every bot's prompt with the rule for adding to
+  it, and the lead is told to prune when the file is over the cap. Before
+  this the same fact was rediscovered and written into four bots' memories.
+- **Team skills** (`skills/<slug>/SKILL.md`): procedures any bot follows.
+  `perch team skill "<name>" --file <path>` (or `--text`) saves one; every
+  prompt lists them by name, one line and path, and a bot Reads the file
+  when a task matches. The wrap-up asks for both: a fact for knowledge, a
+  procedure for a skill, before the memory file.
+- **Runs**: a bot's piece is implemented by a fresh headless Claude, not in
+  the bot's own session. `perch team run <task id> "<instructions>"` starts
+  `claude -p` in the bot's folder THROUGH PERCH'S SHIM with the bot's pane id
+  and pipe and `PERCH_RUN=<id>` in its environment, so its hooks reach the
+  room: a permission prompt is a card ("Ada's run 9f2c11aa wants to run
+  Bash…", answered through the hook alone — nothing is pressed on the
+  pane), a push is denied outright, and every other hook is a no-op for a
+  run (the pane's state and context are the pane's). Its system prompt is
+  the run rules + the bot's brief + knowledge + skills + the piece
+  (`TeamRender.RunSystemPrompt`, written to `local/bots/<slug>/run-<id>.md`);
+  it answers to a schema (status, summary, changed, verified, open). When it
+  ends the report is an artefact, the room gets a row with the outcome and
+  the cost, and the bot is typed one line (`[Perch team] #n run <id> → @Ada:
+  …`) that sends it to review the diff, update its piece and report to the
+  lead. One run per bot at a time; `perch team run --cancel` or Stop on the
+  run's row ends it; 45 minutes and $8 are the caps. The roster shows "a run
+  in progress"; the wrap-up sweep leaves a bot alone while its run is out.
+
 ## Page
 
 Three columns: feed · (task cards over the artefacts panel) · roster; the

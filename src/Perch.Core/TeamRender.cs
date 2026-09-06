@@ -121,6 +121,11 @@ internal static class TeamRender
           .Append("and a REPORT: to the lead. One owner per piece: if a teammate owns what you are about to change, ask them first.\n");
         sb.Append("- Your memory file: a short summary on top, details below a `---` line. The top arrives with every prompt; the ")
           .Append("rest is on disk to Read.\n");
+        sb.Append("- Your piece is IMPLEMENTED BY A RUN, not here: `perch team run <task id> \"<what done looks like, files, ")
+          .Append("tests, gotchas>\"` starts a fresh Claude in your folder on your branch; this session stays free for the room. ")
+          .Append("Its result comes as a `").Append(PostPrefix).Append(" run … → @you:` line with the report's path: review the ")
+          .Append("diff, verify, fix a one-liner or run again, update your piece, REPORT: to the lead. One run at a time ")
+          .Append("(`perch team run --cancel` stops it); never code here beyond a one-liner.\n");
         return sb.ToString();
     }
 
@@ -184,6 +189,9 @@ internal static class TeamRender
           .Append("for his approval anyway.\n");
         sb.Append("- Keep the cards current: the board (every task, every piece and its status) arrives with each of your ")
           .Append("prompts. Chase blocked pieces, re-split when the plan changes, and keep Joseph posted in a few lines.\n");
+        sb.Append("- Teammates implement their pieces through RUNS (`perch team run`): a HANDOFF should carry what a run needs — ")
+          .Append("what done looks like, where, which tests. Keep the team's shared knowledge file pruned (one line per fact, ")
+          .Append("nothing stale) and its skills current; a fact you see two bots rediscover belongs in knowledge.\n");
         sb.Append("- Close each: when every piece of a task is done and you have checked the result, run ")
           .Append("`perch team task done <id>`. That asks Joseph to confirm. Do not say a task is done in prose; the command is ")
           .Append("what the room shows.\n");
@@ -223,6 +231,8 @@ internal static class TeamRender
           .Append("` with what the next task will need from ").Append(cards.Count == 1 ? "it" : "each")
           .Append(" (decisions, where things stand, unfinished threads, who owns what); keep the part above `---` under ")
           .Append(TeamStore.MemoryMaxBytes / 1024).Append(" KB — only that much reaches you — and move detail below the line. ")
+          .Append("A fact every teammate needs goes to team knowledge instead (`perch team learn \"…\"`); a procedure you followed ")
+          .Append("that a teammate could reuse becomes a skill (`perch team skill \"<name>\" --file <path>`). ")
           .Append("Stop any background commands or local servers you started. Then reply with one line. ")
           .Append("Your context is cleared after that reply.");
         return sb.ToString();
@@ -311,11 +321,14 @@ internal static class TeamRender
     /// What the prompt hook inlines for one bot: the shared roster, then that
     /// bot's own memory with the rule for keeping it. One file per bot
     /// (local/bots/&lt;slug&gt;/context.md) because the memory is the bot's alone.
-    public static string Context(string roster, TeamBot bot, string memory, string memoryPath, string? taskBlock = null)
+    public static string Context(string roster, TeamBot bot, string memory, string memoryPath, string? taskBlock = null,
+        string? knowledgeBlock = null, string? skillsBlock = null)
     {
         var sb = new StringBuilder();
         sb.Append(roster.TrimEnd()).Append("\n\n");
         if (!string.IsNullOrWhiteSpace(taskBlock)) sb.Append(taskBlock.TrimEnd()).Append("\n\n");
+        if (!string.IsNullOrWhiteSpace(knowledgeBlock)) sb.Append(knowledgeBlock.TrimEnd()).Append("\n\n");
+        if (!string.IsNullOrWhiteSpace(skillsBlock)) sb.Append(skillsBlock.TrimEnd()).Append("\n\n");
         sb.Append("# Your memory\n");
         sb.Append("Your notes, kept in `").Append(memoryPath).Append("` and shared through the repository, so a future ")
           .Append(bot.Nickname).Append(" on any machine reads them. Edit the file with your tools when you learn something ")
@@ -326,6 +339,186 @@ internal static class TeamRender
         var body = (memory ?? "").Trim();
         sb.Append(body.Length > 0 ? body : "(Empty so far.)").Append('\n');
         return sb.ToString();
+    }
+
+    /// The shared knowledge as every bot's prompt carries it, with the rule
+    /// for adding to it. `pruneCue` is the lead's: the file is over the cap.
+    public static string KnowledgeBlock(string knowledge, string path, bool pruneCue = false)
+    {
+        var sb = new StringBuilder();
+        sb.Append("# Team knowledge\n");
+        sb.Append("Facts every bot on this team needs, in `").Append(path).Append("` (shared through the repository). ")
+          .Append("The moment you learn something a teammate would otherwise rediscover — which table a product reads, an ")
+          .Append("environment quirk, a rule Joseph gave — add it: `perch team learn \"<one fact, one line>\"`. Never keep a ")
+          .Append("team-wide fact only in your own memory; your memory is for what is yours.\n");
+        if (pruneCue)
+            sb.Append("**The file is over the cap and is being cut in everyone's prompt: prune it now** — merge duplicates, drop ")
+              .Append("what went stale, keep one line per fact.\n");
+        var body = (knowledge ?? "").Trim();
+        sb.Append(body.Length > 0 ? body : "(Nothing yet.)").Append('\n');
+        return sb.ToString();
+    }
+
+    /// The team's skills as a list — name, what for, the file — with the
+    /// rule for using and adding them. A bot Reads the file when a task
+    /// matches; the list stays short so the prompt does.
+    public static string SkillsBlock(IReadOnlyList<TeamStore.TeamSkill> skills, string dir)
+    {
+        var sb = new StringBuilder();
+        sb.Append("# Team skills\n");
+        sb.Append("Procedures any bot follows, one file each under `").Append(dir).Append("`. When a task matches one, Read ")
+          .Append("the file FIRST and follow it; when it is wrong, fix the file. When you have just done something repeatable that ")
+          .Append("a teammate could need — how to ship a batch, how to verify a deploy behind login, how to run a report — save ")
+          .Append("it: `perch team skill \"<name>\" --file <path>` (or `--text \"…\"`): the steps, the gotchas, what done looks like.\n");
+        if (skills.Count == 0) sb.Append("(None yet.)\n");
+        foreach (var s in skills)
+        {
+            sb.Append("- ").Append(s.Name);
+            if (s.Summary.Length > 0) sb.Append(" — ").Append(s.Summary);
+            sb.Append(" (`").Append(s.Path).Append("`)\n");
+        }
+        return sb.ToString();
+    }
+
+    // ---- runs --------------------------------------------------------------
+
+    /// The system prompt a bot's run starts with: what a run is, the rules that
+    /// keep it inside its folder and off main, the bot's brief, the team's
+    /// knowledge and skills, and the piece. The instructions themselves are
+    /// the run's prompt (RunPrompt).
+    public static string RunSystemPrompt(TeamBot bot, TeamPosition? pos, string brief, string projectName, string folder,
+        string knowledge, IReadOnlyList<TeamStore.TeamSkill> skills, TaskBoard board, TaskItem? piece)
+    {
+        var project = string.IsNullOrWhiteSpace(projectName) ? "this project" : projectName.Trim();
+        var sb = new StringBuilder();
+        sb.Append("# You are a run for ").Append(bot.Nickname).Append(", the ").Append(pos?.Name ?? bot.PositionSlug)
+          .Append(" on the ").Append(project).Append(" team\n\n");
+        sb.Append("Perch started you — a fresh, single-purpose Claude Code session — to implement ONE piece of work in `")
+          .Append(folder).Append("`, ").Append(bot.Nickname).Append("'s own checkout on its own branch. Nobody is chatting with you: ")
+          .Append("your final answer IS your report, and ").Append(bot.Nickname).Append(" reviews your diff after you. Rules:\n");
+        sb.Append("- Do the piece below and nothing else. Read before you change; keep the diff tight; follow the code's own patterns.\n");
+        sb.Append("- Commit on the current branch with clear messages. Never push, never merge or rebase onto main, never switch ")
+          .Append("branches, never touch files outside this folder, never edit anything under `.perch/`.\n");
+        sb.Append("- Verify: run the tests or checks the piece names, plus what covers what you touched. Report exactly what you ")
+          .Append("ran and what it printed; never claim a check you did not run.\n");
+        sb.Append("- Stop every server or background command you started before you finish. Leave no port held.\n");
+        sb.Append("- You cannot ask anyone anything. Where the piece is genuinely ambiguous, take the safe reading, do that, ")
+          .Append("and put the question under Open in your report. A permission prompt you hit goes to Joseph as a card; wait for it.\n");
+        sb.Append("- Pushing, tickets, messages to teammates and posts to the room are not yours to do.\n\n");
+        sb.Append("## ").Append(bot.Nickname).Append("'s standing brief (yours for this run)\n\n");
+        sb.Append(string.IsNullOrWhiteSpace(brief) ? "(No brief; work from the piece and the code.)\n" : brief.Trim() + "\n");
+        sb.Append("\n## Team knowledge\n").Append(string.IsNullOrWhiteSpace(knowledge) ? "(Nothing yet.)\n" : knowledge.Trim() + "\n");
+        sb.Append("\n## Team skills\n");
+        if (skills.Count == 0) sb.Append("(None yet.)\n");
+        else
+        {
+            sb.Append("Read a skill's file and follow it when the piece matches it:\n");
+            foreach (var s in skills)
+                sb.Append("- ").Append(s.Name).Append(s.Summary.Length > 0 ? " — " + s.Summary : "").Append(" (`").Append(s.Path).Append("`)\n");
+        }
+        sb.Append("\n## The task\n");
+        sb.Append("- Task ").Append(board.Id).Append(": ").Append(OneLine(board.Title, 300)).Append('\n');
+        if (piece != null)
+        {
+            sb.Append("- ").Append(bot.Nickname).Append("'s piece: [").Append(piece.Status).Append("] ").Append(OneLine(piece.Title, 200));
+            var note = OneLine(piece.Note, 200);
+            if (note.Length > 0) sb.Append(" — ").Append(note);
+            sb.Append('\n');
+        }
+        return sb.ToString();
+    }
+
+    /// The run's prompt: the bot's instructions, then the shape of the report.
+    public static string RunPrompt(string instructions)
+        => instructions.Trim() + "\n\nWhen you are done (or cannot go on), report: status (done | partial | blocked), a summary of " +
+           "at most three lines, what changed (files, commits), what you verified (each command and what it printed, in short), " +
+           "and what is open (questions, leftovers, anything a reviewer must know).";
+
+    /// What a run must answer with (`--json-schema`), so the report always has
+    /// the same five parts and the room can render it.
+    public const string RunReportSchema =
+        "{\"type\":\"object\",\"properties\":{" +
+        "\"status\":{\"type\":\"string\",\"enum\":[\"done\",\"partial\",\"blocked\"]}," +
+        "\"summary\":{\"type\":\"string\"}," +
+        "\"changed\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}," +
+        "\"verified\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}," +
+        "\"open\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}}," +
+        "\"required\":[\"status\",\"summary\",\"changed\",\"verified\",\"open\"]}";
+
+    /// A run's report as parsed from its structured answer (or the prose,
+    /// when the schema was not honoured).
+    public sealed record RunReport(string Status, string Summary, IReadOnlyList<string> Changed, IReadOnlyList<string> Verified, IReadOnlyList<string> Open);
+
+    public static RunReport ParseRunReport(string? structured, string prose, bool ok)
+    {
+        if (!string.IsNullOrWhiteSpace(structured))
+        {
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(structured);
+                var r = doc.RootElement;
+                static IReadOnlyList<string> Arr(System.Text.Json.JsonElement e, string name)
+                {
+                    var list = new List<string>();
+                    if (e.TryGetProperty(name, out var a) && a.ValueKind == System.Text.Json.JsonValueKind.Array)
+                        foreach (var x in a.EnumerateArray()) if (x.ValueKind == System.Text.Json.JsonValueKind.String) list.Add(x.GetString() ?? "");
+                    return list;
+                }
+                var status = r.TryGetProperty("status", out var s) && s.ValueKind == System.Text.Json.JsonValueKind.String ? s.GetString() ?? "" : "";
+                var summary = r.TryGetProperty("summary", out var m) && m.ValueKind == System.Text.Json.JsonValueKind.String ? m.GetString() ?? "" : "";
+                if (status.Length > 0) return new RunReport(status, summary.Trim(), Arr(r, "changed"), Arr(r, "verified"), Arr(r, "open"));
+            }
+            catch { /* prose below */ }
+        }
+        return new RunReport(ok ? "done" : "failed", (prose ?? "").Trim(), Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>());
+    }
+
+    /// The report as the artefact the room keeps: status, cost and time on
+    /// top, then the four parts.
+    public static string RunReportMarkdown(string runId, TaskBoard board, TeamBot bot, RunReport rep, double costUsd, long durationMs, string? error)
+    {
+        var sb = new StringBuilder();
+        sb.Append("# Run ").Append(runId).Append(" — ").Append(OneLine(board.Title, 120)).Append("\n\n");
+        sb.Append("**Status:** ").Append(rep.Status).Append(" · **For:** ").Append(bot.Nickname)
+          .Append(" · **Cost:** $").Append(costUsd.ToString("F2", System.Globalization.CultureInfo.InvariantCulture))
+          .Append(" · **Took:** ").Append(Elapsed(durationMs)).Append("\n\n");
+        if (!string.IsNullOrWhiteSpace(error)) sb.Append("**Ended with:** ").Append(error.Trim()).Append("\n\n");
+        if (rep.Summary.Length > 0) sb.Append(rep.Summary).Append("\n\n");
+        void Part(string title, IReadOnlyList<string> items)
+        {
+            sb.Append("## ").Append(title).Append('\n');
+            if (items.Count == 0) sb.Append("- (nothing)\n");
+            foreach (var i in items) sb.Append("- ").Append(i.Trim()).Append('\n');
+            sb.Append('\n');
+        }
+        Part("Changed", rep.Changed);
+        Part("Verified", rep.Verified);
+        Part("Open", rep.Open);
+        return sb.ToString().TrimEnd() + "\n";
+    }
+
+    /// The line typed into the bot when its run ends: the outcome, where the
+    /// full report is, and what the bot does now.
+    public static string RunResultLine(TeamBot bot, string runId, string taskId, RunReport rep, string? reportPath, bool canceled)
+    {
+        var what = canceled ? "was stopped by Joseph"
+                 : rep.Status == "failed" ? "failed"
+                 : "finished — " + rep.Status;
+        var summary = OneLine(rep.Summary, 300).TrimEnd('.');
+        var sb = new StringBuilder();
+        sb.Append(PostPrefix).Append(" run ").Append(runId).Append(" → @").Append(bot.Nickname).Append(": your run on task ")
+          .Append(taskId).Append(' ').Append(what);
+        if (summary.Length > 0) sb.Append(": ").Append(summary);
+        if (reportPath != null) sb.Append(". Full report: ").Append(reportPath);
+        sb.Append(canceled ? ". Check the folder for half-done work, then update your piece and REPORT: to the lead."
+                           : ". Review its diff in your folder, verify what it claims, fix a one-liner yourself or start another run, then update your piece and REPORT: to the lead.");
+        return sb.ToString();
+    }
+
+    public static string Elapsed(long ms)
+    {
+        var t = TimeSpan.FromMilliseconds(Math.Max(0, ms));
+        return t.TotalHours >= 1 ? $"{(int)t.TotalHours}h {t.Minutes:D2}m" : t.TotalMinutes >= 1 ? $"{t.Minutes}m {t.Seconds:D2}s" : $"{t.Seconds}s";
     }
 
     /// The memory file a new bot starts with: its name, and the rule, so the

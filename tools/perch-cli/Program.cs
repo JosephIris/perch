@@ -183,7 +183,9 @@ internal static class Program
         // the room shows the result.
         const string usage = "perch team: usage: perch team post [--image <path>] <text...> | ask [--choices \"A|B\"] <text...> | "
                            + "artefact --file <path> | --title \"…\" --text \"…\" | "
-                           + "react <#seq|@nick> <emoji> | task new|assign|mine|done …";
+                           + "react <#seq|@nick> <emoji> | task new|assign|mine|done … | "
+                           + "learn <fact...> | skill \"<name>\" --file <path> | --text \"…\" [--summary \"…\"] | "
+                           + "run <task id> <instructions...> [--model <alias>] | run --cancel";
         if (args.Length < 2) { Console.Error.WriteLine(usage); return 2; }
         switch (args[1])
         {
@@ -193,9 +195,94 @@ internal static class Program
             case "artifact": return TeamArtefact(pipeName, args.Skip(2).ToArray());
             case "react": return TeamReact(pipeName, args.Skip(2).ToArray());
             case "task": return TeamTask(pipeName, args.Skip(2).ToArray(), usage);
+            case "learn": return TeamLearn(pipeName, args.Skip(2).ToArray());
+            case "skill": return TeamSkill(pipeName, args.Skip(2).ToArray());
+            case "run": return TeamRun(pipeName, args.Skip(2).ToArray());
         }
         Console.Error.WriteLine(usage);
         return 2;
+    }
+
+    /// `perch team learn <fact…>`: one line for the team's shared knowledge
+    /// file. Every bot reads it with every prompt.
+    private static int TeamLearn(string pipeName, string[] rest)
+    {
+        var text = string.Join(' ', rest).Trim();
+        if (text.Length == 0) { Console.Error.WriteLine("perch team learn: missing the fact"); return 2; }
+        return Send(pipeName, new { type = "team.learn", text });
+    }
+
+    /// `perch team skill "<name>" --file <path> | --text "<body>" [--summary "…"]`:
+    /// a procedure saved for the whole team under .perch/team/skills.
+    private static int TeamSkill(string pipeName, string[] rest)
+    {
+        string? file = null, text = null, summary = null;
+        var words = new List<string>();
+        for (var i = 0; i < rest.Length; i++)
+        {
+            switch (rest[i])
+            {
+                case "--file" when i + 1 < rest.Length: file = rest[++i]; break;
+                case "--text" when i + 1 < rest.Length: text = rest[++i]; break;
+                case "--summary" when i + 1 < rest.Length: summary = rest[++i]; break;
+                default: words.Add(rest[i]); break;
+            }
+        }
+        var name = string.Join(' ', words).Trim();
+        if (name.Length == 0) { Console.Error.WriteLine("perch team skill: usage: perch team skill \"<name>\" --file <path> | --text \"<body>\""); return 2; }
+        if (file == null && string.IsNullOrWhiteSpace(text)) { Console.Error.WriteLine("perch team skill: give --file <path> or --text \"<body>\""); return 2; }
+        if (file != null)
+        {
+            try { file = Path.GetFullPath(file); } catch { }
+            if (!File.Exists(file)) { Console.Error.WriteLine($"perch team skill: no such file: {file}"); return 2; }
+        }
+        return Send(pipeName, new { type = "team.skill", name, summary, path = file, text });
+    }
+
+    /// `perch team run <task id> <instructions…> [--model <alias>]` starts a
+    /// run and prints its id (the host writes it to perch-run-&lt;pane&gt;.txt);
+    /// `perch team run --cancel` stops the bot's current run.
+    private static int TeamRun(string pipeName, string[] rest)
+    {
+        if (rest.Length > 0 && rest[0] == "--cancel")
+            return Send(pipeName, new { type = "team.run", op = "cancel" });
+        string? taskId = null, model = null;
+        var words = new List<string>();
+        static bool IsId(string s) => s.Length == 8 && s.All(c => Uri.IsHexDigit(c));
+        for (var i = 0; i < rest.Length; i++)
+        {
+            if (rest[i] == "--model" && i + 1 < rest.Length) { model = rest[++i]; continue; }
+            if (taskId == null && words.Count == 0 && IsId(rest[i])) { taskId = rest[i]; continue; }
+            words.Add(rest[i]);
+        }
+        var text = string.Join(' ', words).Trim();
+        if (text.Length == 0) { Console.Error.WriteLine("perch team run: usage: perch team run <task id> \"<instructions>\" [--model <alias>]"); return 2; }
+        string? replyPath = null;
+        var paneId = Environment.GetEnvironmentVariable("PERCH_PANE_ID");
+        if (!string.IsNullOrEmpty(paneId))
+        {
+            replyPath = Path.Combine(Path.GetTempPath(), $"perch-run-{paneId}.txt");
+            try { if (File.Exists(replyPath)) File.Delete(replyPath); } catch { }
+        }
+        var rc = Send(pipeName, new { type = "team.run", op = "start", taskId, text, model });
+        if (rc != 0 || replyPath == null) return rc;
+        var deadline = DateTime.UtcNow.AddSeconds(3);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (File.Exists(replyPath))
+            {
+                try
+                {
+                    var id = File.ReadAllText(replyPath).Trim();
+                    File.Delete(replyPath);
+                    if (id.Length > 0) { Console.WriteLine($"run {id} started — you get its report as a [Perch team] line when it ends"); return 0; }
+                }
+                catch { }
+            }
+            System.Threading.Thread.Sleep(50);
+        }
+        Console.Error.WriteLine("perch team run: the host didn't confirm the run (the room shows whether it started)");
+        return 0;
     }
 
     /// `perch team post [--image <path>] <text…>`: a note to the room, with an

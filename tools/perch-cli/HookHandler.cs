@@ -41,6 +41,16 @@ internal static class HookHandler
         // 90-line one. See "codex-permission" below.
         if (agent == "codex" && evt == "permission-request") evt = "codex-permission";
 
+        // A bot's RUN (a headless Claude the host started for one piece, with
+        // the bot's pane id and pipe so its hooks reach the room) is not the
+        // pane: its starts, stops and prompts must not move the pane's state
+        // or inject the pane's context. Only its permission prompts (cards for
+        // the owner), classifier blocks (a line for the room) and the push
+        // gate (a run never pushes) get through.
+        if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("PERCH_RUN"))
+            && evt is not ("permission-request" or "permission-denied" or "pre-tool-use"))
+            return 0;
+
         // Claude Code passes the hook payload on stdin as JSON. Read it
         // (with a small budget) and try to parse — if it isn't JSON, fall
         // back to event-only behavior so we still report state transitions.
@@ -419,10 +429,12 @@ internal static class HookHandler
                     && File.Exists(Path.Combine(Path.GetTempPath(), $"perch-team-{dpane}.txt")))
                 {
                     var dtool = StringFrom(root, "tool_name") ?? "tool";
+                    var drun = Environment.GetEnvironmentVariable("PERCH_RUN");
                     Send(pipeName, new
                     {
                         type = "perm.denied", tool = dtool, summary = ToolSummary(root, dtool),
                         reason = StringFrom(root, "reason", maxLen: 300),
+                        run = string.IsNullOrEmpty(drun) ? null : drun,
                     });
                 }
                 break;
@@ -457,12 +469,14 @@ internal static class HookHandler
 
             var id = Guid.NewGuid().ToString("N")[..12];
             var tool = StringFrom(root, "tool_name") ?? "tool";
+            var run = Environment.GetEnvironmentVariable("PERCH_RUN");
             Send(pipeName, new
             {
                 type = "perm.ask", id, tool,
                 summary = ToolSummary(root, tool),
                 input = ToolInputJson(root),
                 suggestions = PermissionSuggestions(root),
+                run = string.IsNullOrEmpty(run) ? null : run,
             });
 
             var answerPath = Path.Combine(Path.GetTempPath(), $"perch-perm-{id}.txt");
@@ -574,13 +588,18 @@ internal static class HookHandler
             if (pane.Length == 0 || !File.Exists(Path.Combine(Path.GetTempPath(), $"perch-team-{pane}.txt"))) return false;
             var command = CommandOf(root);
             if (!LooksLikePush(command)) return false;
+            // A run never pushes: the bot reviews its work first, and pushing
+            // is Joseph's call after that. The pane's push is held for him.
+            var isRun = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("PERCH_RUN"));
             Console.Out.Write(JsonSerializer.Serialize(new
             {
                 hookSpecificOutput = new
                 {
                     hookEventName = "PreToolUse",
-                    permissionDecision = "ask",
-                    permissionDecisionReason = "Pushing is Joseph's call: this is held as a card in the team room until he allows it.",
+                    permissionDecision = isRun ? "deny" : "ask",
+                    permissionDecisionReason = isRun
+                        ? "A run never pushes or lands anything on main: commit on this branch and say so in your report; the bot and Joseph take it from there."
+                        : "Pushing is Joseph's call: this is held as a card in the team room until he allows it.",
                 },
             }, JsonOpts));
             Console.Out.Flush();
@@ -795,7 +814,11 @@ internal static class HookHandler
     // orchestration rules), the task board and up to 2 KB of the bot's memory.
     // The cut lands on the memory, which sits last — so the cap has to hold
     // all three at their fullest.
-    private const int RosterMaxBytes = 8 * 1024;
+    /// The whole per-prompt context (roster, board, team knowledge, skills,
+    /// the bot's memory). Memory comes last, so a cap that bites loses the
+    /// bot's own notes first: sized for a five-bot roster (~5 KB), a full
+    /// board, 3 KB of knowledge, a skills list and 2 KB of memory.
+    private const int RosterMaxBytes = 14 * 1024;
 
     /// The team roster: unlike the board this IS inlined, because it is
     /// small, changes when a teammate joins or leaves, and is the one thing

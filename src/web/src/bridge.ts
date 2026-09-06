@@ -321,6 +321,8 @@ export type OutMessage =
   | { type: "team.task.confirm"; projectId: string; taskId: string }
   | { type: "team.task.close"; projectId: string; taskId: string }
   | { type: "team.task.reopen"; projectId: string; taskId: string }
+  /* Stop a bot's run (the headless Claude doing its piece) from its row. */
+  | { type: "team.run.cancel"; projectId: string; runId: string }
   /* "Send again" on a post a bot never took: the host types the same line
    * into that bot again, and no second post appears in the room. */
   | { type: "team.deliver.retry"; projectId: string; seq: number; botId: string }
@@ -787,6 +789,9 @@ export type TeamBotView = {
    * was drawn at random when the bot was created and is stored, so every
    * machine renders the same bot. Absent on older hosts → defaults. */
   look?: { hat?: string; eyewear?: string; extra?: string; temper?: string };
+  /* The run in flight — a fresh headless Claude doing the bot's piece in its
+   * folder — if any. Its "run" row in the feed offers Stop while this is set. */
+  run?: { id: string; taskId: string; startedAtMs: number } | null;
 };
 
 /* One bot's piece of the current task. */
@@ -897,7 +902,11 @@ export type TeamEntryView = {
         /* a bot's message to a teammate never left */
         | "peer.failed"
         /* something too long for the feed; see kind "artefact" */
-        | "artefact";
+        | "artefact"
+        /* a bot added to the team's knowledge file, or saved a team skill */
+        | "learn" | "skill"
+        /* a bot's run (note = the run id): started, finished, failed, stopped */
+        | "run" | "run.done" | "run.failed" | "run.canceled";
   /* user rows: false while the host is holding the post for a bot that has no
    * Claude up yet (asleep, still booting). Flips true when it lands. */
   delivered?: boolean;

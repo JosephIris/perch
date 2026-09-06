@@ -248,6 +248,38 @@ internal sealed class TeamController
     /// stream of status reports schedules one, not fifty.
     private readonly HashSet<Guid> _sweepPending = new();
 
+    /// A bot's run: a fresh headless Claude doing ONE piece in the bot's
+    /// folder while the bot's own session stays free for the room. One per
+    /// bot at a time; keyed by run id.
+    private sealed class Run
+    {
+        public required string Id;
+        public required Guid Project;
+        public required string Bot;
+        public required string TaskId;
+        public required Guid SessionId;
+        public required Guid PaneId;
+        public required DateTimeOffset StartedAt;
+        public required CancellationTokenSource Cts;
+        public required string Text;
+        public bool Canceled;
+    }
+    private readonly Dictionary<string, Run> _runs = new(StringComparer.OrdinalIgnoreCase);
+
+    /// What a run is started with: the prompt (the bot's instructions), the
+    /// system prompt file (brief + knowledge + skills + the piece), where,
+    /// which model, and the environment that makes its hooks the bot's.
+    internal sealed record RunSpec(string Prompt, string SystemPromptPath, string Cwd, string Model, IReadOnlyDictionary<string, string?> Env);
+
+    /// The thing that runs a RunSpec; tests swap it for a fake.
+    internal Func<RunSpec, CancellationToken, Task<HeadlessResult>> RunWorker = (spec, ct) =>
+        ClaudeHeadless.RunAsync(spec.Prompt, spec.Cwd, spec.Model, "claude.headless.run",
+            new[] { "--append-system-prompt-file", spec.SystemPromptPath, "--json-schema", TeamRender.RunReportSchema, "--max-budget-usd", RunBudgetUsd },
+            timeoutMs: (int)RunTimeout.TotalMilliseconds, ct: ct, viaShim: true, env: spec.Env);
+
+    internal static readonly TimeSpan RunTimeout = TimeSpan.FromMinutes(45);
+    internal const string RunBudgetUsd = "8";
+
     /// Permission requests a bot's hook is holding for the room: id → (bot
     /// slug, pane). The hook polls for the answer file; the owner's click
     /// writes it (OnPermAnswer).
@@ -472,6 +504,7 @@ internal sealed class TeamController
             {
                 var pos = store.Doc.Position(b.PositionSlug);
                 var look = TeamLooks.Normalize(b.Look);
+                var run = _runs.Values.FirstOrDefault(r => r.Project == projectId && string.Equals(r.Bot, b.Slug, StringComparison.OrdinalIgnoreCase));
                 return new
                 {
                     botId = b.Slug,
@@ -480,6 +513,8 @@ internal sealed class TeamController
                     positionName = pos?.Name ?? b.PositionSlug,
                     sessionId = b.SessionId?.ToString("D") ?? "",
                     peerName = b.CcName,
+                    // The run in flight, if any: the roster says so and its row offers Stop.
+                    run = run == null ? null : new { id = run.Id, taskId = run.TaskId, startedAtMs = run.StartedAt.ToUnixTimeMilliseconds() },
                     // The face: hat from the position, the rest the bot's own.
                     look = new
                     {
@@ -890,7 +925,7 @@ internal sealed class TeamController
     /// Write the body under the team's local folder and put its card in the
     /// room. The id names the file, so the page can ask for it back by id
     /// alone and no path from a bot is ever opened by the page.
-    private void StoreArtefact(Project proj, TeamStore store, string from, string title, string? summary, string ext, string body)
+    private string? StoreArtefact(Project proj, TeamStore store, string from, string title, string? summary, string ext, string body)
     {
         var truncated = false;
         if (Encoding.UTF8.GetByteCount(body) > ArtefactMaxBytes)
@@ -908,7 +943,7 @@ internal sealed class TeamController
         {
             Log.Error("Team.artefact.write", ex);
             Fallback(proj, store, "Perch couldn't save that artefact — the room kept nothing.");
-            return;
+            return null;
         }
         var entry = store.Ledger.Append(new RoomEntry
         {
@@ -918,6 +953,7 @@ internal sealed class TeamController
         });
         Log.Info("Team.artefact", $"project={proj.Id:N} id={id} ext={ext} from={from} bytes={body.Length}");
         PostEntries(proj.Id, store, new[] { entry });
+        return id;
     }
 
     /// The room opening an artefact: its body, by id.
@@ -1062,17 +1098,20 @@ internal sealed class TeamController
         if (BotOfSession(sess.Id) is not { } h) return;
         var id = (msg.Id ?? "").Trim();
         if (id.Length == 0) return;
-        _awaitingPerm[id] = (h.Bot.Slug, paneId, h.Project.Id);
+        // A run's prompt is answered through the hook alone: the pane is not
+        // showing it, so no keys are ever pressed there (PaneId = empty).
+        var isRun = !string.IsNullOrWhiteSpace(msg.Run);
+        _awaitingPerm[id] = (h.Bot.Slug, isRun ? Guid.Empty : paneId, h.Project.Id);
         var tool = (msg.Tool ?? "tool").Trim();
         var summary = TeamRender.OneLine(msg.Summary, 300);
         var entry = h.Store.Ledger.Append(new RoomEntry
         {
             Kind = "system", From = "perch", Event = "permission", Note = id, To = new List<string> { h.Bot.Slug },
-            Text = $"{h.Bot.Nickname} wants to run {tool}: {summary}",
+            Text = isRun ? $"{h.Bot.Nickname}'s run {msg.Run!.Trim()} wants to run {tool}: {summary}" : $"{h.Bot.Nickname} wants to run {tool}: {summary}",
             Summary = msg.Input,
-            PaneId = paneId.ToString("D"),
+            PaneId = isRun ? null : paneId.ToString("D"),
         });
-        Log.Info("Team.perm.ask", $"bot={h.Bot.Slug} id={id} tool={tool}");
+        Log.Info("Team.perm.ask", $"bot={h.Bot.Slug} id={id} tool={tool} run={msg.Run}");
         RefreshRoster(h.Project, h.Store);
         PostEntries(h.Project.Id, h.Store, new[] { entry });
         // The hook only waits so long. After that Claude shows the prompt in
@@ -2151,6 +2190,8 @@ internal sealed class TeamController
             }
             if (_wrapping.ContainsKey(sess.Id) || _resetting.ContainsKey(sess.Id)) continue;
             if (store.Tasks.HoldsWork(bot.Slug, store.Doc.IsLead(bot))) continue;
+            // A run's report has to land in the context that started it.
+            if (_runs.Values.Any(r => string.Equals(r.Bot, bot.Slug, StringComparison.OrdinalIgnoreCase))) continue;
             if (sess.Dormant || !SessionRunning(sess) || _coldStart.ContainsKey(sess.Id)) continue;   // OnAgentUp sweeps
             if (Blocked(sess) || Working(sess)) continue;                                                // its turn end sweeps
             if (_submits.ContainsKey(sess.Id) || _held.ContainsKey(sess.Id)) continue;                  // a line of ours is in its composer
@@ -2275,6 +2316,237 @@ internal sealed class TeamController
         _h.PushState();
         PostEntries(proj.Id, store, new[] { e });
     }
+
+    // ---- team knowledge and skills -----------------------------------------
+
+    /// `perch team learn "<fact>"`: one line into the shared knowledge file,
+    /// which every bot's next prompt carries. A repeat adds nothing and says so.
+    public void OnTeamLearn(Session sess, Guid paneId, TeamLearnMessage msg)
+    {
+        if (BotOfSession(sess.Id) is not { } h) return;
+        var fact = TeamRender.OneLine(msg.Text, 400);
+        if (fact.Length == 0) { Refuse(h.Project, h.Store, $"{h.Bot.Nickname} tried to add an empty fact to team knowledge"); return; }
+        var added = h.Store.AppendKnowledge(fact, h.Bot.Nickname, out var line);
+        Log.Info("Team.learn", $"bot={h.Bot.Slug} added={added} fact={TeamRender.OneLine(fact, 80)}");
+        RefreshRoster(h.Project, h.Store);
+        var e = h.Store.Ledger.Append(new RoomEntry
+        {
+            Kind = "system", From = h.Bot.Slug, Event = "learn",
+            Text = added ? $"{h.Bot.Nickname} added to team knowledge: {fact}" : $"{h.Bot.Nickname} re-learned what team knowledge already says: {fact}",
+        });
+        _h.PushState();
+        PostEntries(h.Project.Id, h.Store, new[] { e });
+    }
+
+    /// `perch team skill "<name>" --file <path> | --text "…"`: a procedure
+    /// saved for the whole team; every bot's next prompt lists it.
+    public void OnTeamSkill(Session sess, Guid paneId, TeamSkillMessage msg)
+    {
+        if (BotOfSession(sess.Id) is not { } h) return;
+        var name = TeamRender.OneLine(msg.Name, 80);
+        var body = msg.Text ?? "";
+        var path = (msg.Path ?? "").Trim();
+        if (name.Length == 0) { Refuse(h.Project, h.Store, $"{h.Bot.Nickname} tried to save a skill with no name"); return; }
+        if (path.Length > 0)
+        {
+            try
+            {
+                if (!File.Exists(path)) { Refuse(h.Project, h.Store, $"{h.Bot.Nickname} tried to save a skill from a file that isn't there: {TeamRender.OneLine(path, 80)}"); return; }
+                body = File.ReadAllText(path);
+            }
+            catch (Exception ex) { Log.Error("Team.skill.read", ex); Refuse(h.Project, h.Store, $"{h.Bot.Nickname}'s skill file couldn't be read"); return; }
+        }
+        if (body.Trim().Length == 0) { Refuse(h.Project, h.Store, $"{h.Bot.Nickname} tried to save an empty skill"); return; }
+        if (Encoding.UTF8.GetByteCount(body) > ArtefactMaxBytes) body = CutToBytes(body, ArtefactMaxBytes);
+        var existed = h.Store.ListSkills().Any(s => s.Slug == TeamStore.SkillSlug(name));
+        var slug = h.Store.WriteSkill(name, body, h.Bot.Nickname);
+        if (slug == null) { Refuse(h.Project, h.Store, $"Perch couldn't save {h.Bot.Nickname}'s skill \"{name}\""); return; }
+        var summary = TeamRender.OneLine(msg.Summary, 160);
+        if (summary.Length == 0) summary = h.Store.ListSkills().FirstOrDefault(s => s.Slug == slug)?.Summary ?? "";
+        Log.Info("Team.skill", $"bot={h.Bot.Slug} slug={slug} updated={existed} bytes={body.Length}");
+        RefreshRoster(h.Project, h.Store);
+        var e = h.Store.Ledger.Append(new RoomEntry
+        {
+            Kind = "system", From = h.Bot.Slug, Event = "skill", Note = slug,
+            Text = $"{h.Bot.Nickname} {(existed ? "updated" : "saved")} the team skill \"{name}\"" + (summary.Length > 0 ? $" — {summary}" : ""),
+        });
+        _h.PushState();
+        PostEntries(h.Project.Id, h.Store, new[] { e });
+    }
+
+    // ---- runs ----------------------------------------------------------------
+
+    /// `perch team run <task id> "<instructions>"` (or `--cancel`) from a bot.
+    /// The bot writes what its piece needs; a fresh headless Claude does it in
+    /// the bot's folder, with the bot's pane id and pipe in its environment so
+    /// its permission prompts come to the room as the bot's; the bot gets the
+    /// report typed back when the run ends (FinishRun).
+    public void OnTeamRun(Session sess, Guid paneId, TeamRunMessage msg)
+    {
+        if (BotOfSession(sess.Id) is not { } h) return;
+        var op = (msg.Op ?? "start").Trim().ToLowerInvariant();
+        var mine = _runs.Values.FirstOrDefault(r => r.Project == h.Project.Id && string.Equals(r.Bot, h.Bot.Slug, StringComparison.OrdinalIgnoreCase));
+        if (op == "cancel")
+        {
+            if (mine == null) { Refuse(h.Project, h.Store, $"{h.Bot.Nickname} has no run to cancel"); return; }
+            CancelRun(mine, h.Bot.Nickname);
+            return;
+        }
+        if (mine != null)
+        {
+            Refuse(h.Project, h.Store, $"{h.Bot.Nickname} already has a run going ({mine.Id}) — one at a time; `perch team run --cancel` stops it");
+            return;
+        }
+        var text = (msg.Text ?? "").Trim();
+        if (text.Length == 0) { Refuse(h.Project, h.Store, $"{h.Bot.Nickname} started a run with no instructions"); return; }
+        // The card: named, or the bot's one open piece, or the one open card.
+        TaskBoard? board = null;
+        var id = (msg.TaskId ?? "").Trim();
+        if (id.Length > 0)
+        {
+            board = h.Store.Tasks.Board(id);
+            if (board == null) { Refuse(h.Project, h.Store, $"{h.Bot.Nickname} started a run on task {id}, which isn't on the board"); return; }
+        }
+        else
+        {
+            var pieces = h.Store.Tasks.Active.Where(b => b.ItemOf(h.Bot.Slug) != null).ToList();
+            var active = h.Store.Tasks.Active.ToList();
+            board = pieces.Count == 1 ? pieces[0] : pieces.Count == 0 && active.Count == 1 ? active[0] : null;
+            if (board == null) { Refuse(h.Project, h.Store, $"{h.Bot.Nickname} started a run without saying which task (say `perch team run <id> …`)"); return; }
+        }
+        if (board.Status == "done") { Refuse(h.Project, h.Store, $"{h.Bot.Nickname} started a run on task {board.Id}, but it is done"); return; }
+        var piece = board.ItemOf(h.Bot.Slug);
+        if (piece == null && !h.Store.Doc.IsLead(h.Bot))
+        {
+            Refuse(h.Project, h.Store, $"{h.Bot.Nickname} started a run on task {board.Id} without a piece on it — the lead assigns one first");
+            return;
+        }
+        var pane = PaneTree.AllLeaves(sess.Root).FirstOrDefault(p => p.Id == paneId) ?? PaneTree.AllLeaves(sess.Root).FirstOrDefault(p => p.IsTerminal);
+        var cwd = pane != null ? _h.ResolveCwd(sess, pane) : sess.Cwd;
+        if (string.IsNullOrWhiteSpace(cwd) || !Directory.Exists(cwd)) { Refuse(h.Project, h.Store, $"{h.Bot.Nickname}'s folder isn't there, so a run can't start in it"); return; }
+
+        var runId = TaskDoc.NewId();
+        var pos = h.Store.Doc.Position(h.Bot.PositionSlug);
+        var model = !string.IsNullOrWhiteSpace(h.Bot.Model) ? h.Bot.Model : pos?.Model ?? "";
+        if (!string.IsNullOrWhiteSpace(msg.Model)) model = msg.Model.Trim();
+        // A run is the piece being worked: the card says so, and so does the
+        // run's own brief.
+        if (piece != null && piece.Status == "todo") { piece.Status = "doing"; piece.UpdatedAtMs = Now().ToUnixTimeMilliseconds(); h.Store.SaveTasks(); }
+        var promptPath = h.Store.RunPromptPathFor(h.Bot.Slug, runId);
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(promptPath)!);
+            AtomicFile.WriteAllText(promptPath, TeamRender.RunSystemPrompt(h.Bot, pos, h.Store.ReadBrief(h.Bot.PositionSlug), h.Project.Name,
+                cwd, h.Store.ReadKnowledge(), h.Store.ListSkills(), board, piece));
+        }
+        catch (Exception ex) { Log.Error("Team.run.prompt", ex); Refuse(h.Project, h.Store, $"Perch couldn't write the run's brief for {h.Bot.Nickname}"); return; }
+        var env = new Dictionary<string, string?>
+        {
+            ["PERCH_PIPE"] = OperatingSystem.IsWindows() ? $@"\\.\pipe\perch\{paneId:N}" : $@"perch\{paneId:N}",
+            ["PERCH_PANE_ID"] = paneId.ToString("N"),
+            ["PERCH_RUN"] = runId,
+        };
+        var run = new Run
+        {
+            Id = runId, Project = h.Project.Id, Bot = h.Bot.Slug, TaskId = board.Id, SessionId = sess.Id, PaneId = paneId,
+            StartedAt = Now(), Cts = new CancellationTokenSource(), Text = text,
+        };
+        _runs[runId] = run;
+        // The CLI prints the id from this file, the same way `task new` does.
+        TeamPaths.Write(TeamPaths.RunReplyPathFor(paneId), runId);
+        RefreshRoster(h.Project, h.Store);
+        var e = h.Store.Ledger.Append(new RoomEntry
+        {
+            Kind = "system", From = h.Bot.Slug, Event = "run", Note = runId, TaskId = board.Id,
+            Text = $"{h.Bot.Nickname} started run {runId} on \"{TeamRender.OneLine(board.Title, 60)}\": {TeamRender.OneLine(text, 200)}",
+            Summary = text.Length > 200 ? text : null,
+        });
+        Log.Info("Team.run.start", $"project={h.Project.Id:N} bot={h.Bot.Slug} run={runId} task={board.Id} model={model} cwd={cwd}");
+        _h.PushState();
+        PostEntries(h.Project.Id, h.Store, new[] { e });
+        _ = RunPieceAsync(run, new RunSpec(TeamRender.RunPrompt(text), promptPath, cwd, model, env));
+    }
+
+    private async Task RunPieceAsync(Run run, RunSpec spec)
+    {
+        HeadlessResult r;
+        try { r = await RunWorker(spec, run.Cts.Token); }
+        catch (OperationCanceledException) { r = new HeadlessResult(false, "", "canceled", 0, 0, ""); }
+        catch (Exception ex) { Log.Error("Team.run", ex); r = new HeadlessResult(false, "", ex.Message, 0, 0, ""); }
+        FinishRun(run, r);
+    }
+
+    /// The run ended: its report becomes an artefact, the room gets a row
+    /// with the outcome and the cost, and the bot is typed the one line that
+    /// sends it to review the diff.
+    private void FinishRun(Run run, HeadlessResult r)
+    {
+        _runs.Remove(run.Id);
+        var proj = _h.ProjectById(run.Project);
+        var store = StoreFor(run.Project);
+        var bot = store?.Doc.Bot(run.Bot);
+        if (proj == null || store == null || bot == null) return;
+        var board = store.Tasks.Board(run.TaskId) ?? store.Tasks.Archived(run.TaskId)
+                    ?? new TaskBoard { Id = run.TaskId, Title = "(a card no longer on the board)" };
+        var canceled = run.Canceled || run.Cts.IsCancellationRequested;
+        var elapsed = r.DurationMs > 0 ? r.DurationMs : (long)(Now() - run.StartedAt).TotalMilliseconds;
+        var rep = TeamRender.ParseRunReport(r.Structured, r.Text, r.Ok);
+        if (canceled) rep = rep with { Status = "canceled" };
+        var body = TeamRender.RunReportMarkdown(run.Id, board, bot, rep, r.CostUsd, elapsed, r.Ok || canceled ? null : r.Error);
+        var artefactId = StoreArtefact(proj, store, bot.Slug, $"Run {run.Id} · {rep.Status} — {TeamRender.OneLine(board.Title, 60)}",
+            TeamRender.OneLine(rep.Summary, 200), "md", body);
+        var reportPath = artefactId == null ? null : store.ArtefactPathFor(artefactId, "md");
+        var ev = canceled ? "run.canceled" : r.Ok ? "run.done" : "run.failed";
+        var cost = r.CostUsd > 0 ? $" · ${r.CostUsd.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)}" : "";
+        var row = store.Ledger.Append(new RoomEntry
+        {
+            Kind = "system", From = bot.Slug, Event = ev, Note = run.Id, TaskId = run.TaskId,
+            Text = canceled ? $"{bot.Nickname}'s run {run.Id} was stopped after {TeamRender.Elapsed(elapsed)}{cost}"
+                 : r.Ok ? $"{bot.Nickname}'s run {run.Id} finished — {rep.Status} in {TeamRender.Elapsed(elapsed)}{cost}: {TeamRender.OneLine(rep.Summary, 200)}"
+                 : $"{bot.Nickname}'s run {run.Id} failed after {TeamRender.Elapsed(elapsed)}{cost}: {TeamRender.OneLine(r.Error, 200)}",
+        });
+        Log.Info("Team.run.end", $"run={run.Id} bot={bot.Slug} ok={r.Ok} canceled={canceled} status={rep.Status} cost={r.CostUsd:F3} ms={elapsed}");
+        var rows = new List<RoomEntry> { row };
+        // The line into the bot: parked if it is mid-turn, like any post.
+        var sess = _h.SessionById(run.SessionId);
+        if (sess != null && bot.SessionId == run.SessionId)
+        {
+            var line = TeamRender.RunResultLine(bot, run.Id, run.TaskId, rep, reportPath, canceled);
+            var attempts = Attempt(new List<TeamBot> { bot }, line, everyone: false, row.Seq, raw: true);
+            rows.AddRange(Record(store, row, attempts));
+        }
+        else
+        {
+            rows.Add(store.Ledger.Append(new RoomEntry
+            {
+                Kind = "system", From = "perch", Event = "undelivered", Note = row.Seq.ToString(),
+                Text = $"{bot.Nickname}'s tab is gone, so nobody reviews run {run.Id} — the report is in the room",
+            }));
+        }
+        RefreshRoster(proj, store);
+        _h.PushState();
+        PostEntries(proj.Id, store, rows);
+    }
+
+    private void CancelRun(Run run, string by)
+    {
+        if (run.Canceled) return;
+        run.Canceled = true;
+        Log.Info("Team.run.cancel", $"run={run.Id} by={by}");
+        try { run.Cts.Cancel(); } catch { }
+    }
+
+    /// The owner's Stop on a run's row.
+    public void OnRunCancel(TeamRunCancelMsg msg)
+    {
+        if (!_runs.TryGetValue(msg.RunId, out var run) || run.Project != msg.ProjectId) return;
+        CancelRun(run, "Joseph");
+    }
+
+    /// Runs in flight, for the page and the roster: bot slug → (id, task, started).
+    internal IReadOnlyDictionary<string, (string Id, string TaskId, long StartedAtMs)> ActiveRuns(Guid projectId)
+        => _runs.Values.Where(r => r.Project == projectId)
+            .ToDictionary(r => r.Bot, r => (r.Id, r.TaskId, r.StartedAt.ToUnixTimeMilliseconds()), StringComparer.OrdinalIgnoreCase);
 
     /// Take a card off the board with no ceremony: no confirmation, no
     /// wrap-up, no reset. The owner's "remove this card" and a bot closing a
@@ -2921,6 +3193,8 @@ internal sealed class TeamController
             map[bot.Slug] = leaves.Any(p => p.AgentState is AgentState.Waiting or AgentState.Permission) ? "waiting for the owner"
                           : leaves.Any(p => p.AgentState == AgentState.Working) ? "working"
                           : "idle";
+            if (_runs.Values.Any(r => string.Equals(r.Bot, bot.Slug, StringComparison.OrdinalIgnoreCase)))
+                map[bot.Slug] += ", a run in progress";
         }
         return map;
     }

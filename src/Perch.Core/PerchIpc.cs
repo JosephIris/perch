@@ -39,6 +39,9 @@ internal sealed class PerchIpcServer : IDisposable
     public event Action<TeamAskMessage>? OnTeamAsk;
     public event Action<TeamArtefactMessage>? OnTeamArtefact;
     public event Action<TeamReactMessage>? OnTeamReact;
+    public event Action<TeamLearnMessage>? OnTeamLearn;
+    public event Action<TeamSkillMessage>? OnTeamSkill;
+    public event Action<TeamRunMessage>? OnTeamRun;
     public event Action<PermAskMessage>? OnPermAsk;
     public event Action<PermDeniedMessage>? OnPermDenied;
 
@@ -215,6 +218,18 @@ internal sealed class PerchIpcServer : IDisposable
                 case "team.react":
                     var tr = JsonSerializer.Deserialize<TeamReactMessage>(json, IpcJson.Options);
                     if (tr != null) _ui.Post(() => OnTeamReact?.Invoke(tr));
+                    break;
+                case "team.learn":
+                    var tl = JsonSerializer.Deserialize<TeamLearnMessage>(json, IpcJson.Options);
+                    if (tl != null) _ui.Post(() => OnTeamLearn?.Invoke(tl));
+                    break;
+                case "team.skill":
+                    var tsk = JsonSerializer.Deserialize<TeamSkillMessage>(json, IpcJson.Options);
+                    if (tsk != null) _ui.Post(() => OnTeamSkill?.Invoke(tsk));
+                    break;
+                case "team.run":
+                    var trn = JsonSerializer.Deserialize<TeamRunMessage>(json, IpcJson.Options);
+                    if (trn != null) _ui.Post(() => OnTeamRun?.Invoke(trn));
                     break;
                 case "perm.ask":
                     var pa = JsonSerializer.Deserialize<PermAskMessage>(json, IpcJson.Options);
@@ -407,24 +422,50 @@ internal sealed record TeamReactMessage(
     [property: JsonPropertyName("target")] string? Target,
     [property: JsonPropertyName("emoji")] string? Emoji);
 
+/// `perch team learn "<fact>"` from a bot: one line for the team's shared
+/// knowledge file, which every bot reads with every prompt.
+internal sealed record TeamLearnMessage(
+    [property: JsonPropertyName("text")] string? Text);
+
+/// `perch team skill "<name>" --file <path> | --text "<body>"` from a bot: a
+/// procedure any bot can follow, saved under the team's skills folder and
+/// listed in every prompt. `path` is resolved by the CLI.
+internal sealed record TeamSkillMessage(
+    [property: JsonPropertyName("name")] string? Name,
+    [property: JsonPropertyName("summary")] string? Summary = null,
+    [property: JsonPropertyName("path")] string? Path = null,
+    [property: JsonPropertyName("text")] string? Text = null);
+
+/// `perch team run <task id> "<instructions>"` (op "start") or `perch team
+/// run --cancel` (op "cancel") from a bot: a fresh headless Claude does the
+/// piece in the bot's folder; the bot reviews the report it gets back.
+internal sealed record TeamRunMessage(
+    [property: JsonPropertyName("op")] string? Op,
+    [property: JsonPropertyName("taskId")] string? TaskId = null,
+    [property: JsonPropertyName("text")] string? Text = null,
+    [property: JsonPropertyName("model")] string? Model = null);
+
 /// The PermissionRequest hook in a bot's pane: Claude Code is about to show a
 /// permission prompt and the hook is holding it (polling for the answer file)
 /// so the owner can answer from the room instead. `summary` is one line
 /// (Bash: the command; Edit/Write: the file; else the tool name); `input` is
 /// the raw tool_input JSON, capped; `suggestions` the rules cc offered.
+/// `run` names the bot's run when the prompt is the run's, not the pane's.
 internal sealed record PermAskMessage(
     [property: JsonPropertyName("id")] string? Id,
     [property: JsonPropertyName("tool")] string? Tool,
     [property: JsonPropertyName("summary")] string? Summary,
     [property: JsonPropertyName("input")] string? Input = null,
-    [property: JsonPropertyName("suggestions")] string[]? Suggestions = null);
+    [property: JsonPropertyName("suggestions")] string[]? Suggestions = null,
+    [property: JsonPropertyName("run")] string? Run = null);
 
 /// The PermissionDenied hook: auto mode's classifier blocked a tool call.
 /// Information only — nothing to answer.
 internal sealed record PermDeniedMessage(
     [property: JsonPropertyName("tool")] string? Tool,
     [property: JsonPropertyName("summary")] string? Summary,
-    [property: JsonPropertyName("reason")] string? Reason = null);
+    [property: JsonPropertyName("reason")] string? Reason = null,
+    [property: JsonPropertyName("run")] string? Run = null);
 
 /// `perch team task …` from a bot: the task board's verbs. `op` is "main"
 /// (the lead sets or renames the task), "assign" (the lead gives `bot` a

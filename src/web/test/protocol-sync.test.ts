@@ -100,6 +100,7 @@ const EXPECTED_TYPES = [
   "team.reference.browse",
   "team.request",
   "team.room",
+  "team.run.cancel",
   "team.task.close",
   "team.task.confirm",
   "team.task.reject",

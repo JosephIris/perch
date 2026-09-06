@@ -23,6 +23,11 @@ internal static class TeamPaths
     public static string TaskReplyPathFor(Guid paneId)
         => Path.Combine(Path.GetTempPath(), $"perch-task-{paneId:N}.txt");
 
+    /// The id of the run a bot just started with `perch team run`, same
+    /// contract as the task reply: host writes, CLI prints and deletes.
+    public static string RunReplyPathFor(Guid paneId)
+        => Path.Combine(Path.GetTempPath(), $"perch-run-{paneId:N}.txt");
+
     /// Ids come from the hook (it mints them) — keep the file name safe.
     private static string San(string id)
     {

@@ -69,15 +69,36 @@ internal static class ClaudeHeadless
         return (claudePath, args.ToString());
     }
 
+    /// Perch's own `claude` shim in the app's tools folder, or null when the
+    /// build has none. A run goes through it ON PURPOSE: the shim injects the
+    /// hooks that route the run's permission prompts to the room and hold its
+    /// pushes; the plain binary would prompt into nowhere.
+    public static string? ResolveShim()
+    {
+        if (ShimOverride != null) return ShimOverride();
+        try
+        {
+            var path = Path.Combine(AppContext.BaseDirectory, "tools", OperatingSystem.IsWindows() ? "claude.cmd" : "claude");
+            return File.Exists(path) ? path : null;
+        }
+        catch { return null; }
+    }
+
+    internal static Func<string?>? ShimOverride;
+
     /// Run `claude -p` with `prompt` on stdin in `cwd`. `extraArgs` are added
     /// verbatim after the fixed flags (tool allow-lists, budget caps, schema).
     /// `timeoutMs` bounds the whole run; a timeout or cancellation kills the
-    /// process tree and returns Ok=false.
+    /// process tree and returns Ok=false. `viaShim` starts it through Perch's
+    /// wrapper with `env` (a pane's pipe and id, a run id) so its hooks report
+    /// to the host as that pane's run; the default is the bare binary with
+    /// every Perch variable stripped, so a job never looks like pane activity.
     public static async Task<HeadlessResult> RunAsync(
         string prompt, string cwd, string model, string site,
-        IEnumerable<string>? extraArgs = null, int timeoutMs = 300_000, CancellationToken ct = default)
+        IEnumerable<string>? extraArgs = null, int timeoutMs = 300_000, CancellationToken ct = default,
+        bool viaShim = false, IReadOnlyDictionary<string, string?>? env = null)
     {
-        var claude = ResolveClaude();
+        var claude = viaShim ? ResolveShim() ?? ResolveClaude() : ResolveClaude();
         if (claude == null)
             return new HeadlessResult(false, "", "Claude Code isn't installed (no `claude` on PATH).", 0, 0, "");
 
@@ -86,11 +107,13 @@ internal static class ClaudeHeadless
         if (extraArgs != null) args.AddRange(extraArgs);
 
         var (file, arguments) = Command(claude, args);
-        var env = new Dictionary<string, string?>
+        var envMap = new Dictionary<string, string?>
         {
             ["PERCH_PIPE"] = null,
             ["PERCH_PANE_ID"] = null,
+            ["PERCH_RUN"] = null,
         };
+        if (env != null) foreach (var kv in env) envMap[kv.Key] = kv.Value;
         var started = DateTimeOffset.UtcNow;
         var (code, stdout, stderr) = await ProcRunner.RunAsync(
             file, arguments, site,
@@ -99,7 +122,7 @@ internal static class ClaudeHeadless
             stdoutEncoding: new UTF8Encoding(false),
             ct: ct,
             stdinText: prompt,
-            env: env);
+            env: envMap);
         var elapsed = (long)(DateTimeOffset.UtcNow - started).TotalMilliseconds;
         var result = Parse(stdout, stderr, code);
         return result.DurationMs > 0 ? result : result with { DurationMs = elapsed };

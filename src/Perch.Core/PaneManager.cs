@@ -75,6 +75,9 @@ internal sealed class PaneManager : IDisposable
     public event Action<Session, Guid, TeamAskMessage>? TeamAsk;
     public event Action<Session, Guid, TeamReactMessage>? TeamReact;
     public event Action<Session, Guid, TeamArtefactMessage>? TeamArtefact;
+    public event Action<Session, Guid, TeamLearnMessage>? TeamLearn;
+    public event Action<Session, Guid, TeamSkillMessage>? TeamSkill;
+    public event Action<Session, Guid, TeamRunMessage>? TeamRun;
     public event Action<Session, Guid, PermAskMessage>? PermAsk;
     public event Action<Session, Guid, PermDeniedMessage>? PermDenied;
 
@@ -214,6 +217,9 @@ internal sealed class PaneManager : IDisposable
         ipc.OnTeamAsk += msg => TeamAsk?.Invoke(sess, paneId, msg);
         ipc.OnTeamReact += msg => TeamReact?.Invoke(sess, paneId, msg);
         ipc.OnTeamArtefact += msg => TeamArtefact?.Invoke(sess, paneId, msg);
+        ipc.OnTeamLearn += msg => TeamLearn?.Invoke(sess, paneId, msg);
+        ipc.OnTeamSkill += msg => TeamSkill?.Invoke(sess, paneId, msg);
+        ipc.OnTeamRun += msg => TeamRun?.Invoke(sess, paneId, msg);
         ipc.OnPermAsk += msg => PermAsk?.Invoke(sess, paneId, msg);
         ipc.OnPermDenied += msg => PermDenied?.Invoke(sess, paneId, msg);
         ipc.Start();

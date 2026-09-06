@@ -38,6 +38,14 @@ internal static class ClaudeWrapper
             // real TTY/PTY. Critical for claude's interactive UI.
         };
 
+        // A bot's run: the host starts a headless Claude with the bot's pane
+        // id and pipe (so the hooks reach the room) and PERCH_RUN set. It gets
+        // the hooks and the model, but NOT the pane's session name (two
+        // sessions answering to one name break the bot's address) nor the
+        // pane's brief (the host passes the run's own), and it must not
+        // overwrite the pane's launched-name record.
+        var isRun = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("PERCH_RUN"));
+
         if (inPerch)
         {
             // Write hooks JSON to a file and pass the path. Passing the JSON
@@ -46,7 +54,7 @@ internal static class ClaudeWrapper
             // mangles the JSON's inner `"` chars. Claude Code accepts
             // `--settings <file-or-json>` per its --help, so a path works
             // identically on both .exe and .cmd targets.
-            var path = WriteHooksFile();
+            var path = WriteHooksFile(isRun);
             psi.ArgumentList.Add("--settings");
             psi.ArgumentList.Add(path);
 
@@ -71,7 +79,7 @@ internal static class ClaudeWrapper
             var peerName = ReadPeerName();
             var callerNamed = Array.IndexOf(passthroughArgs, "--name") >= 0
                 || Array.IndexOf(passthroughArgs, "-n") >= 0;
-            if (!string.IsNullOrEmpty(peerName) && !callerNamed)
+            if (!string.IsNullOrEmpty(peerName) && !callerNamed && !isRun)
             {
                 psi.ArgumentList.Add("--name");
                 psi.ArgumentList.Add(peerName!);
@@ -86,7 +94,7 @@ internal static class ClaudeWrapper
             // addressed to the real name was dropped as "not one of our
             // tabs". Now the hook reports THIS file: the address, not the
             // intent.
-            RecordLaunchedName(callerNamed ? CallerName(passthroughArgs) : peerName);
+            if (!isRun) RecordLaunchedName(callerNamed ? CallerName(passthroughArgs) : peerName);
 
             // Per-bot standing brief, same temp-file channel. The host points
             // this pane at the bot's rendered system.md and it is appended to
@@ -96,7 +104,7 @@ internal static class ClaudeWrapper
             // without a flag. A caller supplying its own system-prompt flag
             // wins, same as --model and --name.
             var brief = ReadBriefPath();
-            if (brief != null && !HasSystemPromptArg(passthroughArgs))
+            if (brief != null && !isRun && !HasSystemPromptArg(passthroughArgs))
             {
                 psi.ArgumentList.Add("--append-system-prompt-file");
                 psi.ArgumentList.Add(brief);
@@ -255,11 +263,12 @@ internal static class ClaudeWrapper
     /// Idempotent: overwriting the same file each time the wrapper runs in
     /// a given pane is fine — claude reads it once at startup. We don't try
     /// to clean these up (they're small, %TEMP% is the OS's responsibility).
-    private static string WriteHooksFile()
+    private static string WriteHooksFile(bool isRun = false)
     {
         var paneId = Environment.GetEnvironmentVariable("PERCH_PANE_ID");
         var safeName = string.IsNullOrEmpty(paneId)
             ? $"perch-claude-hooks-{Process.GetCurrentProcess().Id}.json"
+            : isRun ? $"perch-claude-hooks-{paneId}-run.json"
             : $"perch-claude-hooks-{paneId}.json";
         var path = Path.Combine(Path.GetTempPath(), safeName);
         File.WriteAllText(path, BuildHooksJson());

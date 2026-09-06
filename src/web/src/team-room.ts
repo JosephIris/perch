@@ -95,6 +95,7 @@ export function systemTone(event: TeamEntryView["event"]): "calm" | "attention" 
       return "attention";
     case "error":
     case "peer.failed":                        // a bot's message never left
+    case "run.failed":                         // a bot's run ended in an error
     case "denied": return "error";            // auto mode blocked the bot
     default: return "calm";
   }
@@ -947,6 +948,16 @@ function renderRoster(project: ProjectView | null): void {
     row.appendChild(text);
 
     row.appendChild(stateLine(p, s));
+    if (bot.run) {
+      // A run in flight: a fresh Claude doing its piece while the session
+      // above stays free. Elapsed since the run started.
+      const run = el("span", "roster-bot__state roster-bot__run");
+      run.appendChild(el("span", "roster-bot__word", "run"));
+      run.appendChild(el("span", "roster-bot__dotsep", "·"));
+      run.appendChild(elapsedSpan(bot.run.startedAtMs, true));
+      run.title = `Run ${bot.run.id} on task ${bot.run.taskId}`;
+      row.appendChild(run);
+    }
 
     row.addEventListener("click", () => {
       if (!bot.sessionId) {
@@ -2020,6 +2031,35 @@ function renderSystem(e: TeamEntryView, bots: TeamBotView[]): HTMLElement {
   const openBtn = (b: TeamBotView | undefined) =>
     b?.sessionId ? button("tf-sys__open", "Open", () => openTerminal(b), `Go to ${b.nickname}'s terminal`) : null;
   const disableAll = () => node.querySelectorAll("button").forEach((x) => { (x as HTMLButtonElement).disabled = true; });
+
+  // A run's start row offers Stop while that run is still going (the roster
+  // knows which run each bot has in flight); the instructions unfold below.
+  if (e.event === "run" && e.note && project) {
+    const runId = e.note;
+    const body = el("div", "tf-sys__body");
+    body.appendChild(el("span", "tf-sys__text tf-sys__text--wrap", e.text));
+    if (e.summary) {
+      const details = el("pre", "tf-sys__details", e.summary);
+      details.hidden = !openDetails.has(e.seq);
+      const more = button("tf-sys__more", details.hidden ? "instructions" : "hide instructions", () => {
+        details.hidden = !details.hidden;
+        more.textContent = details.hidden ? "instructions" : "hide instructions";
+        if (details.hidden) openDetails.delete(e.seq); else openDetails.add(e.seq);
+      });
+      body.appendChild(more);
+      body.appendChild(details);
+    }
+    if (bot?.run?.id === runId) {
+      const actions = el("div", "tf-sys__actions");
+      actions.appendChild(button("tf-sys__open", "Stop", () => {
+        send({ type: "team.run.cancel", projectId: project.id, runId }); disableAll();
+      }, "Stop this run; the bot is told and reviews what is there"));
+      body.appendChild(actions);
+    }
+    node.appendChild(body);
+    node.appendChild(el("span", "tf-sys__time", hhmm(e.ts)));
+    return node;
+  }
 
   // A permission prompt: the tool and what it wants, the raw input behind a
   // details line, Allow / Deny. The host hands the answer to Claude Code's

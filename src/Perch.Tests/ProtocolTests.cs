@@ -629,6 +629,10 @@ public class ProtocolTests
         Assert.Equal("footer shifts", reject.Note);
         var close = Round<TeamTaskCloseMsg>($"{{\"type\":\"team.task.close\",\"projectId\":\"{G1}\",\"taskId\":\"abcd1234\"}}");
         Assert.Equal("abcd1234", close.TaskId);
+        var reopen = Round<TeamTaskReopenMsg>($"{{\"type\":\"team.task.reopen\",\"projectId\":\"{G1}\",\"taskId\":\"abcd1234\"}}");
+        Assert.Equal("abcd1234", reopen.TaskId);
+        var stop = Round<TeamRunCancelMsg>($"{{\"type\":\"team.run.cancel\",\"projectId\":\"{G1}\",\"runId\":\"9f2c11aa\"}}");
+        Assert.Equal("9f2c11aa", stop.RunId);
         var again = Round<TeamDeliverRetryMsg>($"{{\"type\":\"team.deliver.retry\",\"projectId\":\"{G1}\",\"seq\":803,\"botId\":\"alush\"}}");
         Assert.Equal((803L, "alush"), (again.Seq, again.BotId));
         var open = Round<TeamArtefactOpenMsg>($"{{\"type\":\"team.artefact.open\",\"projectId\":\"{G1}\",\"id\":\"9f2c11aa\"}}");
@@ -678,6 +682,20 @@ public class ProtocolTests
         Assert.Equal("abcd1234", task.TaskId);
         var legacyTask = JsonSerializer.Deserialize<TeamTaskMessage>("{\"type\":\"team.task\",\"op\":\"mine\",\"status\":\"done\"}", IpcJson.Options)!;
         Assert.Null(legacyTask.TaskId);
+        // Knowledge, skills and runs — the three verbs a bot uses to share and to delegate.
+        var learn = JsonSerializer.Deserialize<TeamLearnMessage>("{\"type\":\"team.learn\",\"text\":\"adv_event lives on the AWS ClickHouse\"}", IpcJson.Options)!;
+        Assert.Equal("adv_event lives on the AWS ClickHouse", learn.Text);
+        var skill = JsonSerializer.Deserialize<TeamSkillMessage>("{\"type\":\"team.skill\",\"name\":\"Ship a batch\",\"summary\":null,\"path\":\"C:\\\\repo\\\\ship.md\",\"text\":null}", IpcJson.Options)!;
+        Assert.Equal(("Ship a batch", @"C:\repo\ship.md"), (skill.Name, skill.Path));
+        var run = JsonSerializer.Deserialize<TeamRunMessage>("{\"type\":\"team.run\",\"op\":\"start\",\"taskId\":\"abcd1234\",\"text\":\"dark footer\",\"model\":null}", IpcJson.Options)!;
+        Assert.Equal(("start", "abcd1234", "dark footer"), (run.Op, run.TaskId, run.Text));
+        var cancel = JsonSerializer.Deserialize<TeamRunMessage>("{\"type\":\"team.run\",\"op\":\"cancel\"}", IpcJson.Options)!;
+        Assert.Equal("cancel", cancel.Op);
+        // A run's permission prompt names the run; a pane's leaves it out.
+        var runPerm = JsonSerializer.Deserialize<PermAskMessage>("{\"type\":\"perm.ask\",\"id\":\"p1\",\"tool\":\"Bash\",\"summary\":\"npm test\",\"run\":\"9f2c11aa\"}", IpcJson.Options)!;
+        Assert.Equal("9f2c11aa", runPerm.Run);
+        var panePerm = JsonSerializer.Deserialize<PermAskMessage>("{\"type\":\"perm.ask\",\"id\":\"p2\",\"tool\":\"Bash\",\"summary\":\"npm test\"}", IpcJson.Options)!;
+        Assert.Null(panePerm.Run);
         var session = JsonSerializer.Deserialize<SessionMessage>("{\"type\":\"session\",\"id\":\"abc\",\"name\":\"ada\",\"socket\":\"uds:\\\\\\\\.\\\\pipe\\\\LOCAL\\\\cc-msg-1\"}", IpcJson.Options)!;
         Assert.Equal(@"uds:\\.\pipe\LOCAL\cc-msg-1", session.Socket);
     }

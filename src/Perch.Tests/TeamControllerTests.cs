@@ -866,6 +866,166 @@ public class TeamControllerTests : IDisposable
     }
 
     [Fact]
+    public async Task Knowledge_AndSkills_ReachEveryPrompt_AndARepeatAddsNothing()
+    {
+        var h = new Harness();
+        await h.CreateBot("Lee", position: "Team lead");
+        await h.CreateBot("Ada");
+        var lee = h.Sessions[0];
+        var ada = h.Sessions[1];
+
+        // A fact one bot learns is in every bot's next prompt, signed.
+        h.Ctrl.OnTeamLearn(ada, ada.Root.Id, new TeamLearnMessage("The advertiser dashboard reads rtb.adv_event on the AWS ClickHouse."));
+        Assert.Contains(h.Ledger, e => e.Event == "learn" && e.Text == "Ada added to team knowledge: The advertiser dashboard reads rtb.adv_event on the AWS ClickHouse.");
+        var file = File.ReadAllText(h.Store.KnowledgePath);
+        Assert.StartsWith("# Team knowledge", file);
+        Assert.Contains("- The advertiser dashboard reads rtb.adv_event on the AWS ClickHouse. (Ada, ", file);
+        var leeCtx = File.ReadAllText(h.Store.ContextPathFor("lee"));
+        Assert.Contains("# Team knowledge", leeCtx);
+        Assert.Contains("rtb.adv_event", leeCtx);
+        Assert.Contains("perch team learn", leeCtx);
+        // The same fact again — other case, no full stop — adds nothing.
+        h.Ctrl.OnTeamLearn(lee, lee.Root.Id, new TeamLearnMessage("the advertiser dashboard reads rtb.adv_event on the AWS ClickHouse"));
+        Assert.Contains(h.Ledger, e => e.Event == "learn" && e.Text.StartsWith("Lee re-learned what team knowledge already says"));
+        Assert.Equal(1, File.ReadAllText(h.Store.KnowledgePath).Split("rtb.adv_event").Length - 1);
+
+        // A skill from a file: saved under skills/<slug>/SKILL.md and listed
+        // in every prompt by name, what for, and path.
+        var src = Path.Combine(h.Repo, "ship.md");
+        File.WriteAllText(src, "Cherry-pick each range into a worktree off origin/main, then push the branch onto main.\n\n1. git worktree add …\n");
+        h.Ctrl.OnTeamSkill(ada, ada.Root.Id, new TeamSkillMessage("Ship a batch via a worktree", null, src, null));
+        var skill = Assert.Single(h.Store.ListSkills());
+        Assert.Equal(("ship-a-batch-via-a-worktree", "Ship a batch via a worktree"), (skill.Slug, skill.Name));
+        Assert.Equal("Cherry-pick each range into a worktree off origin/main, then push the branch onto main.", skill.Summary);
+        Assert.Equal(h.Store.SkillPathFor("ship-a-batch-via-a-worktree"), skill.Path);
+        var body = File.ReadAllText(skill.Path);
+        Assert.StartsWith("# Ship a batch via a worktree\n\n_Saved by Ada, ", body);
+        Assert.Contains("1. git worktree add", body);
+        Assert.Contains(h.Ledger, e => e.Event == "skill" && e.Note == "ship-a-batch-via-a-worktree"
+            && e.Text.StartsWith("Ada saved the team skill \"Ship a batch via a worktree\" — Cherry-pick"));
+        leeCtx = File.ReadAllText(h.Store.ContextPathFor("lee"));
+        Assert.Contains("# Team skills", leeCtx);
+        Assert.Contains($"- Ship a batch via a worktree — Cherry-pick each range into a worktree off origin/main, then push the branch onto main. (`{skill.Path}`)", leeCtx);
+        // Saving it again is an update, not a second skill.
+        h.Ctrl.OnTeamSkill(lee, lee.Root.Id, new TeamSkillMessage("Ship a batch via a worktree", "one-liner", null, "Now with a summary.\n"));
+        Assert.Single(h.Store.ListSkills());
+        Assert.Contains(h.Ledger, e => e.Event == "skill" && e.Text == "Lee updated the team skill \"Ship a batch via a worktree\" — one-liner");
+        foreach (var s in h.Sessions) TeamMarkers.Clear(s.Root.Id);
+    }
+
+    [Fact]
+    public async Task ARun_DoesThePieceInAFreshClaude_AndTheBotGetsTheReport()
+    {
+        var h = new Harness();
+        await h.CreateBot("Lee", position: "Team lead");
+        await h.CreateBot("Ada");
+        var lee = h.Sessions[0];
+        var ada = h.Sessions[1];
+        void Task(Session s, string op, string? title = null, string? bot = null, string? id = null, string? status = null)
+            => h.Ctrl.OnTeamTask(s, s.Root.Id, new TeamTaskMessage(op, bot, title, status, null, id));
+        Task(lee, "new", "Dark footer");
+        var board = Assert.Single(h.Store.Tasks.Open);
+        Task(lee, "assign", "Restyle the footer", bot: "ada", id: board.Id);
+
+        // The fake worker keeps what it was handed and answers when told to.
+        TeamController.RunSpec? spec = null;
+        var answer = new TaskCompletionSource<HeadlessResult>();
+        h.Ctrl.RunWorker = (s, ct) => { spec = s; ct.Register(() => answer.TrySetCanceled()); return answer.Task; };
+
+        h.Ctrl.OnTeamRun(ada, ada.Root.Id, new TeamRunMessage("start", board.Id, "Make the footer dark; run npm test."));
+        var runId = File.ReadAllText(TeamPaths.RunReplyPathFor(ada.Root.Id)).Trim();
+        Assert.Equal(8, runId.Length);
+        Assert.NotNull(spec);
+        Assert.StartsWith("Make the footer dark; run npm test.\n\nWhen you are done", spec!.Prompt);
+        Assert.Equal(ada.Cwd, spec.Cwd);
+        Assert.Equal(ada.Root.Id.ToString("N"), spec.Env["PERCH_PANE_ID"]);
+        Assert.Equal(runId, spec.Env["PERCH_RUN"]);
+        Assert.Contains(ada.Root.Id.ToString("N"), spec.Env["PERCH_PIPE"]);
+        var sys = File.ReadAllText(spec.SystemPromptPath);
+        Assert.StartsWith("# You are a run for Ada, the Frontend dev on the perch team", sys);
+        Assert.Contains($"- Task {board.Id}: Dark footer", sys);
+        Assert.Contains("- Ada's piece: [doing] Restyle the footer", sys);   // handed out → being worked
+        Assert.Contains("Never push, never merge or rebase onto main", sys);
+        Assert.Equal("doing", board.ItemOf("ada")!.Status);
+        Assert.Contains(h.Ledger, e => e.Event == "run" && e.Note == runId && e.TaskId == board.Id
+            && e.Text == $"Ada started run {runId} on \"Dark footer\": Make the footer dark; run npm test.");
+        Assert.Contains("[idle, a run in progress]", File.ReadAllText(h.Store.RosterPath));
+        var view = JsonSerializer.SerializeToElement(h.Ctrl.ProjectTeamView(h.Project.Id)!);
+        var adaView = view.GetProperty("bots").EnumerateArray().Single(b => b.GetProperty("botId").GetString() == "ada");
+        Assert.Equal(runId, adaView.GetProperty("run").GetProperty("id").GetString());
+        // One at a time.
+        h.Ctrl.OnTeamRun(ada, ada.Root.Id, new TeamRunMessage("start", board.Id, "again"));
+        Assert.Contains(h.Ledger, e => e.Event == "error" && e.Text.Contains("already has a run going"));
+
+        // The run's permission prompt is a card in the room, named as the
+        // run's; the answer goes to the hook's file and never to the pane.
+        h.Ctrl.OnPermAsk(ada, ada.Root.Id, new PermAskMessage("p9", "Bash", "npm test", null, null, runId));
+        Assert.Contains(h.Ledger, e => e.Event == "permission" && e.Note == "p9" && e.Text == $"Ada's run {runId} wants to run Bash: npm test" && e.PaneId == null);
+        h.Delayed.Clear();
+        h.Ctrl.OnPermAnswer(new TeamPermAnswerMsg { ProjectId = h.Project.Id, Id = "p9", Decision = "allow" });
+        Assert.Equal("allow", File.ReadAllText(TeamPaths.PermAnswerPathFor("p9")).Trim());
+        Assert.Empty(h.Delayed);   // no "press it on screen" fallback for a run
+        Assert.Empty(h.Cleared);
+
+        // The run answers in the report's shape: an artefact for the room, a
+        // row with the outcome and the cost, and the line that sends Ada to
+        // review the diff.
+        h.Typed.Clear();
+        answer.SetResult(new HeadlessResult(true, "done", null, 0.42, 65_000, "{}",
+            "{\"status\":\"done\",\"summary\":\"Footer is dark; tests pass.\",\"changed\":[\"src/footer.css\",\"commit 1a2b3c4\"],\"verified\":[\"npm test: 12 passed\"],\"open\":[]}"));
+        var (toAda, line) = Assert.Single(h.Typed);
+        Assert.Equal(ada.Id, toAda);
+        Assert.Matches(@"^\[Perch team\] (#\d+ )?run " + runId + @" → @Ada: your run on task " + board.Id
+            + @" finished — done: Footer is dark; tests pass\. Full report: ", line);
+        Assert.Contains("Review its diff in your folder, verify what it claims", line);
+        var arte = Assert.Single(h.Ledger.Where(e => e.Kind == "artefact"));
+        Assert.Equal($"Run {runId} · done — Dark footer", arte.Text);
+        var report = File.ReadAllText(h.Store.ArtefactPathFor(arte.Target!, "md"));
+        Assert.Contains("**Status:** done · **For:** Ada · **Cost:** $0.42 · **Took:** 1m 05s", report);
+        Assert.Contains("## Changed\n- src/footer.css\n- commit 1a2b3c4\n", report);
+        Assert.Contains("## Verified\n- npm test: 12 passed\n", report);
+        Assert.Contains("## Open\n- (nothing)", report);
+        Assert.Contains(h.Ledger, e => e.Event == "run.done" && e.Note == runId
+            && e.Text == $"Ada's run {runId} finished — done in 1m 05s · $0.42: Footer is dark; tests pass.");
+        Assert.DoesNotContain("a run in progress", File.ReadAllText(h.Store.RosterPath));
+        foreach (var s in h.Sessions) TeamMarkers.Clear(s.Root.Id);
+    }
+
+    [Fact]
+    public async Task ARun_StoppedFromTheRoom_TellsTheBot_AndAMemberNeedsAPiece()
+    {
+        var h = new Harness();
+        await h.CreateBot("Lee", position: "Team lead");
+        await h.CreateBot("Ada");
+        var lee = h.Sessions[0];
+        var ada = h.Sessions[1];
+        h.Ctrl.OnTeamTask(lee, lee.Root.Id, new TeamTaskMessage("new", null, "Dark footer", null, null, null));
+        var board = Assert.Single(h.Store.Tasks.Open);
+
+        // No piece, no run — the lead hands one out first.
+        h.Ctrl.OnTeamRun(ada, ada.Root.Id, new TeamRunMessage("start", board.Id, "go"));
+        Assert.Contains(h.Ledger, e => e.Event == "error" && e.Text.Contains("without a piece on it"));
+        h.Ctrl.OnTeamRun(ada, ada.Root.Id, new TeamRunMessage("cancel"));
+        Assert.Contains(h.Ledger, e => e.Event == "error" && e.Text == "Ada has no run to cancel");
+
+        h.Ctrl.OnTeamTask(lee, lee.Root.Id, new TeamTaskMessage("assign", "ada", "Restyle the footer", null, null, board.Id));
+        var answer = new TaskCompletionSource<HeadlessResult>();
+        h.Ctrl.RunWorker = (s, ct) => { ct.Register(() => answer.TrySetCanceled()); return answer.Task; };
+        h.Ctrl.OnTeamRun(ada, ada.Root.Id, new TeamRunMessage("start", null, "Make the footer dark."));   // her one open piece
+        var runId = File.ReadAllText(TeamPaths.RunReplyPathFor(ada.Root.Id)).Trim();
+        h.Typed.Clear();
+        h.Ctrl.OnRunCancel(new TeamRunCancelMsg { ProjectId = h.Project.Id, RunId = runId });
+        Assert.Contains(h.Ledger, e => e.Event == "run.canceled" && e.Note == runId && e.Text.StartsWith($"Ada's run {runId} was stopped after"));
+        var (_, line) = Assert.Single(h.Typed);
+        Assert.Contains($"your run on task {board.Id} was stopped by Joseph", line);
+        Assert.Contains("Check the folder for half-done work", line);
+        var adaView = JsonSerializer.SerializeToElement(h.Ctrl.ProjectTeamView(h.Project.Id)!).GetProperty("bots").EnumerateArray()
+            .Single(b => b.GetProperty("botId").GetString() == "ada");
+        Assert.Equal(JsonValueKind.Null, adaView.GetProperty("run").ValueKind);
+        foreach (var s in h.Sessions) TeamMarkers.Clear(s.Root.Id);
+    }
+
+    [Fact]
     public void TasksFile_ArchivedBeforeV3_IsAlreadyWrittenUp_AndTeamFilesAreNotUnclaimedWork()
     {
         var doc = JsonSerializer.Deserialize(

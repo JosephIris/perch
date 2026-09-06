@@ -334,6 +334,7 @@ internal sealed partial class AppController
         _settings = Settings.Load();
         _store = SessionStore.Load();
         _projects = ProjectStore.Load();
+        _panes = new PaneManager(_ui, ptyFactory);
         // Before BuildRouter: the router registers a handler that reads it.
         _boardCtrl = new BoardController(OwningSession, a => _ui.Post(a));
         // Host-agnostic on purpose: every native need (posting to the page,
@@ -400,7 +401,6 @@ internal sealed partial class AppController
         });
         WireBoardController();
         _router = BuildRouter();
-        _panes = new PaneManager(_ui, ptyFactory);
         _panes.Output += PostPaneOut;
         _panes.Exited += PostPaneExit;
         _panes.AgentStatus += OnAgentStatus;
@@ -423,6 +423,9 @@ internal sealed partial class AppController
         _panes.TeamAsk += (s, p, m) => _teamCtrl.OnTeamAsk(s, p, m);
         _panes.TeamReact += (s, p, m) => _teamCtrl.OnTeamReact(s, p, m);
         _panes.TeamArtefact += (s, p, m) => _teamCtrl.OnTeamArtefact(s, p, m);
+        _panes.TeamLearn += (s, p, m) => _teamCtrl.OnTeamLearn(s, p, m);
+        _panes.TeamSkill += (s, p, m) => _teamCtrl.OnTeamSkill(s, p, m);
+        _panes.TeamRun += (s, p, m) => _teamCtrl.OnTeamRun(s, p, m);
         _panes.PermAsk += (s, p, m) => _teamCtrl.OnPermAsk(s, p, m);
         _panes.PermDenied += (s, p, m) => _teamCtrl.OnPermDenied(s, p, m);
         // Usage poller for the model picker. Subscribe once here; a new snapshot
@@ -802,6 +805,7 @@ internal sealed partial class AppController
         .Add<TeamTaskRejectMsg>("team.task.reject", m => _teamCtrl.OnTaskReject(m))
         .Add<TeamTaskCloseMsg>("team.task.close", m => _teamCtrl.OnTaskClose(m))
         .Add<TeamTaskReopenMsg>("team.task.reopen", m => _teamCtrl.OnTaskReopen(m))
+        .Add<TeamRunCancelMsg>("team.run.cancel", m => _teamCtrl.OnRunCancel(m))
         .Add<TeamDeliverRetryMsg>("team.deliver.retry", m => _teamCtrl.OnDeliverRetry(m))
         .Add<TeamArtefactOpenMsg>("team.artefact.open", m => _teamCtrl.OnArtefactOpen(m))
         .Add<TeamArtefactListMsg>("team.artefact.list", m => _teamCtrl.OnArtefactList(m))
