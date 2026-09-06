@@ -53,7 +53,7 @@ real terminal grid when you want your hands on it.
 - Recursive pane splits with keyboard-first control: split, move, even out
   (see the table below).
 - URL panes: keep a localhost preview next to the terminal that serves it.
-- Clickable links, search, per-pane font zoom.
+- Clickable links, Inspector journal search, per-pane font zoom.
 
 **It remembers.**
 
@@ -164,6 +164,9 @@ Get-FileHash .\Perch-Setup.exe -Algorithm SHA256
 
 | Doc | What's in it |
 |---|---|
+| [`AGENTS.md`](AGENTS.md) | Agent entry point: current architecture rules, build/test commands, and isolated-run guidance. |
+| [`docs/CODEBASE-CONTEXT.md`](docs/CODEBASE-CONTEXT.md) | Code map, runtime flows, storage contracts, and maintenance context for new contributors. |
+| [`docs/reviews/2026-09-06.md`](docs/reviews/2026-09-06.md) | Dated correctness/resource review, validation results, and executable reproduction probes. |
 | [`CLAUDE.md`](CLAUDE.md) | The UI design constitution: tokens, Fluent discipline, and the screenshot verification loop. Read it before touching the chrome. |
 | [`docs/DESIGN-BIBLE.md`](docs/DESIGN-BIBLE.md) | Long-form companion to the constitution. |
 | [`docs/SESSION-RESUME.md`](docs/SESSION-RESUME.md) | How Claude Code sessions survive crashes and restarts. |

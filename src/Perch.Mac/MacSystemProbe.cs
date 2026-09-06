@@ -66,17 +66,7 @@ internal sealed class MacSystemProbe : ISystemProbe
 
     private static string Run(string file, params string[] args)
     {
-        var psi = new ProcessStartInfo(file)
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-        };
-        foreach (var a in args) psi.ArgumentList.Add(a);
-        using var p = Process.Start(psi)!;
-        var stdout = p.StandardOutput.ReadToEnd();
-        p.StandardError.ReadToEnd();
-        p.WaitForExit(5000);
-        return stdout;
+        var result = Task.Run(() => ProcRunner.RunAsync(file, "", "mac.probe", timeoutMs: 5000, argumentList: args)).GetAwaiter().GetResult();
+        return result.Code == 0 ? result.Stdout : "";
     }
 }

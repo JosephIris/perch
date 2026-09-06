@@ -85,6 +85,7 @@ internal sealed partial class AppController
     /// on. Equal signature → equal answers → skip the git walks entirely. See
     /// the gate in RefreshGitStatsAsync for why this exists.
     private readonly Dictionary<Guid, string> _lastGitSig = new();
+    private readonly Dictionary<Guid, long> _gitRefreshGeneration = new();
 
     /// Working-tree watchers. The .git fingerprint can't see a file an agent's
     /// Bash command created, so without these the gate above would go stale.
@@ -561,6 +562,8 @@ internal sealed partial class AppController
     /// gets to finish writing its profile).
     public void Shutdown()
     {
+        _local?.Dispose();
+        _cloud?.Dispose();
         _idleWatchdog?.Stop();
         _reapTimer?.Stop();
         _repoWatchers?.Dispose();
@@ -845,6 +848,8 @@ internal sealed partial class AppController
         // PowerShell its final size up front.
         EnsureActivePane();
         PushState();
+        if (!_store.Readable || !_settings.Readable || !_projects.Readable)
+            PostToast("Some saved data could not be read. Original files were preserved and saving those files is disabled; see errors.log.", "error", Guid.Empty);
         // Seed the page's clipboard cache now that it can receive messages, so
         // the first right-click paste is synchronous without waiting for a
         // clipboard change or window re-activation.
@@ -1155,7 +1160,7 @@ internal sealed partial class AppController
     {
         if (_store.ActiveSessionId is Guid id)
             return _store.Sessions.FirstOrDefault(s => s.Id == id);
-        return _store.Sessions.FirstOrDefault();
+        return null;
     }
 
     /// First of the candidate paths that names an existing directory, or null.
@@ -1598,7 +1603,7 @@ internal sealed partial class AppController
                     // thread — so the answer is cached until the pane's cc
                     // session changes (a relaunch or /clear).
                     if (!_limitPaths.TryGetValue(pane.Id, out var hit)
-                        || hit.SessionId != pane.ClaudeSessionId)
+                        || hit.Path == null || hit.SessionId != pane.ClaudeSessionId)
                     {
                         hit = (pane.ClaudeSessionId!, ClaudeTranscripts.Locate(pane.ClaudeSessionId!, cwd!));
                         _limitPaths[pane.Id] = hit;
@@ -2345,11 +2350,15 @@ internal sealed partial class AppController
         _repoWatchers?.Ensure(cwd);
         var sig = GitProc.RefreshSignature(cwd)
                   + "|b=" + baseline
-                  + "|t=" + touched.Count
-                  + "|f=" + (pathFilter?.Count ?? -1)
+                  + "|t=" + string.Join("\0", touched.OrderBy(x => x, StringComparer.Ordinal))
+                  + "|f=" + (pathFilter == null ? "*" : string.Join("\0", pathFilter.OrderBy(x => x, StringComparer.Ordinal)))
+                  + "|u=" + (pane.UntrackedBaseline == null ? "*" : string.Join("\0", pane.UntrackedBaseline.OrderBy(x => x, StringComparer.Ordinal)))
+                  + "|cwd=" + cwd
+                  + "|ttl=" + (Environment.TickCount64 / 300000)
                   + "|w=" + _worktreeEpoch.GetValueOrDefault(cwd, 0);
         if (_lastGitSig.TryGetValue(pane.Id, out var prevSig) && prevSig == sig) return;
-        _lastGitSig[pane.Id] = sig;
+        var generation = _gitRefreshGeneration.GetValueOrDefault(pane.Id) + 1;
+        _gitRefreshGeneration[pane.Id] = generation;
 
         // Run the git queries concurrently off the UI thread — they're
         // independent and each is a fast plumbing command. The commit count and
@@ -2367,6 +2376,7 @@ internal sealed partial class AppController
         var stats = await statsT;
         var ahead = await aheadT;
         var mines = await minesT;
+        var noUpstream = mines == null && await GitProc.StatusAsync(cwd) is { Upstream: null };
         await _ui.InvokeAsync(() =>
         {
             var changed = false;
@@ -2378,6 +2388,8 @@ internal sealed partial class AppController
             // session's "+9". Baseline-relative values only apply if the
             // baseline they were computed against is still current; `ahead`
             // isn't baseline-relative and always applies.
+            if (pane.CommitBaseline != baseline || _paneCwd.GetValueOrDefault(pane.Id) != cwd || _gitRefreshGeneration.GetValueOrDefault(pane.Id) != generation) return;
+            if ((!hasBaseline || stats != null) && ahead != null && (mines != null || noUpstream)) _lastGitSig[pane.Id] = sig;
             var baselineCurrent = pane.CommitBaseline == baseline;
             if (baselineCurrent && stats is GitSessionStats s)
             {
@@ -4745,12 +4757,33 @@ internal sealed partial class AppController
             // in a PushState, so one sweep here keeps the per-pane --name files
             // current without hooking each rename path separately. Cheap —
             // string compares, a file write only on an actual change.
+            var existing = _store.Sessions.SelectMany(s => AllLeaves(s.Root)).Select(p => p.Id).ToHashSet();
+            foreach (var id in _paneCwd.Keys.Where(id => !existing.Contains(id)).ToArray())
+            {
+                _transcripts.Forget(id);
+                _codexTranscripts.Forget(id);
+                _paneCwd.Remove(id);
+                _lastResizeTicks.Remove(id);
+                _lastByteCounts.Remove(id);
+                _activityStreak.Remove(id);
+                _lastGitSig.Remove(id);
+                _gitRefreshGeneration.Remove(id);
+                _lastSustainedTicks.Remove(id);
+                _limitPaths.Remove(id);
+                _assignedPeerNames.Remove(id);
+                _deferredSpawns.Remove(id);
+                _pendingChoosers.Remove(id);
+                _pendingInitialCommand.Remove(id);
+                _armedResumePanes.Remove(id);
+            }
+            _repoWatchers?.Retain(_store.Sessions.Where(s => !s.Dormant).SelectMany(s => AllLeaves(s.Root)).Select(p => _paneCwd.GetValueOrDefault(p.Id, "")));
             SweepPeerNames();
             var snap = StateProjection.BuildSnapshot(
                 _store, _activePaneId, _settings.FontSize, _settings.OnboardingSeen,
                 _projects, _settings.SidebarMode, EffectiveModelLimits(), _settings.InspectorOpen,
                 _settings.WideLayout, _settings.LocalPerchOnly, _teamCtrl.ProjectTeamView,
                 teamFacesColor: _settings.TeamFacesColor,
+                fontFamily: _settings.FontFamily,
                 codexModels: CodexModels.List(),
                 // "Opening this tab picks up its conversation." Armed AND not
                 // already running: a pane with a live PTY has nothing left to

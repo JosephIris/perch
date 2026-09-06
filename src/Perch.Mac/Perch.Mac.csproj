@@ -9,6 +9,8 @@
     <AssemblyName>Perch</AssemblyName>
     <RuntimeIdentifiers>osx-arm64;osx-x64</RuntimeIdentifiers>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <CliRuntime Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</CliRuntime>
+    <CliRuntime Condition="'$(CliRuntime)' == ''">osx-arm64</CliRuntime>
   </PropertyGroup>
 
   <ItemGroup>
@@ -32,6 +34,7 @@
   <ItemGroup>
     <WebSource Include="$(MSBuildThisFileDirectory)..\web\src\**\*.*" />
     <WebSource Include="$(MSBuildThisFileDirectory)..\web\index.html" />
+    <WebSource Include="$(MSBuildThisFileDirectory)..\web\package*.json;$(MSBuildThisFileDirectory)..\web\fonts\**\*;$(MSBuildThisFileDirectory)..\web\*.png" />
     <WebSource Include="$(MSBuildThisFileDirectory)..\web\esbuild.config.mjs" />
   </ItemGroup>
   <!-- `dotnet build -p:SkipWebBundle=true` compiles the host without touching
@@ -40,7 +43,7 @@
   <Target Name="BundleWeb" BeforeTargets="BeforeBuild"
           Condition="'$(SkipWebBundle)' != 'true'"
           Inputs="@(WebSource)"
-          Outputs="$(MSBuildThisFileDirectory)..\Perch\wwwroot\app.js">
+          Outputs="$(MSBuildThisFileDirectory)..\Perch\wwwroot\app.js;$(MSBuildThisFileDirectory)..\Perch\wwwroot\app.css;$(MSBuildThisFileDirectory)..\Perch\wwwroot\index.html">
     <Exec Command="npm --prefix &quot;$(MSBuildThisFileDirectory)..\web&quot; run build"
           ConsoleToMSBuild="true"
           IgnoreStandardErrorWarningFormat="true" />
@@ -49,16 +52,27 @@
   <!-- `dotnet publish` ignores tools/ from BuildPerchCli's OutDir, so we
        republish into PublishDir/tools for the .app bundle to pick up. -->
   <Target Name="PublishPerchCli" AfterTargets="Publish">
-    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\..\tools\perch-cli\perch-cli.csproj&quot; -c $(Configuration) -r osx-arm64 --self-contained true -p:PublishSingleFile=true -p:InvariantGlobalization=true -o &quot;$(PublishDir)tools&quot; --nologo -v q" />
+    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\..\tools\perch-cli\perch-cli.csproj&quot; -c $(Configuration) -r $(CliRuntime) --self-contained true -p:PublishSingleFile=true -p:InvariantGlobalization=true -o &quot;$(PublishDir)tools&quot; --nologo -v q" />
     <Copy SourceFiles="$(MSBuildThisFileDirectory)..\..\tools\perch-cli\claude;$(MSBuildThisFileDirectory)..\..\tools\perch-cli\codex" DestinationFolder="$(PublishDir)tools" SkipUnchangedFiles="true" />
-    <Exec Command="chmod +x &quot;$(PublishDir)tools/claude&quot; &quot;$(PublishDir)tools/codex&quot; &quot;$(PublishDir)tools/perch&quot;" />
+    <Exec Condition="'$(OS)' != 'Windows_NT'" Command="chmod +x &quot;$(PublishDir)tools/claude&quot; &quot;$(PublishDir)tools/codex&quot; &quot;$(PublishDir)tools/perch&quot;" />
   </Target>
 
   <!-- perch CLI + claude/codex shims, published for the host's RID. -->
   <Target Name="BuildPerchCli" AfterTargets="Build">
-    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\..\tools\perch-cli\perch-cli.csproj&quot; -c $(Configuration) -r osx-arm64 --self-contained true -p:PublishSingleFile=true -p:InvariantGlobalization=true -o &quot;$(OutDir)tools&quot; --nologo -v q" />
+    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\..\tools\perch-cli\perch-cli.csproj&quot; -c $(Configuration) -r $(CliRuntime) --self-contained true -p:PublishSingleFile=true -p:InvariantGlobalization=true -o &quot;$(OutDir)tools&quot; --nologo -v q" />
     <Copy SourceFiles="$(MSBuildThisFileDirectory)..\..\tools\perch-cli\claude;$(MSBuildThisFileDirectory)..\..\tools\perch-cli\codex" DestinationFolder="$(OutDir)tools" SkipUnchangedFiles="true" />
-    <Exec Command="chmod +x &quot;$(OutDir)tools/claude&quot; &quot;$(OutDir)tools/codex&quot; &quot;$(OutDir)tools/perch&quot;" />
+    <Exec Condition="'$(OS)' != 'Windows_NT'" Command="chmod +x &quot;$(OutDir)tools/claude&quot; &quot;$(OutDir)tools/codex&quot; &quot;$(OutDir)tools/perch&quot;" />
   </Target>
 
+  <Target Name="CollectWebContent" BeforeTargets="AssignTargetPaths" DependsOnTargets="BundleWeb">
+    <ItemGroup>
+      <Content Remove="..\Perch\wwwroot\**\*.*" />
+      <_WebContent Include="..\Perch\wwwroot\**\*.*" />
+      <Content Include="@(_WebContent)">
+        <Link>wwwroot\%(_WebContent.RecursiveDir)%(_WebContent.Filename)%(_WebContent.Extension)</Link>
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </Content>
+    </ItemGroup>
+  </Target>
 </Project>

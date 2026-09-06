@@ -72,6 +72,10 @@ internal static class GitProc
     /// Deliberately long — it is a safety net, not the refresh mechanism, and
     /// treating it as one would put the polling back.
     private static readonly TimeSpan StatusTtl = TimeSpan.FromMinutes(5);
+    private sealed record DetailEntry(string Signature, GitSessionDetail Detail, DateTime At);
+    private static readonly ConcurrentDictionary<string, DetailEntry> DetailCache = new(StringComparer.Ordinal);
+    private static readonly ConcurrentDictionary<string, long> DetailEpoch = new(StringComparer.Ordinal);
+    private static string SetKey(IReadOnlySet<string>? values) => values == null ? "*" : string.Join("\0", values.OrderBy(x => x, StringComparer.Ordinal));
 
     internal static bool NegativeProofDisableCache;
 
@@ -113,9 +117,11 @@ internal static class GitProc
     public static void InvalidateCache(string cwd)
     {
         StatusCache.TryRemove(cwd, out _);
+        DetailEpoch.AddOrUpdate(cwd, 1, (_, previous) => previous + 1);
+        foreach (var key in DetailCache.Keys) if (key.StartsWith(cwd + "\n", StringComparison.Ordinal)) DetailCache.TryRemove(key, out _);
     }
 
-    internal static void ClearAllCaches() => StatusCache.Clear();
+    internal static void ClearAllCaches() { StatusCache.Clear(); DetailCache.Clear(); }
 
     /// The .git fingerprint, for callers that gate a whole refresh rather than a
     /// single command. Stat-only: reading it costs no subprocess, which is the
@@ -130,35 +136,38 @@ internal static class GitProc
     {
         try
         {
-            var git = Path.Combine(cwd, ".git");
-            // A worktree's .git is a FILE pointing at the real gitdir.
+            var root = new DirectoryInfo(Path.GetFullPath(cwd));
+            while (root != null && !Directory.Exists(Path.Combine(root.FullName, ".git")) && !File.Exists(Path.Combine(root.FullName, ".git"))) root = root.Parent;
+            if (root == null) return "";
+            var git = Path.Combine(root.FullName, ".git");
             if (File.Exists(git))
             {
                 var line = File.ReadAllText(git).Trim();
-                const string marker = "gitdir:";
-                if (line.StartsWith(marker, StringComparison.OrdinalIgnoreCase))
-                    git = line.Substring(marker.Length).Trim();
+                if (!line.StartsWith("gitdir:", StringComparison.OrdinalIgnoreCase)) return "";
+                git = Path.GetFullPath(line[7..].Trim(), root.FullName);
             }
             if (!Directory.Exists(git)) return "";
-
+            var commonFile = Path.Combine(git, "commondir");
+            var common = File.Exists(commonFile) ? Path.GetFullPath(File.ReadAllText(commonFile).Trim(), git) : git;
             var sb = new StringBuilder();
-            foreach (var rel in new[] { "HEAD", "index", "packed-refs", "MERGE_HEAD", "REBASE_HEAD" })
+            foreach (var rel in new[] { "HEAD", "index", "packed-refs", "MERGE_HEAD", "REBASE_HEAD", "logs/HEAD" })
             {
                 var p = Path.Combine(git, rel);
                 sb.Append(rel).Append('=')
                   .Append(File.Exists(p) ? File.GetLastWriteTimeUtc(p).Ticks : 0L)
                   .Append(';');
             }
-            var refs = Path.Combine(git, "refs");
+            sb.Append(common).Append(File.Exists(Path.Combine(common, "packed-refs")) ? File.GetLastWriteTimeUtc(Path.Combine(common, "packed-refs")).Ticks : 0);
+            var refs = Path.Combine(common, "refs");
             if (Directory.Exists(refs))
             {
-                long newest = 0;
-                foreach (var f in Directory.EnumerateFiles(refs, "*", SearchOption.AllDirectories))
+
+                foreach (var f in Directory.EnumerateFiles(refs, "*", SearchOption.AllDirectories).OrderBy(p => p, StringComparer.Ordinal))
                 {
                     var t = File.GetLastWriteTimeUtc(f).Ticks;
-                    if (t > newest) newest = t;
+                    sb.Append(f).Append('=').Append(t).Append(';');
                 }
-                sb.Append("refs=").Append(newest);
+
             }
             return sb.ToString();
         }
@@ -354,6 +363,11 @@ internal static class GitProc
     {
         if (string.IsNullOrEmpty(baselineSha)) return null;
 
+        var cacheKey = cwd + "\n" + baselineSha + "\n" + SetKey(baselineUntracked) + "\n" + SetKey(pathFilter) + "\n" + SetKey(workingTreeFilter);
+        var signature = Fingerprint(cwd);
+        var epoch = DetailEpoch.GetValueOrDefault(cwd);
+        if (!NegativeProofDisableCache && DetailCache.TryGetValue(cacheKey, out var cached) && cached.Signature == signature && DateTime.UtcNow - cached.At < StatusTtl) return cached.Detail;
+
         var authored = await AuthoredHereAsync(cwd);
         int added = 0, deleted = 0, commits = 0;
         // Keyed by path, so a file touched by several commits (and again in the
@@ -450,7 +464,13 @@ internal static class GitProc
             .OrderByDescending(f => f.Added + f.Deleted)
             .ThenBy(f => f.Path, StringComparer.Ordinal)
             .ToList();
-        return new GitSessionDetail(rows, added, deleted, commits);
+        var detail = new GitSessionDetail(rows, added, deleted, commits);
+        if (okLog && okDiff && authored != null && (baselineUntracked == null || uOk) && Fingerprint(cwd) == signature && DetailEpoch.GetValueOrDefault(cwd) == epoch)
+        {
+            if (DetailCache.Count >= 128) DetailCache.Clear();
+            DetailCache[cacheKey] = new DetailEntry(signature, detail, DateTime.UtcNow);
+        }
+        return detail;
     }
 
     /// A `--numstat` row: "&lt;added&gt;\t&lt;deleted&gt;\t&lt;path&gt;", with "-" for binary

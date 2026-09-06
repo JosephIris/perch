@@ -72,8 +72,9 @@ internal sealed class ModelLimitWatch
             fs.Seek(from, SeekOrigin.Begin);
             var buf = new byte[length - from];
             var n = fs.Read(buf, 0, buf.Length);
-            text = System.Text.Encoding.UTF8.GetString(buf, 0, n);
-            _offsets[path!] = from + n;
+            var complete = Array.LastIndexOf(buf, (byte)'\n', n - 1, n) + 1;
+            text = System.Text.Encoding.UTF8.GetString(buf, 0, complete);
+            _offsets[path!] = from + complete;
         }
         catch { return false; }
 
@@ -93,7 +94,16 @@ internal sealed class ModelLimitWatch
             if (line.IndexOf("\"error\":\"rate_limit\"", StringComparison.Ordinal) < 0) continue;
             var alias = AliasFromRefusal(line) ?? Normalize(fallbackAlias);
             if (alias == null) continue;
-            _refusedAt[alias] = Now();
+            var observed = Now();
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(line);
+                if (doc.RootElement.TryGetProperty("timestamp", out var stamp) &&
+                    DateTimeOffset.TryParse(stamp.GetString(), out var at)) observed = at;
+            }
+            catch (System.Text.Json.JsonException) { continue; }
+            if (Now() - observed >= Hold || observed > Now().AddMinutes(5)) continue;
+            if (!_refusedAt.TryGetValue(alias, out var last) || observed > last) _refusedAt[alias] = observed;
             found = true;
             Log.Info("ModelLimit", $"{alias} refused (rate_limit) — held for {Hold.TotalMinutes:0}m");
         }

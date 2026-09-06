@@ -46,7 +46,7 @@ internal sealed class LocalController : IDisposable
     private const int FastMs = 3 * 1000;
 
     public LocalController(
-        IUiThread ui, ISystemProbe probe, Action<object> push,
+        IUiThread ui, ISystemProbe? probe, Action<object> push,
         Func<IReadOnlyList<PaneProc>> snapshotPanes,
         Action<IReadOnlyDictionary<string, int[]>> applyPanePorts)
     {
@@ -72,8 +72,11 @@ internal sealed class LocalController : IDisposable
         if (open) _ = RefreshAsync();
     }
 
+    private bool _disposed;
+
     public async Task RefreshAsync()
     {
+        if (_disposed || _inflight != null) return;
         // Snapshot panes NOW, on the UI thread, before any await.
         var panes = _snapshotPanes();
 
@@ -102,6 +105,7 @@ internal sealed class LocalController : IDisposable
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { Log.Error("LocalController.Refresh", ex); }
+        finally { if (ReferenceEquals(_inflight, cts)) _inflight = null; cts.Dispose(); }
     }
 
     /// Turn raw listeners into the three-bucket view, updating the ledger as we
@@ -231,6 +235,8 @@ internal sealed class LocalController : IDisposable
 
     public void Dispose()
     {
+        _disposed = true;
+        _timer?.Dispose();
         try { _timer?.Stop(); } catch { }
         try { _inflight?.Cancel(); } catch { }
         try { _ledger.Flush(); } catch { }

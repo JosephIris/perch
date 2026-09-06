@@ -83,7 +83,7 @@ internal static class StateProjection
         bool wideLayout = false, bool localPerchOnly = false,
         Func<Guid, object?>? teamOf = null, bool teamFacesColor = false,
         IReadOnlyList<CodexModel>? codexModels = null,
-        Func<Guid, bool>? resumesOnOpen = null)
+        Func<Guid, bool>? resumesOnOpen = null, string? fontFamily = null)
     {
         return new
         {
@@ -94,7 +94,7 @@ internal static class StateProjection
             // Code abbreviates the home dir in its file recaps) into a real
             // file:// URL for the HTML-file link menu.
             homeDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            prefs = new { fontSize, onboardingSeen, sidebarMode, inspectorOpen, wideLayout, localPerchOnly, teamFacesColor },
+            prefs = new { fontFamily, fontSize, onboardingSeen, sidebarMode, inspectorOpen, wideLayout, localPerchOnly, teamFacesColor },
             // Account-wide model rate limits (usually empty — the endpoint 429s).
             // Only the AT-LIMIT models ship: the picker disables exactly these
             // and annotates each with its reset time. Empty / absent → every
@@ -156,7 +156,7 @@ internal static class StateProjection
     /// into its conversation". Null = nothing is armed (the setting is off, or
     /// this is a projection built without the host's arming set), which is the
     /// same as false everywhere.
-    public static object ProjectSession(Session s, Func<Guid, bool>? resumesOnOpen = null)
+    public static object ProjectSession(Session s, Func<Guid, bool>? resumesOnOpen = null, string? fontFamily = null)
     {
         var leaves = PaneTree.AllLeaves(s.Root).ToArray();
         var aggState = AggregateState(leaves);

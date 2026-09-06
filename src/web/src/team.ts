@@ -470,10 +470,22 @@ export function taskOrder(tasks: TeamTaskView[]): TeamTaskView[] {
  *  bot" for good on a post that actually landed. */
 export function landedSet(entries: TeamEntryView[]): Set<number> {
   const out = new Set<number>();
+  const recipients = new Map<number, Set<string>>();
+  const confirmed = new Map<number, Set<string>>();
+  for (const e of entries) {
+    if (e.kind === "user" && Array.isArray(e.to) && e.to.length) recipients.set(e.seq, new Set(e.to));
+  }
   for (const e of entries) {
     if (e.kind !== "system" || e.event !== "delivered" || !e.note) continue;
     const seq = Number(e.note);
-    if (Number.isFinite(seq)) out.add(seq);
+    if (!Number.isFinite(seq)) continue;
+    const bots = confirmed.get(seq) ?? new Set<string>();
+    bots.add(e.from);
+    confirmed.set(seq, bots);
+  }
+  for (const [seq, bots] of confirmed) {
+    const expected = recipients.get(seq);
+    if (expected && [...expected].every(bot => bots.has(bot))) out.add(seq);
   }
   return out;
 }

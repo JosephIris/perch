@@ -113,7 +113,8 @@ internal static class ProcRunner
         Encoding? stdoutEncoding = null,
         CancellationToken ct = default,
         string? stdinText = null,
-        IReadOnlyDictionary<string, string?>? env = null)
+        IReadOnlyDictionary<string, string?>? env = null,
+        IReadOnlyList<string>? argumentList = null)
     {
         Interlocked.Increment(ref _spawns);
         Sites.AddOrUpdate(site, 1, static (_, n) => n + 1);
@@ -130,6 +131,11 @@ internal static class ProcRunner
                 UseShellExecute = false,
                 CreateNoWindow = true,
             };
+            if (argumentList != null)
+            {
+                psi.Arguments = "";
+                foreach (var argument in argumentList) psi.ArgumentList.Add(argument);
+            }
             if (workingDir != null) psi.WorkingDirectory = workingDir;
             if (stdoutEncoding != null)
             {
@@ -151,7 +157,14 @@ internal static class ProcRunner
             }
 
             using var p = new Process { StartInfo = psi };
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            if (timeoutMs > 0) timeout.CancelAfter(timeoutMs);
+            ct.ThrowIfCancellationRequested();
             if (!p.Start()) return (-1, "", $"failed to start {fileName}");
+            using var killOnCancel = timeout.Token.Register(() =>
+            {
+                try { p.Kill(entireProcessTree: true); } catch { }
+            });
 
             // Read BOTH pipes before waiting. Waiting first can deadlock: a
             // child that writes more than the pipe buffer to stderr blocks
@@ -165,29 +178,26 @@ internal static class ProcRunner
                 // child that echoes while we're still writing must not block us.
                 try
                 {
-                    await p.StandardInput.WriteAsync(stdinText);
+                    await p.StandardInput.WriteAsync(stdinText.AsMemory(), timeout.Token);
                     p.StandardInput.Close();
                 }
                 catch (Exception ex) { Log.Info($"ProcRunner.{site}", $"stdin write failed: {ex.Message}"); }
             }
 
-            if (timeoutMs > 0)
+            try
             {
-                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                timeout.CancelAfter(timeoutMs);
-                try { await p.WaitForExitAsync(timeout.Token); }
-                catch (OperationCanceledException)
-                {
-                    try { p.Kill(entireProcessTree: true); } catch { }
-                    return (-1, "", "timed out");
-                }
+                await p.WaitForExitAsync(timeout.Token);
+                // Descendants can inherit the pipes after the parent exits.
+                // Keep draining under the SAME deadline as stdin and exit.
+                var output = await outT.WaitAsync(timeout.Token);
+                var error = await errT.WaitAsync(timeout.Token);
+                return (p.ExitCode, output, error);
             }
-            else
+            catch (OperationCanceledException)
             {
-                await p.WaitForExitAsync(ct);
+                try { p.Kill(entireProcessTree: true); } catch { }
+                return (-1, "", ct.IsCancellationRequested ? "cancelled" : "timed out");
             }
-
-            return (p.ExitCode, await outT, await errT);
         }
         catch (Exception ex)
         {

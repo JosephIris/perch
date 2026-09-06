@@ -62,6 +62,7 @@
   <ItemGroup>
     <WebSource Include="$(MSBuildThisFileDirectory)..\web\src\**\*.*" />
     <WebSource Include="$(MSBuildThisFileDirectory)..\web\index.html" />
+    <WebSource Include="$(MSBuildThisFileDirectory)..\web\package*.json;$(MSBuildThisFileDirectory)..\web\fonts\**\*;$(MSBuildThisFileDirectory)..\web\*.png" />
     <WebSource Include="$(MSBuildThisFileDirectory)..\web\esbuild.config.mjs" />
   </ItemGroup>
   <!-- `dotnet build -p:SkipWebBundle=true` compiles the host without touching
@@ -70,7 +71,7 @@
   <Target Name="BundleWeb" BeforeTargets="BeforeBuild"
           Condition="'$(SkipWebBundle)' != 'true'"
           Inputs="@(WebSource)"
-          Outputs="$(MSBuildThisFileDirectory)wwwroot\app.js">
+          Outputs="$(MSBuildThisFileDirectory)wwwroot\app.js;$(MSBuildThisFileDirectory)wwwroot\app.css;$(MSBuildThisFileDirectory)wwwroot\index.html">
     <Exec Command="npm --prefix &quot;$(MSBuildThisFileDirectory)..\web&quot; run build"
           ConsoleToMSBuild="true"
           IgnoreStandardErrorWarningFormat="true" />
@@ -91,4 +92,10 @@
     <Copy SourceFiles="$(MSBuildThisFileDirectory)..\..\tools\perch-cli\claude.cmd;$(MSBuildThisFileDirectory)..\..\tools\perch-cli\codex.cmd" DestinationFolder="$(PublishDir)tools" SkipUnchangedFiles="true" />
   </Target>
 
+  <Target Name="CollectWebContent" BeforeTargets="AssignTargetPaths" DependsOnTargets="BundleWeb">
+    <ItemGroup>
+      <Content Remove="wwwroot\**\*.*" />
+      <Content Include="wwwroot\**\*.*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
+  </Target>
 </Project>

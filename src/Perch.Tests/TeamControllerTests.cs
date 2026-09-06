@@ -118,11 +118,12 @@ public class TeamControllerTests : IDisposable
 
         public JsonElement To(TeamPostMsg _, string json) => JsonDocument.Parse(json).RootElement.Clone();
 
-        public void Post(string text, string? toJson, string clientId = "c1")
+        private int _clientId;
+        public void Post(string text, string? toJson, string? clientId = null)
         {
             Ctrl.OnPost(new TeamPostMsg
             {
-                ProjectId = Project.Id, Text = text, ClientId = clientId,
+                ProjectId = Project.Id, Text = text, ClientId = clientId ?? $"c{++_clientId}",
                 To = toJson == null ? null : JsonDocument.Parse(toJson).RootElement.Clone(),
             });
         }
@@ -131,7 +132,22 @@ public class TeamControllerTests : IDisposable
 
         /// A hook status for the session's pane, as MainWindow relays it.
         public void Status(Session s, string state, string? detail = null)
-            => Ctrl.OnAgentStatus(s, new StatusMessage(state, detail));
+            {
+            if (detail != null && detail.StartsWith("[Perch team] ") && !detail.StartsWith("[Perch team] #"))
+            {
+                var text = detail[(detail.IndexOf(": ", StringComparison.Ordinal) + 2)..];
+                var post = Ledger.LastOrDefault(e => e.Kind == "user" && e.Text.StartsWith(text, StringComparison.Ordinal));
+                if (post != null) detail = detail.Replace("[Perch team] ", $"[Perch team] #{post.Seq} ");
+            }
+            Ctrl.OnAgentStatus(s, new StatusMessage(state, detail));
+        }
+
+        public void AcknowledgeLast(Session? session = null)
+        {
+            var typed = session == null ? Typed.Last() : Typed.Last(t => t.Session == session.Id);
+            var s = Sessions.Single(x => x.Id == typed.Session);
+            Ctrl.OnAgentStatus(s, new StatusMessage("working", typed.Line));
+        }
 
         /// Run the newest timer callback (and drop it from the list).
         public void RunLastDelayed()
@@ -261,12 +277,39 @@ public class TeamControllerTests : IDisposable
         Assert.Equal("ada", Assert.Single(post.To!));
         Assert.Equal("c1", post.ClientId);
         // Delivery is a fact ON the post, not a row after it.
-        Assert.True(post.Delivered);
+        Assert.False(post.Delivered);
         Assert.DoesNotContain(ledger, e => e.Event == "delivered");
         // The page saw the post, with nicknames not slugs.
         var seen = h.PostedEntries();
         Assert.Contains(("user", "please fix the sidebar"), seen);
         TeamMarkers.Clear(h.Sessions.Single().Root.Id);
+    }
+
+    [Fact]
+    public async Task ConsecutivePostsKeepTheirOwnAcknowledgementsAndDuplicateClientIdsDoNotSendTwice()
+    {
+        var h = new Harness();
+        await h.CreateBot("Ada");
+        var session = h.Sessions.Single();
+        h.Post("first", "[\"Ada\"]", "one");
+        h.Post("second", "[\"Ada\"]", "two");
+        h.Post("first", "[\"Ada\"]", "one");
+        Assert.Single(h.Typed);
+        Assert.Equal(2, h.Ledger.Count(e => e.Kind == "user"));
+        var posts = h.Ledger.Where(e => e.Kind == "user").ToArray();
+        h.Ctrl.OnAgentStatus(session, new StatusMessage("working", $"[Perch team] #{posts[1].Seq} unrelated"));
+        Assert.DoesNotContain(h.Ledger, e => e.Event == "delivered");
+        h.AcknowledgeLast();
+        Assert.Single(h.Ledger, e => e.Event == "delivered" && e.Note == posts[0].Seq.ToString());
+        Assert.Single(h.Store.Outbox.Items);
+        Assert.Equal(posts[1].Seq, h.Store.Outbox.Items[0].Seq);
+        h.Status(session, "done");
+        h.RunLastDelayed();
+        h.RunLastDelayed();
+        Assert.Equal(2, h.Typed.Count);
+        Assert.Contains("second", h.Typed[1].Line);
+        h.AcknowledgeLast();
+        Assert.Empty(h.Store.Outbox.Items);
     }
 
     [Fact]
@@ -281,7 +324,7 @@ public class TeamControllerTests : IDisposable
         Assert.All(h.Typed, t => Assert.Matches(@"^\[Perch team\] #\d+ Joseph → @everyone: introduce yourselves", t.Line));
         Assert.Equal(h.Sessions.Select(s => s.Id).OrderBy(x => x), h.Typed.Select(t => t.Session).OrderBy(x => x));
         var post = h.Ledger.Single(e => e.Kind == "user");
-        Assert.Equal(TeamRender.Everyone, Assert.Single(post.To!));
+        Assert.Equal(new[] { "ada", "bo" }, post.To);
         foreach (var s in h.Sessions) TeamMarkers.Clear(s.Root.Id);
     }
 
@@ -303,6 +346,7 @@ public class TeamControllerTests : IDisposable
         flush();
         var (_, line) = Assert.Single(h.Typed);
         Assert.Matches(@"^\[Perch team\] #\d+ Joseph → @Ada: hello\?$", line);
+        h.AcknowledgeLast();
         Assert.Contains(h.Ledger, e => e.Event == "delivered" && e.Text == "Delivered to Ada");
 
         // Nothing left parked: a second agent-up schedules nothing (the one
@@ -355,6 +399,7 @@ public class TeamControllerTests : IDisposable
         h.RunLastDelayed();                                  // ResumeHeld
         Assert.Equal(3, h.Entered.Count);
         h.Status(sess, "working", "[Perch team] Joseph → @Ada: still there?");
+        h.AcknowledgeLast();
         Assert.Contains(h.Ledger, e => e.Event == "delivered" && e.Text == "Delivered to Ada");
         Assert.DoesNotContain(h.Ledger, e => e.Event == "undelivered");
         TeamMarkers.Clear(sess.Root.Id);
@@ -382,6 +427,7 @@ public class TeamControllerTests : IDisposable
         Assert.Equal(TeamController.SubmitEnterTries + 1, h.Entered.Count);
         Assert.Single(h.Typed);                              // never a second copy
         h.Status(sess, "working", "[Perch team] Joseph → @Ada: one more thing");
+        h.AcknowledgeLast();
         Assert.Contains(h.Ledger, e => e.Event == "delivered" && e.Text == "Delivered to Ada");
         Assert.DoesNotContain(h.Ledger, e => e.Event == "undelivered");
         TeamMarkers.Clear(sess.Root.Id);
@@ -420,6 +466,7 @@ public class TeamControllerTests : IDisposable
         h.RunLastDelayed();                                  // the flush
         var (_, line) = Assert.Single(h.Typed);
         Assert.Matches(@"^\[Perch team\] #\d+ Joseph → @Ada: please fix the sidebar$", line);
+        h.AcknowledgeLast();
         Assert.Contains(h.Ledger, e => e.Event == "delivered" && e.Text == "Delivered to Ada");
 
         // Enter is never pressed on a pane that is asking something either:
@@ -428,7 +475,7 @@ public class TeamControllerTests : IDisposable
         sess.Root.AgentState = AgentState.Waiting;
         h.RunLastDelayed();                                  // the submit check
         Assert.Empty(h.Entered);
-        Assert.Equal(2, h.Ledger.Count(e => e.Event == "waiting"));
+        Assert.Single(h.Ledger, e => e.Event == "waiting");
         TeamMarkers.Clear(sess.Root.Id);
     }
 
@@ -472,6 +519,7 @@ public class TeamControllerTests : IDisposable
         Assert.Equal("lead", post.Note);
         Assert.DoesNotContain(h.Ledger, e => e.Event == "cc");   // the lead IS the target: nothing to copy
 
+        h.AcknowledgeLast(leeSess);
         h.Typed.Clear();
         h.Post("standup in five", "\"everyone\"", "c2");
         Assert.Equal(2, h.Typed.Count);
@@ -491,8 +539,8 @@ public class TeamControllerTests : IDisposable
         Assert.Equal(2, h.Typed.Count);
         Assert.All(h.Typed, t => Assert.Matches(@"^\[Perch team\] #\d+ Joseph → @everyone: who owns the sidebar\?$", t.Line));
         var post = h.Ledger.Single(e => e.Kind == "user");
-        Assert.Equal(TeamRender.Everyone, Assert.Single(post.To!));
-        Assert.True(post.Delivered);
+        Assert.Equal(new[] { "ada", "bo" }, post.To);
+        Assert.False(post.Delivered);
         Assert.DoesNotContain(h.Ledger, e => e.Event is "routed" or "error");
         foreach (var s in h.Sessions) TeamMarkers.Clear(s.Root.Id);
     }
@@ -812,6 +860,7 @@ public class TeamControllerTests : IDisposable
         Assert.Single(h.Delayed)();
         var (_, landed) = Assert.Single(h.Typed);
         Assert.Matches(@"^\[Perch team\] #\d+ Joseph → @Ada: next up: the footer$", landed);
+        h.AcknowledgeLast();
         Assert.Contains(h.Ledger, e => e.Event == "delivered" && e.Text == "Delivered to Ada");
         foreach (var s in h.Sessions) TeamMarkers.Clear(s.Root.Id);
     }
@@ -1197,7 +1246,7 @@ public class TeamControllerTests : IDisposable
             "2 agents are named 'bo'. Re-send with the ref of the one you mean"));
         var (to, line) = Assert.Single(h.Typed);
         Assert.Equal(bo.Id, to);
-        Assert.Equal("[Perch team] Ada → you: FYI: stand down on the ticket definitions", line);
+        Assert.EndsWith("Ada → you: FYI: stand down on the ticket definitions", line);
         var peer = h.Ledger.Single(e => e.Kind == "peer");
         Assert.Equal("stand down on the ticket definitions", peer.Text);
         Assert.True(peer.Ok);
@@ -1504,7 +1553,8 @@ public class TeamControllerTests : IDisposable
         var (_, again) = Assert.Single(h.Typed);
         Assert.Contains("did you see the ticket?", again);
         Assert.Single(h.Ledger, e => e.Kind == "user");
-        Assert.Contains(h.Ledger, e => e.Event == "delivered" && e.Text == "Sent to Ada again");
+        h.AcknowledgeLast();
+        Assert.Contains(h.Ledger, e => e.Event == "delivered" && e.Text == "Delivered to Ada");
         TeamMarkers.Clear(sess.Root.Id);
     }
 
@@ -1538,6 +1588,7 @@ public class TeamControllerTests : IDisposable
         var (to, line) = Assert.Single(h.Typed);
         Assert.Equal(sess.Id, to);
         Assert.Contains("one more thing", line);
+        h.AcknowledgeLast();
         Assert.Contains(h.Ledger, e => e.Event == "delivered" && e.Text == "Delivered to Ada");
         TeamMarkers.Clear(sess.Root.Id);
     }
@@ -1590,10 +1641,8 @@ public class TeamControllerTests : IDisposable
             h.Ctrl.OnPermAnswer(new TeamPermAnswerMsg { ProjectId = h.Project.Id, Id = "p5", Decision = "allow" });
             var onScreen = h.Delayed[^1];
             onScreen();
-            var (pane, keys) = Assert.Single(h.Raw);
-            Assert.Equal(sess.Root.Id, pane);
-            Assert.Equal(new byte[] { (byte)'\r' }, keys);   // Enter takes the highlighted "yes"
-            Assert.Contains(h.Ledger, e => e.Text.Contains("still showing the question"));
+            Assert.Empty(h.Raw); // no unidentified prompt receives delayed keystrokes
+            Assert.Contains(h.Ledger, e => e.Event == "permission.check");
             File.Delete(TeamPaths.PermAnswerPathFor("p5"));
 
             // …and when the bot moves on by itself, nothing is pressed.
@@ -1734,6 +1783,7 @@ public class TeamControllerTests : IDisposable
         Assert.Matches(@"^\[Perch team\] #\d+ Joseph → @Ada \(cc Lee for the board\): add loading states to the KPI page$", cc);
         Assert.Contains(h.Ledger, e => e.Event == "cc" && e.Text == "Copied to Lee for the board");
 
+        foreach (var session in h.Sessions) h.AcknowledgeLast(session);
         // Once a card names Ada, her posts stop being copied.
         h.Ctrl.OnTeamTask(leeSess, leeSess.Root.Id, new TeamTaskMessage("new", null, "KPI loading states", null, null));
         var board = Assert.Single(h.Store.Tasks.Open);
@@ -1775,13 +1825,14 @@ public class TeamControllerTests : IDisposable
         h.Ctrl.OnTeamReact(ada, ada.Root.Id, new TeamReactMessage("#9999", "👀"));
         Assert.Contains(h.Ledger, e => e.Event == "error" && e.Text.Contains("reacted to something the room doesn't have"));
 
+        h.AcknowledgeLast(ada);
         // The owner reacts to Ada's note: a reaction row, and one line to Ada.
         h.Typed.Clear();
         h.Ctrl.OnReact(new TeamReactMsg { ProjectId = h.Project.Id, Seq = note.Seq, Emoji = "✅" });
         var mine = h.Ledger.Last(e => e.Kind == "reaction");
         Assert.Equal("you", mine.From);
         var (_, line) = Assert.Single(h.Typed);
-        Assert.Equal($"[Perch team] Joseph reacted ✅ to #{note.Seq} \"Footer is live on staging.\"", line);
+        Assert.Contains($"Joseph reacted ✅ to #{note.Seq} \"Footer is live on staging.\"", line);
         // Reacting to your own post tells nobody.
         h.Typed.Clear();
         h.Ctrl.OnReact(new TeamReactMsg { ProjectId = h.Project.Id, Seq = post.Seq, Emoji = "✅" });
@@ -1895,6 +1946,7 @@ public class TeamControllerTests : IDisposable
         Assert.Equal(png, row.Image);
         Assert.Equal("does this look right?", row.Text);
 
+        h.AcknowledgeLast();
         // Picture only, no words: still delivered. A path that isn't a picture
         // (or doesn't exist) is dropped, never typed.
         h.Ctrl.OnPost(new TeamPostMsg { ProjectId = h.Project.Id, Text = "", ClientId = "i2", To = JsonDocument.Parse("[\"Ada\"]").RootElement.Clone(), Image = png });
@@ -1942,6 +1994,7 @@ public class TeamControllerTests : IDisposable
         Assert.Equal(sess.Id, typed.Session);
         Assert.Contains("did you save the report?", typed.Line);
         Assert.Contains($"#{post.Seq} ", typed.Line);   // the line names the post the room shows
+        h.AcknowledgeLast();
         Assert.Contains(h.Ledger, e => e.Event == "delivered" && e.Note == post.Seq.ToString());
         TeamMarkers.Clear(sess.Root.Id);
     }
@@ -1987,7 +2040,13 @@ public class TeamControllerTests : IDisposable
         h.Post("two", "[\"Ada\"]", "c2");
 
         var sess = Assert.Single(h.Sessions);          // one tab, not two
+        h.NoPty.Clear();
         h.Ctrl.OnAgentUp(sess);
+        h.RunLastDelayed();
+        Assert.Single(h.Typed);
+        h.AcknowledgeLast(sess);
+        h.Status(sess, "done");
+        h.RunLastDelayed();
         h.RunLastDelayed();
         Assert.Equal(2, h.Typed.Count);
         Assert.Contains("one", h.Typed[0].Line);

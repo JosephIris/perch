@@ -94,6 +94,7 @@ const empty = (paneId: string): InspectorDataMessage => ({
 onMessage((msg) => {
   if (msg.type !== "inspector.data") return;
   cache.set(msg.paneId, msg);
+  while (cache.size > 32) cache.delete(cache.keys().next().value!);
   const p = inflight.get(msg.paneId);
   if (!p) return;
   clearTimeout(p.timer);
@@ -145,6 +146,7 @@ onMessage((msg) => {
   if (msg.type !== "inspector.image.data") return;
   const src = msg.data ? `data:${msg.mediaType};base64,${msg.data}` : "";
   if (src && msg.variant === "thumb") thumbCache.set(`${msg.paneId}:${msg.imageId}`, src);
+  while (thumbCache.size > 128) thumbCache.delete(thumbCache.keys().next().value!);
   const key = `${msg.paneId}:${msg.imageId}:${msg.variant}`;
   const p = imgInflight.get(key);
   if (!p) return;

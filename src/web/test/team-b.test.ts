@@ -201,12 +201,21 @@ test("landedSet: a post parked for a starting bot stops saying it is waiting", (
   // post landed with a row naming that post's number. Without reading those,
   // the room said "waiting for the bot" forever on a post that did arrive.
   const rows = [
-    entry({ seq: 7, kind: "user", from: "you", text: "@Ada are you there?", delivered: false }),
-    entry({ seq: 8, kind: "system", from: "perch", event: "delivered", note: "7", text: "Delivered to Ada" }),
+    entry({ seq: 7, kind: "user", from: "you", text: "@Ada are you there?", to: ["Ada"], delivered: false }),
+    entry({ seq: 8, kind: "system", from: "Ada", event: "delivered", note: "7", text: "Delivered to Ada" }),
     entry({ seq: 9, kind: "user", from: "you", text: "@Bo and you?", delivered: false }),
   ];
   const landed = landedSet(rows);
   assert.ok(landed.has(7));
   assert.ok(!landed.has(9), "a post with no delivered row is still waiting");
   assert.equal(landedSet([]).size, 0);
+});
+
+
+test("broadcast delivery waits for every named recipient", () => {
+  const post = entry({ seq: 50, kind: "user", from: "you", to: ["Ada", "Bo"], delivered: false });
+  const ada = entry({ seq: 51, kind: "system", from: "Ada", event: "delivered", note: "50" });
+  const bo = entry({ seq: 52, kind: "system", from: "Bo", event: "delivered", note: "50" });
+  assert.equal(landedSet([post, ada]).has(50), false);
+  assert.equal(landedSet([post, ada, bo]).has(50), true);
 });

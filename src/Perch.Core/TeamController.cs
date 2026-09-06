@@ -105,7 +105,7 @@ internal sealed class TeamController
     /// asks before sleeping a tab: a bot with a post queued is about to be
     /// busy, however quiet it looks right now.
     public bool HasParkedWork(Guid sessionId) =>
-        _parked.ContainsKey(sessionId) || _coldStart.ContainsKey(sessionId);
+        _parked.ContainsKey(sessionId) || _coldStart.ContainsKey(sessionId) || _submits.ContainsKey(sessionId) || _held.ContainsKey(sessionId);
 
     /// Lines addressed to a bot that had NO tab on this machine, held while
     /// Perch starts one for it (see Attempt's `wake`). Keyed by bot slug
@@ -114,6 +114,7 @@ internal sealed class TeamController
     private readonly Dictionary<string, List<(long Seq, string Line, string Nick)>> _pendingStart = new();
     /// Bots whose tab is being created right now — a second post to one
     /// while it starts queues behind the first instead of starting twice.
+    private static string BotKey(Guid projectId, string slug) => $"{projectId:N}/{slug.ToLowerInvariant()}";
     private readonly HashSet<string> _startingBots = new(StringComparer.OrdinalIgnoreCase);
     /// Tabs Attempt decided to open, started by KickStarts once the caller
     /// has appended its own row. Starting inline would append the bot's
@@ -181,8 +182,8 @@ internal sealed class TeamController
         // never unclaimed work: the wrap-up asks for exactly that edit.
         if (IsTeamFile(target)) return null;
         var now = atMs > 0 ? atMs : DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        if (_unclaimedWarnedAt.TryGetValue(bot.Slug, out var last) && now - last < UnclaimedWarnEveryMs) return null;
-        _unclaimedWarnedAt[bot.Slug] = now;
+        if (_unclaimedWarnedAt.TryGetValue(store.RepoRoot + "/" + bot.Slug, out var last) && now - last < UnclaimedWarnEveryMs) return null;
+        _unclaimedWarnedAt[store.RepoRoot + "/" + bot.Slug] = now;
         Log.Info("Team.unclaimed", $"bot={bot.Slug} edits with no piece on the board");
         return new RoomEntry
         {
@@ -199,8 +200,6 @@ internal sealed class TeamController
         /// The exact line that was typed, so it can be typed again.
         public required string Line { get; init; }
         public int Tries;
-        /// Whether the line has already been typed a second time.
-        public bool Retried;
         /// How many times the line has been held for the pane to come free.
         public int Holds;
         /// Whether the room has been told this line is waiting.
@@ -252,10 +251,10 @@ internal sealed class TeamController
     /// Permission requests a bot's hook is holding for the room: id → (bot
     /// slug, pane). The hook polls for the answer file; the owner's click
     /// writes it (OnPermAnswer).
-    private readonly Dictionary<string, (string Slug, Guid PaneId)> _awaitingPerm = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, (string Slug, Guid PaneId, Guid ProjectId)> _awaitingPerm = new(StringComparer.OrdinalIgnoreCase);
 
     /// Ask cards not yet answered: id → the asking bot's slug.
-    private readonly Dictionary<string, string> _asks = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, (Guid ProjectId, string Slug)> _asks = new(StringComparer.OrdinalIgnoreCase);
 
     /// Model rate limits as last reported; bots moved off a limited model,
     /// slug → the alias they were on; and when each bot was last switched
@@ -290,14 +289,14 @@ internal sealed class TeamController
                 var sess = bot.SessionId is Guid id ? _h.SessionById(id) : null;
                 var pane = sess == null ? null : PaneTree.AllLeaves(sess.Root).FirstOrDefault(p => p.IsTerminal);
                 if (sess == null || pane == null || sess.Dormant) continue;
-                if (_modelActedAt.TryGetValue(bot.Slug, out var last) && now - last < ModelDebounce) continue;
+                if (_modelActedAt.TryGetValue(BotKey(proj.Id, bot.Slug), out var last) && now - last < ModelDebounce) continue;
 
-                if (_modelSwitched.TryGetValue(bot.Slug, out var original))
+                if (_modelSwitched.TryGetValue(BotKey(proj.Id, bot.Slug), out var original))
                 {
                     // Moved off `original` earlier: back the moment it is free.
                     if (Limited(original)) continue;
-                    _modelSwitched.Remove(bot.Slug);
-                    _modelActedAt[bot.Slug] = now;
+                    _modelSwitched.Remove(BotKey(proj.Id, bot.Slug));
+                    _modelActedAt[BotKey(proj.Id, bot.Slug)] = now;
                     _h.SetPaneModel(pane.Id, original);
                     Log.Info("Team.model", $"bot={bot.Slug} back to {original}");
                     rows.Add(store.Ledger.Append(new RoomEntry
@@ -312,8 +311,8 @@ internal sealed class TeamController
                 if (current == null || !Limited(current)) continue;
                 var next = ModelFallback.FirstOrDefault(a => !Limited(a));
                 if (next == null || string.Equals(next, current, StringComparison.OrdinalIgnoreCase)) continue;
-                _modelSwitched[bot.Slug] = current;
-                _modelActedAt[bot.Slug] = now;
+                _modelSwitched[BotKey(proj.Id, bot.Slug)] = current;
+                _modelActedAt[BotKey(proj.Id, bot.Slug)] = now;
                 _h.SetPaneModel(pane.Id, next);
                 var until = ResetWord(_limits.First(l => l.AtLimit && string.Equals(l.Alias, current, StringComparison.OrdinalIgnoreCase)));
                 Log.Info("Team.model", $"bot={bot.Slug} {current} at limit{until} → {next}");
@@ -410,6 +409,23 @@ internal sealed class TeamController
         if (store != null)
         {
             _stores[projectId] = store;
+            foreach (var delivery in store.Outbox.Items.ToList())
+            {
+                var bot = store.Doc.Bot(delivery.Bot);
+                if (bot == null) continue;
+                if (delivery.State == "queued" && bot.SessionId is Guid sid && _h.SessionById(sid) != null)
+                {
+                    if (!_parked.TryGetValue(sid, out var queue)) _parked[sid] = queue = new();
+                    queue.Add((delivery.Seq, delivery.Line, bot.Nickname));
+                    FlushParked(sid, TimeSpan.FromSeconds(1));
+                }
+                else
+                {
+                    store.Ledger.Append(new RoomEntry { Kind = "system", From = bot.Slug,
+                        Event = "undelivered", Note = delivery.Seq.ToString(),
+                        Text = $"Delivery to {bot.Nickname} was interrupted; check its terminal before sending again" });
+                }
+            }
             // First sight of this team in this process: render the local
             // files now. They live under local/ (never committed), so a fresh
             // clone, a pull, or the folder's migration leaves them missing —
@@ -479,8 +495,7 @@ internal sealed class TeamController
                 // The brief rides along (capped) so "Edit brief…" opens on the
                 // text without a round trip. Positions are few and the state
                 // push is already the hot path, hence the cap.
-                var brief = store.ReadBrief(p.Slug);
-                if (brief.Length > 16 * 1024) brief = brief[..(16 * 1024)];
+                var brief = store.ReadBriefPreview(p.Slug);
                 return new
                 {
                     slug = p.Slug,
@@ -996,7 +1011,7 @@ internal sealed class TeamController
         var text = (msg.Text ?? "").Trim();
         if (text.Length == 0) return;
         var id = string.IsNullOrWhiteSpace(msg.Id) ? Guid.NewGuid().ToString("N")[..8] : msg.Id!.Trim();
-        _asks[id] = h.Bot.Slug;
+        _asks[id] = (h.Project.Id, h.Bot.Slug);
         var choices = (msg.Choices ?? Array.Empty<string>()).Select(c => c.Trim()).Where(c => c.Length > 0).Take(6).ToList();
         var entry = h.Store.Ledger.Append(new RoomEntry
         {
@@ -1016,7 +1031,10 @@ internal sealed class TeamController
         var store = StoreFor(msg.ProjectId);
         var answer = (msg.Answer ?? "").Trim();
         if (proj == null || store == null || answer.Length == 0) return;
-        if (!_asks.Remove(msg.Id, out var slug))
+        if (_asks.TryGetValue(msg.Id, out var pendingAsk) && pendingAsk.ProjectId != proj.Id) return;
+        string? slug = null;
+        if (_asks.Remove(msg.Id, out pendingAsk)) slug = pendingAsk.Slug;
+        else
         {
             // Not in memory (a restart): find the card in the ledger.
             slug = store.Ledger.ReadAll().LastOrDefault(e => e.Event == "ask" && e.Note == msg.Id)?.To?.FirstOrDefault();
@@ -1044,7 +1062,7 @@ internal sealed class TeamController
         if (BotOfSession(sess.Id) is not { } h) return;
         var id = (msg.Id ?? "").Trim();
         if (id.Length == 0) return;
-        _awaitingPerm[id] = (h.Bot.Slug, paneId);
+        _awaitingPerm[id] = (h.Bot.Slug, paneId, h.Project.Id);
         var tool = (msg.Tool ?? "tool").Trim();
         var summary = TeamRender.OneLine(msg.Summary, 300);
         var entry = h.Store.Ledger.Append(new RoomEntry
@@ -1098,8 +1116,9 @@ internal sealed class TeamController
         var store = StoreFor(msg.ProjectId);
         if (proj == null || store == null) return;
         var allow = string.Equals(msg.Decision, "allow", StringComparison.OrdinalIgnoreCase);
+        if (!_awaitingPerm.TryGetValue(msg.Id, out var who) || who.ProjectId != proj.Id) return;
         TeamPaths.Write(TeamPaths.PermAnswerPathFor(msg.Id), allow ? "allow" : "deny");
-        _awaitingPerm.Remove(msg.Id, out var who);
+        _awaitingPerm.Remove(msg.Id);
         var bot = store.Doc.Bot(who.Slug ?? "");
         if (bot == null)
             bot = store.Doc.Bot(store.Ledger.ReadAll().LastOrDefault(e => e.Event == "permission" && e.Note == msg.Id)?.To?.FirstOrDefault() ?? "");
@@ -1157,14 +1176,13 @@ internal sealed class TeamController
     {
         if (!_promptOnScreen.Remove(paneId, out var p)) return;   // the hook settled it
         Log.Info("Team.perm.onscreen", $"pane={paneId:N} allow={p.Allow} — the hook's answer didn't take; answering the prompt itself");
-        _h.WriteRaw(paneId, p.Allow ? new byte[] { (byte)'\r' } : new byte[] { 0x1b });
         var store = StoreFor(p.Project);
         var proj = _h.ProjectById(p.Project);
         if (store == null || proj == null) return;
         var e = store.Ledger.Append(new RoomEntry
         {
-            Kind = "system", From = "perch", Event = "permission.answered", PaneId = paneId.ToString("D"),
-            Text = $"{p.Nick} was still showing the question, so the answer was pressed there too",
+            Kind = "system", From = "perch", Event = "permission.check", PaneId = paneId.ToString("D"),
+            Text = $"If {p.Nick} is still showing a question, open its terminal to answer it",
         });
         PostEntries(proj.Id, store, new[] { e });
     }
@@ -1242,15 +1260,11 @@ internal sealed class TeamController
         var bot = store.Doc.Bot(target.From);
         if (bot == null) return;   // the owner's own row, or the app's
         var line = ReactionLine(msg.Seq, (msg.Emoji ?? "").Trim(), target.Text);
-        var attempts = Attempt(new List<TeamBot> { bot }, line, everyone: false, seq: 0, raw: true);
-        Log.Info("Team.react", $"seq={msg.Seq} bot={bot.Slug} delivered={attempts.All(a => a.Ok)}");
-        var post = new RoomEntry
-        {
-            Kind = "system", From = "perch", Event = "delivered", Note = msg.Seq.ToString(),
-            To = new List<string> { bot.Slug }, Text = $"Told {bot.Nickname} about your reaction",
-            Delivered = attempts.All(a => a.Ok),
-        };
-        if (!attempts.All(a => a.Ok)) { store.Ledger.Append(post); Record(store, post, attempts); }
+        var seq = store.Ledger.LastSeq; // the reaction row just appended by React
+        var attempts = Attempt(new List<TeamBot> { bot }, line, everyone: false, seq, raw: true);
+        var post = new RoomEntry { Seq = seq, Kind = "reaction", From = "you", To = new List<string> { bot.Slug } };
+        var rows = Record(store, post, attempts);
+        PostEntries(proj.Id, store, rows);
     }
 
     /// The line typed into a bot's terminal when the owner reacts to its row.
@@ -1300,6 +1314,7 @@ internal sealed class TeamController
     /// uses so the line lands in a painted input box.
     public void OnAgentUp(Session sess)
     {
+        foreach (var key in _awaitingTrust.Where(kv => PaneTree.AllLeaves(sess.Root).Any(p => p.Id == kv.Value)).Select(kv => kv.Key).ToArray()) _awaitingTrust.Remove(key);
         // Claude is listening now, so a pane we started for a post is no
         // longer "starting" — and a reset is over.
         _coldStart.Remove(sess.Id);
@@ -1325,14 +1340,13 @@ internal sealed class TeamController
     /// the submit check will then report.
     private void ColdStartOverdue(Guid sid)
     {
-        if (!_coldStart.Remove(sid)) return;              // Claude came up in time
+        if (!_coldStart.ContainsKey(sid)) return;         // Claude came up in time
         if (BotOfSession(sid) is not { } h) return;
         if (!_parked.ContainsKey(sid)) return;            // nothing waiting after all
         Log.Info("Team.start.overdue", $"session={sid:N} bot={h.Bot.Slug}");
         var seq = _parked[sid].FirstOrDefault().Seq;
         Say(h, h.Bot, "undelivered", seq,
             $"{h.Bot.Nickname} hasn't finished starting, so this hasn't gone in yet — open its terminal to see why");
-        FlushParked(sid, TimeSpan.FromSeconds(1));
     }
 
     /// A hook status for one of `sess`'s panes, BEFORE the window applies it.
@@ -1347,11 +1361,14 @@ internal sealed class TeamController
         if (state is AgentState.Working or AgentState.Done && _promptOnScreen.Count > 0)
             foreach (var leaf in PaneTree.AllLeaves(sess.Root)) _promptOnScreen.Remove(leaf.Id);
         var isPostEcho = state == AgentState.Working && (msg.Detail ?? "").StartsWith(TeamRender.PostPrefix, StringComparison.Ordinal);
-        if (isPostEcho && (_submits.Remove(sess.Id, out var p) || _held.Remove(sess.Id, out p)))
+        var pending = _submits.GetValueOrDefault(sess.Id) ?? _held.GetValueOrDefault(sess.Id);
+        if (isPostEcho && pending is { } p && Echoes(msg.Detail!, p.Seq))
         {
+            _submits.Remove(sess.Id);
+            _held.Remove(sess.Id);
             Log.Info("Team.submit", $"session={sess.Id:N} seq={p.Seq} confirmed");
             // A line the room was told is waiting gets its closing row.
-            if (p.Announced && BotOfSession(sess.Id) is { } hb)
+            if (BotOfSession(sess.Id) is { } hb)
                 Say(hb, p.Bot, "delivered", p.Seq, $"Delivered to {p.Bot.Nickname}");
         }
         // A turn ended (the Stop hook says so): a held line gets its Enter.
@@ -1365,7 +1382,7 @@ internal sealed class TeamController
         // turn end fires it (after a look at the memory file).
         if (_wrapping.TryGetValue(sess.Id, out var w))
         {
-            if (isPostEcho && !w.Confirmed) w.Confirmed = true;
+            if (isPostEcho && Echoes(msg.Detail!, w.Seq) && !w.Confirmed) w.Confirmed = true;
             else if (w.Confirmed && state == AgentState.Done) FinishWrap(sess, w);
         }
         // A turn ended: a bot with finished work and nothing of its own left
@@ -1391,28 +1408,22 @@ internal sealed class TeamController
             // Not yet: asleep, asking something, or mid-turn — a line typed
             // into a running turn sits in the composer unsent. The next
             // state change tries again.
-            if (s.Dormant || Blocked(s) || Working(s)) return;
+            if (s.Dormant || Blocked(s) || Working(s) || _submits.ContainsKey(sid) || _held.ContainsKey(sid)) return;
             // Still booting: the shell answers long before Claude does, and a
             // line typed into that gap is lost. OnAgentUp releases this.
-            if (_coldStart.ContainsKey(sid)) return;
+            if (_coldStart.ContainsKey(sid) || !SessionRunning(s)) return;
             // Writing up finished work, or just reset: the line waits for the
             // fresh Claude (OnAgentUp after the /clear flushes it).
             if (WrapHolds(h.Bot, s)) return;
-            var delivered = new List<RoomEntry>();
-            foreach (var (seq, line, nick) in lines.ToList())
+            foreach (var (seq, line, nick) in lines.Take(1).ToList())
             {
+                h.Store.Outbox.Put(seq, h.Bot.Slug, line, "submitting");
                 if (!_h.TypeToClaude(s, line)) break;
                 lines.Remove((seq, line, nick));
                 Expect(sid, h.Bot, seq, line);
-                delivered.Add(h.Store.Ledger.Append(new RoomEntry
-                {
-                    Kind = "system", From = "perch", Event = "delivered",
-                    Text = $"Delivered to {nick}", Note = seq.ToString(),
-                }));
                 Log.Info("Team.deliver", $"session={sid:N} seq={seq} (parked)");
             }
             if (lines.Count == 0) _parked.Remove(sid);
-            if (delivered.Count > 0) PostEntries(h.Project.Id, h.Store, delivered);
         }, delay);
     }
 
@@ -1424,6 +1435,10 @@ internal sealed class TeamController
     private static bool Working(Session sess)
         => PaneTree.AllLeaves(sess.Root).Any(p => p.IsTerminal && p.AgentState == AgentState.Working);
 
+    private static bool Echoes(string detail, long seq)
+        => seq > 0 && System.Text.RegularExpressions.Regex.IsMatch(detail,
+            @"^\[Perch team\] #" + seq + @"(?:\s|$)");
+
     // ---- submit confirmation ----------------------------------------------
 
     /// A line was just typed for post `seq`: wait for the prompt-submit hook,
@@ -1431,6 +1446,7 @@ internal sealed class TeamController
     /// session — a newer post supersedes the check for an older one.
     private void Expect(Guid sid, TeamBot bot, long seq, string line)
     {
+        if (BotOfSession(sid) is { } h) h.Store.Outbox.Put(seq, bot.Slug, line, "submitting");
         _submits[sid] = new PendingSubmit { Seq = seq, Bot = bot, Line = line };
         _h.Delay(() => CheckSubmitted(sid, seq), SubmitChecks[0]);
     }
@@ -1524,6 +1540,7 @@ internal sealed class TeamController
     /// page can offer its terminal.
     private void Say((Project Project, TeamStore Store, TeamBot Bot) h, TeamBot bot, string ev, long seq, string text)
     {
+        if (ev == "delivered") h.Store.Outbox.Finish(seq, bot.Slug);
         var e = h.Store.Ledger.Append(new RoomEntry
         {
             Kind = "system", From = bot.Slug, Event = ev, Note = seq.ToString(), Text = text,
@@ -1539,7 +1556,7 @@ internal sealed class TeamController
     public void OnPromptStuck(Session sess, Guid paneId)
     {
         if (BotOfSession(sess.Id) is not { } h) return;
-        _awaitingTrust[h.Bot.Slug] = paneId;
+        _awaitingTrust[BotKey(h.Project.Id, h.Bot.Slug)] = paneId;
         var e = h.Store.Ledger.Append(new RoomEntry
         {
             Kind = "system", From = "perch", Event = "trust", PaneId = paneId.ToString("D"),
@@ -1561,12 +1578,10 @@ internal sealed class TeamController
         var bot = store?.Doc.Bot(msg.BotId);
         if (proj == null || store == null || bot == null) return;
         Guid paneId;
-        if (!_awaitingTrust.TryGetValue(bot.Slug, out paneId))
+        if (!_awaitingTrust.TryGetValue(BotKey(proj.Id, bot.Slug), out paneId))
         {
-            var sess = bot.SessionId is Guid sid ? _h.SessionById(sid) : null;
-            var pane = sess == null ? null : PaneTree.AllLeaves(sess.Root).FirstOrDefault(p => p.IsTerminal);
-            if (pane == null) { Toast($"{bot.Nickname} isn't running."); return; }
-            paneId = pane.Id;
+            Toast($"{bot.Nickname}'s start-up question is no longer pending; open its terminal to check.");
+            return;
         }
         var trust = string.Equals(msg.Answer, "trust", StringComparison.OrdinalIgnoreCase);
         try
@@ -1574,7 +1589,7 @@ internal sealed class TeamController
             _h.WriteRaw(paneId, trust ? new byte[] { 0x1b, (byte)'[', (byte)'B', (byte)'\r' } : new byte[] { (byte)'\r' });
         }
         catch (Exception ex) { Log.Info("Team.trust.answer", $"write failed: {ex.Message}"); }
-        _awaitingTrust.Remove(bot.Slug);
+        _awaitingTrust.Remove(BotKey(proj.Id, bot.Slug));
         Log.Info("Team.trust.answer", $"bot={bot.Slug} pane={paneId:N} trust={trust}");
         var e = store.Ledger.Append(new RoomEntry
         {
@@ -1603,16 +1618,12 @@ internal sealed class TeamController
         _parked.Remove(sess.Id);
         _submits.Remove(sess.Id);
         _held.Remove(sess.Id);
+        _coldStart.Remove(sess.Id);
+        _flushPending.Remove(sess.Id);
         _wrapping.Remove(sess.Id);
         _resetting.Remove(sess.Id);
-        // A closed tab has no context left to write from: whatever it had
-        // finished is its past now.
-        var pending = h.Store.Tasks.Unwritten(h.Bot.Slug).ToList();
-        if (pending.Count > 0)
-        {
-            foreach (var b in pending) b.MarkWrittenUp(h.Bot.Slug);
-            h.Store.SaveTasks();
-        }
+        foreach (var delivery in h.Store.Outbox.Items.Where(d => d.Bot == h.Bot.Slug).ToList())
+            Say(h, h.Bot, "undelivered", delivery.Seq, $"{h.Bot.Nickname}'s tab closed before delivery was confirmed");
         RefreshRoster(h.Project, h.Store);
         PostEntries(h.Project.Id, h.Store, new[] { e });
     }
@@ -1671,6 +1682,8 @@ internal sealed class TeamController
         var image = (msg.Image ?? "").Trim();
         if (image.Length > 0 && !(File.Exists(image) && IsImagePath(image))) image = "";
         if (proj == null || store == null || (text.Length == 0 && image.Length == 0)) return;
+        if (!store.Outbox.Readable) { Toast("The team's outbox could not be read. It was preserved; repair outbox.json before sending."); return; }
+        if (!string.IsNullOrEmpty(msg.ClientId) && store.Ledger.ReadAll().Any(e => e.Kind == "user" && e.ClientId == msg.ClientId)) return;
 
         // No one named: the LEAD's, when the team has one — it turns the post
         // into a card and hands out the pieces, so one bot acts on it, not
@@ -1697,7 +1710,7 @@ internal sealed class TeamController
         var entry = new RoomEntry
         {
             Kind = "user", From = "you", Text = text, ClientId = msg.ClientId,
-            To = everyone ? new List<string> { TeamRender.Everyone } : targets.Select(b => b.Slug).ToList(),
+            To = targets.Select(b => b.Slug).ToList(),
             // The page says "to Anton · the lead, nobody named" on the row.
             Note = toLead ? "lead" : null,
             Image = image.Length > 0 ? image : null,
@@ -1712,9 +1725,9 @@ internal sealed class TeamController
         // `wake`) — the one you named, or, for a post to everyone, every one
         // on the roster with no tab on this machine. The owner chose the
         // whole-team start over a "Send again" per bot (2026-09-05).
-        var attempts = Attempt(targets, WithImage(text, image), everyone, seq, wake: (proj, store));
-        entry.Delivered = attempts.All(a => a.Ok);
+        entry.Delivered = false; // only a matching submit hook confirms delivery
         store.Ledger.Append(entry);
+        var attempts = Attempt(targets, WithImage(text, image), everyone, seq, wake: (proj, store));
         var events = Record(store, entry, attempts);
         KickStarts();
 
@@ -2134,9 +2147,6 @@ internal sealed class TeamController
             var sess = bot.SessionId is Guid id ? _h.SessionById(id) : null;
             if (sess == null)
             {
-                // The tab went while the card waited: no context to write from.
-                foreach (var b in cards) b.MarkWrittenUp(bot.Slug);
-                store.SaveTasks();
                 continue;
             }
             if (_wrapping.ContainsKey(sess.Id) || _resetting.ContainsKey(sess.Id)) continue;
@@ -2163,7 +2173,7 @@ internal sealed class TeamController
         var post = store.Ledger.Append(new RoomEntry
         {
             Kind = "user", From = "you", Text = text, To = new List<string> { bot.Slug },
-            Delivered = true, TaskId = cards[^1].Id,
+            Delivered = false, TaskId = cards[^1].Id,
         });
         _wrapping[sess.Id] = new Wrap
         {
@@ -2208,9 +2218,10 @@ internal sealed class TeamController
             {
                 var post = h.Store.Ledger.Append(new RoomEntry
                 {
-                    Kind = "user", From = "you", Text = text, To = new List<string> { h.Bot.Slug }, Delivered = true, TaskId = w.TaskIds[^1],
+                    Kind = "user", From = "you", Text = text, To = new List<string> { h.Bot.Slug }, Delivered = false, TaskId = w.TaskIds[^1],
                 });
                 Expect(sess.Id, h.Bot, post.Seq, line);
+                w.Seq = post.Seq;
                 Log.Info("Team.wrap", $"session={sess.Id:N} bot={h.Bot.Slug}: memory unchanged, nudged");
                 PostEntries(h.Project.Id, h.Store, new[] { post });
                 return;
@@ -2295,43 +2306,24 @@ internal sealed class TeamController
         var bot = store.Doc.Bot(msg.BotId ?? "");
         var sess = bot?.SessionId is Guid id ? _h.SessionById(id) : null;
         var post = store.Ledger.ReadAll().LastOrDefault(e => e.Seq == msg.Seq && e.Kind == "user");
+        var persisted = store.Outbox.Items.FirstOrDefault(d => d.Seq == msg.Seq && d.Bot == bot?.Slug);
+        if (post == null && persisted != null) post = new RoomEntry { Seq = persisted.Seq, Kind = "user" };
         if (bot == null || post == null)
         {
             Log.Info("Team.retry", $"seq={msg.Seq} bot={msg.BotId}: nothing to send again");
             return;
         }
-        if (sess == null)
-        {
-            // "Send again" on a bot that has no tab here: start it for the
-            // post, the way a fresh tag would.
-            var wakeLine = DeliveryLine(post.Text, post.To == null || post.To.Contains(TeamRender.Everyone) ? null : bot.Nickname, post.Seq);
-            var wakeAttempts = Attempt(new List<TeamBot> { bot }, wakeLine, everyone: false, post.Seq, raw: true, wake: (proj, store));
-            Log.Info("Team.retry", $"seq={msg.Seq} bot={bot.Slug} ok=False (no tab here; starting one)");
-            var wakeRows = Record(store, post, wakeAttempts);
-            KickStarts();
-            PostEntries(proj.Id, store, wakeRows);
-            return;
-        }
-        if (sess.Dormant) _h.Wake(sess);
-        else if (!SessionRunning(sess)) _h.EnsureRunning?.Invoke(sess);
+        if (sess != null && ((_submits.TryGetValue(sess.Id, out var pending) && pending.Seq == post.Seq)
+            || (_held.TryGetValue(sess.Id, out var held) && held.Seq == post.Seq)
+            || (_parked.TryGetValue(sess.Id, out var queued) && queued.Any(x => x.Seq == post.Seq)))) return;
+        var key = BotKey(proj.Id, bot.Slug);
+        if (_pendingStart.TryGetValue(key, out var starting) && starting.Any(x => x.Seq == post.Seq)) return;
         var everyone = post.To == null || post.To.Contains(TeamRender.Everyone);
-        var line = DeliveryLine(post.Text, everyone ? null : bot.Nickname, post.Seq);
-        var ok = !sess.Dormant && !Blocked(sess) && _h.TypeToClaude(sess, line);
-        Log.Info("Team.retry", $"seq={msg.Seq} bot={bot.Slug} ok={ok}");
-        if (ok) Expect(sess.Id, bot, post.Seq, line);
-        else
-        {
-            // Not ready yet: park it, and the ordinary flush delivers it the
-            // moment the pane can take it.
-            if (!_parked.TryGetValue(sess.Id, out var list)) _parked[sess.Id] = list = new();
-            list.Add((post.Seq, line, bot.Nickname));
-        }
-        var e = store.Ledger.Append(new RoomEntry
-        {
-            Kind = "system", From = bot.Slug, Event = ok ? "delivered" : "waiting", Note = post.Seq.ToString(),
-            Text = ok ? $"Sent to {bot.Nickname} again" : $"{bot.Nickname} isn't ready yet — this goes in as soon as it is",
-        });
-        PostEntries(proj.Id, store, new[] { e });
+        var line = persisted?.Line ?? DeliveryLine(WithImage(post.Text, post.Image ?? ""), everyone ? null : bot.Nickname, post.Seq);
+        var attempts = Attempt(new List<TeamBot> { bot }, line, everyone: false, post.Seq, raw: true, wake: (proj, store));
+        var rows = Record(store, post, attempts);
+        KickStarts();
+        PostEntries(proj.Id, store, rows);
     }
 
     /// The owner takes a card off the board by hand — the escape hatch for a
@@ -2431,7 +2423,11 @@ internal sealed class TeamController
             Toast($"{bot.Nickname} is already running.");
             return;
         }
-        await StartBotAsync(proj, store, bot, because: null);
+        var key = BotKey(proj.Id, bot.Slug);
+        if (!_startingBots.Add(key)) return;
+        // Use the same completion path as a cold delivery: posts arriving
+        // while the owner's Start button is opening a tab must be transferred.
+        await StartForDeliveryAsync(proj, store, bot, because: null);
     }
 
     /// Open a tab for a bot that has none on this machine: the bot's own
@@ -2479,13 +2475,13 @@ internal sealed class TeamController
     /// the new session with the cold-start clock running — from there it is
     /// the ordinary "post to a starting pane" path, released by the
     /// session-start hook (OnAgentUp) or reported by ColdStartOverdue.
-    private async Task StartForDeliveryAsync(Project proj, TeamStore store, TeamBot bot)
+    private async Task StartForDeliveryAsync(Project proj, TeamStore store, TeamBot bot, string? because = "a post was addressed to it")
     {
         Session? sess = null;
-        try { sess = await StartBotAsync(proj, store, bot, because: "a post was addressed to it"); }
+        try { sess = await StartBotAsync(proj, store, bot, because); }
         catch (Exception ex) { Log.Error("Team.start.cold", ex); }
-        finally { _startingBots.Remove(bot.Slug); }
-        _pendingStart.Remove(bot.Slug, out var lines);
+        finally { _startingBots.Remove(BotKey(proj.Id, bot.Slug)); }
+        _pendingStart.Remove(BotKey(proj.Id, bot.Slug), out var lines);
         lines ??= new();
         if (sess == null)
         {
@@ -2655,14 +2651,18 @@ internal sealed class TeamController
         foreach (var bot in targets)
         {
             var line = raw ? text : DeliveryLine(text, everyone ? null : bot.Nickname, seq);
+            if (raw && seq > 0 && line.StartsWith(TeamRender.PostPrefix + " ") && !line.StartsWith(TeamRender.PostPrefix + " #"))
+                line = TeamRender.PostPrefix + $" #{seq}" + line[TeamRender.PostPrefix.Length..];
             var sess = bot.SessionId is Guid id ? _h.SessionById(id) : null;
+            var deliveryStore = wake?.Store ?? (sess == null ? null : BotOfSession(sess.Id)?.Store);
+            deliveryStore?.Outbox.Put(seq, bot.Slug, line, "queued");
             if (sess == null)
             {
                 if (wake is { } w)
                 {
-                    if (!_pendingStart.TryGetValue(bot.Slug, out var pend)) _pendingStart[bot.Slug] = pend = new();
+                    if (!_pendingStart.TryGetValue(BotKey(w.Project.Id, bot.Slug), out var pend)) _pendingStart[BotKey(w.Project.Id, bot.Slug)] = pend = new();
                     pend.Add((seq, line, bot.Nickname));
-                    if (_startingBots.Add(bot.Slug))
+                    if (_startingBots.Add(BotKey(w.Project.Id, bot.Slug)))
                     {
                         Log.Info("Team.start.cold", $"bot={bot.Slug} seq={seq}: no tab here; starting one for the post");
                         _kickStarts.Add((w.Project, w.Store, bot));
@@ -2700,11 +2700,15 @@ internal sealed class TeamController
             // unsent for as long as the turn runs, with nothing in the room
             // saying so. Parked instead; the turn's end (OnAgentStatus,
             // "done") types it, and the room says it is waiting.
-            var busy = !starting && !sess.Dormant && !blocked && Working(sess);
+            starting |= _coldStart.ContainsKey(sess.Id);
+            var busy = !starting && !sess.Dormant && !blocked &&
+                (Working(sess) || _submits.ContainsKey(sess.Id) || _held.ContainsKey(sess.Id) || _parked.ContainsKey(sess.Id));
             // Writing up finished work (or about to, or just reset): the
             // line waits for the fresh context — the wrap-up goes first.
             var wrapHold = !starting && !sess.Dormant && !blocked && !busy && WrapHolds(bot, sess);
-            var ok = !starting && !sess.Dormant && !blocked && !busy && !wrapHold && _h.TypeToClaude(sess, line);
+            var ready = !starting && !sess.Dormant && !blocked && !busy && !wrapHold;
+            if (ready) deliveryStore?.Outbox.Put(seq, bot.Slug, line, "submitting");
+            var ok = ready && _h.TypeToClaude(sess, line);
             results.Add(new Attempted(bot, ok, false, blocked, line, sess.Id, Busy: busy, WrapHold: wrapHold));
         }
         return results;
@@ -2734,6 +2738,11 @@ internal sealed class TeamController
             {
                 Log.Info("Team.deliver", $"session={a.SessionId:N} seq={post.Seq} bot={a.Bot.Slug}");
                 Expect(a.SessionId!.Value, a.Bot, post.Seq, a.Line);
+                events.Add(store.Ledger.Append(new RoomEntry
+                {
+                    Kind = "system", From = a.Bot.Slug, Event = "submitting", Note = post.Seq.ToString(),
+                    Text = $"Typed into {a.Bot.Nickname}'s composer — waiting for its submit acknowledgement",
+                }));
             }
             else if (a.Starting)
             {
@@ -2749,7 +2758,7 @@ internal sealed class TeamController
             {
                 Log.Info("Team.parked", $"session={sid:N} seq={post.Seq} bot={a.Bot.Slug}{(a.Blocked ? " (pane is asking something)" : "")}");
                 if (!_parked.TryGetValue(sid, out var list)) _parked[sid] = list = new();
-                list.Add((post.Seq, a.Line, a.Bot.Nickname));
+                if (!list.Any(x => x.Seq == post.Seq)) list.Add((post.Seq, a.Line, a.Bot.Nickname));
                 if (a.Blocked)
                     events.Add(store.Ledger.Append(new RoomEntry
                     {
@@ -2903,10 +2912,10 @@ internal sealed class TeamController
             if (sess == null) { map[bot.Slug] = "not running"; continue; }
             if (sess.Dormant) { map[bot.Slug] = "asleep"; continue; }
             if (!SessionRunning(sess)) { map[bot.Slug] = "not started"; continue; }
-            if (_awaitingTrust.ContainsKey(bot.Slug)) { map[bot.Slug] = "waiting for the owner to answer its start-up question"; continue; }
-            if (_awaitingPerm.Values.Any(v => string.Equals(v.Slug, bot.Slug, StringComparison.OrdinalIgnoreCase)))
+            if (_awaitingTrust.Values.Any(id => PaneTree.AllLeaves(sess.Root).Any(p => p.Id == id))) { map[bot.Slug] = "waiting for the owner to answer its start-up question"; continue; }
+            if (_awaitingPerm.Values.Any(v => PaneTree.AllLeaves(sess.Root).Any(p => p.Id == v.PaneId)))
             { map[bot.Slug] = "waiting for your permission"; continue; }
-            if (_asks.Values.Any(s => string.Equals(s, bot.Slug, StringComparison.OrdinalIgnoreCase)))
+            if (_asks.Values.Any(s => s.ProjectId == sess.ProjectId && string.Equals(s.Slug, bot.Slug, StringComparison.OrdinalIgnoreCase)))
             { map[bot.Slug] = "waiting for your answer"; continue; }
             var leaves = PaneTree.AllLeaves(sess.Root).Where(p => p.IsTerminal).ToList();
             map[bot.Slug] = leaves.Any(p => p.AgentState is AgentState.Waiting or AgentState.Permission) ? "waiting for the owner"

@@ -70,6 +70,18 @@ internal sealed class TeamStore
     public string ArtefactPathFor(string id, string ext) => Path.Combine(ArtefactsDir, $"{id}.{ext}");
     public string BriefPathFor(string positionSlug) => Path.Combine(PositionsDir, positionSlug, "brief.md");
     public string MemoryPathFor(string botSlug) => Path.Combine(BotsDir, botSlug, "memory.md");
+    /// Facts every bot needs (which table a product reads, an environment
+    /// quirk, a rule from the owner): one file, shared through the repository,
+    /// inlined into every bot's prompt. Any bot adds a line (`perch team
+    /// learn`); the lead prunes by editing the file.
+    public string KnowledgePath => Path.Combine(Dir, "knowledge.md");
+    /// Procedures any bot follows: one folder per skill with a SKILL.md, shared
+    /// like memory. Listed (name, summary, path) in every prompt; a bot Reads
+    /// the file when a task matches.
+    public string SkillsDir => Path.Combine(Dir, "skills");
+    public string SkillPathFor(string slug) => Path.Combine(SkillsDir, slug, "SKILL.md");
+    /// The system prompt a bot's run is started with; local, one per run.
+    public string RunPromptPathFor(string botSlug, string runId) => Path.Combine(LocalDir, "bots", botSlug, $"run-{runId}.md");
     public string SystemPathFor(string botSlug) => Path.Combine(LocalDir, "bots", botSlug, "system.md");
     public string ContextPathFor(string botSlug) => Path.Combine(LocalDir, "bots", botSlug, "context.md");
 
@@ -79,6 +91,8 @@ internal sealed class TeamStore
 
     private RoomLedger? _ledger;
     public RoomLedger Ledger => _ledger ??= new RoomLedger(LedgerPath);
+    private TeamOutbox? _outbox;
+    public TeamOutbox Outbox => _outbox ??= new TeamOutbox(Path.Combine(LocalDir, "outbox.json"));
 
     /// The task board (tasks.json beside team.json; shared). Read on first
     /// use and on Reload; a missing or unreadable file is an empty board —
@@ -92,6 +106,8 @@ internal sealed class TeamStore
     private TaskDoc? _tasks;
     private DateTime _tasksStamp;
     private long _tasksCheckedAt;
+    private string? _tasksSource;
+    public bool TasksReadable { get; private set; } = true;
 
     public TaskDoc Tasks
     {
@@ -111,7 +127,7 @@ internal sealed class TeamStore
         _tasksCheckedAt = now;
         try
         {
-            if (!File.Exists(TasksPath)) return false;
+            if (!File.Exists(TasksPath)) return _tasksStamp != default;
             return File.GetLastWriteTimeUtc(TasksPath) != _tasksStamp;
         }
         catch { return false; }
@@ -129,9 +145,11 @@ internal sealed class TeamStore
         try
         {
             StampTasks();
-            if (!File.Exists(TasksPath)) return new TaskDoc();
-            var doc = JsonSerializer.Deserialize(File.ReadAllText(TasksPath), TaskJsonContext.Default.TaskDoc);
-            if (doc == null) return new TaskDoc();
+            _tasksSource = File.Exists(TasksPath) ? File.ReadAllText(TasksPath) : null;
+            TasksReadable = true;
+            if (_tasksSource == null) return new TaskDoc();
+            var doc = JsonSerializer.Deserialize(_tasksSource, TaskJsonContext.Default.TaskDoc);
+            if (doc == null) throw new JsonException("Task document is null.");
             doc.Done ??= new();
             doc.Open ??= new();
             doc.Migrate();   // a v1 file's single `current` becomes the first open board
@@ -141,6 +159,7 @@ internal sealed class TeamStore
         }
         catch (Exception ex)
         {
+            TasksReadable = false;
             Log.Error("TeamStore.ReadTasks", ex);
             return new TaskDoc();
         }
@@ -151,9 +170,21 @@ internal sealed class TeamStore
         if (!Readable) return;
         try
         {
-            var doc = Tasks;
+            var doc = _tasks ?? Tasks;
+            if (!TasksReadable) return;
+            // Check on EVERY write, including inside the read-side debounce.
+            // Never replace an outside edit with our previously loaded board.
+            var current = File.Exists(TasksPath) ? File.ReadAllText(TasksPath) : null;
+            if (current != _tasksSource)
+            {
+                _tasks = LoadTasks();
+                Log.Info("TeamStore.SaveTasks", "Task board changed externally; stale save refused.");
+                return;
+            }
             while (doc.Done.Count > TaskDoc.DoneKept) doc.Done.RemoveAt(0);
-            AtomicFile.WriteAllText(TasksPath, JsonSerializer.Serialize(doc, TaskJsonContext.Default.TaskDoc));
+            var json = JsonSerializer.Serialize(doc, TaskJsonContext.Default.TaskDoc);
+            AtomicFile.WriteAllText(TasksPath, json);
+            _tasksSource = json;
             StampTasks();   // our own write is not an outside edit
         }
         catch (Exception ex) { Log.Error("TeamStore.SaveTasks", ex); }
@@ -421,6 +452,25 @@ internal sealed class TeamStore
         return Doc.Positions.RemoveAll(p => string.Equals(p.Slug, slug, StringComparison.OrdinalIgnoreCase)) > 0;
     }
 
+    private readonly Dictionary<string, (DateTime Stamp, long Length, string Text)> _briefs = new();
+    public string ReadBriefPreview(string positionSlug)
+    {
+        var path = BriefPathFor(positionSlug);
+        try
+        {
+            var file = new FileInfo(path);
+            if (!file.Exists) { _briefs.Remove(positionSlug); return ""; }
+            if (_briefs.TryGetValue(positionSlug, out var hit) && hit.Stamp == file.LastWriteTimeUtc && hit.Length == file.Length) return hit.Text;
+            using var reader = File.OpenText(path);
+            var chars = new char[16 * 1024];
+            var text = new string(chars, 0, reader.ReadBlock(chars, 0, chars.Length));
+            if (_briefs.Count >= 64) _briefs.Clear();
+            _briefs[positionSlug] = (file.LastWriteTimeUtc, file.Length, text);
+            return text;
+        }
+        catch (Exception ex) { Log.Error("TeamStore.ReadBriefPreview", ex); return ""; }
+    }
+
     public string ReadBrief(string positionSlug)
     {
         var path = BriefPathFor(positionSlug);
@@ -519,6 +569,143 @@ internal sealed class TeamStore
         catch (Exception ex) { Log.Error("TeamStore.WriteMemory", ex); }
     }
 
+    // ---- team knowledge ---------------------------------------------------
+
+    /// How much of knowledge.md rides in with every prompt. Past this the lead
+    /// is told to prune; the file itself is not cut.
+    public const int KnowledgeMaxBytes = 3072;
+
+    /// The knowledge file as a bot sees it: whole while it fits, else the first
+    /// cap with a note. "" when there is none yet.
+    public string ReadKnowledge()
+    {
+        if (!File.Exists(KnowledgePath)) return "";
+        try
+        {
+            var text = File.ReadAllText(KnowledgePath).Replace("\r\n", "\n").Trim();
+            if (Encoding.UTF8.GetByteCount(text) <= KnowledgeMaxBytes) return text;
+            var cut = Math.Min(text.Length, KnowledgeMaxBytes);
+            while (cut > 0 && Encoding.UTF8.GetByteCount(text.AsSpan(0, cut)) > KnowledgeMaxBytes) cut--;
+            return text[..cut].TrimEnd() + "\n[the file is over the cap — the lead prunes it; Read it for the rest]";
+        }
+        catch (Exception ex) { Log.Error("TeamStore.ReadKnowledge", ex); return ""; }
+    }
+
+    /// Whether the inlined part is being cut — the lead's cue to prune.
+    public bool KnowledgeOverCap()
+    {
+        try { return File.Exists(KnowledgePath) && new FileInfo(KnowledgePath).Length > KnowledgeMaxBytes; }
+        catch { return false; }
+    }
+
+    /// Add one fact as a line, signed with who and when. False when the same
+    /// fact (ignoring case, punctuation at the end and the signature) is
+    /// already there — a bot re-learning what a teammate wrote adds nothing.
+    public bool AppendKnowledge(string fact, string by, out string line)
+    {
+        fact = OneLineOf(fact);
+        line = $"- {fact} ({by}, {DateTime.UtcNow:yyyy-MM-dd})";
+        try
+        {
+            var existing = File.Exists(KnowledgePath) ? File.ReadAllText(KnowledgePath) : "";
+            var key = KnowledgeKey(fact);
+            foreach (var raw in existing.Replace("\r\n", "\n").Split('\n'))
+            {
+                var l = raw.Trim();
+                if (!l.StartsWith("- ", StringComparison.Ordinal)) continue;
+                if (KnowledgeKey(l[2..]) == key) return false;
+            }
+            var sb = new StringBuilder(existing.TrimEnd());
+            if (sb.Length == 0)
+                sb.Append("# Team knowledge\n\nFacts every bot on this team needs. One line each, newest last; the lead prunes what goes stale.\n");
+            sb.Append('\n').Append(line).Append('\n');
+            AtomicFile.WriteAllText(KnowledgePath, sb.ToString());
+            return true;
+        }
+        catch (Exception ex) { Log.Error("TeamStore.AppendKnowledge", ex); return false; }
+    }
+
+    /// A fact stripped of its signature, case, and trailing punctuation.
+    internal static string KnowledgeKey(string line)
+    {
+        var s = line.Trim();
+        // "(nick, 2026-09-06)" at the end is the signature, not the fact.
+        var open = s.LastIndexOf(" (", StringComparison.Ordinal);
+        if (open > 0 && s.EndsWith(')') && s.IndexOf(',', open) > open) s = s[..open];
+        return s.TrimEnd('.', ' ', ';').ToLowerInvariant();
+    }
+
+    private static string OneLineOf(string text)
+        => System.Text.RegularExpressions.Regex.Replace((text ?? "").Trim(), @"\s+", " ");
+
+    // ---- team skills ------------------------------------------------------
+
+    /// One skill: its folder key, the title on its first line, one line of
+    /// what it is for, and the file a bot Reads to follow it.
+    internal sealed record TeamSkill(string Slug, string Name, string Summary, string Path);
+
+    public IReadOnlyList<TeamSkill> ListSkills()
+    {
+        var list = new List<TeamSkill>();
+        try
+        {
+            if (!Directory.Exists(SkillsDir)) return list;
+            foreach (var dir in Directory.GetDirectories(SkillsDir).OrderBy(d => d, StringComparer.OrdinalIgnoreCase))
+            {
+                var path = System.IO.Path.Combine(dir, "SKILL.md");
+                if (!File.Exists(path)) continue;
+                var slug = System.IO.Path.GetFileName(dir);
+                string name = slug, summary = "";
+                foreach (var raw in File.ReadLines(path))
+                {
+                    var l = raw.Trim();
+                    if (l.Length == 0) continue;
+                    if (l.StartsWith('#')) { if (name == slug) name = l.TrimStart('#').Trim(); continue; }
+                    if (l.StartsWith('_') && l.EndsWith('_')) continue;   // the provenance line
+                    summary = TeamRender.OneLine(l, 160);
+                    break;
+                }
+                list.Add(new TeamSkill(slug, name, summary, path));
+            }
+        }
+        catch (Exception ex) { Log.Error("TeamStore.ListSkills", ex); }
+        return list;
+    }
+
+    /// Write (or overwrite) a skill. Returns its slug, or null when it could
+    /// not be written.
+    public string? WriteSkill(string name, string body, string by)
+    {
+        var slug = SkillSlug(name);
+        if (slug.Length == 0) return null;
+        try
+        {
+            var text = new StringBuilder();
+            var trimmed = (body ?? "").Replace("\r\n", "\n").Trim();
+            // A body that already starts with the title keeps it; else the name heads it.
+            if (!trimmed.StartsWith("# ", StringComparison.Ordinal)) text.Append("# ").Append(name.Trim()).Append("\n\n");
+            text.Append('_').Append("Saved by ").Append(by).Append(", ").Append(DateTime.UtcNow.ToString("yyyy-MM-dd"))
+                .Append(". Any bot may follow it; whoever finds it wrong fixes the file.").Append("_\n\n");
+            text.Append(trimmed).Append('\n');
+            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(SkillPathFor(slug))!);
+            AtomicFile.WriteAllText(SkillPathFor(slug), text.ToString());
+            return slug;
+        }
+        catch (Exception ex) { Log.Error("TeamStore.WriteSkill", ex); return null; }
+    }
+
+    internal static string SkillSlug(string name)
+    {
+        var sb = new StringBuilder();
+        foreach (var c in (name ?? "").Trim().ToLowerInvariant())
+        {
+            if (char.IsLetterOrDigit(c)) sb.Append(c);
+            else if (sb.Length > 0 && sb[^1] != '-') sb.Append('-');
+        }
+        var s = sb.ToString().Trim('-');
+        return s.Length > 60 ? s[..60].TrimEnd('-') : s;
+    }
+
     // ---- rendering --------------------------------------------------------
 
     /// Rewrite every bot's system.md from its position's current brief (and
@@ -556,7 +743,9 @@ internal sealed class TeamStore
             {
                 AtomicFile.WriteAllText(ContextPathFor(bot.Slug),
                     TeamRender.Context(roster, bot, ReadMemory(bot.Slug), MemoryPathFor(bot.Slug),
-                        TeamRender.TaskBlock(Tasks, Doc, bot)));
+                        TeamRender.TaskBlock(Tasks, Doc, bot),
+                        TeamRender.KnowledgeBlock(ReadKnowledge(), KnowledgePath, KnowledgeOverCap() && Doc.IsLead(bot)),
+                        TeamRender.SkillsBlock(ListSkills(), SkillsDir)));
             }
             catch (Exception ex) { Log.Error("TeamStore.RenderContext", ex); }
         }

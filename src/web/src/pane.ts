@@ -58,6 +58,8 @@ export const MIN_FONT_SIZE = 9;
 export const MAX_FONT_SIZE = 32;
 
 export class Pane {
+  private webgl?: WebglAddon;
+  private rendererActive = true;
   readonly paneId: string;
   readonly element: HTMLElement;
   private readonly nameEl: HTMLElement;
@@ -108,7 +110,7 @@ export class Pane {
   // Full first-prompt text for the name tooltip; updated from each leaf view.
   private nameFull = "";
 
-  constructor(paneId: string, name: string, fontSize: number = DEFAULT_FONT_SIZE) {
+  constructor(paneId: string, name: string, fontSize: number = DEFAULT_FONT_SIZE, fontFamily?: string) {
     this.paneId = paneId;
 
     this.element = document.createElement("div");
@@ -168,7 +170,7 @@ export class Pane {
     // these once at construction time; updating the CSS variables doesn't
     // change the canvas — bump explicitly via setOption if needed.
     this.term = new Terminal({
-      fontFamily:
+      fontFamily: fontFamily ||
         '"Geist Mono Variable", "Cascadia Code", "Cascadia Mono", Consolas, monospace',
       fontSize: clampFontSize(fontSize),
       // Bump the variable-font weight axis. Geist Mono Variable supports
@@ -389,9 +391,10 @@ export class Pane {
       // is the font's em size (smaller than the cell). Wrapped in
       // try/catch because some WebView2 builds fail WebGL context
       // creation and we want a working fallback.
-      if (!WEBGL_DISABLED) {
+      if (!WEBGL_DISABLED && this.rendererActive) {
         try {
           const webgl = new WebglAddon();
+          this.webgl = webgl;
           webgl.onContextLoss(() => webgl.dispose());
           this.term.loadAddon(webgl);
         } catch (err) {
@@ -406,13 +409,37 @@ export class Pane {
     });
   }
 
+  setFontFamily(family?: string) {
+    if (!family || this.term.options.fontFamily === family) return;
+    this.term.options.fontFamily = family;
+    this.reportResize();
+  }
+
   dispose() {
+    const index = liveTerms.indexOf(this.term);
+    if (index >= 0) liveTerms.splice(index, 1);
     this.stopProbe();
     this.observer?.disconnect();
     this.observer = undefined;
     this.sync.dispose();
     try { this.term.dispose(); } catch { /* ignore */ }
     this.element.remove();
+  }
+
+  setRendererActive(active: boolean) {
+    this.rendererActive = active;
+    if (active && !this.webgl && !WEBGL_DISABLED && this.term.element) {
+      try {
+        const addon = new WebglAddon();
+        this.webgl = addon;
+        addon.onContextLoss(() => { addon.dispose(); if (this.webgl === addon) this.webgl = undefined; });
+        this.term.loadAddon(addon);
+      } catch { this.webgl = undefined; }
+    }
+    if (!active && this.webgl) {
+      this.webgl.dispose();
+      this.webgl = undefined;
+    }
   }
 
   feed(b64: string) {

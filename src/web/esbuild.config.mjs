@@ -8,6 +8,7 @@ import * as esbuild from "esbuild";
 import { cp, mkdir, rm } from "node:fs/promises";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { watch as watchFiles } from "node:fs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const outDir = resolve(here, "../Perch/wwwroot");
@@ -72,6 +73,17 @@ const opts = {
 if (watch) {
   const ctx = await esbuild.context(opts);
   await ctx.watch();
+  // esbuild watches imported sources; copied static assets are independent.
+  let copying = false, again = false;
+  const refresh = async () => {
+    if (copying) { again = true; return; }
+    copying = true;
+    try { do { again = false; await copyStatics(); } while (again); }
+    catch (error) { console.error("[statics]", error); }
+    finally { copying = false; }
+  };
+  for (const file of ["index.html", "fonts", "perch-logo.png", "perch-glyph.png"])
+    watchFiles(resolve(here, file), { recursive: file === "fonts" }, refresh);
   console.log("[esbuild] watching src/web/src/ ...");
 } else {
   await esbuild.build(opts);

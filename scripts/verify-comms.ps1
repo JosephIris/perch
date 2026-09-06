@@ -32,7 +32,11 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $PerchExe = Join-Path $ToolsDir 'perch.exe'
-$DataDir  = Join-Path $env:TEMP ("perch-comms-{0}" -f $PID)
+$TempRoot = [IO.Path]::GetFullPath($env:TEMP).TrimEnd('\')
+$DataDir  = [IO.Path]::GetFullPath((Join-Path $TempRoot ("perch-comms-{0}" -f [Guid]::NewGuid().ToString('N'))))
+if (-not $DataDir.StartsWith($TempRoot + '\', [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'Delivery gate data directory must be inside TEMP.'
+}
 $LogPath  = Join-Path $DataDir 'perch\errors.log'
 $RepoDir  = Join-Path $DataDir 'comms-repo'
 
@@ -110,7 +114,6 @@ $exit = 0
 try {
     if (Test-Path '\\.\pipe\perch\control') { throw "control pipe already exists - another test-IPC Perch is running." }
 
-    Remove-Item $DataDir -Recurse -Force -EA SilentlyContinue
     New-Item -ItemType Directory -Force -Path (Join-Path $DataDir 'perch'), (Join-Path $RepoDir 'src') | Out-Null
     Set-Content -Path (Join-Path $RepoDir 'README.md') -Encoding utf8 -Value "# comms-repo`n`nA throwaway repository for the delivery gate."
     Set-Content -Path (Join-Path $RepoDir 'src\app.ts') -Encoding utf8 -Value "export const hello = () => 'hi';`n"
@@ -156,7 +159,7 @@ Never read a file, never write code, never run anything else.
     Remove-Item Env:\CLAUDE_CODE_CHILD_SESSION -EA SilentlyContinue
 
     Write-Host "Launching isolated Perch with the REAL claude (data: $DataDir)"
-    $proc = Start-Process -PassThru -FilePath $ExePath
+    $proc = Start-Process -PassThru -FilePath $ExePath -WindowStyle Hidden
     $deadline = (Get-Date).AddSeconds(25)
     while ((Get-Date) -lt $deadline) {
         $proc.Refresh()
@@ -227,7 +230,7 @@ Never read a file, never write code, never run anything else.
     Start-Sleep -Seconds 2
     Stop-Process -Id $proc.Id -Force -EA SilentlyContinue
     Start-Sleep -Seconds 3
-    $proc = Start-Process -PassThru -FilePath $ExePath
+    $proc = Start-Process -PassThru -FilePath $ExePath -WindowStyle Hidden
     $deadline = (Get-Date).AddSeconds(25)
     while ((Get-Date) -lt $deadline) {
         $proc.Refresh()
@@ -420,6 +423,6 @@ finally {
     Remove-Item Env:\PERCH_ENABLE_TEST_IPC -EA SilentlyContinue
     Remove-Item Env:\PERCH_DATA_DIR -EA SilentlyContinue
     # The data dir is left behind ON FAILURE so the log can be read.
-    if ($exit -eq 0) { Remove-Item $DataDir -Recurse -Force -EA SilentlyContinue }
+    if ($exit -eq 0) { Remove-Item -LiteralPath $DataDir -Recurse -Force -EA SilentlyContinue }
 }
 exit $exit

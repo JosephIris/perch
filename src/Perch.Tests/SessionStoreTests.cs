@@ -16,6 +16,31 @@ namespace Perch.Tests;
 public class SessionStoreTests
 {
     [Fact]
+    public void PanesTitleRoundTripsAndUnreadableFilesSurviveSave()
+    {
+        var root = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "perch-store-" + Guid.NewGuid().ToString("N"));
+        var previous = Environment.GetEnvironmentVariable("PERCH_DATA_DIR");
+        try
+        {
+            Environment.SetEnvironmentVariable("PERCH_DATA_DIR", root);
+            var store = new SessionStore();
+            store.AddNew().Title = "Panes";
+            store.Save();
+            Assert.Equal("Panes", SessionStore.Load().Sessions.Single().Title);
+            var path = System.IO.Path.Combine(root, "perch", "sessions.json");
+            System.IO.File.WriteAllText(path, "{broken");
+            var unreadable = SessionStore.Load();
+            Assert.False(unreadable.Readable);
+            unreadable.Save();
+            Assert.Equal("{broken", System.IO.File.ReadAllText(path));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PERCH_DATA_DIR", previous);
+            if (System.IO.Directory.Exists(root)) System.IO.Directory.Delete(root, true);
+        }
+    }
+    [Fact]
     public void ClosingTheLastSession_LeavesTheStoreEmpty_AndDoesNotConjureANewOne()
     {
         var store = new SessionStore();

@@ -224,6 +224,7 @@ internal sealed class PaneManager : IDisposable
 
     public void Destroy(Guid paneId)
     {
+        lock (_tails) _tails.Remove(paneId);
         if (_paneIpc.Remove(paneId, out var ipc)) { try { ipc.Dispose(); } catch { } }
         if (!_ptys.TryGetValue(paneId, out var pty)) return;
         _ptys.Remove(paneId);

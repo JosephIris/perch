@@ -31,13 +31,27 @@ internal sealed class RepoWatcher : IDisposable
     private readonly FileSystemWatcher _fsw;
     private readonly System.Timers.Timer _debounce;
     private readonly Action _onChanged;
+    private readonly System.Timers.Timer _metadata;
+    private string _signature;
+    private volatile bool _disposed;
 
     public RepoWatcher(string root, Action onChanged)
     {
         _onChanged = onChanged;
+        _signature = GitProc.RefreshSignature(root);
+        _metadata = new System.Timers.Timer(2000) { AutoReset = true };
+        _metadata.Elapsed += (_, _) =>
+        {
+            if (_disposed) return;
+            var next = GitProc.RefreshSignature(root);
+            if (next == _signature) return;
+            _signature = next;
+            Kick();
+        };
+        _metadata.Start();
 
         _debounce = new System.Timers.Timer(DebounceMs) { AutoReset = false };
-        _debounce.Elapsed += (_, _) => { try { _onChanged(); } catch { } };
+        _debounce.Elapsed += (_, _) => { try { if (!_disposed) _onChanged(); } catch { } };
 
         _fsw = new FileSystemWatcher(root)
         {
@@ -85,14 +99,18 @@ internal sealed class RepoWatcher : IDisposable
 
     private void Kick()
     {
-        try { _debounce.Stop(); _debounce.Start(); } catch { }
+        // Leading window with a bounded delay: continuous writes cannot
+        // postpone invalidation forever.
+        try { if (!_debounce.Enabled) _debounce.Start(); } catch { }
     }
 
     public void Dispose()
     {
+        _disposed = true;
         try { _fsw.EnableRaisingEvents = false; } catch { }
         try { _fsw.Dispose(); } catch { }
         try { _debounce.Dispose(); } catch { }
+        _metadata.Dispose();
     }
 }
 
@@ -106,6 +124,13 @@ internal sealed class RepoWatchers : IDisposable
     private readonly Action<string> _onChanged;
 
     public RepoWatchers(Action<string> onChanged) => _onChanged = onChanged;
+
+    public void Retain(System.Collections.Generic.IEnumerable<string> roots)
+    {
+        var live = new System.Collections.Generic.HashSet<string>(roots, StringComparer.OrdinalIgnoreCase);
+        foreach (var root in _byRoot.Keys)
+            if (!live.Contains(root) && _byRoot.TryRemove(root, out var watcher)) watcher?.Dispose();
+    }
 
     public void Ensure(string root)
     {

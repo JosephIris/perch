@@ -11,6 +11,7 @@ namespace Perch;
 
 internal sealed class SessionStore
 {
+    public bool Readable { get; private set; } = true;
     public ObservableCollection<Session> Sessions { get; } = new();
     public Guid? ActiveSessionId { get; set; }
 
@@ -36,11 +37,14 @@ internal sealed class SessionStore
 
             var json = File.ReadAllText(StorePath);
 
-            // Old-format sessions (with Panes : List<PaneState>) are incompatible with the new
-            // recursive tree model. Detect and wipe — user accepts losing the list.
-            if (json.Contains("\"Panes\""))
+            // Inspect structure, never string values such as a tab titled "Panes".
+            using var document = JsonDocument.Parse(json);
+            if (document.RootElement.TryGetProperty("Sessions", out var sessions) &&
+                sessions.ValueKind == JsonValueKind.Array &&
+                sessions.EnumerateArray().Any(s => s.TryGetProperty("Panes", out _)))
             {
-                try { File.Delete(StorePath); } catch { }
+                store.Readable = false;
+                Log.Info("SessionStore.Load", $"Legacy sessions preserved at {StorePath}; automatic saving disabled.");
                 return SeedDefault(store);
             }
 
@@ -100,8 +104,9 @@ internal sealed class SessionStore
                 return store;
             }
         }
-        catch { /* corrupt — fall through */ }
+        catch (Exception ex) { store.Readable = false; Log.Error("SessionStore.Load", ex); }
 
+        store.Readable = false;
         return SeedDefault(store);
     }
 
@@ -116,6 +121,7 @@ internal sealed class SessionStore
 
     public void Save()
     {
+        if (!Readable) return;
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(StorePath)!);
@@ -127,9 +133,9 @@ internal sealed class SessionStore
                 ActiveSessionId = ActiveSessionId,
             };
             var json = JsonSerializer.Serialize(dto, SessionStoreJsonContext.Default.SessionStoreDto);
-            File.WriteAllText(StorePath, json);
+            AtomicFile.WriteAllText(StorePath, json);
         }
-        catch { }
+        catch (Exception ex) { Log.Error("SessionStore.Save", ex); }
     }
 
     public Session AddNew()

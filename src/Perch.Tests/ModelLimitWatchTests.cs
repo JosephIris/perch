@@ -30,7 +30,7 @@ public class ModelLimitWatchTests
     [Fact]
     public void RefusalNamesTheModelThatWasRefused()
     {
-        var w = new ModelLimitWatch();
+        var w = new ModelLimitWatch { Now = () => DateTimeOffset.Parse("2026-09-04T06:24:00Z") };
         Assert.True(w.Ingest(Refusal, fallbackAlias: null));
         Assert.Equal(new[] { "fable" }, w.Current().Select(l => l.Alias));
         Assert.True(w.Current().Single().AtLimit);
@@ -42,7 +42,7 @@ public class ModelLimitWatchTests
     [Fact]
     public void ProseAboutRateLimitsIsNotARefusal()
     {
-        var w = new ModelLimitWatch();
+        var w = new ModelLimitWatch { Now = () => DateTimeOffset.Parse("2026-09-04T06:24:00Z") };
         // An agent DISCUSSING rate limits (this very test file, say) must not
         // mark a model as maxed out — the marker is the row's own error field.
         Assert.False(w.Ingest(OrdinaryRow, fallbackAlias: "fable"));
@@ -52,7 +52,7 @@ public class ModelLimitWatchTests
     [Fact]
     public void AWordingChangeFallsBackToThePanesOwnModel()
     {
-        var w = new ModelLimitWatch();
+        var w = new ModelLimitWatch { Now = () => DateTimeOffset.Parse("2026-09-04T06:24:00Z") };
         var reworded = Refusal.Replace("You've reached your Fable limit.", "Usage limit reached.");
         Assert.True(w.Ingest(reworded, fallbackAlias: "opus"));
         Assert.Equal(new[] { "opus" }, w.Current().Select(l => l.Alias));
@@ -61,7 +61,7 @@ public class ModelLimitWatchTests
     [Fact]
     public void AnUnknownModelNameIsIgnoredRatherThanGuessed()
     {
-        var w = new ModelLimitWatch();
+        var w = new ModelLimitWatch { Now = () => DateTimeOffset.Parse("2026-09-04T06:24:00Z") };
         var other = Refusal.Replace("your Fable limit", "your Fathom limit");
         Assert.False(w.Ingest(other, fallbackAlias: null));
         Assert.Empty(w.Current());

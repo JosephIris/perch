@@ -47,7 +47,7 @@ internal sealed class CloudController : IDisposable
     /// The feature costs them exactly one process spawn, once, ever.
     public async void Start()
     {
-        if (!await _poller.IsAvailableAsync())
+        if (_disposed || !await _poller.IsAvailableAsync() || _disposed)
         {
             Log.Info("CloudController: gcloud absent or not logged in — cloud feature off for this session");
             return;
@@ -94,8 +94,11 @@ internal sealed class CloudController : IDisposable
         _ = Task.Delay(6000).ContinueWith(_ => _ui.Post(() => _ = RefreshAsync()));
     }
 
+    private bool _disposed;
+
     public async Task RefreshAsync()
     {
+        if (_disposed || _inflight != null) return;
         // Coalesce: a burst of stamps must not queue a burst of gcloud calls.
         _inflight?.Cancel();
         var cts = new CancellationTokenSource();
@@ -109,6 +112,7 @@ internal sealed class CloudController : IDisposable
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { Log.Error("CloudController.Refresh", ex); }
+        finally { if (ReferenceEquals(_inflight, cts)) _inflight = null; cts.Dispose(); }
     }
 
     /// Delete one resource. A VM and a Dataproc cluster take DIFFERENT commands,
@@ -179,6 +183,8 @@ internal sealed class CloudController : IDisposable
 
     public void Dispose()
     {
+        _disposed = true;
+        _timer?.Dispose();
         try { _timer?.Stop(); } catch { }
         try { _inflight?.Cancel(); } catch { }
     }

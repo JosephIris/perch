@@ -52,12 +52,19 @@ internal sealed class StaticServer : IDisposable
         try
         {
             var rsp = ctx.Response;
+            if (ctx.Request.HttpMethod != "GET")
+            {
+                rsp.StatusCode = 405;
+                rsp.Headers["Allow"] = "GET";
+                rsp.Close();
+                return;
+            }
             var rel = Uri.UnescapeDataString(ctx.Request.Url?.AbsolutePath ?? "/").TrimStart('/');
             if (rel.Length == 0) rel = "index.html";
 
             // Resolve and confine to the web root — no traversal.
             var full = Path.GetFullPath(Path.Combine(_root, rel));
-            if (!full.StartsWith(_root, StringComparison.Ordinal) || !File.Exists(full))
+            if (!full.StartsWith(Path.TrimEndingDirectorySeparator(_root) + Path.DirectorySeparatorChar, StringComparison.Ordinal) || !File.Exists(full))
             {
                 rsp.StatusCode = 404;
                 rsp.Close();

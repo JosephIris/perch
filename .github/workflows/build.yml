@@ -17,6 +17,7 @@ permissions:
 
 jobs:
   build:
+    needs: mac
     runs-on: windows-latest
     permissions:
       contents: write      # create the GitHub Release + upload its assets
@@ -88,6 +89,10 @@ jobs:
 
       # Gate: web unit tests (node --test via run-tests.mjs). Fast and runs
       # before any C# work so a page-logic regression fails the build early.
+      - name: Typecheck web
+        working-directory: src/web
+        run: npm run typecheck
+
       - name: Web tests
         working-directory: src/web
         run: npm test

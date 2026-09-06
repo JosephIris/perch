@@ -883,7 +883,7 @@ export type TeamEntryView = {
    * submitted. Both offer the bot's terminal. */
   event?: "joined" | "left" | "waiting" | "permission" | "done" | "asleep" | "woke" | "error"
         | "trust" | "trusted" | "exited"
-        | "delivered" | "undelivered"
+        | "delivered" | "undelivered" | "submitting" | "permission.check"
         /* the task board: a change, the lead asking to confirm, the owner
          * confirming, a bot reset for the next task, a new lead */
         | "task" | "task.review" | "task.done" | "reset" | "lead"

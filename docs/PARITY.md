@@ -1,5 +1,12 @@
 # perch vs upstream perch — parity tracker
 
+> **Historical local inventory:** as of the 2026-09-06 review, the local column
+> and proposed backlog below are stale. Projects, worktrees, the bundled CLI,
+> agent resume, automatic port discovery, and URL panes already exist. Use
+> [CODEBASE-CONTEXT.md](CODEBASE-CONTEXT.md) for the current local implementation
+> and [the review](reviews/2026-09-06.md) for verified gaps. The upstream column
+> remains unverified as described below.
+
 > **Source caveat:** the upstream column in the table below was drafted from
 > prior knowledge of `github.com/manaflow-ai/cmux`, not a fresh fetch of the
 > live repo (the research agent's network access was sandboxed at the time).

@@ -129,25 +129,29 @@ internal sealed class ProjectStore
             if (!File.Exists(StorePath)) return store;
             var dto = JsonSerializer.Deserialize(
                 File.ReadAllText(StorePath), ProjectStoreJsonContext.Default.ProjectStoreDto);
-            if (dto?.Projects is { Count: > 0 })
+            if (dto == null) throw new JsonException("Project document is null.");
+            if (dto.Projects is { Count: > 0 })
                 foreach (var p in dto.Projects)
                     if (!string.IsNullOrWhiteSpace(p.Path))
                         store.Projects.Add(p);
         }
-        catch { /* unreadable/corrupt → start empty rather than crash on launch */ }
+        catch (Exception ex) { store.Readable = false; Log.Error("ProjectStore.Load", ex); }
         return store;
     }
 
+    public bool Readable { get; private set; } = true;
+
     public void Save()
     {
+        if (!Readable) return;
         try
         {
             Directory.CreateDirectory(System.IO.Path.GetDirectoryName(StorePath)!);
             var dto = new ProjectStoreDto { Version = 1, Projects = Projects.ToList() };
-            File.WriteAllText(
+            AtomicFile.WriteAllText(
                 StorePath, JsonSerializer.Serialize(dto, ProjectStoreJsonContext.Default.ProjectStoreDto));
         }
-        catch { /* best-effort, same as SessionStore/Settings */ }
+        catch (Exception ex) { Log.Error("ProjectStore.Save", ex); }
     }
 }
 

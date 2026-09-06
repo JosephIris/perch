@@ -81,6 +81,13 @@ internal sealed class RoomLedger
     private readonly string _path;
     private readonly object _gate = new();
     private long _lastSeq;
+    private List<RoomEntry>? _cached;
+    private (long Length, DateTime Stamp) _version;
+    private (long Length, DateTime Stamp) Version()
+    {
+        var file = new FileInfo(_path);
+        return file.Exists ? (file.Length, file.LastWriteTimeUtc) : default;
+    }
 
     /// Rotate when the file passes this many bytes …
     internal const long RotateAtBytes = 2L * 1024 * 1024;
@@ -111,7 +118,7 @@ internal sealed class RoomLedger
     {
         lock (_gate)
         {
-            entry.Seq = ++_lastSeq;
+            entry.Seq = _lastSeq + 1;
             if (entry.TsMs == 0) entry.TsMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             try
             {
@@ -119,9 +126,12 @@ internal sealed class RoomLedger
                 if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
                 var line = JsonSerializer.Serialize(entry, RoomJsonContext.Default.RoomEntry);
                 File.AppendAllText(_path, line + "\n", Utf8NoBom);
+                _lastSeq = entry.Seq;
+                _cached?.Add(entry);
+                _version = Version();
                 RotateIfNeeded();
             }
-            catch (Exception ex) { Log.Error("RoomLedger.Append", ex); }
+            catch (Exception ex) { Log.Error("RoomLedger.Append", ex); throw; }
             return entry;
         }
     }
@@ -152,6 +162,8 @@ internal sealed class RoomLedger
         var list = new List<RoomEntry>();
         lock (_gate)
         {
+            var version = Version();
+            if (_cached != null && version == _version) return new List<RoomEntry>(_cached);
             if (!File.Exists(_path)) return list;
             string[] lines;
             try { lines = File.ReadAllLines(_path, Utf8NoBom); }
@@ -167,8 +179,10 @@ internal sealed class RoomLedger
                 }
                 catch (JsonException) { /* skip the corrupt line */ }
             }
+            list.Sort((a, b) => a.Seq.CompareTo(b.Seq));
+            _cached = new List<RoomEntry>(list);
+            _version = version;
         }
-        list.Sort((a, b) => a.Seq.CompareTo(b.Seq));
         return list;
     }
 
@@ -188,10 +202,20 @@ internal sealed class RoomLedger
 
         string[] lines;
         try { lines = File.ReadAllLines(_path, Utf8NoBom); } catch { return; }
-        if (lines.Length <= KeepLines) return;
-
-        var keep = new string[KeepLines];
-        Array.Copy(lines, lines.Length - KeepLines, keep, 0, KeepLines);
+        // Bound bytes as well as line count; large messages otherwise leave
+        // the file over the threshold and cause a rewrite on every append.
+        var count = 0;
+        long bytes = 0;
+        for (var i = lines.Length - 1; i >= 0 && count < KeepLines; i--)
+        {
+            var size = Utf8NoBom.GetByteCount(lines[i]) + 1;
+            if (count > 0 && bytes + size > RotateAtBytes / 2) break;
+            bytes += size;
+            count++;
+        }
+        var keep = new string[count];
+        Array.Copy(lines, lines.Length - count, keep, 0, count);
+        _cached = null;
         try { AtomicFile.WriteAllText(_path, string.Join("\n", keep) + "\n"); }
         catch (Exception ex) { Log.Error("RoomLedger.Rotate", ex); }
     }

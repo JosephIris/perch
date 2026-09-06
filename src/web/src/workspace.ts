@@ -48,12 +48,14 @@ export class Workspace {
   private readonly stages = new Map<string, Stage>();
   // Bytes that arrive before the matching Pane is attached.
   private readonly pendingBytes = new Map<string, string[]>();
+  private sessions: SessionView[] = [];
   private activeSessionId: string | null = null;
   private activePaneId: string | null = null;
   // Default font size for newly-created Panes. Updated on each state push
   // from the host's persisted prefs, so a freshly-split pane opens at the
   // user's saved size instead of the hardcoded default.
   private defaultFontSize: number = DEFAULT_FONT_SIZE;
+  private defaultFontFamily?: string;
 
   // Drag-to-rearrange state. Set on a pane-header dragstart, cleared on
   // dragend/drop. The shared drop overlay is a single fixed-position element
@@ -161,6 +163,20 @@ export class Workspace {
     activeSessionId: string | null,
     activePaneId: string | null
   ) {
+    this.sessions = sessions;
+    const paneIds = new Set<string>();
+    const collect = (node: PaneTreeView) => {
+      if (node.kind === "leaf") paneIds.add(node.paneId);
+      else node.children.forEach(collect);
+    };
+    sessions.forEach(s => collect(s.rootPane));
+    for (const id of this.pendingBytes.keys()) if (!paneIds.has(id)) this.pendingBytes.delete(id);
+    // A cold PTY may reach its high-water mark before this state arrives.
+    // Give known queued output a consumer even if no more bytes can arrive.
+    for (const [id, chunks] of [...this.pendingBytes]) {
+      this.pendingBytes.delete(id);
+      for (const chunk of chunks) this.feed(id, chunk);
+    }
     // 1. Dispose stages for sessions that no longer exist (closed). This is
     //    the ONLY path that disposes panes now — a switch never does.
     const live = new Set(sessions.map((s) => s.id));
@@ -178,7 +194,10 @@ export class Workspace {
 
     if (!active) {
       // No active session — hide every stage but keep them mounted.
-      for (const st of this.stages.values()) st.container.style.display = "none";
+      for (const st of this.stages.values()) {
+        this.hideStage(st);
+        st.container.style.display = "none";
+      }
       this.activeSessionId = null;
       // No active session is always a real state now, not a momentary switch:
       // closing a tab with no LIVE sibling left in its project deliberately
@@ -240,6 +259,7 @@ export class Workspace {
   private hideStage(stage: Stage) {
     for (const pane of stage.panes.values()) {
       if (pane instanceof UrlPane) pane.setVisible(false);
+      if (pane instanceof Pane) pane.setRendererActive(false);
     }
   }
 
@@ -249,6 +269,7 @@ export class Workspace {
   private showStage(stage: Stage) {
     for (const pane of stage.panes.values()) {
       if (pane instanceof UrlPane) pane.setVisible(true);
+      if (pane instanceof Pane) pane.setRendererActive(true);
     }
   }
 
@@ -373,9 +394,33 @@ export class Workspace {
   }
 
   feed(paneId: string, b64: string) {
-    const pane = this.findPane(paneId);
+    let pane = this.findPane(paneId);
+    if (!pane) {
+      const contains = (node: PaneTreeView): boolean => node.kind === "leaf"
+        ? node.paneId === paneId : node.children.some(contains);
+      const session = this.sessions.find(s => !s.dormant && contains(s.rootPane));
+      if (session) {
+        let stage = this.stages.get(session.id);
+        if (!stage) {
+          const container = document.createElement("div");
+          container.className = "workspace__stage";
+          container.style.display = "none";
+          this.root.appendChild(container);
+          stage = { sessionId: session.id, container, panes: new Map(), signature: null, boardPath: "" };
+          this.stages.set(session.id, stage);
+        }
+        this.reconcile(stage, session, null, false);
+        this.hideStage(stage);
+        pane = this.findPane(paneId);
+      }
+    }
     if (pane) { pane.feed(b64); return; }
     const queue = this.pendingBytes.get(paneId) ?? [];
+    // Before the first state snapshot, retain bounded headroom above the
+    // PTY high-water window, measured in bytes rather than base64 characters.
+    // It remains unacknowledged until a terminal consumes it.
+    const byteLength = (chunk: string) => chunk.length * 3 / 4 - (chunk.endsWith("==") ? 2 : chunk.endsWith("=") ? 1 : 0);
+    if (queue.reduce((n, chunk) => n + byteLength(chunk), 0) + byteLength(b64) > 512 * 1024) return;
     queue.push(b64);
     this.pendingBytes.set(paneId, queue);
   }
@@ -457,11 +502,12 @@ export class Workspace {
 
   /** Apply user prefs from a state push: store as the default for future new
    *  panes, and update existing terminal panes (across all stages). */
-  applyPrefs(prefs: { fontSize: number }) {
+  applyPrefs(prefs: { fontSize: number; fontFamily?: string }) {
     this.defaultFontSize = prefs.fontSize;
+    this.defaultFontFamily = prefs.fontFamily;
     for (const st of this.stages.values()) {
       for (const pane of st.panes.values()) {
-        if (pane instanceof Pane) pane.setFontSize(prefs.fontSize);
+        if (pane instanceof Pane) { pane.setFontSize(prefs.fontSize); pane.setFontFamily(prefs.fontFamily); }
       }
     }
   }
@@ -552,7 +598,7 @@ export class Workspace {
           ? new UrlPane(node.paneId, node.name, node.url)
           : node.isBoard
           ? new BoardPane(node.paneId, node.name, stage.boardPath)
-          : new Pane(node.paneId, node.name, this.defaultFontSize);
+          : new Pane(node.paneId, node.name, this.defaultFontSize, this.defaultFontFamily);
         stage.panes.set(node.paneId, pane);
         pane.attach(host);
         // Push initial state so the freshly-created pane header reflects

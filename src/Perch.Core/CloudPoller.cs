@@ -70,6 +70,9 @@ internal sealed class CloudPoller
 
     private static readonly char[] Slash = { '/' };
     private bool? _available;
+    private IReadOnlyList<CloudResource> _lastAttributed = Array.Empty<CloudResource>();
+    private IReadOnlyList<CloudResource> _lastGpu = Array.Empty<CloudResource>();
+    public bool IsStale { get; private set; }
 
     /// True once we've confirmed gcloud exists and has an active account.
     /// Cached: a missing gcloud isn't going to appear mid-session, and we don't
@@ -117,9 +120,17 @@ internal sealed class CloudPoller
         // are best-effort: without them Parse just falls back to the static table.
         await LoadPricingAsync(new[] { attributedJson, gpuJson }, ct);
 
-        var attributed = ParseSafe(attributedJson, startedByPerch: true);
-        var gpus = ParseSafe(gpuJson, startedByPerch: false);
-        return Merge(attributed, gpus);
+        IsStale = false;
+        _lastAttributed = ParseOrKeep(attributedJson, true, _lastAttributed);
+        _lastGpu = ParseOrKeep(gpuJson, false, _lastGpu);
+        return Merge(_lastAttributed, _lastGpu);
+    }
+
+    private IReadOnlyList<CloudResource> ParseOrKeep(string? json, bool ours, IReadOnlyList<CloudResource> previous)
+    {
+        if (string.IsNullOrWhiteSpace(json)) { IsStale = true; return previous; }
+        try { return Parse(json, ours); }
+        catch (Exception ex) { IsStale = true; Log.Error("CloudPoller.Parse", ex); return previous; }
     }
 
     /// One `instances list`. Returns the raw JSON so the caller can learn which

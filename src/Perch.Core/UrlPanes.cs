@@ -34,7 +34,12 @@ internal sealed class UrlPanes : IUrlPanes
     /// create and stack orphaned native views. Also records a dispose that
     /// lands mid-create, so the completion bails instead of resurrecting a
     /// closed pane.
-    private readonly HashSet<Guid> _pending = new();
+    private sealed class Pending
+    {
+        public required UrlPaneLayoutMsg Layout;
+        public bool Visible = true;
+    }
+    private readonly Dictionary<Guid, Pending> _pending = new();
 
     /// Panes we've already told the page about a policy rejection for.
     private readonly HashSet<Guid> _rejected = new();
@@ -61,6 +66,7 @@ internal sealed class UrlPanes : IUrlPanes
 
     public void SetVisible(Guid paneId, bool visible)
     {
+        if (_pending.TryGetValue(paneId, out var pending)) pending.Visible = visible;
         if (!_panes.TryGetValue(paneId, out var e)) return;
         e.DesiredVisible = visible;
         Apply(e);
@@ -102,16 +108,20 @@ internal sealed class UrlPanes : IUrlPanes
             return;
         }
 
-        if (!_pending.Add(id)) return;   // create already in flight
+        if (_pending.TryGetValue(id, out var pending)) { pending.Layout = msg; return; }
+        pending = new Pending { Layout = msg };
+        _pending.Add(id, pending);
         Log.Info("UrlPane.create", $"pane={id:N} url={url} rect=({msg.X},{msg.Y},{msg.W},{msg.H})");
-        _ = CreateAsync(id, url!, msg.X, msg.Y, msg.W, msg.H);
+        _ = CreateAsync(id, pending);
     }
 
-    private async Task CreateAsync(Guid id, string url, double x, double y, double w, double h)
+    private async Task CreateAsync(Guid id, Pending pending)
     {
+        bool Current() => _pending.TryGetValue(id, out var current) && ReferenceEquals(current, pending);
         try
         {
-            var host = await _factory.CreateAsync(id, url, x, y, w, h);
+            var initial = pending.Layout;
+            var host = await _factory.CreateAsync(id, initial.Url!, initial.X, initial.Y, initial.W, initial.H);
             if (host == null)
             {
                 Log.Info("UrlPane.create.timeout", $"pane={id:N} engine never became ready");
@@ -119,16 +129,23 @@ internal sealed class UrlPanes : IUrlPanes
             }
             // The pane was closed while we waited — creating now would leave
             // a native view nobody has a handle to.
-            if (!_pending.Contains(id)) { try { host.Close(); } catch { } return; }
-
-            host.DocumentTitleChanged += title => _ui.Post(() => AutoTitleRequested?.Invoke(id, title));
-            host.NavigationFailed += status => _ui.Post(() => Failed?.Invoke(id, status));
-            var entry = new Entry { Host = host, Url = url };
-            _panes[id] = entry;
-            Apply(entry);   // respect an open modal at create time
+            await _ui.InvokeAsync(() =>
+            {
+                if (!Current()) { host.Close(); return; }
+                var latest = pending.Layout;
+                var entry = new Entry { Host = host, Url = latest.Url!, DesiredVisible = pending.Visible };
+                bool Installed() => _panes.TryGetValue(id, out var value) && ReferenceEquals(value, entry);
+                host.DocumentTitleChanged += title => _ui.Post(() => { if (Installed()) AutoTitleRequested?.Invoke(id, title); });
+                host.NavigationFailed += status => _ui.Post(() => { if (Installed()) Failed?.Invoke(id, status); });
+                host.SetVisible(false);
+                host.SetBounds(latest.X, latest.Y, latest.W, latest.H);
+                host.NavigateIfChanged(latest.Url!);
+                _panes[id] = entry;
+                Apply(entry);
+            });
         }
         catch (Exception ex) { Log.Error("UrlPane.create", ex); }
-        finally { _pending.Remove(id); }
+        finally { await _ui.InvokeAsync(() => { if (Current()) _pending.Remove(id); }); }
     }
 
     public void OnDispose(PaneRef msg)

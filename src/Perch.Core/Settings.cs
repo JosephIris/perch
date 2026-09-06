@@ -139,6 +139,9 @@ public sealed class Settings
             "perch",
             "settings.json");
 
+    [JsonIgnore]
+    public bool Readable { get; private set; } = true;
+
     public static Settings Load()
     {
         try
@@ -146,26 +149,28 @@ public sealed class Settings
             var path = SettingsPath;
             if (!File.Exists(path)) return new Settings();
             var json = File.ReadAllText(path);
-            return JsonSerializer.Deserialize(json, SettingsJsonContext.Default.Settings) ?? new Settings();
+            return JsonSerializer.Deserialize(json, SettingsJsonContext.Default.Settings) ?? throw new JsonException("Settings document is null.");
         }
-        catch
+        catch (Exception ex)
         {
-            return new Settings();
+            Log.Error("Settings.Load", ex);
+            return new Settings { Readable = false };
         }
     }
 
     public void Save()
     {
+        if (!Readable) return;
         try
         {
             var path = SettingsPath;
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             var json = JsonSerializer.Serialize(this, SettingsJsonContext.Default.Settings);
-            File.WriteAllText(path, json);
+            AtomicFile.WriteAllText(path, json);
         }
-        catch
+        catch (Exception ex)
         {
-            // Settings persistence is best-effort; don't crash on shutdown.
+            Log.Error("Settings.Save", ex);
         }
     }
 }

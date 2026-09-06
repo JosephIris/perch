@@ -1,5 +1,13 @@
 # UI Design Constitution — WebView2 + xterm.js Terminal App
 
+> Maintenance note (2026-09-06): see [AGENTS.md](AGENTS.md) and
+> [docs/CODEBASE-CONTEXT.md](docs/CODEBASE-CONTEXT.md) for current architecture,
+> commands, and isolation guidance. This document retains historical WPF-only
+> UI sections below; those do not call for rebuilding the current web chrome in
+> XAML. The opening host/Core split and current TypeScript/CSS components describe
+> the shipped architecture. Known mismatches are recorded in the
+> [dated review](docs/reviews/2026-09-06.md).
+
 You are working on a .NET 8 app that ships on Windows AND macOS from one
 `main`. On Windows the host shell is a `FluentWindow` with Win11 Mica chrome
 and native window decorations; on macOS it is a Photino window over

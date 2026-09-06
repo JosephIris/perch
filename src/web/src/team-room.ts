@@ -1788,7 +1788,7 @@ function renderRow(row: FeedRow, bots: TeamBotView[], names: string[]): HTMLElem
 
   if (e.kind === "user") {
     const strip = el("div", "tf-msg__to", recipientsLabel(e.to));
-    if (e.delivered === false && !landed.has(e.seq)) strip.textContent += " · waiting for the bot";
+    if (e.delivered === false && !landed.has(e.seq)) strip.textContent += " · delivery pending";
     body.appendChild(strip);
   }
 
@@ -2150,7 +2150,7 @@ function renderSystem(e: TeamEntryView, bots: TeamBotView[]): HTMLElement {
     }, `Type it into ${target.nickname} again`));
   }
   if ((e.event === "waiting" || e.event === "permission" || e.event === "permission.expired"
-       || e.event === "undelivered" || e.event === "denied") && target?.sessionId) {
+       || e.event === "undelivered" || e.event === "submitting" || e.event === "permission.check" || e.event === "denied") && target?.sessionId) {
     const o = openBtn(target);
     if (o) node.appendChild(o);
   }

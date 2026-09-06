@@ -28,9 +28,7 @@ internal static class AtomicFile
     {
         var dir = Path.GetDirectoryName(path);
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-        var tmp = path + ".tmp";
-        File.WriteAllText(tmp, contents, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-        File.Move(tmp, path, overwrite: true);
+        WriteAllBytes(path, new UTF8Encoding(false).GetBytes(contents));
     }
 
     /// Byte-oriented sibling, for images and other binary artifacts.
@@ -38,8 +36,16 @@ internal static class AtomicFile
     {
         var dir = Path.GetDirectoryName(path);
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-        var tmp = path + ".tmp";
-        File.WriteAllBytes(tmp, contents);
-        File.Move(tmp, path, overwrite: true);
+        var tmp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            using (var stream = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                stream.Write(contents);
+                stream.Flush(flushToDisk: true);
+            }
+            File.Move(tmp, path, overwrite: true);
+        }
+        finally { if (File.Exists(tmp)) File.Delete(tmp); }
     }
 }
