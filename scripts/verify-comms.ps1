@@ -276,15 +276,19 @@ Never read a file, never write code, never run anything else.
     $postsBefore = @($d.ledger | Where-Object { $_.kind -eq 'user' }).Count
     $ackPattern = "seq=$postSeq confirmed"
     $acksBefore = Log-Count $ackPattern
-    $repliesBefore = @($d.ledger | Where-Object { ($_.kind -eq 'beat' -or $_.kind -eq 'note') -and $_.text -match 'PONGTWO' }).Count
+    $lastSeqBeforeRetry = ($d.ledger | Measure-Object -Property seq -Maximum).Maximum
     [void](Send-Verb 'team.deliver.retry' @{ projectId = $projectId; seq = $postSeq; botId = 'ada' })
     # A retry uses the ordinary queue when the preceding turn is finishing.
     # Require a NEW matching acknowledgement and reply, not an immediate-send log.
     Check "the bot accepted and answered the retried post" (Wait-Until {
         Answer-Cards $projectId
         $retryDump = Team-Dump $projectId
+        $retryDelivered = @($retryDump.ledger | Where-Object { $_.seq -gt $lastSeqBeforeRetry -and $_.event -eq 'delivered' -and $_.note -eq [string]$postSeq }) | Select-Object -Last 1
+        # Claude may correctly say "already posted" for the same message.
+        # A response AFTER the new delivery proves the retry turn completed.
         (Log-Count $ackPattern) -gt $acksBefore -and
-        @($retryDump.ledger | Where-Object { ($_.kind -eq 'beat' -or $_.kind -eq 'note') -and $_.text -match 'PONGTWO' }).Count -gt $repliesBefore
+        $null -ne $retryDelivered -and
+        @($retryDump.ledger | Where-Object { $_.seq -gt $retryDelivered.seq -and $_.from -eq 'Ada' -and ($_.kind -eq 'beat' -or $_.kind -eq 'note') }).Count -gt 0
     } 180)
     $d2 = Team-Dump $projectId
     Check "no second post appeared in the room" (@($d2.ledger | Where-Object { $_.kind -eq 'user' }).Count -eq $postsBefore)

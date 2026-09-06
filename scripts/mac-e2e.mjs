@@ -523,12 +523,15 @@ try {
     const postsBefore = (d.ledger ?? []).filter((e) => e.kind === "user").length;
     const ackPattern = `seq=${Number(post.seq)} confirmed`;
     const acksBefore = count(ackPattern);
+    const lastSeqBeforeRetry = Math.max(0, ...(d.ledger ?? []).map(e => Number(e.seq)));
     await send({ verb: "team.deliver.retry", projectId, seq: Number(post.seq), botId: "ada" });
     // Retries can queue behind a finishing turn; prove a fresh acceptance.
-    check("the bot accepted the retried post", await waitUntil(async () => {
+    check("the bot accepted and answered the retried post", await waitUntil(async () => {
       await answerCards(projectId);
-      return count(ackPattern) > acksBefore;
-    }, 90000));
+      const rows = (await teamDump(projectId)).ledger ?? [];
+      const delivered = rows.filter(e => Number(e.seq) > lastSeqBeforeRetry && e.event === "delivered" && String(e.note) === String(post.seq)).pop();
+      return count(ackPattern) > acksBefore && delivered && rows.some(e => Number(e.seq) > Number(delivered.seq) && e.from === "Ada" && (e.kind === "beat" || e.kind === "note"));
+    }, 180000));
     const d2 = await teamDump(projectId);
     check("no second post appeared in the room", (d2.ledger ?? []).filter((e) => e.kind === "user").length === postsBefore);
   }
