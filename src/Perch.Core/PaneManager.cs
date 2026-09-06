@@ -30,6 +30,14 @@ internal sealed class PaneManager : IDisposable
     // hence ConcurrentDictionary. Drives the Working→Done demotion.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, long> _lastOutputTicks = new();
 
+    // Last time anything was WRITTEN to the pane (Stopwatch ticks): typing,
+    // a paste, a team post. Output alone can't stand in for this — the idle
+    // reaper's clock only advances on SUSTAINED output, and a single
+    // keystroke's echo is one burst, so a pane being slowly typed into would
+    // otherwise look asleep. Every write funnels through Write(), so this is
+    // the one place that has to know.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, long> _lastInputTicks = new();
+
     private readonly IUiThread _ui;
     private readonly IPtyFactory _ptyFactory;
 
@@ -76,8 +84,30 @@ internal sealed class PaneManager : IDisposable
 
     public void Write(Guid paneId, byte[] bytes)
     {
-        if (_ptys.TryGetValue(paneId, out var pty)) pty.Write(bytes);
+        if (!_ptys.TryGetValue(paneId, out var pty)) return;
+        _lastInputTicks[paneId] = System.Diagnostics.Stopwatch.GetTimestamp();
+        pty.Write(bytes);
     }
+
+    public bool TryGetLastInputTicks(Guid paneId, out long ticks) =>
+        _lastInputTicks.TryGetValue(paneId, out ticks);
+
+    /// Pane ids that own a live PTY right now. The idle reaper compares this
+    /// against the tabs the store knows about — a PTY on neither list is
+    /// holding a process tree nothing in the app can reach.
+    public IReadOnlyList<Guid> LivePaneIds()
+    {
+        var ids = new List<Guid>(_ptys.Count);
+        foreach (var id in _ptys.Keys) ids.Add(id);
+        return ids;
+    }
+
+    /// The pane's kernel membership scope (job object / process session), for
+    /// reclaiming what it leaves behind. Null once the PTY is gone — the
+    /// handle dies with it, so a caller that needs this must ask BEFORE
+    /// teardown.
+    public IProcScope? ScopeOf(Guid paneId) =>
+        _ptys.TryGetValue(paneId, out var p) ? p.Scope : null;
 
     public void Ack(Guid paneId, long bytes)
     {
@@ -200,6 +230,7 @@ internal sealed class PaneManager : IDisposable
         try { pty.Dispose(); } catch { }
         lock (_bytesReceived) _bytesReceived.Remove(paneId);
         _lastOutputTicks.TryRemove(paneId, out _);
+        _lastInputTicks.TryRemove(paneId, out _);
     }
 
     public void Dispose()

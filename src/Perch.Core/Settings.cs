@@ -33,6 +33,21 @@ public sealed class Settings
     /// perch's "Reopen Previous Session" toggle.
     public bool ResumeAgentsOnLaunch { get; set; } = true;
 
+    /// Hours an agent tab may sit with nothing happening before Perch puts it
+    /// to sleep on its own. 0 disables it.
+    ///
+    /// Sleeping is not closing: the tab stays in the sidebar and clicking it
+    /// resumes the conversation. What it reclaims is the process tree — an
+    /// idle agent session measured at 700–820 MB across four processes (the
+    /// shell, claude, and its MCP plugin server, which costs as much as claude
+    /// does). Seven of them survived 56 hours on one machine and cost 5.7 GB.
+    ///
+    /// Four hours is long enough that a tab you stepped away from over lunch
+    /// is untouched, and short enough that an overnight machine wakes up with
+    /// its memory back. Only tabs that ran an agent, are not the one you're
+    /// looking at, aren't mid-turn, and aren't serving a port are eligible.
+    public double SleepIdleAgentsAfterHours { get; set; } = 4;
+
     /// Where a newly-created tab lands inside its project's run of tabs:
     /// "top" (default) or "bottom". Top is the default because a tab you just
     /// made is the one you're about to use — burying it under a dozen older

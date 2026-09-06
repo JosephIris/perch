@@ -21,6 +21,18 @@ import { confirmDialog } from "./confirm.js";
 import { buildSettingsMascot } from "./settings-mascot.js";
 import { setFaceColorMode } from "./bot-face.js";
 
+/// How long a tab may sit idle before Perch sleeps it. Hours, as strings,
+/// because that is what a Dropdown value is. "0" is the off switch and is
+/// spelled out rather than hidden behind a toggle — a reaper you can't see
+/// the setting for is one nobody trusts.
+const SLEEP_IDLE_OPTIONS = [
+  { value: "0", label: "Never" },
+  { value: "2", label: "After 2 hours" },
+  { value: "4", label: "After 4 hours" },
+  { value: "8", label: "After 8 hours" },
+  { value: "24", label: "After a day" },
+];
+
 let overlay: HTMLElement | null = null;
 let shellDropdown: Dropdown | null = null;
 let cwdInput: HTMLInputElement | null = null;
@@ -32,6 +44,7 @@ let fontInput: HTMLInputElement | null = null;
 let resumeToggle: HTMLButtonElement | null = null;
 let facesToggle: HTMLButtonElement | null = null;
 let newTabDropdown: Dropdown | null = null;
+let sleepIdleDropdown: Dropdown | null = null;
 let updateCheckBtn: HTMLButtonElement | null = null;
 let updateStatusEl: HTMLElement | null = null;
 // Default Updates-row blurb; restated after a check resets the row. Mirrors the
@@ -63,6 +76,8 @@ export function closeSettings(): void {
   facesToggle = null;
   newTabDropdown?.dispose();
   newTabDropdown = null;
+  sleepIdleDropdown?.dispose();
+  sleepIdleDropdown = null;
   updateCheckBtn = null;
   updateStatusEl = null;
   document.removeEventListener("keydown", onKeyDown, true);
@@ -114,6 +129,15 @@ export function applySettingsData(msg: SettingsDataMessage): void {
       { value: "bottom", label: "Bottom of the project" },
     ],
     msg.newTabPosition ?? "top",
+  );
+
+  // Absent -> 4 hours, matching Settings.SleepIdleAgentsAfterHours. An hours
+  // value that isn't one of the offered options falls back to "4" rather than
+  // leaving the control blank.
+  const sleepHours = String(msg.sleepIdleAgentsAfterHours ?? 4);
+  sleepIdleDropdown?.setOptions(
+    SLEEP_IDLE_OPTIONS,
+    SLEEP_IDLE_OPTIONS.some((o) => o.value === sleepHours) ? sleepHours : "4",
   );
 
   // Updates row: show the running version + cadence, and disable "Check now"
@@ -290,6 +314,9 @@ function save(): void {
     teamFacesColor: facesToggle ? getToggle(facesToggle) : undefined,
     newTabPosition: newTabDropdown
       ? (newTabDropdown.value as NewTabPosition)
+      : undefined,
+    sleepIdleAgentsAfterHours: sleepIdleDropdown
+      ? Number(sleepIdleDropdown.value)
       : undefined,
     // Split on newlines, drop blanks — so a trailing newline or an accidental
     // empty line doesn't register "" as a scan root.
@@ -581,6 +608,19 @@ function buildSkeleton(): void {
       "New tab position",
       "Whether a new tab appears above or below its project's existing tabs.",
       newTabDropdown.element,
+    ),
+  );
+
+  // Auto-sleep for idle agent tabs. Sleeping is not closing — the tab stays
+  // and clicking it resumes — but it hands back the ~700-800 MB an idle agent
+  // session holds across its shell, Claude, and Claude's MCP servers. Seven
+  // such tabs left open cost 5.7 GB on one machine over 56 hours.
+  sleepIdleDropdown = new Dropdown();
+  sessions.appendChild(
+    makeRow(
+      "Sleep idle agent tabs",
+      "Tabs quiet for this long go to sleep and hand back their memory. Click one to pick it up again. Never the tab you're in, an agent mid-turn, or a tab serving a port.",
+      sleepIdleDropdown.element,
     ),
   );
 

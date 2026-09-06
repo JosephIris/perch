@@ -403,6 +403,8 @@ internal sealed record SettingsSaveMsg
     public bool? TeamFacesColor { get; init; }
     /// Where a new tab lands in its project: "top" or "bottom".
     public string? NewTabPosition { get; init; }
+    /// Hours an agent tab may sit idle before it is slept; 0 = never.
+    public double? SleepIdleAgentsAfterHours { get; init; }
     /// Parent folders scanned one level deep for repos to offer as projects.
     /// Null = key absent (leave as-is); an empty array explicitly clears them.
     public List<string>? ProjectScanRoots { get; init; }

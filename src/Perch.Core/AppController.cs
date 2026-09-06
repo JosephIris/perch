@@ -293,6 +293,16 @@ internal sealed partial class AppController
     private CloudController? _cloud;
     private LocalController? _local;
     private IUiTimer? _usageTimer;
+    /// Reclaims a torn-down pane's leftovers (MCP servers and friends), while
+    /// sparing anything that's serving a port. See JobSweep.
+    private JobSweep _jobSweep = new(null);
+    /// Sleeps idle agent tabs and destroys PTYs no tab owns. See IdleReaper.
+    private IdleReaper? _reaper;
+    private IUiTimer? _reapTimer;
+    /// How often the reaper looks. Deliberately unhurried — it is answering
+    /// "has this been idle for hours", so a five-minute cadence is 60× finer
+    /// than the question needs and costs one pass over the session list.
+    private static readonly TimeSpan ReapInterval = TimeSpan.FromMinutes(5);
     // When the last update check ran (UTC). Throttles the re-check we fire on
     // window activation so rapid alt-tabbing can't hammer the GitHub feed.
     private DateTime _lastUpdateCheckUtc = DateTime.MinValue;
@@ -429,6 +439,25 @@ internal sealed partial class AppController
         // attribution never reads session/pane state off-thread.
         _local = new LocalController(_ui, probe, PostToPage, SnapshotLivePanes, ApplyPanePorts);
         _local.Start();
+        // The reaper shares the Local panel's probe on purpose: "is this
+        // process serving a port?" must have exactly one answer in the app.
+        _jobSweep = new JobSweep(probe);
+        _reaper = new IdleReaper
+        {
+            Sessions = () => _store.Sessions,
+            Leaves = s => AllLeaves(s.Root),
+            HasPty = id => _panes.Has(id),
+            LastActivityTicks = LastPaneActivityTicks,
+            ActiveSessionId = () => _store.ActiveSessionId,
+            Parked = id => _teamCtrl.HasParkedWork(id),
+            Sleep = id => OnSessionDormant(new SessionRef { Id = id }),
+            LivePaneIds = () => _panes.LivePaneIds(),
+            DestroyPane = DestroyOrphanPane,
+            Announce = text => PostToast(text, "info", Guid.Empty),
+            IdleHours = _settings.SleepIdleAgentsAfterHours,
+        };
+        _reapTimer = _ui.CreateTimer(ReapInterval, OnReapTick);
+        _reapTimer.Start();
         EnsurePaneNames();
         // Persist immediately on first launch so external tools (the perch
         // CLI, test harnesses) can read pane ids and pipe paths from disk
@@ -525,6 +554,7 @@ internal sealed partial class AppController
     public void Shutdown()
     {
         _idleWatchdog?.Stop();
+        _reapTimer?.Stop();
         _repoWatchers?.Dispose();
         _updateTimer?.Stop();
         _usageTimer?.Stop();
@@ -1239,6 +1269,66 @@ internal sealed partial class AppController
 
     private void DestroyPty(Guid paneId) => _panes.Destroy(paneId);
 
+    // ---- Idle reaping ------------------------------------------------------
+
+    /// The pane's last REAL activity, in Stopwatch ticks. Two clocks, because
+    /// neither alone is honest:
+    ///   - _lastSustainedTicks, the idle watchdog's own signal, ignores the
+    ///     ambient one-burst repaints (a statusline tick) that would otherwise
+    ///     make every Claude pane look permanently busy.
+    ///   - the last WRITE, because typing produces a single-burst echo that
+    ///     never reaches "sustained" — without this, a pane you are slowly
+    ///     working in reads as idle.
+    /// Null when we have never clocked the pane, which the reaper treats as
+    /// "too new to judge" rather than "ancient".
+    private long? LastPaneActivityTicks(Guid paneId)
+    {
+        long? best = null;
+        if (_lastSustainedTicks.TryGetValue(paneId, out var sustained)) best = sustained;
+        if (_panes.TryGetLastInputTicks(paneId, out var typed) && (best == null || typed > best)) best = typed;
+        return best;
+    }
+
+    /// A PTY belonging to no awake tab. There is no session to be polite on
+    /// behalf of and no transcript anyone can reach, so this is the hard path:
+    /// destroy, then reclaim whatever the console didn't take.
+    private void DestroyOrphanPane(Guid paneId)
+    {
+        var snap = _jobSweep.CaptureAsync(paneId, _panes.ScopeOf(paneId));
+        DestroyPty(paneId);
+        _ = ReapLeftoversAsync(snap, "orphaned pane");
+    }
+
+    private void OnReapTick()
+    {
+        if (_reaper == null) return;
+        // Read the setting every tick so changing it in Settings takes effect
+        // without a restart — the whole point is a net that works on a machine
+        // that stays up for days.
+        _reaper.IdleHours = _settings.SleepIdleAgentsAfterHours;
+        try
+        {
+            _reaper.SweepOrphans();
+            _reaper.SweepIdle();
+        }
+        catch (Exception ex) { Log.Error("Reap.tick", ex); }
+    }
+
+    /// Wait out the snapshot, then kill what the teardown left behind. Fire-
+    /// and-forget by design: nothing in the UI waits on a dead pane's estate.
+    private async System.Threading.Tasks.Task ReapLeftoversAsync(
+        System.Threading.Tasks.Task<JobSnapshot> snapshot, string why)
+    {
+        try
+        {
+            var snap = await snapshot.ConfigureAwait(false);
+            // Two seconds of grace: an MCP stdio server usually exits by itself
+            // when the agent closes its pipe, and one that does costs nothing.
+            await _jobSweep.ReapAsync(snap, TimeSpan.FromSeconds(2), why).ConfigureAwait(false);
+        }
+        catch (Exception ex) { Log.Error("Reap.leftovers", ex); }
+    }
+
     // ---- Graceful agent shutdown on close ----------------------------------
     // Closing a tab used to shoot the console outright (ClosePseudoConsole
     // terminates the whole attached tree), which could kill Claude halfway
@@ -1260,12 +1350,20 @@ internal sealed partial class AppController
 
     private async System.Threading.Tasks.Task ShutdownPaneAsync(PaneNode pane)
     {
+        // Photograph the pane's process tree FIRST: membership is unanswerable
+        // once the PTY (and with it the job handle) is gone, and killing the
+        // console recovers barely half of an agent session — its MCP plugin
+        // server costs as much as claude itself and is not attached to the
+        // console at all. The capture runs off-thread and is awaited only
+        // after teardown, so it costs the close path nothing.
+        var snapshot = _jobSweep.CaptureAsync(pane.Id, _panes.ScopeOf(pane.Id));
         // Polite path only for a live Claude pane with a PTY to talk to.
         // Plain shells have no hooks to save, and "/exit" is cc's exit
         // choreography — other agents take the hard kill as before.
         if (pane.AgentType != "claude" || !_panes.Has(pane.Id))
         {
             DestroyPty(pane.Id);
+            _ = ReapLeftoversAsync(snapshot, "pane closed");
             return;
         }
         var cts = new System.Threading.CancellationTokenSource();
@@ -1294,6 +1392,7 @@ internal sealed partial class AppController
         {
             _pendingShutdown.Remove(pane.Id);
             DestroyPty(pane.Id);   // idempotent; CancelPendingShutdown may have beaten us here
+            _ = ReapLeftoversAsync(snapshot, "pane closed");
         }
     }
 
@@ -3745,6 +3844,7 @@ internal sealed partial class AppController
                 resumeAgentsOnLaunch = _settings.ResumeAgentsOnLaunch,
                 teamFacesColor = _settings.TeamFacesColor,
                 newTabPosition = _settings.NewTabPosition,
+                sleepIdleAgentsAfterHours = _settings.SleepIdleAgentsAfterHours,
                 projectScanRoots = _settings.ProjectScanRoots.ToArray(),
                 worktreeRoot = _settings.WorktreeRoot,
                 worktreeRootResolved = Worktree.Root(_settings),
@@ -3802,6 +3902,21 @@ internal sealed partial class AppController
         {
             _settings.TeamFacesColor = faces;
             dirty = true;
+        }
+        // Clamped to a sane band rather than trusted: 0 is the off switch, and
+        // anything under an hour would turn a memory net into a tab-closer.
+        if (msg.SleepIdleAgentsAfterHours is double hrs)
+        {
+            var clamped = hrs <= 0 ? 0 : Math.Max(1, Math.Min(168, hrs));
+            if (Math.Abs(_settings.SleepIdleAgentsAfterHours - clamped) > 0.01)
+            {
+                _settings.SleepIdleAgentsAfterHours = clamped;
+                if (_reaper != null) _reaper.IdleHours = clamped;
+                dirty = true;
+                Log.Info("Reap.setting", clamped <= 0
+                    ? "idle agent tabs are never slept"
+                    : $"idle agent tabs sleep after {clamped:F0}h");
+            }
         }
         // Clamped like every other string enum here: an unknown value is
         // dropped rather than persisted, so a stale page can't wedge new tabs
@@ -4905,6 +5020,36 @@ internal sealed partial class AppController
                                 Log.Info("FlowStats", $"FLOW pane={leaf.Id:D} max={pty.MaxOutstanding}");
                 }
                 break;
+            case "reap.now":
+                // Run the idle/orphan sweeps this instant instead of waiting
+                // out the five-minute timer. The reaper answers a question
+                // measured in HOURS, so without this a harness could never
+                // watch it work. `idleHours` overrides the threshold for this
+                // one pass only (0.0001 = "everything not busy"), leaving the
+                // user's setting alone.
+                {
+                    if (_reaper == null) break;
+                    var keep = _reaper.IdleHours;
+                    // perch-cli sends every --flag as a STRING, so accept both
+                    // wire forms rather than silently ignoring the override.
+                    if (root.TryGetProperty("idleHours", out var ih))
+                    {
+                        double? over = ih.ValueKind switch
+                        {
+                            JsonValueKind.Number when ih.TryGetDouble(out var d) => d,
+                            JsonValueKind.String when double.TryParse(
+                                ih.GetString(), System.Globalization.NumberStyles.Float,
+                                System.Globalization.CultureInfo.InvariantCulture, out var s) => s,
+                            _ => null,
+                        };
+                        if (over is double o) _reaper.IdleHours = o;
+                    }
+                    var orphans = _reaper.SweepOrphans();
+                    var slept = _reaper.SweepIdle();
+                    _reaper.IdleHours = keep;
+                    Log.Info("REAP_DONE", $"orphans={orphans} slept={slept}");
+                }
+                break;
             case "team.dump":
                 // The project's team plus the room ledger's tail, as one
                 // TEAM_DUMP{json} log line for scripts/test-team.ps1.
@@ -4924,10 +5069,17 @@ internal sealed partial class AppController
                     {
                         id = s.Id.ToString("D"),
                         active = _store.ActiveSessionId == s.Id,
+                        // Asleep: the tab is kept but owns no PTY. The idle
+                        // reaper's whole outcome is this flag flipping.
+                        dormant = s.Dormant,
                         panes = AllLeaves(s.Root).Select(p => new
                         {
                             id = p.Id.ToString("D"),
                             name = p.Name,
+                            // Loopback ports attributed to this pane. The
+                            // reaper spares a tab that is serving, so a
+                            // harness has to be able to see what it sees.
+                            ports = p.Ports,
                             agentState = StateProjection.StateToString(p.AgentState),
                             // "claude" / "codex" / "" — which agent the pane's
                             // shim reported; the mac e2e suite asserts it.
@@ -4962,6 +5114,7 @@ internal sealed partial class AppController
                         defaultShell = _settings.DefaultShell,
                         defaultCwd = _settings.DefaultCwd,
                         resumeAgentsOnLaunch = _settings.ResumeAgentsOnLaunch,
+                        sleepIdleAgentsAfterHours = _settings.SleepIdleAgentsAfterHours,
                     };
                     var dump = new { sessions = snap, closedSessions = closed, prefs };
                     Log.Info("StateDump", "STATE_DUMP" + JsonSerializer.Serialize(dump));

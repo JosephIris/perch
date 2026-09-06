@@ -101,6 +101,12 @@ internal sealed class TeamController
     /// Posts waiting for a Claude to come up (or to be free) in that session.
     private readonly Dictionary<Guid, List<(long Seq, string Line, string Nick)>> _parked = new();
 
+    /// Is a room post still waiting on this session's bot? The idle reaper
+    /// asks before sleeping a tab: a bot with a post queued is about to be
+    /// busy, however quiet it looks right now.
+    public bool HasParkedWork(Guid sessionId) =>
+        _parked.ContainsKey(sessionId) || _coldStart.ContainsKey(sessionId);
+
     /// Lines addressed to a bot that had NO tab on this machine, held while
     /// Perch starts one for it (see Attempt's `wake`). Keyed by bot slug
     /// because there is no session yet; moved into _parked the moment the

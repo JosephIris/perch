@@ -193,6 +193,8 @@ export type OutMessage =
       /* Team bot faces in colour rather than plain ink. */
       teamFacesColor?: boolean;
       newTabPosition?: NewTabPosition;
+      /* Hours idle before an agent tab is slept; 0 = never. */
+      sleepIdleAgentsAfterHours?: number;
       projectScanRoots?: string[];
       worktreeRoot?: string;
       worktreeSeedPaths?: string[];
@@ -953,6 +955,9 @@ export type SettingsDataMessage = {
   /* Where a new tab is inserted in its project (Settings → "New tab position").
    * Absent → "top", matching the host's Settings.NewTabPosition default. */
   newTabPosition?: NewTabPosition;
+  /* Hours an agent tab may sit idle before Perch sleeps it and hands back its
+   * memory (Settings -> "Sleep idle agent tabs"). 0 = never; absent -> 4. */
+  sleepIdleAgentsAfterHours?: number;
   /* Parent folders scanned (one level deep) for repos to offer as projects. */
   projectScanRoots?: string[];
   /* Where project tabs' worktrees are created ("" = the built-in default, which
