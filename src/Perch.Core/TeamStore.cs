@@ -135,7 +135,8 @@ internal sealed class TeamStore
             doc.Done ??= new();
             doc.Open ??= new();
             doc.Migrate();   // a v1 file's single `current` becomes the first open board
-            foreach (var b in doc.Open) b.Items ??= new();
+            foreach (var b in doc.Open) { b.Items ??= new(); b.WrappedBy ??= new(); }
+            foreach (var b in doc.Done) { b.Items ??= new(); b.WrappedBy ??= new(); }
             return doc;
         }
         catch (Exception ex)

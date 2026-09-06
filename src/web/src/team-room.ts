@@ -119,7 +119,7 @@ export function taskStatusWord(status: TeamTaskView["status"] | undefined): stri
   switch (status) {
     case "open": return "in progress";
     case "review": return "confirm?";
-    case "done": return "wrapping up";
+    case "done": return "done";
     default: return "";
   }
 }
@@ -1013,7 +1013,8 @@ function renderTasks(project: ProjectView | null): void {
   const team = project?.team;
   const bots = team?.bots ?? [];
   const tasks = taskOrder(team?.tasks ?? []);
-  taskCountEl.textContent = tasks.length > 0 ? String(tasks.length) : "";
+  const openCount = tasks.filter((t) => !t.archived).length;
+  taskCountEl.textContent = openCount > 0 ? String(openCount) : "";
   setGlyph(newTaskBtn, newTaskOpen ? "close" : "plus", newTaskOpen ? "Cancel" : "New task");
   newTaskBtn.hidden = !project || bots.length === 0;
   tasksBoardBtn.hidden = !project || tasks.length === 0;
@@ -1025,7 +1026,7 @@ function renderTasks(project: ProjectView | null): void {
   const sig = [
     project?.id ?? "", team?.lead ?? "", newTaskOpen, renameFor ?? "", rejectFor ?? "",
     tasks.map((t) => [
-      t.id, t.status, t.title, t.setBy, t.reviewBy ?? "", t.doneAtMs ?? 0,
+      t.id, t.status, t.title, t.setBy, t.reviewBy ?? "", t.doneAtMs ?? 0, t.archived ? 1 : 0,
       t.wrapping.join("+"),
       t.items.map((i) => `${i.botId}${i.status}${i.title}${i.note}${i.updatedAtMs}`).join("+"),
     ].join(":")).join(","),
@@ -1421,7 +1422,7 @@ function taskCard(project: ProjectView, team: TeamView, t: TeamTaskView): HTMLEl
   const confirmDone = () => {
     void confirmDialog({
       title: "Task done?",
-      body: `The bots on "${t.title}" write what the next task needs into their memory, then their conversation is cleared. The card moves to the archive.`,
+      body: `"${t.title}" moves to the archive. Each bot that worked on it writes what the next task needs into its memory and is reset — once it is free, and in one go with anything else it finished. A bot mid-piece on another card is left alone. You can reopen the card for a while if this was a mistake.`,
       confirmLabel: "Confirm done",
     }).then((ok) => { if (ok) send({ type: "team.task.confirm", projectId: project.id, taskId: t.id }); });
   };
@@ -1454,15 +1455,23 @@ function taskCard(project: ProjectView, team: TeamView, t: TeamTaskView): HTMLEl
     }, "Take this card off the board"));
     card.appendChild(actions);
   } else if (t.status === "done") {
+    // Archived. Who has written it up and been reset (✓), who is still to
+    // (…): the host asks each bot when it is free. Reopen is the undo.
     const wrap = el("div", "team-tasks__wrap");
-    wrap.appendChild(document.createTextNode("Wrapping up: "));
     const on = bots.filter((b) => t.wrapping.includes(b.botId) || items.some((i) => i.botId === b.botId));
+    wrap.appendChild(document.createTextNode(t.wrapping.length > 0 ? "Writing it up when free: " : "Written up: "));
     for (const bot of on) {
       const pendingWrap = t.wrapping.includes(bot.botId);
       wrap.appendChild(el("span", pendingWrap ? "pending" : "", `${bot.nickname}${pendingWrap ? "…" : " ✓"}`));
     }
-    if (on.length === 0) wrap.appendChild(el("span", "", "done"));
+    if (on.length === 0) wrap.appendChild(el("span", "", "nobody had a hand in it"));
     card.appendChild(wrap);
+    if (t.archived) {
+      actions.appendChild(button("projects-card__btn", "Reopen", () => {
+        send({ type: "team.task.reopen", projectId: project.id, taskId: t.id });
+      }, "Put this card back on the board — bots that haven't written it up yet won't be asked to"));
+      card.appendChild(actions);
+    }
   }
   return card;
 }

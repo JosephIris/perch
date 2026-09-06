@@ -187,11 +187,57 @@ internal static class TeamRender
         sb.Append("- Close each: when every piece of a task is done and you have checked the result, run ")
           .Append("`perch team task done <id>`. That asks Joseph to confirm. Do not say a task is done in prose; the command is ")
           .Append("what the room shows.\n");
-        sb.Append("- After Joseph confirms a task, the bots whose work was all on it (you included, if so) write what the next task ")
-          .Append("needs into their memory file and are reset; a bot with a piece on another open task carries on. Expect to ")
-          .Append("start a fresh task with only your brief, the roster, the board and your memory.\n");
+        sb.Append("- After Joseph confirms a task, each bot that worked on it (you included) is asked, once it is free and has ")
+          .Append("nothing of its own left on the board, to write what the next task needs into its memory file — one wrap-up ")
+          .Append("for every card it finished since its last reset — and is then reset. A bot mid-piece on another card is left ")
+          .Append("alone until that card is confirmed too. Expect to start a fresh task with only your brief, the roster, the ")
+          .Append("board and your memory.\n");
         return sb.ToString();
     }
+
+    // ---- wrap-up -------------------------------------------------------------
+
+    /// The one line a bot is typed when the harness has decided it is time
+    /// to write up its finished work and reset: every card, its own piece on
+    /// each, and what to do. Kept to one message so the bot's reply is the
+    /// turn the reset follows.
+    public static string WrapUp(TeamBot bot, IReadOnlyList<TaskBoard> cards, string memoryPath)
+    {
+        var sb = new StringBuilder();
+        sb.Append(cards.Count == 1 ? "Joseph confirmed the task you worked on: " : $"Joseph confirmed {cards.Count} tasks you worked on: ");
+        for (var i = 0; i < cards.Count; i++)
+        {
+            var c = cards[i];
+            if (i > 0) sb.Append("; ");
+            sb.Append('(').Append(i + 1).Append(") ").Append(c.Id).Append(" \"").Append(OneLine(c.Title, 140)).Append('"');
+            var mine = c.ItemOf(bot.Slug);
+            if (mine != null)
+            {
+                sb.Append(" — your piece: [").Append(mine.Status).Append("] ").Append(OneLine(mine.Title, 100));
+                var note = OneLine(mine.Note, 100);
+                if (note.Length > 0) sb.Append(" (").Append(note).Append(')');
+            }
+            else if (string.Equals(c.SetBy, bot.Slug, StringComparison.OrdinalIgnoreCase)) sb.Append(" — you ran it");
+        }
+        sb.Append(". Wrap up now: update your memory file `").Append(memoryPath)
+          .Append("` with what the next task will need from ").Append(cards.Count == 1 ? "it" : "each")
+          .Append(" (decisions, where things stand, unfinished threads, who owns what); keep the part above `---` under ")
+          .Append(TeamStore.MemoryMaxBytes / 1024).Append(" KB — only that much reaches you — and move detail below the line. ")
+          .Append("Stop any background commands or local servers you started. Then reply with one line. ")
+          .Append("Your context is cleared after that reply.");
+        return sb.ToString();
+    }
+
+    /// Typed once when the wrap-up turn ended and the memory file is as it
+    /// was: the reset follows the next reply whatever happens.
+    public static string WrapNudge(string memoryPath)
+        => $"Your memory file `{memoryPath}` did not change. Write what the next task needs into it now — the part above `---` " +
+           $"under {TeamStore.MemoryMaxBytes / 1024} KB, detail below — then reply with one line. Your context is cleared after that reply.";
+
+    /// "Ada", "Ada and Bo", "Ada, Bo and Cy".
+    public static string Names(IReadOnlyList<string> names)
+        => names.Count == 0 ? "" : names.Count == 1 ? names[0]
+         : string.Join(", ", names.Take(names.Count - 1)) + " and " + names[^1];
 
     // ---- task block --------------------------------------------------------
 
@@ -274,7 +320,8 @@ internal static class TeamRender
         sb.Append("Your notes, kept in `").Append(memoryPath).Append("` and shared through the repository, so a future ")
           .Append(bot.Nickname).Append(" on any machine reads them. Edit the file with your tools when you learn something ")
           .Append("that must outlive this session: decisions, where things are, who owns what, what you were in the middle of. ")
-          .Append("Keep a short summary on top and the details below a line that is exactly `---`: only the top (up to 4 KB) ")
+          .Append("Keep a short summary on top and the details below a line that is exactly `---`: only the top (up to ")
+          .Append(TeamStore.MemoryMaxBytes / 1024).Append(" KB) ")
           .Append("arrives here; the rest is on disk to Read when you need it. Keep the top current — replace, don't append forever.\n\n");
         var body = (memory ?? "").Trim();
         sb.Append(body.Length > 0 ? body : "(Empty so far.)").Append('\n');

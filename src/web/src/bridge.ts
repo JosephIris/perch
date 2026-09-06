@@ -312,13 +312,15 @@ export type OutMessage =
   /* Make a bot the team's one lead. */
   | { type: "team.lead.set"; projectId: string; botId: string }
   /* The task board — several tasks may be open, each a card. The owner opens a
-   * new one (`set`), renames one, confirms one is done (the bots on it wrap
-   * up and reset), or says not yet (back to open; the lead is told, with the
-   * note). */
+   * new one (`set`), renames one, confirms one is done (archived at once; the
+   * host writes each bot up and resets it when it is free), says not yet
+   * (back to open; the lead is told, with the note), or reopens an archived
+   * one (the undo for a confirm by mistake). */
   | { type: "team.task.set"; projectId: string; title: string }
   | { type: "team.task.rename"; projectId: string; taskId: string; title: string }
   | { type: "team.task.confirm"; projectId: string; taskId: string }
   | { type: "team.task.close"; projectId: string; taskId: string }
+  | { type: "team.task.reopen"; projectId: string; taskId: string }
   /* "Send again" on a post a bot never took: the host types the same line
    * into that bot again, and no second post appears in the room. */
   | { type: "team.deliver.retry"; projectId: string; seq: number; botId: string }
@@ -798,8 +800,9 @@ export type TeamTaskItemView = {
 };
 
 /* One task on the board — a card. open → review (the lead asked the owner to
- * confirm) → done (confirmed; bots in `wrapping` are still writing their
- * memory and being reset; when it empties the card is archived). */
+ * confirm) → done (confirmed and archived; the host keeps it in the list for
+ * a while — `archived` — so it can be reopened, with the bots still to write
+ * it up in `wrapping`). */
 export type TeamTaskView = {
   id: string;
   title: string;
@@ -810,7 +813,12 @@ export type TeamTaskView = {
   createdAtMs: number;
   doneAtMs?: number;
   items: TeamTaskItemView[];
+  /* botIds of the bots that have yet to write this (archived) card into
+   * their memory and be reset. */
   wrapping: string[];
+  /* Off the board (in the archive); shown behind the open cards. Absent on
+   * older hosts. */
+  archived?: boolean;
 };
 
 export type TeamView = {

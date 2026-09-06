@@ -614,6 +614,14 @@ internal sealed record TeamTaskCloseMsg
     public required string TaskId { get; init; }
 }
 
+/// The owner puts an archived card back on the board: the undo for a
+/// confirm by mistake. Bots that have not written it up yet never are.
+internal sealed record TeamTaskReopenMsg
+{
+    public required Guid ProjectId { get; init; }
+    public required string TaskId { get; init; }
+}
+
 /// The owner says a task is not done yet (after the lead asked): back to
 /// open, with a note the lead gets.
 internal sealed record TeamTaskRejectMsg

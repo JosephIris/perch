@@ -160,14 +160,26 @@ internal sealed class TeamController
     private static bool IsEditVerb(string? verb)
         => verb is "Edit" or "MultiEdit" or "Write" or "NotebookEdit";
 
+    /// A path under the repository's `.perch/team/` (a memory file, a brief).
+    internal static bool IsTeamFile(string? target)
+    {
+        if (string.IsNullOrEmpty(target)) return false;
+        var p = target.Replace('\\', '/');
+        return p.Contains("/.perch/team/", StringComparison.OrdinalIgnoreCase)
+            || p.StartsWith(".perch/team/", StringComparison.OrdinalIgnoreCase);
+    }
+
     /// A system row when `bot` edits files while holding no piece on any open
     /// task and the team has a lead to hand one out — null when the work is
     /// claimed, the bot IS the lead, there is no lead, or it was said lately.
-    private RoomEntry? UnclaimedWork(TeamStore store, TeamBot bot, long atMs)
+    private RoomEntry? UnclaimedWork(TeamStore store, TeamBot bot, long atMs, string? target)
     {
         var lead = store.Doc.Lead;
         if (lead == null || store.Doc.IsLead(bot)) return null;
         if (store.Tasks.Active.Any(b => b.ItemOf(bot.Slug) != null)) return null;
+        // Its own memory file (and anything else under the team's folder) is
+        // never unclaimed work: the wrap-up asks for exactly that edit.
+        if (IsTeamFile(target)) return null;
         var now = atMs > 0 ? atMs : DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         if (_unclaimedWarnedAt.TryGetValue(bot.Slug, out var last) && now - last < UnclaimedWarnEveryMs) return null;
         _unclaimedWarnedAt[bot.Slug] = now;
@@ -200,11 +212,42 @@ internal sealed class TeamController
     /// only when the turn ends and Enter is pressed again (see Hold).
     private readonly Dictionary<Guid, PendingSubmit> _held = new();
 
-    /// Bots told to wrap up after the owner confirmed a task: session → the
-    /// project, and whether the wrap-up post was seen submitted. A bot is
-    /// reset (its context cleared) when its turn ends AFTER that post went
-    /// in — a Done from the turn it was busy with doesn't count.
-    private readonly Dictionary<Guid, (Guid Project, string TaskId, bool Confirmed)> _wrapping = new();
+    /// A bot in the middle of its wrap-up: the wrap-up line has been typed
+    /// (or is parked for it), and it is reset (its context cleared) when its
+    /// turn ends AFTER that line went in — a Done from the turn it was busy
+    /// with doesn't count. Keyed by session.
+    private sealed class Wrap
+    {
+        public required Guid Project;
+        /// The archived boards this wrap-up covers, in the order they were
+        /// confirmed; each is marked written up by the bot at the reset.
+        public required List<string> TaskIds;
+        /// The wrap-up post's room number.
+        public required long Seq;
+        /// The memory file as it was when the wrap-up was typed, so the reset
+        /// can tell whether the bot wrote anything.
+        public required string MemoryStamp;
+        /// The prompt-submit hook echoed the wrap-up line.
+        public bool Confirmed;
+        /// The bot was told once that its memory file did not change.
+        public bool Nudged;
+    }
+    private readonly Dictionary<Guid, Wrap> _wrapping = new();
+
+    /// Sessions a `/clear` was just typed into: nothing else is typed until
+    /// the session-start hook says the fresh Claude is listening (OnAgentUp),
+    /// or the grace runs out. Value: when the reset was typed.
+    private readonly Dictionary<Guid, DateTimeOffset> _resetting = new();
+    internal static readonly TimeSpan ResetGrace = TimeSpan.FromSeconds(20);
+
+    /// How long a confirmed card sits before any bot is asked to write it up:
+    /// the owner's window to reopen a card confirmed by mistake before
+    /// anyone acts on it.
+    internal static readonly TimeSpan WrapGrace = TimeSpan.FromSeconds(30);
+
+    /// Projects with a wrap-up sweep already on the timer, so a working bot's
+    /// stream of status reports schedules one, not fifty.
+    private readonly HashSet<Guid> _sweepPending = new();
 
     /// Permission requests a bot's hook is holding for the room: id → (bot
     /// slug, pane). The hook polls for the answer file; the owner's click
@@ -452,13 +495,24 @@ internal sealed class TeamController
         };
     }
 
-    /// The open tasks for the page, open ones first: each board, every piece
-    /// by nickname, and which bots are still wrapping up after its confirm.
+    /// The tasks for the page: every open board (open ones first), then the
+    /// cards confirmed lately — still there to reopen, and showing which of
+    /// their bots have yet to write them up (`wrapping`). A card stays in
+    /// that tail while anyone is still to write it up, or for an hour.
+    internal static readonly TimeSpan RecentDone = TimeSpan.FromHours(1);
     private object[] TasksView(Guid projectId, TeamStore store)
     {
         string Nick(string slug) => slug == "you" ? "you" : store.Doc.Bot(slug)?.Nickname ?? slug;
+        var nowMs = Now().ToUnixTimeMilliseconds();
+        var recentMs = (long)RecentDone.TotalMilliseconds;
+        string[] Pending(TaskBoard b) => b.Status != "done" ? Array.Empty<string>()
+            : store.Doc.Bots.Where(bot => b.Worked(bot.Slug) && !b.WrittenUpBy(bot.Slug)).Select(bot => bot.Slug).ToArray();
+        var recent = store.Tasks.Done
+            .Where(b => Pending(b).Length > 0 || nowMs - (b.DoneAtMs ?? 0) < recentMs)
+            .OrderByDescending(b => b.DoneAtMs ?? 0).Take(5).Reverse();
         return store.Tasks.Open
             .OrderBy(b => b.Status == "done" ? 1 : 0).ThenBy(b => b.CreatedAtMs)
+            .Concat(recent)
             .Select(b => (object)new
             {
                 id = b.Id,
@@ -472,8 +526,8 @@ internal sealed class TeamController
                 {
                     botId = i.Bot, bot = Nick(i.Bot), title = i.Title, status = i.Status, note = i.Note, updatedAtMs = i.UpdatedAtMs,
                 }).ToArray(),
-                wrapping = _wrapping.Where(kv => kv.Value.Project == projectId && kv.Value.TaskId == b.Id)
-                    .Select(kv => store.Doc.BotBySession(kv.Key)?.Slug).Where(s => s != null).ToArray(),
+                wrapping = Pending(b),
+                archived = b.Status == "done",
             }).ToArray();
     }
 
@@ -1247,9 +1301,13 @@ internal sealed class TeamController
     public void OnAgentUp(Session sess)
     {
         // Claude is listening now, so a pane we started for a post is no
-        // longer "starting".
+        // longer "starting" — and a reset is over.
         _coldStart.Remove(sess.Id);
+        _resetting.Remove(sess.Id);
         FlushParked(sess.Id, TimeSpan.FromSeconds(4));
+        // A bot that just came up (or woke) may have finished work to write
+        // up before it takes anything new.
+        if (BotOfSession(sess.Id) is { } h) ScheduleSweep(h.Project.Id, TimeSpan.FromSeconds(4));
     }
 
     /// Panes Perch started because a post was addressed to them, and the
@@ -1304,12 +1362,17 @@ internal sealed class TeamController
         if (state is not (AgentState.Permission or AgentState.Waiting) && _parked.ContainsKey(sess.Id))
             FlushParked(sess.Id, TimeSpan.FromSeconds(1));
         // Wrapping up: the wrap-up post going in arms the reset; the next
-        // turn end fires it.
+        // turn end fires it (after a look at the memory file).
         if (_wrapping.TryGetValue(sess.Id, out var w))
         {
-            if (isPostEcho && !w.Confirmed) _wrapping[sess.Id] = (w.Project, w.TaskId, true);
-            else if (w.Confirmed && state == AgentState.Done) ResetBot(sess, w.Project, w.TaskId);
+            if (isPostEcho && !w.Confirmed) w.Confirmed = true;
+            else if (w.Confirmed && state == AgentState.Done) FinishWrap(sess, w);
         }
+        // A turn ended: a bot with finished work and nothing of its own left
+        // on the board gets its wrap-up now. Delayed past ResumeHeld and the
+        // parked flush, which have first claim on the free pane.
+        else if (state is AgentState.Done or AgentState.Idle && BotOfSession(sess.Id) is { } hb)
+            ScheduleSweep(hb.Project.Id, TimeSpan.FromMilliseconds(1500));
     }
 
     /// Type the session's parked lines once it can take them. Re-checked at
@@ -1332,6 +1395,9 @@ internal sealed class TeamController
             // Still booting: the shell answers long before Claude does, and a
             // line typed into that gap is lost. OnAgentUp releases this.
             if (_coldStart.ContainsKey(sid)) return;
+            // Writing up finished work, or just reset: the line waits for the
+            // fresh Claude (OnAgentUp after the /clear flushes it).
+            if (WrapHolds(h.Bot, s)) return;
             var delivered = new List<RoomEntry>();
             foreach (var (seq, line, nick) in lines.ToList())
             {
@@ -1537,10 +1603,18 @@ internal sealed class TeamController
         _parked.Remove(sess.Id);
         _submits.Remove(sess.Id);
         _held.Remove(sess.Id);
-        var wasWrapping = _wrapping.Remove(sess.Id);
+        _wrapping.Remove(sess.Id);
+        _resetting.Remove(sess.Id);
+        // A closed tab has no context left to write from: whatever it had
+        // finished is its past now.
+        var pending = h.Store.Tasks.Unwritten(h.Bot.Slug).ToList();
+        if (pending.Count > 0)
+        {
+            foreach (var b in pending) b.MarkWrittenUp(h.Bot.Slug);
+            h.Store.SaveTasks();
+        }
         RefreshRoster(h.Project, h.Store);
         PostEntries(h.Project.Id, h.Store, new[] { e });
-        if (wasWrapping) MaybeArchive(h.Project.Id);   // a closed tab has no context left to clear
     }
 
     private void Lifecycle(Session sess, string ev, Func<TeamBot, string> text)
@@ -1981,80 +2055,214 @@ internal sealed class TeamController
         PostEntries(proj.Id, store, new[] { e });
     }
 
-    /// The owner confirmed. The board is done; the running bots whose open
-    /// pieces are ALL on it are told to wrap up (memory first, then one line)
-    /// and each is reset when that turn ends. A bot with a piece on another
-    /// open task is told and carries on; bots that aren't running have
-    /// nothing to clear.
+    /// The owner confirmed. The card leaves the board now and nothing is
+    /// typed into anyone: each bot that worked on it is written up and reset
+    /// by the sweep (SweepWraps) once it is free, in one go with every other
+    /// card it finished. The grace before the first sweep is the owner's
+    /// window to reopen a card confirmed by mistake.
     private void CompleteTask(Project proj, TeamStore store, TaskBoard board)
     {
         if (board.Status == "done") return;
         board.Status = "done";
-        board.DoneAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        board.DoneAtMs = Now().ToUnixTimeMilliseconds();
+        Archive(store, board);
+        store.Tasks.Open.Remove(board);
         store.SaveTasks();
         RefreshRoster(proj, store);
+        // Who will write it up: the bots that had a hand in it and have a
+        // tab to do it from. A bot with no tab has no context to write from.
+        var writers = store.Doc.Bots.Where(b => board.Worked(b.Slug) && b.SessionId is Guid id && _h.SessionById(id) != null).ToList();
+        foreach (var b in store.Doc.Bots.Where(b => board.Worked(b.Slug) && !writers.Contains(b))) board.MarkWrittenUp(b.Slug);
+        if (writers.Count > 0) store.SaveTasks();
+        var later = writers.Where(b => store.Tasks.HoldsWork(b.Slug, store.Doc.IsLead(b))).Select(b => b.Nickname).ToList();
+        var soon = writers.Where(b => !later.Contains(b.Nickname)).Select(b => b.Nickname).ToList();
         var rows = new List<RoomEntry>
         {
             store.Ledger.Append(new RoomEntry
             {
                 Kind = "system", From = "perch", Event = "task.done", TaskId = board.Id,
-                Text = $"Task done: {board.Title} — its bots are wrapping up",
+                Text = $"Task done: {board.Title}",
+            }),
+            store.Ledger.Append(new RoomEntry
+            {
+                Kind = "system", From = "perch", Event = "task", TaskId = board.Id,
+                Text = $"\"{TeamRender.OneLine(board.Title, 60)}\" is off the board — "
+                     + (writers.Count == 0 ? "nobody has a tab to write it up from"
+                        : (soon.Count > 0 ? $"{TeamRender.Names(soon)} write{(soon.Count == 1 ? "s" : "")} it up and reset{(soon.Count == 1 ? "s" : "")} shortly" : "")
+                        + (soon.Count > 0 && later.Count > 0 ? "; " : "")
+                        + (later.Count > 0 ? $"{TeamRender.Names(later)} {(later.Count == 1 ? "has" : "have")} work in flight and write{(later.Count == 1 ? "s" : "")} it up when free" : ""))
+                     + (store.Tasks.Active.Any() ? "" : ". Ready for the next task"),
             }),
         };
-        var others = store.Tasks.Active.Where(b => b.Id != board.Id).ToList();
-        bool Elsewhere(TeamBot b) => others.Any(o => o.ItemOf(b.Slug) != null);
-        var resetting = store.Doc.Bots.Where(b => !Elsewhere(b)).ToList();
-        var staying = store.Doc.Bots.Where(Elsewhere).ToList();
-
-        if (resetting.Count > 0)
-        {
-            var text = $"The task \"{board.Title}\" is done. Wrap up now: update your memory file with what the next task will need " +
-                       "(decisions, where things stand, unfinished threads), then reply with one line. Your context is cleared after that reply.";
-            var seq = store.Ledger.NextSeq;
-            var attempts = Attempt(resetting, text, everyone: true, seq);
-            var post = new RoomEntry
-            {
-                Kind = "user", From = "you", Text = text, To = new List<string> { TeamRender.Everyone },
-                Delivered = attempts.All(a => a.Ok), TaskId = board.Id,
-            };
-            store.Ledger.Append(post);
-            rows.Add(post);
-            rows.AddRange(Record(store, post, attempts));
-            foreach (var a in attempts)
-                if (a.Ok && a.SessionId is Guid sid) _wrapping[sid] = (proj.Id, board.Id, false);
-        }
-        if (staying.Count > 0)
-        {
-            var text = $"The task \"{board.Title}\" is done. You still have a piece on another open task, so you carry on; " +
-                       "update your memory file with anything from this one worth keeping.";
-            var seq = store.Ledger.NextSeq;
-            var attempts = Attempt(staying, text, everyone: false, seq);
-            var post = new RoomEntry
-            {
-                Kind = "user", From = "you", Text = text, To = staying.Select(b => b.Slug).ToList(),
-                Delivered = attempts.All(a => a.Ok), TaskId = board.Id,
-            };
-            store.Ledger.Append(post);
-            rows.Add(post);
-            rows.AddRange(Record(store, post, attempts));
-        }
-        // The card leaves the board NOW. Wrapping up is the bots' business and
-        // takes as long as it takes; it used to hold the card in place, so one
-        // bot that never finished its wrap-up (or picked up a piece on a new
-        // task first) pinned a confirmed card on the board for good.
-        Archive(store, board);
-        store.Tasks.Open.Remove(board);
-        store.SaveTasks();
-        RefreshRoster(proj, store);
-        rows.Add(store.Ledger.Append(new RoomEntry
-        {
-            Kind = "system", From = "perch", Event = "task", TaskId = board.Id,
-            Text = $"\"{TeamRender.OneLine(board.Title, 60)}\" is off the board"
-                 + (store.Tasks.Active.Any() ? "" : " — ready for the next task"),
-        }));
-        Log.Info("Team.task", $"project={proj.Id:N} done id={board.Id}; wrapping={_wrapping.Count(kv => kv.Value.TaskId == board.Id)} staying={staying.Count}");
+        Log.Info("Team.task", $"project={proj.Id:N} done id={board.Id}; soon={soon.Count} later={later.Count}");
         _h.PushState();
         PostEntries(proj.Id, store, rows);
+        ScheduleSweep(proj.Id, WrapGrace + TimeSpan.FromSeconds(1));
+    }
+
+    // ---- wrap-up: when a bot writes up finished work and is reset ----------
+
+    /// One sweep on the timer per project; a bot's stream of status reports
+    /// coalesces into it.
+    private void ScheduleSweep(Guid projectId, TimeSpan delay)
+    {
+        // Nothing to write up anywhere: no timer. Most turn ends are that.
+        if (StoreFor(projectId) is not { } store || !store.Doc.Bots.Any(b => store.Tasks.Unwritten(b.Slug).Any())) return;
+        if (!_sweepPending.Add(projectId)) return;
+        _h.Delay(() => { _sweepPending.Remove(projectId); SweepWraps(projectId); }, delay);
+    }
+
+    /// The harness's judgement of who is reset, and when: a bot with
+    /// confirmed cards it has not written up, past the reopen grace, whose
+    /// own work on the open board is nil (a piece just handed out doesn't
+    /// count — it waits for the fresh context), whose pane is up and free,
+    /// with nothing of ours sitting in its composer. That bot gets ONE
+    /// wrap-up naming every such card; the reset follows its reply
+    /// (FinishWrap). Everyone else is left alone until the next sweep, which
+    /// each turn end schedules.
+    internal void SweepWraps(Guid projectId)
+    {
+        var proj = _h.ProjectById(projectId);
+        var store = StoreFor(projectId);
+        if (proj == null || store == null) return;
+        var nowMs = Now().ToUnixTimeMilliseconds();
+        var graceMs = (long)WrapGrace.TotalMilliseconds;
+        foreach (var bot in store.Doc.Bots)
+        {
+            var cards = store.Tasks.Unwritten(bot.Slug).Where(b => (b.DoneAtMs ?? 0) + graceMs <= nowMs).ToList();
+            if (cards.Count == 0) continue;
+            var sess = bot.SessionId is Guid id ? _h.SessionById(id) : null;
+            if (sess == null)
+            {
+                // The tab went while the card waited: no context to write from.
+                foreach (var b in cards) b.MarkWrittenUp(bot.Slug);
+                store.SaveTasks();
+                continue;
+            }
+            if (_wrapping.ContainsKey(sess.Id) || _resetting.ContainsKey(sess.Id)) continue;
+            if (store.Tasks.HoldsWork(bot.Slug, store.Doc.IsLead(bot))) continue;
+            if (sess.Dormant || !SessionRunning(sess) || _coldStart.ContainsKey(sess.Id)) continue;   // OnAgentUp sweeps
+            if (Blocked(sess) || Working(sess)) continue;                                                // its turn end sweeps
+            if (_submits.ContainsKey(sess.Id) || _held.ContainsKey(sess.Id)) continue;                  // a line of ours is in its composer
+            StartWrap(proj, store, bot, sess, cards);
+        }
+    }
+
+    /// Type the wrap-up: the cards, the bot's own pieces on them, and what to
+    /// do (memory within the cap, background jobs stopped, one line back).
+    private void StartWrap(Project proj, TeamStore store, TeamBot bot, Session sess, List<TaskBoard> cards)
+    {
+        var text = TeamRender.WrapUp(bot, cards, store.MemoryPathFor(bot.Slug));
+        var seq = store.Ledger.NextSeq;
+        var line = DeliveryLine(text, bot.Nickname, seq);
+        if (!_h.TypeToClaude(sess, line))
+        {
+            Log.Info("Team.wrap", $"session={sess.Id:N} bot={bot.Slug}: couldn't type the wrap-up; next sweep");
+            return;
+        }
+        var post = store.Ledger.Append(new RoomEntry
+        {
+            Kind = "user", From = "you", Text = text, To = new List<string> { bot.Slug },
+            Delivered = true, TaskId = cards[^1].Id,
+        });
+        _wrapping[sess.Id] = new Wrap
+        {
+            Project = proj.Id, TaskIds = cards.Select(c => c.Id).ToList(), Seq = post.Seq,
+            MemoryStamp = MemoryStamp(store, bot.Slug),
+        };
+        Expect(sess.Id, bot, post.Seq, line);
+        Log.Info("Team.wrap", $"session={sess.Id:N} bot={bot.Slug} seq={post.Seq} cards={string.Join(",", cards.Select(c => c.Id))}");
+        _h.PushState();
+        PostEntries(proj.Id, store, new[] { post });
+    }
+
+    /// The memory file's identity for the "did it change" check: size and
+    /// a hash of the text. "" when there is no file.
+    private static string MemoryStamp(TeamStore store, string slug)
+    {
+        try
+        {
+            var path = store.MemoryPathFor(slug);
+            if (!File.Exists(path)) return "";
+            var bytes = File.ReadAllBytes(path);
+            return bytes.Length + ":" + Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(bytes));
+        }
+        catch { return ""; }
+    }
+
+    /// The wrap-up turn ended. If the memory file is as it was, one nudge
+    /// (the next turn end lands here again and resets regardless); otherwise
+    /// the reset.
+    private void FinishWrap(Session sess, Wrap w)
+    {
+        if (BotOfSession(sess.Id) is not { } h) { _wrapping.Remove(sess.Id); return; }
+        var stamp = MemoryStamp(h.Store, h.Bot.Slug);
+        if (!w.Nudged && stamp == w.MemoryStamp)
+        {
+            w.Nudged = true;
+            w.Confirmed = false;
+            var text = TeamRender.WrapNudge(h.Store.MemoryPathFor(h.Bot.Slug));
+            var seq = h.Store.Ledger.NextSeq;
+            var line = DeliveryLine(text, h.Bot.Nickname, seq);
+            if (_h.TypeToClaude(sess, line))
+            {
+                var post = h.Store.Ledger.Append(new RoomEntry
+                {
+                    Kind = "user", From = "you", Text = text, To = new List<string> { h.Bot.Slug }, Delivered = true, TaskId = w.TaskIds[^1],
+                });
+                Expect(sess.Id, h.Bot, post.Seq, line);
+                Log.Info("Team.wrap", $"session={sess.Id:N} bot={h.Bot.Slug}: memory unchanged, nudged");
+                PostEntries(h.Project.Id, h.Store, new[] { post });
+                return;
+            }
+        }
+        ResetBot(sess, h, w, memoryWritten: stamp != w.MemoryStamp);
+    }
+
+    /// Whether a line for this bot has to wait for its wrap-up and reset:
+    /// one is in progress, a /clear was just typed, or one is due the moment
+    /// the pane is free (the sweep types it first).
+    private bool WrapHolds(TeamBot bot, Session sess)
+    {
+        if (_wrapping.ContainsKey(sess.Id)) return true;
+        if (_resetting.TryGetValue(sess.Id, out var at))
+        {
+            if (Now() - at < ResetGrace) return true;
+            _resetting.Remove(sess.Id);   // the hook never came; stop holding
+        }
+        if (sess.ProjectId is not Guid pid || StoreFor(pid) is not { } store) return false;
+        var nowMs = Now().ToUnixTimeMilliseconds();
+        var graceMs = (long)WrapGrace.TotalMilliseconds;
+        return store.Tasks.Unwritten(bot.Slug).Any(b => (b.DoneAtMs ?? 0) + graceMs <= nowMs)
+            && !store.Tasks.HoldsWork(bot.Slug, store.Doc.IsLead(bot));
+    }
+
+    /// The owner puts an archived card back on the board: the undo for a
+    /// confirm by mistake, and the way to pick a finished thing up again. A
+    /// bot that has not written it up yet simply never is; one already reset
+    /// meets it on its board with its piece and its memory.
+    public void OnTaskReopen(TeamTaskReopenMsg msg)
+    {
+        var proj = _h.ProjectById(msg.ProjectId);
+        var store = StoreFor(msg.ProjectId);
+        var board = store?.Tasks.Archived(msg.TaskId);
+        if (proj == null || store == null || board == null) return;
+        store.Tasks.Done.Remove(board);
+        board.Status = board.ReviewBy != null ? "review" : "open";
+        board.DoneAtMs = null;
+        board.WrappedBy.Clear();
+        store.Tasks.Open.Add(board);
+        foreach (var w in _wrapping.Values.Where(w => w.Project == proj.Id)) w.TaskIds.Remove(board.Id);
+        store.SaveTasks();
+        RefreshRoster(proj, store);
+        var e = store.Ledger.Append(new RoomEntry
+        {
+            Kind = "system", From = "perch", Event = "task", TaskId = board.Id,
+            Text = $"Joseph reopened \"{TeamRender.OneLine(board.Title, 60)}\"",
+        });
+        Log.Info("Team.task", $"project={proj.Id:N} reopen id={board.Id} status={board.Status}");
+        _h.PushState();
+        PostEntries(proj.Id, store, new[] { e });
     }
 
     /// Take a card off the board with no ceremony: no confirmation, no
@@ -2064,9 +2272,7 @@ internal sealed class TeamController
     {
         Archive(store, board);
         store.Tasks.Open.Remove(board);
-        foreach (var sid in _wrapping.Where(kv => kv.Value.Project == proj.Id && kv.Value.TaskId == board.Id)
-                                     .Select(kv => kv.Key).ToList())
-            _wrapping.Remove(sid);
+        board.WrappedBy = new List<string> { TaskBoard.WrappedByAll };   // nobody is asked to write it up
         store.SaveTasks();
         RefreshRoster(proj, store);
         var e = store.Ledger.Append(new RoomEntry
@@ -2143,21 +2349,28 @@ internal sealed class TeamController
     /// A wrapping bot's turn ended after the wrap-up post went in: clear its
     /// context. `/clear` re-fires the session-start hook, so the brief is
     /// re-applied and the next prompt carries the roster and its memory.
-    private void ResetBot(Session sess, Guid projectId, string taskId)
+    /// Whatever it wrote, the cards are now its past: marked written up so
+    /// the sweep never asks about them again.
+    private void ResetBot(Session sess, (Project Project, TeamStore Store, TeamBot Bot) h, Wrap w, bool memoryWritten)
     {
         _wrapping.Remove(sess.Id);
-        if (BotOfSession(sess.Id) is not { } h) { MaybeArchive(projectId, taskId); return; }
+        foreach (var id in w.TaskIds) h.Store.Tasks.Archived(id)?.MarkWrittenUp(h.Bot.Slug);
+        h.Store.SaveTasks();
         var ok = _h.TypeToClaude(sess, "/clear");
-        Log.Info("Team.reset", $"session={sess.Id:N} bot={h.Bot.Slug} ok={ok}");
+        if (ok) _resetting[sess.Id] = Now();
+        Log.Info("Team.reset", $"session={sess.Id:N} bot={h.Bot.Slug} ok={ok} memoryWritten={memoryWritten} cards={string.Join(",", w.TaskIds)}");
         var e = h.Store.Ledger.Append(new RoomEntry
         {
-            Kind = "system", From = h.Bot.Slug, Event = "reset", TaskId = taskId,
-            Text = ok ? $"{h.Bot.Nickname} reset for the next task"
+            Kind = "system", From = h.Bot.Slug, Event = "reset", TaskId = w.TaskIds.Count > 0 ? w.TaskIds[^1] : null,
+            Text = ok ? $"{h.Bot.Nickname} reset for the next task" + (memoryWritten ? "" : " (its memory file didn't change)")
                       : $"{h.Bot.Nickname} couldn't be reset — open its terminal and run /clear",
         });
         if (!ok) e.Event = "undelivered";
+        _h.PushState();
         PostEntries(h.Project.Id, h.Store, new[] { e });
-        MaybeArchive(projectId, taskId);
+        // The fresh Claude's session-start hook releases the hold; if it
+        // never fires, the grace does.
+        _h.Delay(() => { if (_resetting.Remove(sess.Id)) FlushParked(sess.Id, TimeSpan.FromSeconds(1)); }, ResetGrace);
     }
 
     /// Once nobody is left wrapping for a done board, it moves to the archive.
@@ -2422,7 +2635,7 @@ internal sealed class TeamController
     /// Ok = the line was typed; Missing = the bot has no tab at all; Blocked =
     /// its pane is showing a prompt of its own; none of them = parked (asleep
     /// or booting).
-    private sealed record Attempted(TeamBot Bot, bool Ok, bool Missing, bool Blocked, string Line, Guid? SessionId, bool Starting = false, bool Busy = false);
+    private sealed record Attempted(TeamBot Bot, bool Ok, bool Missing, bool Blocked, string Line, Guid? SessionId, bool Starting = false, bool Busy = false, bool WrapHold = false);
 
     /// Try to type the post into each target's terminal now. Anything not
     /// typed is parked, to be flushed when the session is up and free.
@@ -2488,8 +2701,11 @@ internal sealed class TeamController
             // saying so. Parked instead; the turn's end (OnAgentStatus,
             // "done") types it, and the room says it is waiting.
             var busy = !starting && !sess.Dormant && !blocked && Working(sess);
-            var ok = !starting && !sess.Dormant && !blocked && !busy && _h.TypeToClaude(sess, line);
-            results.Add(new Attempted(bot, ok, false, blocked, line, sess.Id, Busy: busy));
+            // Writing up finished work (or about to, or just reset): the
+            // line waits for the fresh context — the wrap-up goes first.
+            var wrapHold = !starting && !sess.Dormant && !blocked && !busy && WrapHolds(bot, sess);
+            var ok = !starting && !sess.Dormant && !blocked && !busy && !wrapHold && _h.TypeToClaude(sess, line);
+            results.Add(new Attempted(bot, ok, false, blocked, line, sess.Id, Busy: busy, WrapHold: wrapHold));
         }
         return results;
     }
@@ -2545,6 +2761,12 @@ internal sealed class TeamController
                     {
                         Kind = "system", From = a.Bot.Slug, Event = "waiting", Note = post.Seq.ToString(),
                         Text = $"{a.Bot.Nickname} is mid-task — this goes in the moment it finishes",
+                    }));
+                else if (a.WrapHold)
+                    events.Add(store.Ledger.Append(new RoomEntry
+                    {
+                        Kind = "system", From = a.Bot.Slug, Event = "waiting", Note = post.Seq.ToString(),
+                        Text = $"{a.Bot.Nickname} is writing up finished work first — this goes in once it is reset",
                     }));
             }
         }
@@ -2770,7 +2992,7 @@ internal sealed class TeamController
                         // Work with no piece: a bot editing files that no card
                         // gave it is the duplicate-fix mess starting again. Say
                         // so once, to the lead, and let the board sort it out.
-                        if (IsEditVerb(e.Verb) && UnclaimedWork(store, bot, ParseTs(e.Ts)) is { } warning)
+                        if (IsEditVerb(e.Verb) && UnclaimedWork(store, bot, ParseTs(e.Ts), e.Target) is { } warning)
                             added.Add(store.Ledger.Append(warning));
                         break;
                 }

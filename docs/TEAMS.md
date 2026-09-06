@@ -193,9 +193,16 @@ owner post carries its number: `[Perch team] #123 Joseph → @Ada: …`.
 - Reactions instead of messages when a word will do: ✅ approved/done, 👀
   seen/on it, ✏️ noted, 👋 hello. The owner's reaction is delivered to the
   bot as one line and shown in a different colour.
-- Done means reset, per task: on confirm, bots whose open pieces are all on
-  that task write their memory, reply one line, and get `/clear`; a bot with a
-  piece on another open task is told and carries on.
+- Done means reset, per bot, when the harness says so: a confirm archives the
+  card and types nothing. `TeamController.SweepWraps` (30 s after a confirm,
+  after every turn end, when a bot comes up) resets a bot that has confirmed
+  cards it hasn't written up AND nothing of its own started on the open board
+  (a piece just handed out doesn't count; any open card counts for the lead)
+  AND a free pane: ONE wrap-up naming every such card and its pieces, a check
+  that `memory.md` actually changed (one nudge if not), then `/clear`. Posts to
+  a bot in that state are parked until the fresh Claude reports in. The cards
+  record who has written them up (`wrappedBy`); the page shows the archived
+  card with who is still to, and **Reopen** is the undo.
 - Model limits: when a bot's model is at its rate limit, Perch switches it to
   the next model that isn't and says so in the room; it switches back when the
   limit lifts.
@@ -228,9 +235,12 @@ markdown as a document and everything else verbatim. It opens from an
 artefact's card in the feed, and shows the newest one when the room opens.
 
 The owner can take a card off the board with **Remove** (`team.task.close`):
-no confirmation from the bots, nothing reset — the escape hatch for a card
-nobody will finish. Confirming one ("Mark done") takes it off the board at
-once; the bots' wrap-up and reset carry on behind it.
+no confirmation from the bots, nothing reset, nobody writes it up — the
+escape hatch for a card nobody will finish. Confirming one ("Mark done")
+archives it at once; the bots' write-ups and resets follow when each is free
+(above). An archived card stays in the column, behind the open ones, while
+anyone is still to write it up or for an hour, with **Reopen**
+(`team.task.reopen`) to put it back.
 
 Pasting a picture into the composer asks the host to read the clipboard
 (`team.paste` → `team.paste.data`); the PNG is saved under

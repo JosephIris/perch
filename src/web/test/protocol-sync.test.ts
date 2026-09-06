@@ -104,6 +104,7 @@ const EXPECTED_TYPES = [
   "team.task.confirm",
   "team.task.reject",
   "team.task.rename",
+  "team.task.reopen",
   "team.task.set",
   "ui.mode",
   "ui.webpanes.suppress",

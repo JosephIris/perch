@@ -612,37 +612,231 @@ public class TeamControllerTests : IDisposable
         Assert.Equal(leeSess.Id, toLee);
         Assert.Matches(@"^\[Perch team\] #\d+ Joseph → @Lee: Not done yet \(task " + board.Id + @"\): the footer still shifts$", line);
 
-        // Second time: the owner confirms. Ada also has a piece on the second
-        // task, so only Lee wraps up and resets; Ada is told and carries on.
+        // Second time: the owner confirms. Nothing is typed into anyone: the
+        // card is archived, and who writes it up when is the sweep's call.
         Task(leeSess, "done", id: board.Id);
         h.Typed.Clear();
         h.Ctrl.OnTaskConfirm(new TeamTaskConfirmMsg { ProjectId = h.Project.Id, TaskId = board.Id });
         Assert.Equal("done", board.Status);
-        Assert.Equal(2, h.Typed.Count);
-        Assert.Contains(h.Typed, t => t.Session == leeSess.Id && t.Line.Contains("Wrap up now: update your memory file"));
-        Assert.Contains(h.Typed, t => t.Session == adaSess.Id && t.Line.Contains("You still have a piece on another open task"));
-        // Confirming takes the card off the board THERE AND THEN: only the
-        // second one is left, whatever the bots are still doing about it.
-        var tasks = JsonSerializer.SerializeToElement(h.Ctrl.ProjectTeamView(h.Project.Id)!).GetProperty("tasks");
-        Assert.Equal(second.Id, Assert.Single(tasks.EnumerateArray()).GetProperty("id").GetString());
+        Assert.Empty(h.Typed);
         Assert.Equal("Ship the sidebar", Assert.Single(h.Store.Tasks.Done).Title);
-        Assert.Contains(h.Ledger, e => e.Event == "task" && e.TaskId == board.Id && e.Text.Contains("is off the board"));
+        Assert.Contains(h.Ledger, e => e.Event == "task.done" && e.TaskId == board.Id && e.Text == "Task done: Ship the sidebar");
+        // The room says who does what: Ada's piece on the second card is still
+        // "todo" (never started), so she writes up shortly; Lee runs the open
+        // card, so Lee writes it up when free.
+        Assert.Contains(h.Ledger, e => e.Event == "task" && e.TaskId == board.Id
+            && e.Text.Contains("is off the board — Ada writes it up and resets shortly; Lee has work in flight and writes it up when free"));
+        // The page keeps the archived card in view (to reopen, and to show who
+        // is still to write it up) behind the open one.
+        var tasks = JsonSerializer.SerializeToElement(h.Ctrl.ProjectTeamView(h.Project.Id)!).GetProperty("tasks").EnumerateArray().ToList();
+        Assert.Equal(new[] { second.Id, board.Id }, tasks.Select(t => t.GetProperty("id").GetString()).ToArray());
+        Assert.True(tasks[1].GetProperty("archived").GetBoolean());
+        Assert.Equal(new[] { "lee", "ada" }, tasks[1].GetProperty("wrapping").EnumerateArray().Select(w => w.GetString()).OrderByDescending(w => w).ToArray());
+
+        // The sweep runs after the reopen grace. Before it: nothing. After it:
+        // Ada (free, nothing of her own started) gets ONE wrap-up naming the
+        // card and her piece; Lee (an open card to run) is left alone.
+        var sweep = h.Delayed[^1];
+        sweep();
+        Assert.Empty(h.Typed);
+        var t0 = DateTimeOffset.UtcNow;
+        h.Ctrl.Now = () => t0 + TeamController.WrapGrace + TimeSpan.FromSeconds(1);
+        h.Ctrl.SweepWraps(h.Project.Id);
+        var (toAda, wrapLine) = Assert.Single(h.Typed);
+        Assert.Equal(adaSess.Id, toAda);
+        Assert.Matches(@"^\[Perch team\] #\d+ Joseph → @Ada: Joseph confirmed the task you worked on: \(1\) " + board.Id
+            + @" ""Ship the sidebar"" — your piece: \[done\] Nest the bots under the team row \(chevron in, CSS next\)\. Wrap up now: update your memory file", wrapLine);
+        Assert.Contains("Stop any background commands or local servers you started. Then reply with one line. Your context is cleared after that reply.", wrapLine);
+        Assert.Contains(h.Ledger, e => e.Kind == "user" && e.To!.Single() == "ada" && e.Text.StartsWith("Joseph confirmed the task"));
 
         // A Done BEFORE the post echo is the old turn ending: no reset. The
-        // echo, then the turn end: /clear is typed, the room says reset.
+        // echo, then the turn end — but Ada's memory file is as it was, so she
+        // is nudged once; the next reply is followed by /clear regardless, and
+        // the room says so.
         h.Typed.Clear();
-        h.Status(leeSess, "done");
+        h.Status(adaSess, "done");
         Assert.Empty(h.Typed);
-        h.Status(leeSess, "working", "[Perch team] Joseph → @everyone: The task");
-        h.Status(leeSess, "done");
+        h.Status(adaSess, "working", "[Perch team] Joseph → @Ada: Joseph confirmed");
+        h.Status(adaSess, "done");
+        var (_, nudge) = Assert.Single(h.Typed);
+        Assert.Contains("Your memory file `", nudge);
+        Assert.Contains("` did not change. Write what the next task needs into it now", nudge);
+        h.Typed.Clear();
+        h.Status(adaSess, "working", "[Perch team] Joseph → @Ada: Your memory file");
+        h.Status(adaSess, "done");
         var (resetSess, cleared) = Assert.Single(h.Typed);
-        Assert.Equal(leeSess.Id, resetSess);
+        Assert.Equal(adaSess.Id, resetSess);
         Assert.Equal("/clear", cleared);
-        Assert.Contains(h.Ledger, e => e.Event == "reset" && e.Text == "Lee reset for the next task");
+        Assert.Contains(h.Ledger, e => e.Event == "reset" && e.Text == "Ada reset for the next task (its memory file didn't change)");
+        Assert.True(board.WrittenUpBy("ada"));
+        Assert.False(board.WrittenUpBy("lee"));
         // The second stays open, with Ada on it.
         Assert.Same(second, Assert.Single(h.Store.Tasks.Open));
         Assert.Contains($"- Task {second.Id}: **Dark mode for the room** — open", File.ReadAllText(h.Store.ContextPathFor("lee")));
         foreach (var s in h.Sessions) TeamMarkers.Clear(s.Root.Id);
+    }
+
+    [Fact]
+    public async Task WrapUp_WaitsForABusyBot_ThenCoversEveryCardItFinished()
+    {
+        var h = new Harness();
+        await h.CreateBot("Lee", position: "Team lead");
+        await h.CreateBot("Ada");
+        var leeSess = h.Sessions[0];
+        var adaSess = h.Sessions[1];
+        h.Ctrl.OnLeadSet(new TeamLeadSetMsg { ProjectId = h.Project.Id, BotId = "lee" });
+        void Task(Session s, string op, string? title = null, string? bot = null, string? id = null, string? status = null, string? note = null)
+            => h.Ctrl.OnTeamTask(s, s.Root.Id, new TeamTaskMessage(op, bot, title, status, note, id));
+        var t0 = DateTimeOffset.UtcNow;
+        h.Ctrl.Now = () => t0;
+
+        Task(leeSess, "new", "Card A");
+        Task(leeSess, "new", "Card B");
+        var a = h.Store.Tasks.Open.Single(b => b.Title == "Card A");
+        var b2 = h.Store.Tasks.Open.Single(b => b.Title == "Card B");
+        Task(leeSess, "assign", "A piece", bot: "ada", id: a.Id);
+        Task(leeSess, "assign", "B piece", bot: "ada", id: b2.Id);
+        Task(adaSess, "mine", status: "done", id: a.Id, note: "shipped");
+        Task(adaSess, "mine", status: "doing", id: b2.Id);
+        adaSess.Root.AgentState = AgentState.Working;
+        Task(leeSess, "done", id: a.Id);
+        h.Typed.Clear();
+        h.Ctrl.OnTaskConfirm(new TeamTaskConfirmMsg { ProjectId = h.Project.Id, TaskId = a.Id });
+        Assert.Contains(h.Ledger, e => e.Event == "task" && e.TaskId == a.Id && e.Text.Contains("Lee and Ada have work in flight and write it up when free"));
+        h.RunLastDelayed();   // the confirm's sweep timer: inside the grace, nothing to do
+        Assert.Empty(h.Typed);
+
+        // Past the grace: Ada is mid-piece on B (started) and mid-turn; Lee
+        // runs B. Nobody is touched.
+        h.Ctrl.Now = () => t0 + TeamController.WrapGrace + TimeSpan.FromSeconds(1);
+        h.Ctrl.SweepWraps(h.Project.Id);
+        Assert.Empty(h.Typed);
+
+        // B is confirmed too, while Ada is still mid-turn: still nothing typed
+        // into her. Her turn ending schedules the sweep; it types ONE wrap-up
+        // naming both cards, oldest first. Lee, free with no open card, gets
+        // one too — the lead ran both.
+        Task(adaSess, "mine", status: "done", id: b2.Id);
+        Task(leeSess, "done", id: b2.Id);
+        h.Ctrl.OnTaskConfirm(new TeamTaskConfirmMsg { ProjectId = h.Project.Id, TaskId = b2.Id });
+        h.Ctrl.Now = () => t0 + TeamController.WrapGrace * 2 + TimeSpan.FromSeconds(2);
+        h.RunLastDelayed();   // this confirm's sweep timer, past both graces
+        var (toLee, leeLine) = Assert.Single(h.Typed);
+        Assert.Equal(leeSess.Id, toLee);
+        Assert.Contains($"Joseph confirmed 2 tasks you worked on: (1) {a.Id} \"Card A\" — you ran it; (2) {b2.Id} \"Card B\" — you ran it. Wrap up now", leeLine);
+        h.Typed.Clear();
+        adaSess.Root.AgentState = AgentState.Done;
+        h.Status(adaSess, "done");
+        h.RunLastDelayed();   // the sweep the turn end scheduled (ResumeHeld was queued first)
+        var (toAda, adaLine) = Assert.Single(h.Typed);
+        Assert.Equal(adaSess.Id, toAda);
+        Assert.Contains($"(1) {a.Id} \"Card A\" — your piece: [done] A piece (shipped); (2) {b2.Id} \"Card B\" — your piece: [done] B piece. Wrap up now", adaLine);
+
+        // Ada writes her memory: no nudge, straight to /clear, both cards hers
+        // to forget.
+        h.Store.WriteMemory("ada", "# Ada — memory\n\nCard A shipped; B too.\n");
+        h.Typed.Clear();
+        h.Status(adaSess, "working", "[Perch team] Joseph → @Ada: Joseph confirmed 2 tasks");
+        h.Status(adaSess, "done");
+        Assert.Equal("/clear", Assert.Single(h.Typed).Line);
+        Assert.Contains(h.Ledger, e => e.Event == "reset" && e.Text == "Ada reset for the next task");
+        Assert.True(a.WrittenUpBy("ada") && b2.WrittenUpBy("ada"));
+        Assert.False(a.WrittenUpBy("lee"));
+        // The archived cards stay on the page while Lee is still to write them up.
+        var tasks = JsonSerializer.SerializeToElement(h.Ctrl.ProjectTeamView(h.Project.Id)!).GetProperty("tasks").EnumerateArray().ToList();
+        Assert.Equal(2, tasks.Count);
+        Assert.All(tasks, t => Assert.Equal("lee", Assert.Single(t.GetProperty("wrapping").EnumerateArray()).GetString()));
+        foreach (var s in h.Sessions) TeamMarkers.Clear(s.Root.Id);
+    }
+
+    [Fact]
+    public async Task WrapUp_HoldsPostsForTheFreshContext_AndReopenUndoesAConfirm()
+    {
+        var h = new Harness();
+        await h.CreateBot("Ada");
+        var adaSess = h.Sessions[0];
+        var t0 = DateTimeOffset.UtcNow;
+        h.Ctrl.Now = () => t0;
+        h.Ctrl.OnTaskSet(new TeamTaskSetMsg { ProjectId = h.Project.Id, Title = "Card A" });
+        h.Ctrl.OnTaskSet(new TeamTaskSetMsg { ProjectId = h.Project.Id, Title = "Card B" });
+        var a = h.Store.Tasks.Open.Single(b => b.Title == "Card A");
+        var b2 = h.Store.Tasks.Open.Single(b => b.Title == "Card B");
+        h.Ctrl.OnTeamTask(adaSess, adaSess.Root.Id, new TeamTaskMessage("mine", null, "A piece", "done", null, a.Id));
+        h.Ctrl.OnTeamTask(adaSess, adaSess.Root.Id, new TeamTaskMessage("mine", null, "B piece", "done", null, b2.Id));
+
+        // Confirmed by mistake: within the grace, Reopen puts it back exactly
+        // as it was, and nobody is ever asked to write it up.
+        h.Ctrl.OnTaskConfirm(new TeamTaskConfirmMsg { ProjectId = h.Project.Id, TaskId = b2.Id });
+        Assert.Single(h.Store.Tasks.Done);
+        h.Ctrl.OnTaskReopen(new TeamTaskReopenMsg { ProjectId = h.Project.Id, TaskId = b2.Id });
+        Assert.Empty(h.Store.Tasks.Done);
+        Assert.Equal("open", b2.Status);
+        Assert.Null(b2.DoneAtMs);
+        Assert.Contains(h.Ledger, e => e.Event == "task" && e.TaskId == b2.Id && e.Text == "Joseph reopened \"Card B\"");
+        h.Ctrl.Now = () => t0 + TeamController.WrapGrace + TimeSpan.FromSeconds(1);
+        h.Typed.Clear();
+        h.Ctrl.SweepWraps(h.Project.Id);
+        Assert.Empty(h.Typed);
+
+        // Remove is the other way off the board: nothing to write up either.
+        h.Ctrl.OnTaskClose(new TeamTaskCloseMsg { ProjectId = h.Project.Id, TaskId = b2.Id });
+        Assert.Empty(h.Store.Tasks.Unwritten("ada"));
+
+        // A is confirmed and past the grace; Ada is free. A post to her now
+        // waits: the wrap-up goes first, and the room says why.
+        h.Ctrl.OnTaskConfirm(new TeamTaskConfirmMsg { ProjectId = h.Project.Id, TaskId = a.Id });
+        h.Ctrl.Now = () => t0 + TeamController.WrapGrace * 2 + TimeSpan.FromSeconds(2);
+        h.Typed.Clear();
+        h.Post("next up: the footer", "[\"Ada\"]");
+        Assert.Empty(h.Typed);
+        Assert.Contains(h.Ledger, e => e.Event == "waiting" && e.Text == "Ada is writing up finished work first — this goes in once it is reset");
+        h.Ctrl.SweepWraps(h.Project.Id);
+        var (_, wrapLine) = Assert.Single(h.Typed);
+        Assert.Contains("Joseph confirmed the task you worked on: (1) " + a.Id, wrapLine);
+        // She writes her memory and replies; the reset follows, and the held
+        // post lands only once the fresh Claude reports in.
+        h.Store.WriteMemory("ada", "# Ada — memory\n\nA is done.\n");
+        h.Typed.Clear();
+        h.Status(adaSess, "working", "[Perch team] Joseph → @Ada: Joseph confirmed");
+        h.Status(adaSess, "done");
+        Assert.Equal("/clear", Assert.Single(h.Typed).Line);
+        // While the /clear settles, the flush and the held-line check run and
+        // type nothing; the reset's own fallback (last) is left unrun.
+        h.Typed.Clear();
+        while (h.Delayed.Count > 1) { var d = h.Delayed[0]; h.Delayed.RemoveAt(0); d(); }
+        Assert.Empty(h.Typed);
+        h.Delayed.Clear();
+        // The fresh Claude reports in: the flush (no sweep — nothing is left
+        // to write up anywhere).
+        h.Ctrl.OnAgentUp(adaSess);
+        Assert.Single(h.Delayed)();
+        var (_, landed) = Assert.Single(h.Typed);
+        Assert.Matches(@"^\[Perch team\] #\d+ Joseph → @Ada: next up: the footer$", landed);
+        Assert.Contains(h.Ledger, e => e.Event == "delivered" && e.Text == "Delivered to Ada");
+        foreach (var s in h.Sessions) TeamMarkers.Clear(s.Root.Id);
+    }
+
+    [Fact]
+    public void TasksFile_ArchivedBeforeV3_IsAlreadyWrittenUp_AndTeamFilesAreNotUnclaimedWork()
+    {
+        var doc = JsonSerializer.Deserialize(
+            "{\"v\":2,\"open\":[],\"done\":[{\"id\":\"aaaa1111\",\"title\":\"Old\",\"status\":\"done\",\"setBy\":\"lee\",\"items\":[{\"bot\":\"ada\",\"title\":\"x\",\"status\":\"done\"}]}]}",
+            TaskJsonContext.Default.TaskDoc)!;
+        doc.Migrate();
+        Assert.Equal(3, doc.V);
+        Assert.True(doc.Done.Single().WrittenUpBy("ada"));
+        Assert.Empty(doc.Unwritten("ada"));
+        // Migrated once: a v3 file's archive is left alone.
+        var fresh = new TaskDoc();
+        fresh.Done.Add(new TaskBoard { Id = "bbbb2222", Status = "done", Items = { new TaskItem { Bot = "ada" } } });
+        fresh.Migrate();
+        Assert.False(fresh.Done.Single().WrittenUpBy("ada"));
+        Assert.Single(fresh.Unwritten("ada"));
+
+        Assert.True(TeamController.IsTeamFile(@"C:\repo\.perch\team\bots\ada\memory.md"));
+        Assert.True(TeamController.IsTeamFile(".perch/team/bots/ada/memory.md"));
+        Assert.False(TeamController.IsTeamFile(@"C:\repo\src\web\src\team-room.ts"));
+        Assert.False(TeamController.IsTeamFile(null));
     }
 
     [Fact]
@@ -746,7 +940,7 @@ public class TeamControllerTests : IDisposable
         var board = Assert.Single(h.Store.Tasks.Open);
         Assert.Equal("abcd1234", board.Id);
         Assert.Equal("Old task", board.Title);
-        Assert.Equal(2, h.Store.Tasks.V);
+        Assert.Equal(3, h.Store.Tasks.V);
         TeamMarkers.Clear(h.Sessions.Single().Root.Id);
     }
 
