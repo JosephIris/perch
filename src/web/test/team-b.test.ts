@@ -96,7 +96,7 @@ test("systemTone: the cards you answer are attention, a classifier block is an e
 test("taskStatusWord: every status has a word, unknown none", () => {
   assert.equal(taskStatusWord("open"), "in progress");
   assert.equal(taskStatusWord("review"), "confirm?");
-  assert.equal(taskStatusWord("done"), "wrapping up");
+  assert.equal(taskStatusWord("done"), "done");
   assert.equal(taskStatusWord("archived"), "");
   assert.equal(taskStatusWord(undefined), "");
 });
