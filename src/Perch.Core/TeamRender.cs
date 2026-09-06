@@ -387,7 +387,7 @@ internal static class TeamRender
     /// knowledge and skills, and the piece. The instructions themselves are
     /// the run's prompt (RunPrompt).
     public static string RunSystemPrompt(TeamBot bot, TeamPosition? pos, string brief, string projectName, string folder,
-        string knowledge, IReadOnlyList<TeamStore.TeamSkill> skills, TaskBoard board, TaskItem? piece)
+        string knowledge, IReadOnlyList<TeamStore.TeamSkill> skills, TaskBoard board, TaskItem? piece, string? allowPath = null)
     {
         var project = string.IsNullOrWhiteSpace(projectName) ? "this project" : projectName.Trim();
         var sb = new StringBuilder();
@@ -403,7 +403,11 @@ internal static class TeamRender
           .Append("ran and what it printed; never claim a check you did not run.\n");
         sb.Append("- Stop every server or background command you started before you finish. Leave no port held.\n");
         sb.Append("- You cannot ask anyone anything. Where the piece is genuinely ambiguous, take the safe reading, do that, ")
-          .Append("and put the question under Open in your report. A permission prompt you hit goes to Joseph as a card; wait for it.\n");
+          .Append("and put the question under Open in your report.\n");
+        sb.Append("- Reading, editing, committing and the ordinary build and test commands run without asking");
+        if (allowPath != null) sb.Append(" (the list is `").Append(allowPath).Append("`)");
+        sb.Append("; any other command goes to Joseph as a card and can wait minutes — prefer the ones that don't ask, and ")
+          .Append("never work around a denial.\n");
         sb.Append("- Pushing, tickets, messages to teammates and posts to the room are not yours to do.\n\n");
         sb.Append("## ").Append(bot.Nickname).Append("'s standing brief (yours for this run)\n\n");
         sb.Append(string.IsNullOrWhiteSpace(brief) ? "(No brief; work from the piece and the code.)\n" : brief.Trim() + "\n");

@@ -240,6 +240,14 @@ All three travel with the repository under `.perch/team/`.
   lead. One run per bot at a time; `perch team run --cancel` or Stop on the
   run's row ends it; 45 minutes and $8 are the caps. The roster shows "a run
   in progress"; the wrap-up sweep leaves a bot alone while its run is out.
+  Headless Claude has nobody to ask, so a tool outside its allow-list is
+  denied unless a hook decides: the run gets `--allowedTools` from
+  `.perch/team/run-allow.txt` (seeded with `TeamStore.DefaultRunAllow` —
+  read, edit, commit, the ordinary build/test commands; no push, no delete,
+  no network), `--permission-mode acceptEdits`, and the shim's
+  PermissionRequest hook carries everything else to the room as a card. A
+  smoke run under an account set to auto mode had every Write and Bash
+  denied without the list — auto is not honoured headless.
 
 ## Page
 

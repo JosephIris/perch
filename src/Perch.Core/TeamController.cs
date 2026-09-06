@@ -269,13 +269,27 @@ internal sealed class TeamController
     /// What a run is started with: the prompt (the bot's instructions), the
     /// system prompt file (brief + knowledge + skills + the piece), where,
     /// which model, and the environment that makes its hooks the bot's.
-    internal sealed record RunSpec(string Prompt, string SystemPromptPath, string Cwd, string Model, IReadOnlyDictionary<string, string?> Env);
+    internal sealed record RunSpec(string Prompt, string SystemPromptPath, string Cwd, string Model, IReadOnlyDictionary<string, string?> Env,
+        IReadOnlyList<string> AllowedTools);
 
     /// The thing that runs a RunSpec; tests swap it for a fake.
     internal Func<RunSpec, CancellationToken, Task<HeadlessResult>> RunWorker = (spec, ct) =>
-        ClaudeHeadless.RunAsync(spec.Prompt, spec.Cwd, spec.Model, "claude.headless.run",
-            new[] { "--append-system-prompt-file", spec.SystemPromptPath, "--json-schema", TeamRender.RunReportSchema, "--max-budget-usd", RunBudgetUsd },
+        ClaudeHeadless.RunAsync(spec.Prompt, spec.Cwd, spec.Model, "claude.headless.run", RunArgs(spec),
             timeoutMs: (int)RunTimeout.TotalMilliseconds, ct: ct, viaShim: true, env: spec.Env);
+
+    /// `claude -p` headless has nobody to ask: a tool outside the allow-list
+    /// is denied outright unless a hook decides — and the shim's
+    /// PermissionRequest hook does, by asking the room. So: the team's
+    /// allow-list for the routine, acceptEdits for the edits, the room for
+    /// the rest, and the report schema.
+    internal static string[] RunArgs(RunSpec spec) => new[]
+    {
+        "--append-system-prompt-file", spec.SystemPromptPath,
+        "--json-schema", TeamRender.RunReportSchema,
+        "--max-budget-usd", RunBudgetUsd,
+        "--permission-mode", "acceptEdits",
+        "--allowedTools", string.Join(",", spec.AllowedTools),
+    };
 
     internal static readonly TimeSpan RunTimeout = TimeSpan.FromMinutes(45);
     internal const string RunBudgetUsd = "8";
@@ -2437,7 +2451,7 @@ internal sealed class TeamController
         {
             Directory.CreateDirectory(Path.GetDirectoryName(promptPath)!);
             AtomicFile.WriteAllText(promptPath, TeamRender.RunSystemPrompt(h.Bot, pos, h.Store.ReadBrief(h.Bot.PositionSlug), h.Project.Name,
-                cwd, h.Store.ReadKnowledge(), h.Store.ListSkills(), board, piece));
+                cwd, h.Store.ReadKnowledge(), h.Store.ListSkills(), board, piece, h.Store.RunAllowPath));
         }
         catch (Exception ex) { Log.Error("Team.run.prompt", ex); Refuse(h.Project, h.Store, $"Perch couldn't write the run's brief for {h.Bot.Nickname}"); return; }
         var env = new Dictionary<string, string?>
@@ -2464,7 +2478,7 @@ internal sealed class TeamController
         Log.Info("Team.run.start", $"project={h.Project.Id:N} bot={h.Bot.Slug} run={runId} task={board.Id} model={model} cwd={cwd}");
         _h.PushState();
         PostEntries(h.Project.Id, h.Store, new[] { e });
-        _ = RunPieceAsync(run, new RunSpec(TeamRender.RunPrompt(text), promptPath, cwd, model, env));
+        _ = RunPieceAsync(run, new RunSpec(TeamRender.RunPrompt(text), promptPath, cwd, model, env, h.Store.ReadRunAllow()));
     }
 
     private async Task RunPieceAsync(Run run, RunSpec spec)

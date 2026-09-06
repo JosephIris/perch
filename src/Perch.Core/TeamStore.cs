@@ -83,6 +83,56 @@ internal sealed class TeamStore
     public string SkillPathFor(string slug) => Path.Combine(SkillsDir, slug, "SKILL.md");
     /// The system prompt a bot's run is started with; local, one per run.
     public string RunPromptPathFor(string botSlug, string runId) => Path.Combine(LocalDir, "bots", botSlug, $"run-{runId}.md");
+    /// The tools a run may use without asking, one Claude Code permission
+    /// pattern per line (`Bash(git commit *)`), shared through the repository.
+    /// Anything else a run wants goes to the owner as a card. Seeded with
+    /// DefaultRunAllow the first time it is read, so it is there to edit.
+    public string RunAllowPath => Path.Combine(Dir, "run-allow.txt");
+
+    /// What a run may do unasked when the team has not said otherwise: read
+    /// and edit the folder, commit on its branch, and run the ordinary build,
+    /// test and inspection commands. No push (the hook denies it anyway), no
+    /// deletes, no network, nothing outside the folder.
+    public static readonly string[] DefaultRunAllow =
+    {
+        "Read", "Glob", "Grep", "Edit", "Write", "MultiEdit", "NotebookEdit", "TodoWrite",
+        "Bash(git status*)", "Bash(git diff*)", "Bash(git log*)", "Bash(git show*)", "Bash(git branch*)",
+        "Bash(git add *)", "Bash(git commit *)", "Bash(git stash*)", "Bash(git restore *)",
+        "Bash(git checkout -b *)", "Bash(git switch -c *)",
+        "Bash(npm *)", "Bash(npx *)", "Bash(node *)", "Bash(dotnet *)",
+        "Bash(python *)", "Bash(python3 *)", "Bash(pytest*)", "Bash(pip *)",
+        "Bash(ls*)", "Bash(cat *)", "Bash(head *)", "Bash(tail *)", "Bash(wc *)", "Bash(grep *)", "Bash(rg *)",
+        "Bash(find *)", "Bash(mkdir *)", "Bash(pwd)", "Bash(echo *)",
+        "PowerShell(git *)", "PowerShell(npm *)", "PowerShell(npx *)", "PowerShell(dotnet *)", "PowerShell(python *)",
+        "PowerShell(Get-*)", "PowerShell(Select-*)",
+    };
+
+    /// The run allow-list: the file's non-empty, non-comment lines, or the
+    /// defaults (written to the file so the team can see and edit them).
+    public IReadOnlyList<string> ReadRunAllow()
+    {
+        try
+        {
+            if (!File.Exists(RunAllowPath))
+            {
+                var seed = new StringBuilder();
+                seed.Append("# Tools a run may use without asking: one Claude Code permission pattern per line.\n");
+                seed.Append("# Anything else a run wants comes to Joseph as a card in the room. A push is always denied.\n");
+                foreach (var p in DefaultRunAllow) seed.Append(p).Append('\n');
+                AtomicFile.WriteAllText(RunAllowPath, seed.ToString());
+                return DefaultRunAllow;
+            }
+            var list = new List<string>();
+            foreach (var raw in File.ReadAllLines(RunAllowPath))
+            {
+                var l = raw.Trim();
+                if (l.Length == 0 || l.StartsWith('#')) continue;
+                list.Add(l);
+            }
+            return list.Count > 0 ? list : DefaultRunAllow;
+        }
+        catch (Exception ex) { Log.Error("TeamStore.ReadRunAllow", ex); return DefaultRunAllow; }
+    }
     public string SystemPathFor(string botSlug) => Path.Combine(LocalDir, "bots", botSlug, "system.md");
     public string ContextPathFor(string botSlug) => Path.Combine(LocalDir, "bots", botSlug, "context.md");
 

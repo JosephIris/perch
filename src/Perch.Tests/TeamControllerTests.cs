@@ -941,6 +941,11 @@ public class TeamControllerTests : IDisposable
         Assert.Equal(ada.Root.Id.ToString("N"), spec.Env["PERCH_PANE_ID"]);
         Assert.Equal(runId, spec.Env["PERCH_RUN"]);
         Assert.Contains(ada.Root.Id.ToString("N"), spec.Env["PERCH_PIPE"]);
+        // The team's allow-list, seeded to the shared file on first use.
+        Assert.Contains("Bash(git commit *)", spec.AllowedTools);
+        Assert.True(File.Exists(h.Store.RunAllowPath));
+        Assert.Contains("--allowedTools", TeamController.RunArgs(spec));
+        Assert.DoesNotContain("Bash(git push*)", spec.AllowedTools);
         var sys = File.ReadAllText(spec.SystemPromptPath);
         Assert.StartsWith("# You are a run for Ada, the Frontend dev on the perch team", sys);
         Assert.Contains($"- Task {board.Id}: Dark footer", sys);
