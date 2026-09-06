@@ -162,23 +162,30 @@ if (phase === "phaseA") {
   if (commits.ahead !== 0) throw new Error(`expected ahead=0 in scratch cwd, got ${commits.ahead}`);
   ok("commits: commits.request round-trip -> commits.data (ahead=0)");
 
-  // -- 5. Mock claude session so phase B can prove the resume dialog.
+  // -- 5. Mock claude session so phase B can prove the resume-on-open path.
   await pipeSend(['{"verb":"pty.send","text":"claude\\r"}']);
   await waitFor("ClaudeSessionId captured from session-start hook", () =>
     leaves(store().Sessions[0].Root).some((l) => l.ClaudeSessionId), 30000);
   ok("mock claude session captured (ClaudeSessionId persisted) — ready for resume test");
   console.log("PHASE A PASS");
 } else if (phase === "phaseB") {
-  // Resume prompt: real dialog, real "Resume" click -> resume.decision -> armed
-  // spawn with `claude --resume` -> restore lightbox completes.
-  await waitFor("resume prompt dialog", () => cdp.eval(`!!document.querySelector(".confirm-card")`), 25000);
-  ok("resume: launch prompt rendered (host posted resume.prompt)");
+  // Resume on open. There is no launch dialog any more: it asked one global
+  // question ("reopen 24 sessions?") whose real answer was per-tab and only
+  // took effect when you clicked a tab. What phase B proves now is the thing
+  // that always actually happened — the tab is MARKED as picking up where it
+  // left off, and opening it runs `claude --resume <id>`.
+  await waitFor(
+    "sidebar marks the tab as resuming",
+    () =>
+      cdp.eval(
+        `[...document.querySelectorAll(".session-item__meta-item")].some(e => e.textContent.includes("resumes"))`,
+      ),
+    25000,
+  );
+  ok("resume: the tab wears the ⟲ mark (host projected resumesOnOpen)");
 
-  await tapNew("__resRx");
-  await cdp.eval(`document.querySelector(".confirm-card .settings-btn--accent").click(), true`);
-  await waitFor("restore.done", () => rxHas("__resRx", (m) => m.type === "restore.done"), 30000);
-  await waitFor("resumed spawn in log", () => log().includes("claude --resume mock-"), 10000);
-  ok("resume: real Resume click -> resume.decision -> spawned `claude --resume <id>` -> restore.done");
+  await waitFor("resumed spawn in log", () => log().includes("claude --resume mock-"), 30000);
+  ok("resume: opening the tab spawned `claude --resume <id>` — no dialog in the way");
   console.log("PHASE B PASS");
 } else {
   throw new Error("unknown phase " + phase);

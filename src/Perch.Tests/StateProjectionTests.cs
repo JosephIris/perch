@@ -391,4 +391,32 @@ public class StateProjectionTests
         Assert.Equal("info", note.GetProperty("level").GetString());
         Assert.Equal(1234, note.GetProperty("atMs").GetInt64());
     }
+
+    // ---- "⟲ resumes": the mark that replaced the launch dialog -----------
+    //
+    // The dialog said "24 agent sessions across 24 projects can be reopened"
+    // and offered one Resume button. Accepting it reopened nothing — it armed
+    // them, and each came back when its tab was clicked. The honest signal is
+    // per-tab, so it lives on the tab now, and this is what feeds it.
+
+    [Fact]
+    public void ResumesOnOpen_CountsThePanesThatWillPickUp()
+    {
+        var a = Pane(AgentState.Idle);
+        var b = Pane(AgentState.Idle);
+        var s = SessionWith(a, b);
+        var row = JsonSerializer.SerializeToElement(
+            StateProjection.ProjectSession(s, id => id == a.Id));
+        Assert.Equal(1, row.GetProperty("resumesOnOpen").GetInt32());
+    }
+
+    // No arming set at all (resume turned off in Settings, or a projection
+    // built without the host's state) reads as "nothing picks up" — never as
+    // "everything does".
+    [Fact]
+    public void ResumesOnOpen_IsZeroWhenNothingIsArmed()
+    {
+        var row = Project(SessionWith(Pane(AgentState.Idle)));
+        Assert.Equal(0, row.GetProperty("resumesOnOpen").GetInt32());
+    }
 }

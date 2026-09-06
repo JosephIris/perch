@@ -2,7 +2,7 @@
 .SYNOPSIS
 Prove the page-only flows the control-pipe smoke (test-smoke.ps1) can't reach:
 new-pane chooser, URL pane layout, settings round-trip + "Check now",
-commits.request reply, and the launch resume prompt (via mock claude).
+commits.request reply, and resume-on-open (via mock claude).
 
 Drives the REAL page over CDP (WebView2 --remote-debugging-port via env var):
 real keystrokes and real button clicks, so the page itself authors every wire
@@ -81,7 +81,7 @@ try {
     Assert-Log 'Pane\.chooser\.choose .* choice=same' 'chooser choice reached the host'
     Assert-Log 'UrlPane\.create' 'urlpane.layout reached the host'
 
-    # ---- Phase B: relaunch -> resume prompt -> real Resume click ----
+    # ---- Phase B: relaunch -> the tab is marked, opening it resumes ----
     $p = Start-Process -PassThru -FilePath $ExePath
     Write-Host "phase B: pid=$($p.Id)" -ForegroundColor Green
     node $Driver phaseB $DataDir *> "$DataDir\phaseB.out"
@@ -97,7 +97,7 @@ try {
     if ($errors) { $errors | ForEach-Object { Write-Warning $_ }; throw "FAIL: unexpected errors in log" }
 
     Write-Host ""
-    Write-Host "PASS: chooser, URL pane, update check, commits round-trip, resume prompt - all proven against the real page." -ForegroundColor Green
+    Write-Host "PASS: chooser, URL pane, update check, commits round-trip, resume-on-open - all proven against the real page." -ForegroundColor Green
 }
 finally {
     if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force -EA SilentlyContinue }

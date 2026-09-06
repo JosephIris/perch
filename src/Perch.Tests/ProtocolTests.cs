@@ -399,13 +399,14 @@ public class ProtocolTests
             $"{{\"type\":\"session.close\",\"id\":\"{G1}\",\"removeWorktree\":true}}").RemoveWorktree);
     }
 
+    // The launch resume dialog is gone (it asked one global question whose real
+    // answer was per-tab and on click), and so is its resume.decision message.
+    // Its replacement is a plain SessionRef: "open this tab without picking up
+    // its conversation".
     [Fact]
-    public void ResumeDecision_MissingAcceptDegradesToNull()
+    public void SessionOpenFresh_IsAPlainSessionRef()
     {
-        Assert.True(Round<ResumeDecisionMsg>("{\"type\":\"resume.decision\",\"accept\":true}").Accept);
-        // Absent accept must NOT throw — the handler treats null as declined,
-        // releasing parked spawns as plain shells instead of parking forever.
-        Assert.Null(Round<ResumeDecisionMsg>("{\"type\":\"resume.decision\"}").Accept);
+        Assert.Equal(Guid.Parse(G1), Round<SessionRef>($"{{\"type\":\"session.openFresh\",\"id\":\"{G1}\"}}").Id);
     }
 
     [Fact]
@@ -501,7 +502,6 @@ public class ProtocolTests
         Assert.Equal(14, Round<PrefsSetMsg>("{\"fontSize\":\"14\"}").FontSize);
         Assert.True(Round<PrefsSetMsg>("{\"inspectorOpen\":\"true\"}").InspectorOpen);
         Assert.True(Round<SettingsSaveMsg>("{\"resumeAgentsOnLaunch\":\"true\"}").ResumeAgentsOnLaunch);
-        Assert.True(Round<ResumeDecisionMsg>("{\"accept\":\"true\"}").Accept);
     }
 
     // ---- Loud failure: protocol drift must throw, not default -------------

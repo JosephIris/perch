@@ -25,12 +25,20 @@ public sealed class Settings
     /// (without clearing this).
     public bool OnboardingSeen { get; set; } = false;
 
-    /// Auto-resume Claude Code sessions on launch / on restoring a closed
-    /// session. When true (default), a pane that carries a saved Claude session
-    /// id offers to `claude --resume <id>` instead of dropping to a bare shell.
-    /// The launch resume is still gated by a one-time prompt; this flag is the
-    /// master switch (off = never resume, never prompt). Mirrors upstream
-    /// perch's "Reopen Previous Session" toggle.
+    /// Whether opening a tab puts its agent back into the conversation it was
+    /// in. True (default) arms every pane that still has its conversation on
+    /// disk — at launch, and when a closed session is restored; the pane then
+    /// runs `claude --resume <id>` on its first spawn instead of a bare shell.
+    ///
+    /// There WAS a one-time launch prompt gating this, and it is gone. It said
+    /// "24 agent sessions across 24 projects can be reopened", which described
+    /// something the app never did: accepting it reopened nothing, it ARMED
+    /// them, and each came back only when its tab was clicked. So the dialog
+    /// asked one global question whose real answer was per-tab and deferred.
+    /// Now the sidebar marks which tabs will pick up ("⟲ resumes"), the row's
+    /// right-click menu offers "Open as a fresh shell" for a one-off no, and
+    /// this flag is the global off switch. The property keeps its "OnLaunch"
+    /// name so the persisted settings file needs no migration.
     public bool ResumeAgentsOnLaunch { get; set; } = true;
 
     /// Hours an agent tab may sit with nothing happening before Perch puts it

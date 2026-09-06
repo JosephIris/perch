@@ -28,7 +28,6 @@ import { showProjectsDialog } from "./projects-dialog.js";
 import { showOnboarding } from "./onboarding.js";
 import { startElapsedTicker } from "./elapsed.js";
 import { startSpinnerTicker } from "./spinner.js";
-import { confirmDialog } from "./confirm.js";
 import { RestoreProgress } from "./restore-progress.js";
 import { invalidateCommits } from "./commits.js";
 import { initCloud } from "./cloud-panel.js";
@@ -94,9 +93,6 @@ updateBanner.addEventListener("click", () => {
   send({ type: "update.apply" });
 });
 
-// One-time launch prompt is shown at most once per run; guard against a
-// duplicate resume.prompt (defensive — the host sends it once).
-let resumePromptShown = false;
 installShortcutHint($("shortcut-hint"));
 
 $("settings-button").addEventListener("click", () => openSettings());
@@ -354,31 +350,6 @@ onMessage((msg) => {
     case "team.artefact.index":
       applyArtefactIndex(msg);
       break;
-    case "resume.prompt": {
-      // One-time "reopen previous Claude sessions?" prompt. Until we answer,
-      // the host holds the resumable panes' spawns, so a decision is required
-      // to release them either way.
-      if (resumePromptShown) break;
-      resumePromptShown = true;
-      const n = msg.paneCount;
-      const sess = msg.sessionCount;
-      // "agent", not "Claude": a codex conversation resumes here too, and
-      // naming the wrong agent in the one dialog that asks about them is how
-      // you get told the feature doesn't work.
-      const what =
-        n === 1
-          ? "1 agent session from your last run can be reopened."
-          : `${n} agent sessions across ${sess} ${
-              sess === 1 ? "project" : "projects"
-            } can be reopened.`;
-      confirmDialog({
-        title: "Resume previous sessions?",
-        body: `${what} They'll pick up where they left off.`,
-        confirmLabel: "Resume",
-        cancelLabel: "Not now",
-      }).then((accept) => send({ type: "resume.decision", accept }));
-      break;
-    }
     case "pane.chooser":
       // A freshly-split terminal pane whose source pane had a known cwd —
       // show the in-pane chooser; its spawn is parked host-side until we

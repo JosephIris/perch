@@ -576,13 +576,17 @@ function buildSkeleton(): void {
   );
 
   // ── Sessions ────────────────────────────────────────────────────────────
-  // The master switch the launch "Resume N Claude sessions?" prompt is gated by;
-  // off means Perch never offers to reopen previous conversations on startup.
-  resumeToggle = makeToggle("Resume Claude sessions on launch");
+  // The global default for "does opening a tab pick up its conversation".
+  // There used to be a launch dialog asking this once per run; it claimed to
+  // reopen every saved session at once when in fact it only armed them, and
+  // each came back when you clicked its tab. The dialog is gone: the sidebar
+  // marks the tabs that will pick up, right-click offers "Open as a fresh
+  // shell" for a one-off, and this is the switch that turns it all off.
+  resumeToggle = makeToggle("Pick up conversations when you open a tab");
   sessions.appendChild(
     makeRow(
-      "Resume Claude sessions on launch",
-      "When Perch starts, offer to reopen the Claude conversations that were running.",
+      "Pick up conversations when you open a tab",
+      "Opening a tab puts its agent back in the conversation it was in. Off starts a plain shell instead. Right-click a tab to skip it just once.",
       resumeToggle,
     ),
   );

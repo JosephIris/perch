@@ -82,7 +82,8 @@ internal static class StateProjection
         IReadOnlyList<ModelUsageLimit>? modelLimits = null, bool inspectorOpen = true,
         bool wideLayout = false, bool localPerchOnly = false,
         Func<Guid, object?>? teamOf = null, bool teamFacesColor = false,
-        IReadOnlyList<CodexModel>? codexModels = null)
+        IReadOnlyList<CodexModel>? codexModels = null,
+        Func<Guid, bool>? resumesOnOpen = null)
     {
         return new
         {
@@ -123,7 +124,7 @@ internal static class StateProjection
                 // what lets the sidebar badge them and show the room's door.
                 team = teamOf?.Invoke(p.Id),
             }).ToArray(),
-            sessions = store.Sessions.Select(ProjectSession).ToArray(),
+            sessions = store.Sessions.Select(s => ProjectSession(s, resumesOnOpen)).ToArray(),
             // Recently-closed sessions for the sidebar's restore list. Just
             // the summary the row needs — title, pane/agent counts, and when
             // it was closed (the page renders "closed 5m ago" live).
@@ -151,7 +152,11 @@ internal static class StateProjection
     /// urgent wins" summary. The first pane with the winning state also lends
     /// its activity detail and notification (so the sidebar shows the one
     /// that wants attention).
-    public static object ProjectSession(Session s)
+    /// `resumesOnOpen` answers, per pane, "opening this tab puts this pane back
+    /// into its conversation". Null = nothing is armed (the setting is off, or
+    /// this is a projection built without the host's arming set), which is the
+    /// same as false everywhere.
+    public static object ProjectSession(Session s, Func<Guid, bool>? resumesOnOpen = null)
     {
         var leaves = PaneTree.AllLeaves(s.Root).ToArray();
         var aggState = AggregateState(leaves);
@@ -189,6 +194,13 @@ internal static class StateProjection
             id    = s.Id.ToString("D"),
             title = s.Title,
             shell = s.DisplayShell,
+            /* How many of this tab's panes will pick up where they left off
+             * the moment you open it. The sidebar marks the row with this;
+             * it replaced the launch dialog that claimed to reopen everything
+             * at once and in fact only armed it. 0 = opening gives a plain
+             * shell (already running, nothing saved, or the user chose
+             * "Open as a fresh shell"). */
+            resumesOnOpen = resumesOnOpen == null ? 0 : leaves.Count(p => resumesOnOpen(p.Id)),
             /* The project (registered repo) this tab belongs to, or "" when it
              * isn't filed under one — project mode puts those under "Other". */
             projectId = s.ProjectId?.ToString("D") ?? "",

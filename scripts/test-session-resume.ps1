@@ -200,14 +200,16 @@ try {
     $p = Launch-Perch
     Write-Host "  relaunch pid=$($p.Id)"
 
-    if (-not (Wait-Pattern -Pattern 'Pane\.resize\.defer' -TimeoutSec 15)) {
-        Fail "resumable pane did not defer its spawn (resume prompt gating broken)" $p
+    # No dialog and no deferral any more: the launch prompt asked one global
+    # question whose real answer was per-tab and only landed when you clicked a
+    # tab, so it was removed. Launch now ARMS every pane whose conversation is
+    # still on disk, and the first open of a tab is what resumes it.
+    if (-not (Wait-Pattern -Pattern 'Resume\.gate: enabled=True armed=[1-9]' -TimeoutSec 15)) {
+        Fail "launch did not arm the resumable pane" $p
     }
-    Write-Host "  [+] resumable pane deferred its spawn (awaiting decision)"
+    Write-Host "  [+] launch armed the resumable pane (no dialog)"
 
-    Test-Verb -Verb 'resume.decision' -Fields @{ accept = 'true' }
-
-    $spawn = Wait-Pattern -Pattern "claude --resume $([regex]::Escape($SID))" -TimeoutSec 12
+    $spawn = Wait-Pattern -Pattern "claude --resume $([regex]::Escape($SID))" -TimeoutSec 20
     if (-not $spawn) { Fail "spawn command did not inject 'claude --resume $SID'" $p }
     Write-Host "  [+] resume injected into spawn command"
 

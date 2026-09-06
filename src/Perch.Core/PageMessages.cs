@@ -364,13 +364,6 @@ internal sealed record SessionPairMsg
     public required Guid PartnerId { get; init; }
 }
 
-internal sealed record ResumeDecisionMsg
-{
-    /// Deliberately optional: a malformed/absent accept must degrade to
-    /// "declined" (spawns release as plain shells), never to parked-forever.
-    public bool? Accept { get; init; }
-}
-
 internal sealed record UrlOpenMsg
 {
     public required string Url { get; init; }

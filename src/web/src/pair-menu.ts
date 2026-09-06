@@ -1,11 +1,11 @@
-// Right-click menu on a sidebar session row: pair this tab with another for
-// cross-session messaging, or dissolve the pair it has. Modeled on
-// model-menu.ts (same fixed-position popup, same dismiss rules) but built
-// per-invocation from the current session list.
+// Right-click menu on a sidebar session row: open the tab without picking up
+// its saved conversation, pair it with another tab for cross-session
+// messaging, or dissolve the pair it has. Modeled on model-menu.ts (same
+// fixed-position popup, same dismiss rules) but built per-invocation from the
+// current session list.
 //
-// Deliberately small: pairing is the only row action that needs a menu today.
-// If a second action ever lands here, promote this to a generic row menu
-// rather than growing a parallel one.
+// It is a row menu now, not a pair menu — the name stayed because renaming a
+// file every time it grows an item is churn, not clarity.
 
 import type { SessionView } from "./bridge.js";
 import { send } from "./bridge.js";
@@ -48,6 +48,16 @@ export function showPairMenu(x: number, y: number, s: SessionView, all: SessionV
     return btn;
   };
 
+  // The per-tab "no" to picking up a conversation. Offered only on a tab that
+  // WOULD pick one up, so the menu never carries an item that does nothing.
+  // This is the escape hatch that let the launch dialog go: the old global
+  // "Not now" is now a per-tab choice, made at the moment it matters.
+  if ((s.resumesOnOpen ?? 0) > 0) {
+    add("Open as a fresh shell", "don't pick up the conversation", () =>
+      send({ type: "session.openFresh", id: s.id })
+    );
+  }
+
   if (s.pairedWith) {
     const partner = all.find((t) => t.id === s.pairedWith);
     add(`Unpair from ${partner?.title ?? "its partner"}`, null, () =>
@@ -67,11 +77,14 @@ export function showPairMenu(x: number, y: number, s: SessionView, all: SessionV
       none.textContent = "No other tab to pair with";
       menu.appendChild(none);
     }
-    const label = document.createElement("div");
+    // Appended, not inserted at the top: the menu may already carry "Open as
+    // a fresh shell" above, and a section label that jumps over it would
+    // caption the wrong item.
     if (candidates.length) {
+      const label = document.createElement("div");
       label.className = "pair-menu__section";
       label.textContent = "Pair with";
-      menu.insertBefore(label, menu.firstChild);
+      menu.appendChild(label);
     }
     for (const t of candidates.slice(0, 8)) {
       add(t.title, t.projectId === s.projectId ? null : "other project", () =>

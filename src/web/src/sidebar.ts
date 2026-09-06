@@ -1714,6 +1714,12 @@ export class Sidebar {
       if (s.branch) metaItems.push({ text: `⎇ ${s.branch}` });
       if (aheadItem) metaItems.push(aheadItem);
       for (const p of s.ports ?? []) metaItems.push({ text: `:${p}` });
+      // "Opening this picks up the conversation." This mark replaced the
+      // launch dialog that claimed to reopen every saved session at once and
+      // in fact only armed them — the truth was always per-tab and on click,
+      // so it belongs on the tab. Only ever on a row at rest: a tab that is
+      // running has nothing left to pick up.
+      if ((s.resumesOnOpen ?? 0) > 0) metaItems.push({ text: "⟲ resumes" });
     }
 
     // Pane breakdown, appended for any multi-pane session.

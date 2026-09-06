@@ -122,14 +122,19 @@ internal sealed partial class AppController
     // ---- Agent-session resume (claude --resume <id>) ---------------------
     // Panes armed to inject `claude --resume <id>` on their NEXT spawn. Drained
     // one-shot in SpawnPty so a later manual re-split never auto-launches an
-    // agent. Populated when the user accepts the launch prompt or restores a
-    // closed session.
+    // agent. Populated at launch (every pane with a conversation still on
+    // disk) and when a closed session is restored.
+    //
+    // There used to be a launch dialog gating this - "24 agent sessions across
+    // 24 projects can be reopened" with one Resume button. It described
+    // something the app never did: accepting it did not reopen 24 sessions, it
+    // armed them, and each came back only when you clicked its tab. So the
+    // dialog asked a question whose real answer was per-tab and whose apparent
+    // answer was all-at-once. It is gone. Arming is now silent, the sidebar
+    // marks which tabs will pick up where they left off, and opening one is
+    // the decision. "Open as a fresh shell" on the row is the way to say no,
+    // and Settings -> "Resume agent tabs" is the global off switch.
     private readonly HashSet<Guid> _armedResumePanes = new();
-    // True between launch and the user's answer to the one-time "Resume N
-    // Claude sessions?" prompt. While pending, a resumable pane's lazy spawn is
-    // parked in _deferredSpawns so the prompt actually gates the first agent
-    // launch instead of racing it.
-    private bool _resumeDecisionPending;
     private readonly Dictionary<Guid, (int cols, int rows)> _deferredSpawns = new();
     // ---- New-pane chooser ------------------------------------------------
     // Panes split from a pane whose working directory we already know (an agent
@@ -468,13 +473,16 @@ internal sealed partial class AppController
         // spawns until the one-time prompt (sent from OnPageReady) is answered.
         // Set here — before the page can send its first pane.resize — so the
         // deferral in OnPaneResize is in effect from the very first measure.
-        var resumableAtLaunch = _settings.ResumeAgentsOnLaunch ? AllResumablePanes().Count() : 0;
-        // Logged because "why didn't it offer to resume?" is otherwise
-        // unanswerable after the fact: the gate depends on a setting AND on
-        // each agent still having the conversation on disk.
-        Log.Info("Resume.gate", $"enabled={_settings.ResumeAgentsOnLaunch} resumable={resumableAtLaunch}");
-        if (resumableAtLaunch > 0)
-            _resumeDecisionPending = true;
+        // Arm every pane whose conversation is still on disk. Nothing starts
+        // here - a pane's PTY is created lazily, on the page's first measure of
+        // it - so this only decides what the NEXT open of each tab does.
+        var resumableAtLaunch = 0;
+        if (_settings.ResumeAgentsOnLaunch)
+            foreach (var (_, pane) in AllResumablePanes()) { _armedResumePanes.Add(pane.Id); resumableAtLaunch++; }
+        // Logged because "why didn't it pick up where I left off?" is otherwise
+        // unanswerable after the fact: it depends on a setting AND on each
+        // agent still having the conversation on disk.
+        Log.Info("Resume.gate", $"enabled={_settings.ResumeAgentsOnLaunch} armed={resumableAtLaunch}");
 
         // Page → host bridge and crash policy. Wired here (not in StartAsync)
         // so even an early message/crash is caught.
@@ -746,7 +754,7 @@ internal sealed partial class AppController
         .Add<SessionRef>("session.unpair", OnSessionUnpair)
         .Add<SessionRef>("session.restore", OnSessionRestore)
         .Add<SessionRef>("session.purge", OnSessionPurge)
-        .Add<ResumeDecisionMsg>("resume.decision", OnResumeDecision)
+        .Add<SessionRef>("session.openFresh", OnSessionOpenFresh)
         .Add<PaneRef>("pane.focus", OnPaneFocus)
         .Add<UrlOpenMsg>("url.open", OnUrlOpen)
         .Add<PrefsSetMsg>("prefs.set", OnPrefsSet)
@@ -843,7 +851,6 @@ internal sealed partial class AppController
         // If we held back any resumable panes (see the constructor), ask the
         // user once whether to reopen those Claude sessions. The answer
         // (resume.decision) releases the parked spawns.
-        if (_resumeDecisionPending) PostResumePrompt();
 
         // Kick off the auto-update check now that the page can receive
         // messages. Fire-and-forget: the await inside resumes on the UI thread
@@ -1005,47 +1012,22 @@ internal sealed partial class AppController
     private string ResolvePaneCwd(Session sess, PaneNode pane) =>
         FirstExistingDir(pane.Cwd, sess.Cwd) ?? _settings.ResolveDefaultCwd();
 
-    /// One-time "Resume N Claude sessions?" prompt. The page renders the dialog
-    /// and replies with resume.decision {accept}.
-    private void PostResumePrompt()
+    /// Turn a tab's armed resume off and let it open as a plain shell instead.
+    /// The per-tab "no" that replaced the launch dialog's global one: the
+    /// conversation is NOT forgotten (the pane keeps its session id, so a later
+    /// relaunch offers it again) - this open just doesn't go back into it.
+    private void OnSessionOpenFresh(SessionRef msg)
     {
-        var resumable = AllResumablePanes().ToList();
-        var sessionCount = resumable.Select(t => t.sess.Id).Distinct().Count();
-        var payload = new
-        {
-            type = "resume.prompt",
-            paneCount = resumable.Count,
-            sessionCount,
-        };
-        try { _web.PostJson(JsonSerializer.Serialize(payload)); }
-        catch (Exception ex) { Log.Error("PostResumePrompt", ex); }
-    }
-
-    /// User answered the launch resume prompt. Accept → arm every resumable
-    /// pane and open the progress lightbox for the ones we deferred (the
-    /// visible session's). Either way, release every parked spawn.
-    private void OnResumeDecision(ResumeDecisionMsg msg)
-    {
-        // Absent/malformed accept degrades to "declined" (spawns release as
-        // plain shells) — never to parked-forever.
-        var accept = msg.Accept == true;
-        _resumeDecisionPending = false;
-        if (accept)
-        {
-            foreach (var (_, pane) in AllResumablePanes())
-                _armedResumePanes.Add(pane.Id);
-            // The lightbox tracks the panes we're bringing back right now.
-            BeginRestoreProgress(_deferredSpawns.Keys.ToList());
-        }
-        // Release the parked spawns — resuming (armed) or bare (not armed).
-        foreach (var kv in _deferredSpawns.ToList())
-        {
-            var sess = OwningSession(kv.Key);
-            var pane = sess == null ? null : AllLeaves(sess.Root).FirstOrDefault(p => p.Id == kv.Key);
-            if (sess != null && pane != null)
-                SpawnPty(sess, pane, kv.Value.cols, kv.Value.rows);
-        }
-        _deferredSpawns.Clear();
+        var sess = _store.Sessions.FirstOrDefault(x => x.Id == msg.Id);
+        if (sess == null) return;
+        var cleared = 0;
+        foreach (var pane in AllLeaves(sess.Root))
+            if (_armedResumePanes.Remove(pane.Id)) cleared++;
+        Log.Info("Resume.fresh", $"session={sess.Id:N} panes={cleared} — opening as a plain shell");
+        // Disarmed, then opened normally: selecting is what creates the PTY
+        // (lazily, on the page's next measure), and by then there is nothing
+        // armed for it to pick up.
+        OnSessionSelect(msg);
     }
 
     // ---- Restore-progress lightbox (host side) ---------------------------
@@ -2541,18 +2523,6 @@ internal sealed partial class AppController
         var sess = OwningSession(id);
         var pane = sess == null ? null : AllLeaves(sess.Root).FirstOrDefault(p => p.Id == id);
         if (sess == null || pane == null) return;
-        // While the launch resume prompt is unanswered, park a resumable
-        // pane's spawn so the prompt gates the first resume instead of racing
-        // it. Non-resumable panes spawn immediately. The SAME predicate the
-        // prompt counted with — when this asked only about Claude, a codex
-        // pane spawned a bare shell two seconds before the prompt it was
-        // supposed to be waiting for.
-        if (_resumeDecisionPending && Resumable(sess, pane))
-        {
-            Log.Info($"Pane.resize.defer pane={id:N} (awaiting resume decision)");
-            _deferredSpawns[id] = (cols, rows);
-            return;
-        }
         // New-pane chooser: park the spawn and ask the user what to run
         // here. Released by OnPaneChooserChoose (or closed on cancel).
         if (_pendingChoosers.ContainsKey(id))
@@ -4780,7 +4750,12 @@ internal sealed partial class AppController
                 _projects, _settings.SidebarMode, EffectiveModelLimits(), _settings.InspectorOpen,
                 _settings.WideLayout, _settings.LocalPerchOnly, _teamCtrl.ProjectTeamView,
                 teamFacesColor: _settings.TeamFacesColor,
-                codexModels: CodexModels.List());
+                codexModels: CodexModels.List(),
+                // "Opening this tab picks up its conversation." Armed AND not
+                // already running: a pane with a live PTY has nothing left to
+                // pick up, and marking it would be a promise about a tab that
+                // is already open.
+                resumesOnOpen: id => _armedResumePanes.Contains(id) && !_panes.Has(id));
             _web.PostJson(JsonSerializer.Serialize(snap));
         }
         catch (Exception ex) { Log.Error("PushState", ex); }

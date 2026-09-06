@@ -79,9 +79,10 @@ export type OutMessage =
   | { type: "session.restore"; id: string }
   /* Permanently drop a closed session from "Recently closed". */
   | { type: "session.purge"; id: string }
-  /* Answer to the one-time launch resume prompt. accept=true reopens the
-   * saved Claude sessions; false leaves the panes as plain shells. */
-  | { type: "resume.decision"; accept: boolean }
+  /* Open a tab WITHOUT picking up its saved conversation. The per-tab "no"
+   * that replaced the launch resume dialog: the conversation is kept (a later
+   * relaunch offers it again), this open just starts a plain shell. */
+  | { type: "session.openFresh"; id: string }
   /* Open a URL externally — host resolves to the OS default browser. */
   | { type: "url.open"; url: string }
   /* Pane rename + color tag changes from the pane header chrome. */
@@ -533,6 +534,12 @@ export type SessionView = {
    * dashboard card wear one pixel mark per entry (agent-glyph.ts). Optional
    * so harness fixtures need not carry it; the host always sends it. */
   agents?: string[];
+  /* How many of this tab's panes pick up where they left off the moment you
+   * open it. The row wears a "⟲ resumes" mark when this is > 0. 0 means
+   * opening gives a plain shell — already running, nothing saved, resume
+   * turned off in Settings, or the user chose "Open as a fresh shell".
+   * Optional so harness fixtures need not carry it. */
+  resumesOnOpen?: number;
 };
 
 /* A row in the sidebar's "Recently closed" list. Summary only — the panes
@@ -996,9 +1003,6 @@ export type InMessage =
   | InspectorImageDataMessage
   | ProjectsCandidatesMessage
   | { type: "host.error"; message: string }
-  /* One-time launch prompt: N saved Claude sessions can be reopened. The page
-   * asks the user, then replies with resume.decision. */
-  | { type: "resume.prompt"; paneCount: number; sessionCount: number }
   /* Show the centered in-pane new-pane chooser. Sent when a freshly-split
    * terminal pane — whose source pane had a known working directory — first
    * measures; the host parks that pane's shell spawn until the user answers
