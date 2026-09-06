@@ -274,9 +274,18 @@ Never read a file, never write code, never run anything else.
     Write-Host "`n[3] Send again re-types the same line and adds no second post"
     $postSeq = [int]$cold.seq
     $postsBefore = @($d.ledger | Where-Object { $_.kind -eq 'user' }).Count
-    $deliverBefore = Log-Count 'Team.retry'
+    $ackPattern = "seq=$postSeq confirmed"
+    $acksBefore = Log-Count $ackPattern
+    $repliesBefore = @($d.ledger | Where-Object { ($_.kind -eq 'beat' -or $_.kind -eq 'note') -and $_.text -match 'PONGTWO' }).Count
     [void](Send-Verb 'team.deliver.retry' @{ projectId = $projectId; seq = $postSeq; botId = 'ada' })
-    Check "the host typed it again" (Wait-Until { (Log-Last 'Team.retry') -match 'ok=True' } 20)
+    # A retry uses the ordinary queue when the preceding turn is finishing.
+    # Require a NEW matching acknowledgement and reply, not an immediate-send log.
+    Check "the bot accepted and answered the retried post" (Wait-Until {
+        Answer-Cards $projectId
+        $retryDump = Team-Dump $projectId
+        (Log-Count $ackPattern) -gt $acksBefore -and
+        @($retryDump.ledger | Where-Object { ($_.kind -eq 'beat' -or $_.kind -eq 'note') -and $_.text -match 'PONGTWO' }).Count -gt $repliesBefore
+    } 180)
     $d2 = Team-Dump $projectId
     Check "no second post appeared in the room" (@($d2.ledger | Where-Object { $_.kind -eq 'user' }).Count -eq $postsBefore)
 

@@ -521,8 +521,14 @@ try {
     const d = await teamDump(projectId);
     const post = coldPost ?? (d.ledger ?? []).filter((e) => e.kind === "user").pop();
     const postsBefore = (d.ledger ?? []).filter((e) => e.kind === "user").length;
+    const ackPattern = `seq=${Number(post.seq)} confirmed`;
+    const acksBefore = count(ackPattern);
     await send({ verb: "team.deliver.retry", projectId, seq: Number(post.seq), botId: "ada" });
-    check("the host typed it again", await waitUntil(() => /ok=True/.test(last("Team.retry")), 20000));
+    // Retries can queue behind a finishing turn; prove a fresh acceptance.
+    check("the bot accepted the retried post", await waitUntil(async () => {
+      await answerCards(projectId);
+      return count(ackPattern) > acksBefore;
+    }, 90000));
     const d2 = await teamDump(projectId);
     check("no second post appeared in the room", (d2.ledger ?? []).filter((e) => e.kind === "user").length === postsBefore);
   }

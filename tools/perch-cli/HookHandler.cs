@@ -477,14 +477,10 @@ internal static class HookHandler
                     try { File.Delete(answerPath); } catch { }
                     if (answer is "allow" or "deny")
                     {
-                        // Same field, two shapes: Claude Code takes the decision
-                        // as a bare word, codex as an object with a `behavior`.
-                        // Sending the wrong one is silent — the agent logs
-                        // "invalid hook JSON output" and just shows its own
-                        // prompt — so the shape follows the agent, not a guess.
-                        object decision = agent == "codex"
-                            ? new { behavior = answer }
-                            : answer;
+                        // Both agents require a decision object. A bare string
+                        // is rejected by Claude, leaving its permission prompt
+                        // open even after the owner answers the room's card.
+                        object decision = new { behavior = answer };
                         Console.Out.Write(JsonSerializer.Serialize(new
                         {
                             hookSpecificOutput = new { hookEventName = "PermissionRequest", decision },

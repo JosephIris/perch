@@ -1175,7 +1175,7 @@ internal sealed class TeamController
     private void AnswerPromptOnScreen(Guid paneId)
     {
         if (!_promptOnScreen.Remove(paneId, out var p)) return;   // the hook settled it
-        Log.Info("Team.perm.onscreen", $"pane={paneId:N} allow={p.Allow} — the hook's answer didn't take; answering the prompt itself");
+        Log.Info("Team.perm.check", $"pane={paneId:N} allow={p.Allow} — no progress observed after the answer; offering the terminal");
         var store = StoreFor(p.Project);
         var proj = _h.ProjectById(p.Project);
         if (store == null || proj == null) return;
