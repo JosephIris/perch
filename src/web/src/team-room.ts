@@ -1685,8 +1685,13 @@ function avatar(bot: TeamBotView | undefined, name: string): HTMLElement {
     // The bot's face, in the state it is in right now — the feed is live, so
     // a bot that is working is seen working next to what it said.
     a.classList.add("tf-msg__avatar--face");
+    // Still, not animated. The feed is a transcript and its avatars are a
+    // record of who said a thing; the ROSTER is the live surface and keeps
+    // its motion. Animating one per message meant the room got heavier the
+    // longer the team talked - thirteen visible faces cost 50 ms of paint a
+    // frame. The face still shows the bot's state, it just holds the pose.
     const face = createBotFace(normalizeLook(bot.look), colorIndexFor(bot, name),
-      faceStateOf(presenceOf(sessionOf(bot))), faceSeed(bot));
+      faceStateOf(presenceOf(sessionOf(bot))), faceSeed(bot), false);
     a.appendChild(face.el);
     feedFaces.push(face);
     return a;

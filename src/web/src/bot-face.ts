@@ -1009,11 +1009,64 @@ const REST_T: Readonly<Record<FaceState, number>> = { idle: 0, working: 700, wai
 interface FaceImpl {
   el: SVGSVGElement; look: BotLook; state: FaceState; seed: number;
   scene: Scene; t0: number; prev: Pose | null; switchAt: number; last: Pose | null;
+  /** On screen right now. Starts true so a face is never born frozen — the
+   *  observer corrects it on its first callback, a frame later. */
+  seen: boolean;
+  /** Whether this face ever moves. A still face draws its state as a pose and
+   *  then stops; only the roster's faces animate. See createBotFace. */
+  live: boolean;
 }
 const faces = new Set<FaceImpl>();
 let raf = 0;
 let frozenAt: number | null = null;
 let colorMode = false;
+
+/* ---- Only animate what can be seen ----------------------------------------
+ *
+ * Measured on a room with 400 messages and three bots working: 315 faces
+ * existed, 14 of them were on screen, and one animation frame took 150 ms —
+ * about 7 fps, on a page whose whole job is to look calm. Every avatar in the
+ * scrollback was posing itself sixty times a second inside a container that
+ * had clipped it away.
+ *
+ * An IntersectionObserver answers "can this be seen" for free (the compositor
+ * already knows), including clipping by the feed's own scroll box, which a
+ * getBoundingClientRect per face per frame would not do cheaply. Faces just
+ * outside the view keep animating — the margin below — so scrolling reveals
+ * something already in motion rather than something that starts when looked
+ * at. A face that comes back into view is drawn at once, on the shared clock,
+ * so it picks up mid-act instead of restarting.
+ */
+const VIEW_MARGIN = "200px";
+let watcher: IntersectionObserver | null | undefined;
+
+function observer(): IntersectionObserver | null {
+  if (watcher !== undefined) return watcher;
+  watcher = typeof IntersectionObserver === "undefined" ? null : new IntersectionObserver(
+    (rows) => {
+      let woke = false;
+      for (const row of rows) {
+        const f = byEl.get(row.target as SVGSVGElement);
+        if (!f) continue;
+        const seen = row.isIntersecting;
+        if (seen && !f.seen) woke = true;
+        f.seen = seen;
+      }
+      // Something came back into view: draw it now rather than leaving a stale
+      // pose on screen until the next frame, and restart the loop if the whole
+      // room had scrolled out of sight.
+      if (woke) {
+        const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+        for (const f of faces) if (f.live && f.seen) renderFace(f, now);
+        ensureLoop();
+      }
+    },
+    { rootMargin: VIEW_MARGIN },
+  );
+  return watcher;
+}
+/** el -> face, so the observer's callback can find whose element moved. */
+const byEl = new WeakMap<SVGSVGElement, FaceImpl>();
 
 /* the media query is resolved once and then read (it stays live) — this runs
    per face per frame, and a fresh matchMedia() each time is needless work */
@@ -1039,10 +1092,31 @@ function renderFace(f: FaceImpl, now: number): void {
 function tick(now: number): void {
   raf = 0;
   if (!faces.size) return;
+  let drew = 0;
+  const t0 = typeof performance !== "undefined" ? performance.now() : 0;
   if (typeof document === "undefined" || !document.hidden) {
-    for (const f of faces) if (f.el.isConnected) renderFace(f, now);
+    for (const f of faces) if (f.live && f.seen && f.el.isConnected) { renderFace(f, now); drew++; }
   }
+  lastDrawn = drew;
+  lastMs = (typeof performance !== "undefined" ? performance.now() : 0) - t0;
+  // Nothing on screen (the feed scrolled away, the room closed, the window
+  // hidden): stop. The observer restarts us the moment a face is seen again,
+  // and the clock is wall-time, so nothing drifts while we are stopped.
+  if (drew === 0 && typeof document !== "undefined" && !document.hidden && !anySeen()) return;
   raf = requestAnimationFrame(tick);
+}
+/** What the shared loop is actually doing: how many faces exist, and how many
+ *  of them it drew on the last frame. The gap between the two is the whole
+ *  point of the visibility gate, so scripts/bench-room.mjs asserts on it. */
+export function faceStats(): { total: number; drawn: number; ms: number } {
+  return { total: faces.size, drawn: lastDrawn, ms: +lastMs.toFixed(2) };
+}
+let lastDrawn = 0;
+let lastMs = 0;
+
+function anySeen(): boolean {
+  for (const f of faces) if (f.live && f.seen && f.el.isConnected) return true;
+  return false;
 }
 function ensureLoop(): void {
   if (raf || !faces.size || frozenAt !== null || reducedMotion()) return;
@@ -1054,13 +1128,21 @@ function stopLoop(): void {
 
 /** Build a face. Caller appends `el` to a sized circle (the room's 28 px
  *  avatar slot) and drives it through setState / setLook. The seed offsets
- *  the blink phase and the ambient loops so a roster never moves in unison. */
-export function createBotFace(look: BotLook, colorIndex: number, state: FaceState = "idle", seed = 0): BotFace {
+ *  the blink phase and the ambient loops so a roster never moves in unison.
+ *
+ *  `live` is whether it ever moves. Measured on a busy room: an animating
+ *  face costs about 4 ms of paint per frame, so the thirteen visible in a
+ *  400-message feed turned a 16.7 ms frame into 66 ms - the whole budget
+ *  spent on birds blinking beside messages from twenty minutes ago. A still
+ *  face still SHOWS its state (each state has its own pose); it just holds
+ *  it. The roster is the live thing and keeps its motion; the feed is a
+ *  transcript and does not need one. */
+export function createBotFace(look: BotLook, colorIndex: number, state: FaceState = "idle", seed = 0, live = true): BotFace {
   const svg = el<SVGSVGElement>("svg", { viewBox: VIEWBOX, "aria-hidden": "true", focusable: "false" });
   svg.classList.add("bot-face");
   svg.style.setProperty("--bf-ink", EYE_INK);
   if (colorMode) svg.classList.add("bot-face--color");
-  const f: FaceImpl = { el: svg, look: { ...look }, state, seed, scene: buildScene(look), t0: 0, prev: null, switchAt: 0, last: null };
+  const f: FaceImpl = { el: svg, look: { ...look }, state, seed, scene: buildScene(look), t0: 0, prev: null, switchAt: 0, last: null, seen: true, live };
   svg.append(f.scene.root);
   const setIndex = (i: number) => svg.setAttribute("data-color-index", String(Math.max(0, Math.floor(i)) % 6));
   setIndex(colorIndex);
@@ -1069,6 +1151,8 @@ export function createBotFace(look: BotLook, colorIndex: number, state: FaceStat
   const now = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
   f.t0 = now();
   faces.add(f);
+  byEl.set(svg, f);
+  observer()?.observe(svg);
   renderFace(f, f.t0);                                 // a deterministic first frame, even before the loop's first tick
   ensureLoop();
 
@@ -1098,6 +1182,8 @@ export function createBotFace(look: BotLook, colorIndex: number, state: FaceStat
     setColorIndex: setIndex,
     dispose() {
       faces.delete(f);
+      observer()?.unobserve(svg);
+      byEl.delete(svg);
       svg.remove();
       if (!faces.size) stopLoop();
     },

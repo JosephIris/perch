@@ -31,7 +31,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { createSetupOverlay } from "./setup-overlay.js";
 import { initInspector } from "./inspector.js";
-import { createBotFace, setFaceColorMode, faceColorMode, freezeFaces, FACE_HATS, FACE_EYEWEAR, FACE_EXTRAS, FACE_TEMPERS, FACE_STATES } from "./bot-face.js";
+import { createBotFace, setFaceColorMode, faceColorMode, freezeFaces, faceStats, FACE_HATS, FACE_EYEWEAR, FACE_EXTRAS, FACE_TEMPERS, FACE_STATES } from "./bot-face.js";
 import type { BotLook, FaceHat, FaceState, FaceTemper } from "./bot-face.js";
 import "@xterm/xterm/css/xterm.css";
 
@@ -1595,6 +1595,52 @@ if (view === "team" || view === "team-activity" || view === "team-artefacts" || 
         if (opts?.bump) sess.agentState = sess.agentState === "working" ? "done" : "working";
       }
       applyTeamState(next);
+    },
+    // A busy room, for scripts/bench-room.mjs. The host ships up to 500
+    // ledger entries and every bot message row carries an animated face, so
+    // this is the shape the room actually takes on a team that has been
+    // working for a while - not a synthetic worst case.
+    stress: {
+      fill(n: number) {
+        const bots = ["Ada", "Bo", "Cy"];
+        const ids = ["b-ada", "b-bo", "b-cy"];
+        const entries = [...fixture.entries];
+        let seq2 = fixture.lastSeq;
+        for (let i = 0; i < n; i++) {
+          const k = i % 3;
+          entries.push({
+            seq: ++seq2,
+            ts: new Date(Date.now() - (n - i) * 1000).toISOString(),
+            kind: i % 4 === 0 ? "work" : "beat",
+            from: bots[k], botId: ids[k],
+            text: i % 4 === 0 ? "read src/web/src/team-room.ts" : `line ${i}: what I found and what I am doing next`,
+          } as TeamEntryView);
+        }
+        feedTeamFixture({ type: "team.data", projectId: "p-ptp", entries, lastSeq: seq2, truncated: true });
+        return new Promise<number>((r) => setTimeout(() => r(entries.length), 400));
+      },
+      // One feed render, forced. Pushing state is what triggers it in life;
+      // a new entry is what makes it do real work.
+      // How long the faces' own animation work takes in one frame - the JS
+      // only, with the browser's paint left out, so a slow frame can be
+      // blamed on the right thing.
+      faceStats,
+      freeze() { freezeFaces(700); },
+      thaw() { freezeFaces(null); },
+      timeFaceFrame() {
+        return new Promise<number>((r) => {
+          requestAnimationFrame(() => {
+            const t = performance.now();
+            requestAnimationFrame(() => r(performance.now() - t));
+          });
+        });
+      },
+      timeRender() {
+        const t = performance.now();
+        (window as unknown as { __perchHarness: { pushState: (o?: unknown) => void } })
+          .__perchHarness.pushState({ bump: true });
+        return performance.now() - t;
+      },
     },
   };
 
