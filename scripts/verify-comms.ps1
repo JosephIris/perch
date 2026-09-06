@@ -212,6 +212,19 @@ Never read a file, never write code, never run anything else.
     # bots were in when two posts were lost. Sleeping a tab is NOT the same
     # thing: its Claude survives, so there is no boot to race.
     Write-Host "`n[2] cold delivery: after a restart, the post waits for the bot's Claude"
+    # Leave the owner on a DIFFERENT tab before quitting. A pane's terminal is
+    # created lazily, when the page first measures it, so the tab that is
+    # active on relaunch gets one and every other tab does not — which is
+    # exactly the state Joseph's bots were in, and what Perch has to notice
+    # and start for the post.
+    #
+    # This used to be arranged by not answering the launch resume dialog,
+    # which held every restored pane's spawn. That dialog is gone (it asked
+    # one global question whose real answer was per-tab and only landed when
+    # you clicked a tab), so the cold state is now created the way a person
+    # creates it: by being somewhere else when you quit.
+    [void](Send-Verb 'session.new')
+    Start-Sleep -Seconds 2
     Stop-Process -Id $proc.Id -Force -EA SilentlyContinue
     Start-Sleep -Seconds 3
     $proc = Start-Process -PassThru -FilePath $ExePath
@@ -226,10 +239,6 @@ Never read a file, never write code, never run anything else.
     [Perch.WinPos]::SetWindowPos($proc.MainWindowHandle, [IntPtr]::Zero, -3400, -3400, 1400, 900,
         ([Perch.WinPos]::NOZORDER -bor [Perch.WinPos]::NOACTIVATE)) | Out-Null
     Start-Sleep -Seconds 3
-    # The launch prompt is deliberately NOT answered: that is what holds every
-    # restored pane's spawn, so the bot's tab has no terminal at all — the
-    # exact state Joseph's bots were in. Perch must start it for the post.
-
     $deliverBefore = Log-Count 'Team.deliver'
     $sessionsBefore = Log-Count 'type=session'
     $startNeededBefore = Log-Count 'Team.start.needed'
