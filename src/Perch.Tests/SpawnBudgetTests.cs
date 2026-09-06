@@ -22,6 +22,7 @@ namespace Perch.Tests;
 /// These assert the two properties that would have caught it:
 ///   1. a refresh cycle costs a bounded number of subprocesses, and
 ///   2. an idle repo costs none at all.
+[Collection("Git cache")]
 public class SpawnBudgetTests : IDisposable
 {
     private readonly string _repo;

@@ -11,6 +11,7 @@ namespace Perch.Tests;
 /// REJECTS it. If someone later removes the cache, SpawnBudgetTests goes red;
 /// this proves that in the same run rather than asking anyone to take it on
 /// faith.
+[Collection("Git cache")]
 public class SpawnBudgetNegativeProofTests : IDisposable
 {
     private readonly string _repo;

@@ -7,6 +7,7 @@ using Xunit;
 
 namespace Perch.Tests;
 
+[Collection("Git cache")]
 public sealed class ReviewRegressionTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "perch-regression-" + Guid.NewGuid().ToString("N"));
