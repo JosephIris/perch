@@ -44,6 +44,26 @@ if (-not (Test-Path $ExePath))  { throw "Perch.exe not found: $ExePath (build fi
 if (-not (Test-Path $PerchExe)) { throw "perch.exe not found: $PerchExe (build first)" }
 if (-not (Get-Command claude -EA SilentlyContinue)) { throw "claude is not on PATH" }
 
+# Claude Code registers every session in ~/.claude/sessions/<pid>.json (name,
+# pid, inbox). A gate that ends by killing its Perch leaves its two bots'
+# entries behind until Claude prunes them, and enough left-over "bo"s make
+# Bo's name ambiguous for the next gate's Ada ("27 agents are named 'bo'",
+# 2026-09-07). Drop the gate's own names whose process is gone, nothing else.
+$SessionsDir = Join-Path $HOME '.claude\sessions'
+if (Test-Path $SessionsDir) {
+    $stale = 0
+    foreach ($f in Get-ChildItem $SessionsDir -Filter '*.json' -EA SilentlyContinue) {
+        try {
+            $j = Get-Content $f.FullName -Raw -EA Stop | ConvertFrom-Json -EA Stop
+            if ($j.name -notin @('ada', 'bo')) { continue }
+            if ($j.pid -and (Get-Process -Id $j.pid -EA SilentlyContinue)) { continue }
+            Remove-Item -LiteralPath $f.FullName -Force -EA SilentlyContinue
+            $stale++
+        } catch { }
+    }
+    if ($stale -gt 0) { "Removed $stale stale ada/bo session registrations from earlier gate runs" }
+}
+
 if (-not ('Perch.WinPos' -as [type])) {
     Add-Type @'
 using System;
