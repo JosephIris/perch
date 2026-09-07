@@ -486,11 +486,16 @@ public class TeamControllerTests : IDisposable
         await h.CreateBot("Ada");
         var sess = h.Sessions.Single();
         sess.Dormant = true;
+        // A sleeping tab has no terminal: waking it must also START it, or
+        // the post waits for the owner to click the tab.
+        h.NoPty.Add(sess.Root.Id);
         // Wake flips Dormant, but no Claude answers yet (TypeOk false = booting).
         h.TypeOk = false;
         h.Post("wake up", "[\"Ada\"]");
         Assert.False(sess.Dormant);
+        Assert.Equal(sess.Id, Assert.Single(h.Started));
         Assert.Empty(h.Typed);
+        h.NoPty.Clear();
         h.TypeOk = true;
         h.Ctrl.OnAgentUp(sess);
         // (One of the pending timers is the cold-start watchdog; the flush is

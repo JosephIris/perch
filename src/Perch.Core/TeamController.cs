@@ -2960,7 +2960,22 @@ internal sealed class TeamController
                 continue;
             }
             var starting = false;
-            if (sess.Dormant) { _h.Wake(sess); starting = true; }
+            if (sess.Dormant)
+            {
+                _h.Wake(sess);
+                // Waking marks the tab awake and arms its resume; the terminal
+                // itself spawns only when the page lays the pane out, which
+                // never happens for a tab nobody selects. Start it now, or the
+                // post sits parked until the owner clicks the tab — four bots
+                // tagged from the room on 2026-09-07 "woke up" and came up only
+                // when Joseph opened each one.
+                if (!SessionRunning(sess))
+                {
+                    Log.Info("Team.start.woken", $"session={sess.Id:N} bot={bot.Slug}: asleep with no terminal; starting it");
+                    _h.EnsureRunning?.Invoke(sess);
+                }
+                starting = true;
+            }
             // A tab restored after a restart but never looked at has no
             // terminal yet — a post to it must start it, or it sits parked
             // until the owner happens to click the tab.
