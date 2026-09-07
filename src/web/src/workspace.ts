@@ -258,8 +258,15 @@ export class Workspace {
    *  as before, are left untouched. Mirror: showStage on return. */
   private hideStage(stage: Stage) {
     for (const pane of stage.panes.values()) {
-      if (pane instanceof UrlPane) pane.setVisible(false);
-      if (pane instanceof Pane) pane.setRendererActive(false);
+      // One pane's renderer must never abort the switch for the whole stage:
+      // an exception here once left the old stage on screen with a dead
+      // canvas while the sidebar already showed the new session selected.
+      try {
+        if (pane instanceof UrlPane) pane.setVisible(false);
+        if (pane instanceof Pane) pane.setRendererActive(false);
+      } catch (err) {
+        console.error("[workspace] hideStage failed for pane", pane.paneId, err);
+      }
     }
   }
 
@@ -268,8 +275,12 @@ export class Workspace {
    *  now-laid-out rect — no navigation, no reload. */
   private showStage(stage: Stage) {
     for (const pane of stage.panes.values()) {
-      if (pane instanceof UrlPane) pane.setVisible(true);
-      if (pane instanceof Pane) pane.setRendererActive(true);
+      try {
+        if (pane instanceof UrlPane) pane.setVisible(true);
+        if (pane instanceof Pane) pane.setRendererActive(true);
+      } catch (err) {
+        console.error("[workspace] showStage failed for pane", pane.paneId, err);
+      }
     }
   }
 
@@ -410,7 +421,10 @@ export class Workspace {
           this.stages.set(session.id, stage);
         }
         this.reconcile(stage, session, null, false);
-        this.hideStage(stage);
+        // Only a background session's stage is hidden here. Hiding the ACTIVE
+        // stage would drop its visible terminals' renderers and hide its URL
+        // panes' native windows out from under the user.
+        if (session.id !== this.activeSessionId) this.hideStage(stage);
         pane = this.findPane(paneId);
       }
     }

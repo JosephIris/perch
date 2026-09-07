@@ -60,6 +60,7 @@ export const MAX_FONT_SIZE = 32;
 export class Pane {
   private webgl?: WebglAddon;
   private rendererActive = true;
+  private disposed = false;
   readonly paneId: string;
   readonly element: HTMLElement;
   private readonly nameEl: HTMLElement;
@@ -388,19 +389,8 @@ export class Pane {
       // cell height, which the default canvas renderer does not — without
       // this, TUIs like Claude Code, vim, htop show faint horizontal
       // stripes through ▀▄█ block characters because the rasterized glyph
-      // is the font's em size (smaller than the cell). Wrapped in
-      // try/catch because some WebView2 builds fail WebGL context
-      // creation and we want a working fallback.
-      if (!WEBGL_DISABLED && this.rendererActive) {
-        try {
-          const webgl = new WebglAddon();
-          this.webgl = webgl;
-          webgl.onContextLoss(() => webgl.dispose());
-          this.term.loadAddon(webgl);
-        } catch (err) {
-          console.warn("[pane] WebGL renderer unavailable, using canvas:", err);
-        }
-      }
+      // is the font's em size (smaller than the cell).
+      this.loadWebgl();
       this.observer = new ResizeObserver(() => this.reportResize());
       this.observer.observe(this.termHost);
       this.reportResize();
@@ -416,29 +406,88 @@ export class Pane {
   }
 
   dispose() {
+    this.disposed = true;
     const index = liveTerms.indexOf(this.term);
     if (index >= 0) liveTerms.splice(index, 1);
     this.stopProbe();
     this.observer?.disconnect();
     this.observer = undefined;
     this.sync.dispose();
+    // Take the WebGL addon off first: its dispose throws (see unloadWebgl),
+    // and thrown from inside term.dispose it would skip the other addons.
+    this.unloadWebgl(false);
     try { this.term.dispose(); } catch { /* ignore */ }
     this.element.remove();
   }
 
+  /** Only the visible session's terminals hold a WebGL context — the browser
+   *  caps a page at 16 live contexts and silently kills the oldest past that.
+   *  Hiding a stage drops the renderer (the DOM renderer takes over, unseen);
+   *  showing it brings WebGL back two frames later, once layout has run and
+   *  xterm has un-paused and re-measured the terminal, so the new renderer's
+   *  first frame is a full one. The DOM renderer paints in the meantime, so
+   *  there is no blank frame. */
   setRendererActive(active: boolean) {
     this.rendererActive = active;
-    if (active && !this.webgl && !WEBGL_DISABLED && this.term.element) {
-      try {
-        const addon = new WebglAddon();
-        this.webgl = addon;
-        addon.onContextLoss(() => { addon.dispose(); if (this.webgl === addon) this.webgl = undefined; });
-        this.term.loadAddon(addon);
-      } catch { this.webgl = undefined; }
+    if (!active) { this.unloadWebgl(); return; }
+    if (this.webgl || WEBGL_DISABLED || !this.term.element) return;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (this.rendererActive) this.loadWebgl();
+    }));
+  }
+
+  /** Put the WebGL renderer on this terminal. Idempotent; needs an opened
+   *  terminal. Wrapped in try/catch because some WebView2 builds fail WebGL
+   *  context creation and the DOM renderer is a working fallback. */
+  private loadWebgl() {
+    if (this.webgl || this.disposed || WEBGL_DISABLED || !this.rendererActive || !this.term.element) return;
+    const addon = new WebglAddon();
+    try {
+      this.term.loadAddon(addon);
+    } catch (err) {
+      try { addon.dispose(); } catch { /* never activated */ }
+      console.warn("[pane] WebGL renderer unavailable, using canvas:", err);
+      return;
     }
-    if (!active && this.webgl) {
-      this.webgl.dispose();
-      this.webgl = undefined;
+    this.webgl = addon;
+    // A lost context can't draw; fall back the same guarded way an explicit
+    // unload does.
+    addon.onContextLoss(() => { if (this.webgl === addon) this.unloadWebgl(); });
+  }
+
+  /** Take the WebGL renderer off this terminal.
+   *
+   *  @xterm/addon-webgl 0.19's dispose tears its renderer down and THEN
+   *  throws against xterm 5.5's core (it reads a `_store` field only newer
+   *  cores have), so it never installs the DOM renderer it meant to leave
+   *  behind: the terminal keeps a dead renderer and paints nothing. Left
+   *  uncaught, that exception also aborted the workspace's session switch
+   *  half-way — the old stage stayed on screen with a dead canvas. That was
+   *  the black pane. Catch it, and install the fallback ourselves. */
+  private unloadWebgl(fallback = true) {
+    const addon = this.webgl;
+    if (!addon) return;
+    this.webgl = undefined;
+    let threw = false;
+    try { addon.dispose(); }
+    catch (err) { threw = true; console.warn("[pane] WebGL addon dispose threw:", err); }
+    if (threw && fallback) this.restoreDomRenderer(addon);
+  }
+
+  /** The addon's own fallback, done by hand: if the dead WebGL renderer is
+   *  still the one in charge, swap in a fresh DOM renderer. Reaches into the
+   *  same xterm internals the addon uses; guarded so a core without them is
+   *  a no-op rather than a second exception. */
+  private restoreDomRenderer(addon: WebglAddon) {
+    const core = (this.term as any)._core;
+    const rs = core?._renderService;
+    if (!rs || typeof core._createRenderer !== "function") return;
+    if (rs._renderer?.value !== (addon as any)._renderer) return;
+    try {
+      rs.setRenderer(core._createRenderer());
+      rs.handleResize(this.term.cols, this.term.rows);
+    } catch (err) {
+      console.error("[pane] could not restore the DOM renderer:", err);
     }
   }
 
