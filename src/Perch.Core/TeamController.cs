@@ -2413,6 +2413,13 @@ internal sealed class TeamController
         }
         var text = (msg.Text ?? "").Trim();
         if (text.Length == 0) { Refuse(h.Project, h.Store, $"{h.Bot.Nickname} started a run with no instructions"); return; }
+        // A flag, or a few words, is not a brief for a fresh Claude (a run
+        // whose whole brief was "--help" was started and stopped on 2026-09-07).
+        if (text.StartsWith("-", StringComparison.Ordinal) || text.Length < 20)
+        {
+            Refuse(h.Project, h.Store, $"{h.Bot.Nickname} started a run with \"{TeamRender.OneLine(text, 40)}\" as its whole brief — a run needs real instructions: what done looks like, which files, which tests");
+            return;
+        }
         // The card: named, or the bot's one open piece, or the one open card.
         TaskBoard? board = null;
         var id = (msg.TaskId ?? "").Trim();

@@ -244,6 +244,8 @@ internal static class Program
     /// `perch team run --cancel` stops the bot's current run.
     private static int TeamRun(string pipeName, string[] rest)
     {
+        const string runUsage = "perch team run: usage: perch team run <task id> \"<instructions>\" [--model <alias>] | perch team run --cancel\n"
+                              + "  The instructions are the whole brief for a fresh Claude: what done looks like, which files, which tests to run, the gotchas.";
         if (rest.Length > 0 && rest[0] == "--cancel")
             return Send(pipeName, new { type = "team.run", op = "cancel" });
         string? taskId = null, model = null;
@@ -252,11 +254,19 @@ internal static class Program
         for (var i = 0; i < rest.Length; i++)
         {
             if (rest[i] == "--model" && i + 1 < rest.Length) { model = rest[++i]; continue; }
+            // A flag nobody knows is a question about usage, not instructions
+            // for a run: big_dawg started (and had to stop) a run whose whole
+            // brief was "--help".
+            if (rest[i].StartsWith("--", StringComparison.Ordinal) || rest[i] == "-h") { Console.Error.WriteLine(runUsage); return 2; }
             if (taskId == null && words.Count == 0 && IsId(rest[i])) { taskId = rest[i]; continue; }
             words.Add(rest[i]);
         }
         var text = string.Join(' ', words).Trim();
-        if (text.Length == 0) { Console.Error.WriteLine("perch team run: usage: perch team run <task id> \"<instructions>\" [--model <alias>]"); return 2; }
+        if (text.Length < 20)
+        {
+            Console.Error.WriteLine(text.Length == 0 ? runUsage : "perch team run: those instructions are too short to be a piece of work — say what done looks like, which files, which tests.\n" + runUsage);
+            return 2;
+        }
         string? replyPath = null;
         var paneId = Environment.GetEnvironmentVariable("PERCH_PANE_ID");
         if (!string.IsNullOrEmpty(paneId))

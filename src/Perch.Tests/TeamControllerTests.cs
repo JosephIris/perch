@@ -1012,8 +1012,11 @@ public class TeamControllerTests : IDisposable
         h.Ctrl.OnTeamTask(lee, lee.Root.Id, new TeamTaskMessage("new", null, "Dark footer", null, null, null));
         var board = Assert.Single(h.Store.Tasks.Open);
 
+        // A flag or a few words is not a brief for a fresh Claude.
+        h.Ctrl.OnTeamRun(ada, ada.Root.Id, new TeamRunMessage("start", board.Id, "--help"));
+        Assert.Contains(h.Ledger, e => e.Event == "error" && e.Text.Contains("\"--help\" as its whole brief"));
         // No piece, no run — the lead hands one out first.
-        h.Ctrl.OnTeamRun(ada, ada.Root.Id, new TeamRunMessage("start", board.Id, "go"));
+        h.Ctrl.OnTeamRun(ada, ada.Root.Id, new TeamRunMessage("start", board.Id, "Make the footer dark and run the tests."));
         Assert.Contains(h.Ledger, e => e.Event == "error" && e.Text.Contains("without a piece on it"));
         h.Ctrl.OnTeamRun(ada, ada.Root.Id, new TeamRunMessage("cancel"));
         Assert.Contains(h.Ledger, e => e.Event == "error" && e.Text == "Ada has no run to cancel");
