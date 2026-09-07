@@ -975,7 +975,7 @@ function renderRoster(project: ProjectView | null): void {
     });
     nodes.push(row);
   }
-  rosterListEl.replaceChildren(...nodes);
+  syncChildren(rosterListEl, nodes);
 }
 
 // ---- Task cards ------------------------------------------------------------
@@ -1644,6 +1644,9 @@ function renderFeed(entries: TeamEntryView[], bots: TeamBotView[]): void {
   const place = (key: string, sig: string, build: () => HTMLElement, enter: boolean) => {
     const prev = alive.get(key);
     if (prev && prev.dataset.sig === sig) {
+      // A kept row is not new any more: the entry animation must not be
+      // armed on it, or the next reinsert replays it.
+      prev.classList.remove("row-enter");
       nodes.push(prev);
       nextFaces.set(key, feedFacesByKey.get(key) ?? []);
       return;
@@ -1653,7 +1656,7 @@ function renderFeed(entries: TeamEntryView[], bots: TeamBotView[]): void {
     const node = build();
     node.dataset.key = key;
     node.dataset.sig = sig;
-    if (enter) node.classList.add("row-enter");
+    if (enter) enterOnce(node);
     nodes.push(node);
     nextFaces.set(key, feedFaces.slice(before));
   };
@@ -1671,7 +1674,7 @@ function renderFeed(entries: TeamEntryView[], bots: TeamBotView[]): void {
   feedFaces.length = 0;
   for (const list of nextFaces.values()) feedFaces.push(...list);
 
-  feedEl.replaceChildren(...nodes);
+  syncChildren(feedEl, nodes);
   renderedSeq = maxSeq;
 
   if (pinned) feedEl.scrollTop = feedEl.scrollHeight;
@@ -1689,6 +1692,32 @@ function renderFeed(entries: TeamEntryView[], bots: TeamBotView[]): void {
   if (isNearBottom(feedEl) && projectId) {
     const d = cachedTeam(projectId);
     if (d) markSeen(projectId, d.lastSeq);
+  }
+}
+
+/** Play the entry animation on a new row ONCE. The class used to stay on the
+ *  node for good, and every feed render re-inserted every node (replaceChildren
+ *  with the same elements), which restarts a CSS animation — so each new
+ *  ledger row, hidden tool calls included, replayed the fade-in on every row
+ *  on screen. That was the room's irregular blinking (2026-09-07). */
+function enterOnce(node: HTMLElement): void {
+  node.classList.add("row-enter");
+  const done = () => node.classList.remove("row-enter");
+  node.addEventListener("animationend", done, { once: true });
+  // Reduced motion (or a row that never painted) fires no animationend.
+  setTimeout(done, 600);
+}
+
+/** Make `parent`'s children equal `nodes`, in order, touching only what
+ *  differs: a node already in its place is left alone (no reinsert, so no
+ *  animation restart, no lost hover, no layout churn), a node that moved or is
+ *  new is inserted where it belongs, and anything not in `nodes` is removed. */
+export function syncChildren(parent: HTMLElement, nodes: HTMLElement[]): void {
+  const want = new Set(nodes);
+  for (const child of Array.from(parent.children)) if (!want.has(child as HTMLElement)) child.remove();
+  for (let i = 0; i < nodes.length; i++) {
+    const at = parent.children[i] ?? null;
+    if (at !== nodes[i]) parent.insertBefore(nodes[i], at);
   }
 }
 
