@@ -328,15 +328,25 @@ internal static class HookHandler
 
             case "pre-bash":
                 // Registered with a "Bash" matcher (NOT the "" matcher that
-                // pre-tool-use would need) for two narrow jobs: hold a team
-                // bot's `git push` for the owner's approval (GatePush), and
-                // stamp agent-attribution labels onto `gcloud ... create`.
+                // pre-tool-use would need) for three narrow jobs: hold a team
+                // bot's `git push` for the owner's approval (GatePush), refuse
+                // a file write from a runs-only bot's own session (GateEdit),
+                // and stamp agent-attribution labels onto `gcloud ... create`.
                 // Deliberately silent otherwise: it emits no IPC and prints
                 // nothing for the overwhelming majority of Bash calls, so it
                 // can't resurrect the status-detail firehose that got
                 // PreToolUse disabled in the first place.
                 if (GatePush(root)) return 0;
+                if (GateEdit(pipeName, root)) return 0;
                 return StampGcloud(pipeName, root);
+
+            case "pre-edit":
+                // Registered only in a team bot's pane, with an Edit/Write
+                // matcher: on a runs-only team the bot's own session does not
+                // write code — its runs do — so the edit is refused with the
+                // way to do it instead, and the room is told.
+                GateEdit(pipeName, root);
+                return 0;
 
             case "post-tool-use":
                 // A tool just finished → the agent is actively working again.
@@ -610,6 +620,108 @@ internal static class HookHandler
             Console.Error.WriteLine($"perch hooks: push gate failed: {ex.Message}");
             return false;
         }
+    }
+
+    /// The message a runs-only bot reads when its own session tries to write
+    /// code: what to do instead, in one breath.
+    internal const string RunsOnlyReason =
+        "This team is runs-only: your session reviews and coordinates, a run writes the code. Start one — " +
+        "`perch team run <task id> \"<what done looks like, files, tests, gotchas>\"` — and review its report when the " +
+        "[Perch team] run line arrives. Only files under .perch/team (memory, knowledge, skills) are edited here.";
+
+    /// A runs-only team's bot pane (the host writes perch-team-runs-<pane>.txt
+    /// while the switch is on): an Edit/Write/MultiEdit/NotebookEdit outside
+    /// `.perch/`, or a Bash command that plainly writes a file, is refused.
+    /// True when the call was refused (the decision is on stdout and the room
+    /// has a row); false when there is nothing to say. A run is never gated:
+    /// PERCH_RUN never reaches here (see Run), and a run's edits are the point.
+    internal static bool GateEdit(string pipeName, JsonElement? root)
+    {
+        try
+        {
+            var pane = Environment.GetEnvironmentVariable("PERCH_PANE_ID") ?? "";
+            if (pane.Length == 0 || !File.Exists(Path.Combine(Path.GetTempPath(), $"perch-team-runs-{pane}.txt"))) return false;
+            var tool = StringFrom(root, "tool_name") ?? "";
+            string what;
+            if (tool == "Bash")
+            {
+                var command = CommandOf(root);
+                if (!LooksLikeFileWrite(command)) return false;
+                what = command.Length > 80 ? command[..80] + "…" : command;
+            }
+            else
+            {
+                var path = FilePathOf(root);
+                if (EditAllowedInBotPane(path)) return false;
+                what = Path.GetFileName(path);
+            }
+            Console.Out.Write(JsonSerializer.Serialize(new
+            {
+                hookSpecificOutput = new
+                {
+                    hookEventName = "PreToolUse",
+                    permissionDecision = "deny",
+                    permissionDecisionReason = RunsOnlyReason,
+                },
+            }, JsonOpts));
+            Console.Out.Flush();
+            Send(pipeName, new
+            {
+                type = "perm.denied", tool = tool.Length > 0 ? tool : "Edit", summary = what,
+                reason = "runs-only: the session reviews, a run writes (perch team run)",
+            });
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"perch hooks: runs-only gate failed: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// The team's own files are the bot's to edit in its session: memory,
+    /// knowledge, skills, a run brief. Anything else is the code.
+    internal static bool EditAllowedInBotPane(string? filePath)
+    {
+        if (string.IsNullOrWhiteSpace(filePath)) return true;   // nothing to judge; never block blind
+        var p = filePath.Replace('\\', '/');
+        return p.Contains("/.perch/", StringComparison.OrdinalIgnoreCase) || p.StartsWith(".perch/", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// A Bash line that writes a file in place: sed -i, the PowerShell
+    /// content cmdlets, tee, or a redirect into something that is not a
+    /// temp or team file. Conservative on purpose — a miss lets an edit
+    /// through, a false hit stops a bot's harmless command.
+    internal static bool LooksLikeFileWrite(string command)
+    {
+        if (string.IsNullOrWhiteSpace(command)) return false;
+        var c = " " + System.Text.RegularExpressions.Regex.Replace(command, @"\s+", " ").Trim() + " ";
+        if (System.Text.RegularExpressions.Regex.IsMatch(c, @"\bsed\s+(-[a-zA-Z]*i|--in-place)")) return true;
+        if (System.Text.RegularExpressions.Regex.IsMatch(c, @"\b(Set-Content|Add-Content|Out-File)\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase)) return true;
+        if (System.Text.RegularExpressions.Regex.IsMatch(c, @"\btee\s+(-a\s+)?[^\s|;&]+")) return !TempOrTeam(System.Text.RegularExpressions.Regex.Match(c, @"\btee\s+(?:-a\s+)?([^\s|;&]+)").Groups[1].Value);
+        foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(c, @"(?<![<>&\d])>{1,2}\s*""?([^\s""|;&]+)"))
+            if (!TempOrTeam(m.Groups[1].Value)) return true;
+        return false;
+    }
+
+    private static bool TempOrTeam(string target)
+    {
+        var t = target.Replace('\\', '/');
+        return t.Length == 0
+            || t.Contains("/.perch/", StringComparison.OrdinalIgnoreCase)
+            || t.Contains("/tmp/", StringComparison.OrdinalIgnoreCase)
+            || t.Contains("/temp/", StringComparison.OrdinalIgnoreCase)
+            || t.StartsWith("/dev/", StringComparison.Ordinal)
+            || t.Equals("nul", StringComparison.OrdinalIgnoreCase)
+            || t.StartsWith("&", StringComparison.Ordinal);
+    }
+
+    private static string? FilePathOf(JsonElement? root)
+    {
+        if (root is not JsonElement r || !r.TryGetProperty("tool_input", out var ti) || ti.ValueKind != JsonValueKind.Object) return null;
+        foreach (var key in new[] { "file_path", "notebook_path", "path" })
+            if (ti.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String) return v.GetString();
+        return null;
     }
 
     private static string CommandOf(JsonElement? root)

@@ -124,8 +124,10 @@ internal static class TeamRender
         sb.Append("- Your piece is IMPLEMENTED BY A RUN, not here: `perch team run <task id> \"<what done looks like, files, ")
           .Append("tests, gotchas>\"` starts a fresh Claude in your folder on your branch; this session stays free for the room. ")
           .Append("Its result comes as a `").Append(PostPrefix).Append(" run … → @you:` line with the report's path: review the ")
-          .Append("diff, verify, fix a one-liner or run again, update your piece, REPORT: to the lead. One run at a time ")
-          .Append("(`perch team run --cancel` stops it); never code here beyond a one-liner.\n");
+          .Append("diff, verify, run again for what is wrong, update your piece, REPORT: to the lead. One run at a time ")
+          .Append("(`perch team run --cancel` stops it). This is enforced: an Edit or Write in this session outside `.perch/` ")
+          .Append("is refused by the pane's hook and the room is told. A run's usage (a list-price estimate, drawn from the ")
+          .Append("subscription) is shown in the room when it ends; use `--model sonnet` for investigations and reading.\n");
         return sb.ToString();
     }
 
@@ -484,7 +486,8 @@ internal static class TeamRender
         var sb = new StringBuilder();
         sb.Append("# Run ").Append(runId).Append(" — ").Append(OneLine(board.Title, 120)).Append("\n\n");
         sb.Append("**Status:** ").Append(rep.Status).Append(" · **For:** ").Append(bot.Nickname)
-          .Append(" · **Cost:** $").Append(costUsd.ToString("F2", System.Globalization.CultureInfo.InvariantCulture))
+          .Append(" · **Usage:** ≈ $").Append(costUsd.ToString("F2", System.Globalization.CultureInfo.InvariantCulture))
+          .Append(" at API list price (drawn from the subscription, not billed)")
           .Append(" · **Took:** ").Append(Elapsed(durationMs)).Append("\n\n");
         if (!string.IsNullOrWhiteSpace(error)) sb.Append("**Ended with:** ").Append(error.Trim()).Append("\n\n");
         if (rep.Summary.Length > 0) sb.Append(rep.Summary).Append("\n\n");
@@ -503,7 +506,7 @@ internal static class TeamRender
 
     /// The line typed into the bot when its run ends: the outcome, where the
     /// full report is, and what the bot does now.
-    public static string RunResultLine(TeamBot bot, string runId, string taskId, RunReport rep, string? reportPath, bool canceled)
+    public static string RunResultLine(TeamBot bot, string runId, string taskId, RunReport rep, string? reportPath, bool canceled, double costUsd = 0)
     {
         var what = canceled ? "was stopped by Joseph"
                  : rep.Status == "failed" ? "failed"
@@ -511,13 +514,20 @@ internal static class TeamRender
         var summary = OneLine(rep.Summary, 300).TrimEnd('.');
         var sb = new StringBuilder();
         sb.Append(PostPrefix).Append(" run ").Append(runId).Append(" → @").Append(bot.Nickname).Append(": your run on task ")
-          .Append(taskId).Append(' ').Append(what);
+          .Append(taskId).Append(' ').Append(what).Append(Usage(costUsd));
         if (summary.Length > 0) sb.Append(": ").Append(summary);
         if (reportPath != null) sb.Append(". Full report: ").Append(reportPath);
         sb.Append(canceled ? ". Check the folder for half-done work, then update your piece and REPORT: to the lead."
                            : ". Review its diff in your folder, verify what it claims, fix a one-liner yourself or start another run, then update your piece and REPORT: to the lead.");
         return sb.ToString();
     }
+
+    /// " · usage ≈ $2.08 at list price" — what a run drew from the account's
+    /// subscription, in Claude Code's own list-price estimate. Not a bill:
+    /// the CLI is signed in with the subscription, and the number is what
+    /// the tokens would have cost on the API.
+    public static string Usage(double costUsd)
+        => costUsd > 0 ? " · usage ≈ $" + costUsd.ToString("F2", System.Globalization.CultureInfo.InvariantCulture) + " at list price" : "";
 
     public static string Elapsed(long ms)
     {

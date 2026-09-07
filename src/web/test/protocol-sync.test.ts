@@ -89,6 +89,7 @@ const EXPECTED_TYPES = [
   "team.bot.start",
   "team.brief.cancel",
   "team.brief.generate",
+  "team.deactivate",
   "team.deliver.retry",
   "team.image",
   "team.lead.set",

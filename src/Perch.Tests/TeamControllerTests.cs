@@ -52,6 +52,8 @@ public class TeamControllerTests : IDisposable
         public readonly List<(Guid Pane, byte[] Bytes)> Raw = new();
         public readonly List<Guid> Cleared = new();
         public readonly List<Guid> Started = new();
+        /// Sessions the controller put to sleep (the room's "Sleep team").
+        public readonly List<Guid> Slept = new();
         /// Panes the fake host reports as having NO terminal (never spawned).
         public readonly HashSet<Guid> NoPty = new();
         public readonly List<(Guid Pane, string Model)> ModelSet = new();
@@ -95,6 +97,7 @@ public class TeamControllerTests : IDisposable
                 ClearPrompt = id => Cleared.Add(id),
                 HasPty = id => !NoPty.Contains(id),
                 EnsureRunning = s => Started.Add(s.Id),
+                Sleep = s => { s.Dormant = true; Slept.Add(s.Id); },
                 SetPaneModel = (p, m) => ModelSet.Add((p, m)),
             });
         }
@@ -937,6 +940,10 @@ public class TeamControllerTests : IDisposable
         var answer = new TaskCompletionSource<HeadlessResult>();
         h.Ctrl.RunWorker = (s, ct) => { spec = s; ct.Register(() => answer.TrySetCanceled()); return answer.Task; };
 
+        // Runs-only is the default: the pane carries the marker the hook reads.
+        Assert.True(h.Store.Doc.RunsOnly);
+        Assert.True(File.Exists(TeamMarkers.RunsOnlyPathFor(ada.Root.Id)));
+
         h.Ctrl.OnTeamRun(ada, ada.Root.Id, new TeamRunMessage("start", board.Id, "Make the footer dark; run npm test."));
         var runId = File.ReadAllText(TeamPaths.RunReplyPathFor(ada.Root.Id)).Trim();
         Assert.Equal(8, runId.Length);
@@ -958,7 +965,7 @@ public class TeamControllerTests : IDisposable
         Assert.Contains("Never push, never merge or rebase onto main", sys);
         Assert.Equal("doing", board.ItemOf("ada")!.Status);
         Assert.Contains(h.Ledger, e => e.Event == "run" && e.Note == runId && e.TaskId == board.Id
-            && e.Text == $"Ada started run {runId} on \"Dark footer\": Make the footer dark; run npm test.");
+            && e.Text == $"Ada started run {runId} on the default model for \"Dark footer\": Make the footer dark; run npm test.");
         Assert.Contains("[idle, a run in progress]", File.ReadAllText(h.Store.RosterPath));
         var view = JsonSerializer.SerializeToElement(h.Ctrl.ProjectTeamView(h.Project.Id)!);
         var adaView = view.GetProperty("bots").EnumerateArray().Single(b => b.GetProperty("botId").GetString() == "ada");
@@ -985,18 +992,20 @@ public class TeamControllerTests : IDisposable
             "{\"status\":\"done\",\"summary\":\"Footer is dark; tests pass.\",\"changed\":[\"src/footer.css\",\"commit 1a2b3c4\"],\"verified\":[\"npm test: 12 passed\"],\"open\":[]}"));
         var (toAda, line) = Assert.Single(h.Typed);
         Assert.Equal(ada.Id, toAda);
+        // The usage is Claude Code's list-price estimate of what the run drew
+        // from the subscription — named as such everywhere it appears.
         Assert.Matches(@"^\[Perch team\] (#\d+ )?run " + runId + @" → @Ada: your run on task " + board.Id
-            + @" finished — done: Footer is dark; tests pass\. Full report: ", line);
+            + @" finished — done · usage ≈ \$0\.42 at list price: Footer is dark; tests pass\. Full report: ", line);
         Assert.Contains("Review its diff in your folder, verify what it claims", line);
-        var arte = Assert.Single(h.Ledger.Where(e => e.Kind == "artefact"));
+        var arte = Assert.Single(h.Ledger, e => e.Kind == "artefact");
         Assert.Equal($"Run {runId} · done — Dark footer", arte.Text);
         var report = File.ReadAllText(h.Store.ArtefactPathFor(arte.Target!, "md"));
-        Assert.Contains("**Status:** done · **For:** Ada · **Cost:** $0.42 · **Took:** 1m 05s", report);
+        Assert.Contains("**Status:** done · **For:** Ada · **Usage:** ≈ $0.42 at API list price (drawn from the subscription, not billed) · **Took:** 1m 05s", report);
         Assert.Contains("## Changed\n- src/footer.css\n- commit 1a2b3c4\n", report);
         Assert.Contains("## Verified\n- npm test: 12 passed\n", report);
         Assert.Contains("## Open\n- (nothing)", report);
         Assert.Contains(h.Ledger, e => e.Event == "run.done" && e.Note == runId
-            && e.Text == $"Ada's run {runId} finished — done in 1m 05s · $0.42: Footer is dark; tests pass.");
+            && e.Text == $"Ada's run {runId} finished — done in 1m 05s · usage ≈ $0.42 at list price: Footer is dark; tests pass.");
         Assert.DoesNotContain("a run in progress", File.ReadAllText(h.Store.RosterPath));
         foreach (var s in h.Sessions) TeamMarkers.Clear(s.Root.Id);
     }
@@ -1035,6 +1044,50 @@ public class TeamControllerTests : IDisposable
         var adaView = JsonSerializer.SerializeToElement(h.Ctrl.ProjectTeamView(h.Project.Id)!).GetProperty("bots").EnumerateArray()
             .Single(b => b.GetProperty("botId").GetString() == "ada");
         Assert.Equal(JsonValueKind.Null, adaView.GetProperty("run").ValueKind);
+        foreach (var s in h.Sessions) TeamMarkers.Clear(s.Root.Id);
+    }
+
+    [Fact]
+    public async Task ARun_TakesAFreeModel_WhenTheBotsIsAtItsLimit()
+    {
+        var h = new Harness();
+        await h.CreateBot("Ada");
+        var ada = h.Sessions.Single();
+        h.Store.Doc.Bots.Single().Model = "opus";
+        h.Ctrl.OnTaskSet(new TeamTaskSetMsg { ProjectId = h.Project.Id, Title = "Dark footer" });
+        var board = h.Store.Tasks.Open.Single();
+        h.Ctrl.OnTeamTask(ada, ada.Root.Id, new TeamTaskMessage("mine", null, "Footer", "doing", null, board.Id));
+        h.Ctrl.OnModelLimits(new[] { new ModelUsageLimit("fable", true, null), new ModelUsageLimit("opus", true, null) });
+        TeamController.RunSpec? spec = null;
+        h.Ctrl.RunWorker = (s, ct) => { spec = s; return new TaskCompletionSource<HeadlessResult>().Task; };
+        h.Ctrl.OnTeamRun(ada, ada.Root.Id, new TeamRunMessage("start", board.Id, "Make the footer dark and run the tests."));
+        Assert.Equal("sonnet", spec!.Model);
+        var runId = File.ReadAllText(TeamPaths.RunReplyPathFor(ada.Root.Id)).Trim();
+        Assert.Contains(h.Ledger, e => e.Event == "run" && e.Text.StartsWith($"Ada started run {runId} on sonnet (opus is at its limit) for"));
+        TeamMarkers.Clear(ada.Root.Id);
+    }
+
+    [Fact]
+    public async Task SleepTeam_StopsEveryRun_AndPutsEveryRunningBotToSleep()
+    {
+        var h = new Harness();
+        await h.CreateBot("Lee", position: "Team lead");
+        await h.CreateBot("Ada");
+        var lee = h.Sessions[0];
+        var ada = h.Sessions[1];
+        h.Ctrl.OnTaskSet(new TeamTaskSetMsg { ProjectId = h.Project.Id, Title = "Dark footer" });
+        var board = h.Store.Tasks.Open.Single();
+        h.Ctrl.OnTeamTask(ada, ada.Root.Id, new TeamTaskMessage("mine", null, "Footer", "doing", null, board.Id));
+        var answer = new TaskCompletionSource<HeadlessResult>();
+        h.Ctrl.RunWorker = (s, ct) => { ct.Register(() => answer.TrySetCanceled()); return answer.Task; };
+        h.Ctrl.OnTeamRun(ada, ada.Root.Id, new TeamRunMessage("start", board.Id, "Make the footer dark and run the tests."));
+        lee.Dormant = true;   // already asleep: left alone, not counted
+
+        h.Ctrl.OnDeactivate(new TeamDeactivateMsg { ProjectId = h.Project.Id });
+        Assert.Equal(ada.Id, Assert.Single(h.Slept));
+        Assert.True(ada.Dormant);
+        Assert.Contains(h.Ledger, e => e.Event == "run.canceled");
+        Assert.Contains(h.Ledger, e => e.Event == "asleep" && e.Text.StartsWith("Joseph put the team to sleep: Ada stopped, 1 run cancelled."));
         foreach (var s in h.Sessions) TeamMarkers.Clear(s.Root.Id);
     }
 

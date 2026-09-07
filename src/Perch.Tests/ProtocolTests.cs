@@ -633,6 +633,8 @@ public class ProtocolTests
         Assert.Equal("abcd1234", reopen.TaskId);
         var stop = Round<TeamRunCancelMsg>($"{{\"type\":\"team.run.cancel\",\"projectId\":\"{G1}\",\"runId\":\"9f2c11aa\"}}");
         Assert.Equal("9f2c11aa", stop.RunId);
+        var sleep = Round<TeamDeactivateMsg>($"{{\"type\":\"team.deactivate\",\"projectId\":\"{G1}\"}}");
+        Assert.Equal(Guid.Parse(G1), sleep.ProjectId);
         var again = Round<TeamDeliverRetryMsg>($"{{\"type\":\"team.deliver.retry\",\"projectId\":\"{G1}\",\"seq\":803,\"botId\":\"alush\"}}");
         Assert.Equal((803L, "alush"), (again.Seq, again.BotId));
         var open = Round<TeamArtefactOpenMsg>($"{{\"type\":\"team.artefact.open\",\"projectId\":\"{G1}\",\"id\":\"9f2c11aa\"}}");

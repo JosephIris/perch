@@ -323,6 +323,8 @@ export type OutMessage =
   | { type: "team.task.reopen"; projectId: string; taskId: string }
   /* Stop a bot's run (the headless Claude doing its piece) from its row. */
   | { type: "team.run.cancel"; projectId: string; runId: string }
+  /* Put the whole team to sleep: every run stopped, every bot's tab dormant. */
+  | { type: "team.deactivate"; projectId: string }
   /* "Send again" on a post a bot never took: the host types the same line
    * into that bot again, and no second post appears in the room. */
   | { type: "team.deliver.retry"; projectId: string; seq: number; botId: string }

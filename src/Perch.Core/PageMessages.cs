@@ -629,6 +629,14 @@ internal sealed record TeamRunCancelMsg
     public required string RunId { get; init; }
 }
 
+/// The owner puts the whole team to sleep from the room's header (after a
+/// confirmation): every bot's run is stopped and every bot's tab goes
+/// dormant. A tag from the room, or a click on its row, wakes a bot.
+internal sealed record TeamDeactivateMsg
+{
+    public required Guid ProjectId { get; init; }
+}
+
 /// The owner says a task is not done yet (after the lead asked): back to
 /// open, with a note the lead gets.
 internal sealed record TeamTaskRejectMsg

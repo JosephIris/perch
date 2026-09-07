@@ -361,6 +361,11 @@ internal static class ClaudeWrapper
         // is a pane with a team marker; the hook re-checks that per call.
         if (BinResolver.FindOnPathSkippingSelf("gcloud") != null || IsTeamBotPane())
             pre.Add(Hook("pre-bash", timeoutSec: 5, matcher: "Bash"));
+        // …and a team bot's edits: on a runs-only team its own session does
+        // not write code (HookHandler.GateEdit; the hook re-checks the
+        // runs-only marker per call, so the switch applies without a relaunch).
+        if (IsTeamBotPane())
+            pre.Add(Hook("pre-edit", timeoutSec: 5, matcher: "Edit|Write|MultiEdit|NotebookEdit"));
         hooks["PreToolUse"] = pre.ToArray();
 
         var settings = new

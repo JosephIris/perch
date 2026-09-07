@@ -50,6 +50,11 @@ internal sealed class TeamDoc
     /// carries the lead role on top of its brief (TeamRender.LeadRole).
     /// Null = no lead yet (the first bot in a lead-type position takes it).
     public string? LeadSlug { get; set; }
+    /// Runs do the work: a bot's own session reviews and coordinates, and an
+    /// Edit/Write there outside `.perch/` is refused by the pane's hook with
+    /// the way to do it instead (`perch team run`). On by default; the owner
+    /// turns it off by editing team.json.
+    public bool RunsOnly { get; set; } = true;
 
     public TeamBot? Lead => LeadSlug == null ? null : Bot(LeadSlug);
     public bool IsLead(TeamBot bot) => LeadSlug != null && string.Equals(LeadSlug, bot.Slug, StringComparison.OrdinalIgnoreCase);

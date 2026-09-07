@@ -398,6 +398,7 @@ internal sealed partial class AppController
                 foreach (var p in cold) SpawnPty(sess, p);
                 Log.Info("Team.start", $"session={sess.Id:N} spawned {cold.Count} cold pane(s) for a room post");
             },
+            Sleep = sess => OnSessionDormant(new SessionRef { Id = sess.Id }),
         });
         WireBoardController();
         _router = BuildRouter();
@@ -806,6 +807,7 @@ internal sealed partial class AppController
         .Add<TeamTaskCloseMsg>("team.task.close", m => _teamCtrl.OnTaskClose(m))
         .Add<TeamTaskReopenMsg>("team.task.reopen", m => _teamCtrl.OnTaskReopen(m))
         .Add<TeamRunCancelMsg>("team.run.cancel", m => _teamCtrl.OnRunCancel(m))
+        .Add<TeamDeactivateMsg>("team.deactivate", m => _teamCtrl.OnDeactivate(m))
         .Add<TeamDeliverRetryMsg>("team.deliver.retry", m => _teamCtrl.OnDeliverRetry(m))
         .Add<TeamArtefactOpenMsg>("team.artefact.open", m => _teamCtrl.OnArtefactOpen(m))
         .Add<TeamArtefactListMsg>("team.artefact.list", m => _teamCtrl.OnArtefactList(m))

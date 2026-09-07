@@ -218,6 +218,7 @@ let readingBtn: HTMLButtonElement;
 /* Narrow window: the board+team drawer. */
 let boardOpen = false;
 let boardBtn: HTMLButtonElement;
+let sleepBtn: HTMLButtonElement;
 
 /** The cards region scrolls; say so with a fade while there is more below. */
 function updateTasksMore(): void {
@@ -473,6 +474,23 @@ function mount(): void {
   boardBtn.title = "Show the task board and the team";
   boardBtn.setAttribute("aria-pressed", "false");
   head.appendChild(boardBtn);
+  // The whole team to sleep: every run stopped, every bot's tab dormant,
+  // conversations kept. Behind a confirmation — it stops work in flight.
+  sleepBtn = button("team-room__activity team-room__sleep", "Sleep team", () => {
+    const pid = projectId;
+    if (!pid) return;
+    const bots = projectFor(pid)?.team?.bots ?? [];
+    const awake = bots.filter((b) => b.sessionId && presenceOf(sessionOf(b)).state !== "dormant").length;
+    void confirmDialog({
+      title: "Put the team to sleep?",
+      body: awake === 0
+        ? "Nobody is running. Any run in flight is stopped."
+        : `${awake} bot${awake === 1 ? "" : "s"} stop where ${awake === 1 ? "it is" : "they are"}: runs in flight are cancelled, terminals close, conversations are kept. A tag from the room, or a click on a bot's row, wakes it.`,
+      confirmLabel: "Sleep team",
+    }).then((ok) => { if (ok) send({ type: "team.deactivate", projectId: pid }); });
+  });
+  sleepBtn.title = "Stop every bot and run; wake them by tagging or clicking";
+  head.appendChild(sleepBtn);
   const close = document.createElement("button");
   close.type = "button";
   close.className = "team-room__close";

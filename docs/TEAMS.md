@@ -240,6 +240,18 @@ All three travel with the repository under `.perch/team/`.
   lead. One run per bot at a time; `perch team run --cancel` or Stop on the
   run's row ends it; 45 minutes and $8 are the caps. The roster shows "a run
   in progress"; the wrap-up sweep leaves a bot alone while its run is out.
+  **Runs-only** (`TeamDoc.RunsOnly`, on by default, off by editing
+  team.json): the host writes `perch-team-runs-<pane>.txt` beside a bot's
+  other markers, and the pane's PreToolUse hooks (`pre-edit` on
+  Edit/Write/MultiEdit/NotebookEdit, registered only in bot panes, and
+  `pre-bash`) refuse a write outside `.perch/` — `HookHandler.GateEdit` —
+  with the way to do it instead, and send a `perm.denied` so the room shows
+  the block. The rule alone was ignored: 43 in-session edits to 2 runs in
+  the first hour. A run's usage is shown as "usage ≈ $x at list price":
+  Claude Code's own estimate of what the tokens would cost on the API, drawn
+  from the subscription the CLI is signed in with, not a bill. A run whose
+  model is at its limit takes the first free one (the same fallback a bot
+  gets) and the room says so.
   Headless Claude has nobody to ask, so a tool outside its allow-list is
   denied unless a hook decides: the run gets `--allowedTools` from
   `.perch/team/run-allow.txt` (seeded with `TeamStore.DefaultRunAllow` —
@@ -275,6 +287,12 @@ The artefacts panel sits under the task cards: the head names the open
 artefact and offers "Recent" (the last 50, newest first), the body renders
 markdown as a document and everything else verbatim. It opens from an
 artefact's card in the feed, and shows the newest one when the room opens.
+
+**Sleep team** in the room's header (`team.deactivate`, behind a
+confirmation) stops every run of the project and puts every running bot's
+tab to sleep the way the sidebar's sleep does — conversations kept, posts
+made meanwhile parked; a tag from the room or a click on a bot's row wakes
+it, and waking now STARTS the terminal (it used to wait for a click).
 
 The owner can take a card off the board with **Remove** (`team.task.close`):
 no confirmation from the bots, nothing reset, nobody writes it up — the

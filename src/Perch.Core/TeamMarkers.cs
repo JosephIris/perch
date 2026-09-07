@@ -41,13 +41,25 @@ internal static class TeamMarkers
     public static string LaunchedNamePathFor(Guid paneId)
         => Path.Combine(Path.GetTempPath(), $"perch-claude-launched-name-{paneId:N}.txt");
 
-    /// Write (or, for null/blank/nonexistent, delete) both host-owned markers
+    /// Present while the team is runs-only: the pane's PreToolUse hook then
+    /// refuses an Edit/Write outside `.perch/` (HookHandler.GateEdit).
+    public static string RunsOnlyPathFor(Guid paneId)
+        => Path.Combine(Path.GetTempPath(), $"perch-team-runs-{paneId:N}.txt");
+
+    /// Write (or, for null/blank/nonexistent, delete) the host-owned markers
     /// for a pane. A pointer at a file that isn't there is worse than no
     /// pointer: the CLI would try and fail every turn.
-    public static void Publish(Guid paneId, string? systemMdPath, string? rosterPath)
+    public static void Publish(Guid paneId, string? systemMdPath, string? rosterPath, bool runsOnly = false)
     {
         WriteOrDelete(BriefPathFor(paneId), systemMdPath, "Team.marker.brief");
         WriteOrDelete(RosterPathFor(paneId), rosterPath, "Team.marker.roster");
+        try
+        {
+            var flag = RunsOnlyPathFor(paneId);
+            if (runsOnly) AtomicFile.WriteAllText(flag, "1");
+            else if (File.Exists(flag)) File.Delete(flag);
+        }
+        catch (Exception ex) { Log.Error("Team.marker.runs", ex); }
     }
 
     /// Drop every marker for a pane when it closes or stops being a bot, so a
@@ -57,6 +69,7 @@ internal static class TeamMarkers
         Delete(BriefPathFor(paneId), "Team.marker.clear");
         Delete(RosterPathFor(paneId), "Team.marker.clear");
         Delete(LaunchedNamePathFor(paneId), "Team.marker.clear");
+        Delete(RunsOnlyPathFor(paneId), "Team.marker.clear");
     }
 
     /// The --name wrap-claude last launched this pane's claude with, or null

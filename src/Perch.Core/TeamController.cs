@@ -52,6 +52,9 @@ internal sealed class TeamHost
     /// restored but not looked at since the restart — arming its resume first
     /// so its Claude comes back with its conversation. Optional.
     public Action<Session>? EnsureRunning { get; init; }
+    /// Put a session to sleep the way the sidebar's "sleep" does: terminals
+    /// stopped, the tab filed under Idle, its conversation kept for a wake.
+    public Action<Session>? Sleep { get; init; }
 }
 
 /// The team feature's host-side brain: per-project team stores, the marker
@@ -310,6 +313,8 @@ internal sealed class TeamController
     private readonly Dictionary<string, DateTimeOffset> _modelActedAt = new(StringComparer.OrdinalIgnoreCase);
     internal static readonly string[] ModelFallback = { "fable", "opus", "sonnet", "haiku" };
     internal static readonly TimeSpan ModelDebounce = TimeSpan.FromSeconds(60);
+    /// Whether the account's limits, as last reported, have this alias at its cap.
+    private bool IsLimited(string alias) => _limits.Any(l => l.AtLimit && string.Equals(l.Alias, alias, StringComparison.OrdinalIgnoreCase));
     /// The clock, swappable so a test can step past the debounce.
     internal Func<DateTimeOffset> Now = () => DateTimeOffset.UtcNow;
 
@@ -607,7 +612,7 @@ internal sealed class TeamController
         {
             if (!pane.IsTerminal) continue;
             if (hit is { } h)
-                TeamMarkers.Publish(pane.Id, h.Store.SystemPathFor(h.Bot.Slug), h.Store.ContextPathFor(h.Bot.Slug));
+                TeamMarkers.Publish(pane.Id, h.Store.SystemPathFor(h.Bot.Slug), h.Store.ContextPathFor(h.Bot.Slug), h.Store.Doc.RunsOnly);
             else
                 TeamMarkers.Clear(pane.Id);
         }
@@ -2448,8 +2453,13 @@ internal sealed class TeamController
 
         var runId = TaskDoc.NewId();
         var pos = h.Store.Doc.Position(h.Bot.PositionSlug);
-        var model = !string.IsNullOrWhiteSpace(h.Bot.Model) ? h.Bot.Model : pos?.Model ?? "";
-        if (!string.IsNullOrWhiteSpace(msg.Model)) model = msg.Model.Trim();
+        var wanted = !string.IsNullOrWhiteSpace(h.Bot.Model) ? h.Bot.Model : pos?.Model ?? "";
+        if (!string.IsNullOrWhiteSpace(msg.Model)) wanted = msg.Model.Trim();
+        // The same fallback a bot gets: a model at its usage limit is swapped
+        // for the first free one, and the room says so.
+        var model = wanted;
+        if (wanted.Length > 0 && IsLimited(wanted)) model = ModelFallback.FirstOrDefault(a => !IsLimited(a)) ?? wanted;
+        var modelWord = model.Length == 0 ? "the default model" : model + (model != wanted ? $" ({wanted} is at its limit)" : "");
         // A run is the piece being worked: the card says so, and so does the
         // run's own brief.
         if (piece != null && piece.Status == "todo") { piece.Status = "doing"; piece.UpdatedAtMs = Now().ToUnixTimeMilliseconds(); h.Store.SaveTasks(); }
@@ -2479,7 +2489,7 @@ internal sealed class TeamController
         var e = h.Store.Ledger.Append(new RoomEntry
         {
             Kind = "system", From = h.Bot.Slug, Event = "run", Note = runId, TaskId = board.Id,
-            Text = $"{h.Bot.Nickname} started run {runId} on \"{TeamRender.OneLine(board.Title, 60)}\": {TeamRender.OneLine(text, 200)}",
+            Text = $"{h.Bot.Nickname} started run {runId} on {modelWord} for \"{TeamRender.OneLine(board.Title, 60)}\": {TeamRender.OneLine(text, 200)}",
             Summary = text.Length > 200 ? text : null,
         });
         Log.Info("Team.run.start", $"project={h.Project.Id:N} bot={h.Bot.Slug} run={runId} task={board.Id} model={model} cwd={cwd}");
@@ -2518,13 +2528,13 @@ internal sealed class TeamController
             TeamRender.OneLine(rep.Summary, 200), "md", body);
         var reportPath = artefactId == null ? null : store.ArtefactPathFor(artefactId, "md");
         var ev = canceled ? "run.canceled" : r.Ok ? "run.done" : "run.failed";
-        var cost = r.CostUsd > 0 ? $" · ${r.CostUsd.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)}" : "";
+        var usage = TeamRender.Usage(r.CostUsd);
         var row = store.Ledger.Append(new RoomEntry
         {
             Kind = "system", From = bot.Slug, Event = ev, Note = run.Id, TaskId = run.TaskId,
-            Text = canceled ? $"{bot.Nickname}'s run {run.Id} was stopped after {TeamRender.Elapsed(elapsed)}{cost}"
-                 : r.Ok ? $"{bot.Nickname}'s run {run.Id} finished — {rep.Status} in {TeamRender.Elapsed(elapsed)}{cost}: {TeamRender.OneLine(rep.Summary, 200)}"
-                 : $"{bot.Nickname}'s run {run.Id} failed after {TeamRender.Elapsed(elapsed)}{cost}: {TeamRender.OneLine(r.Error, 200)}",
+            Text = canceled ? $"{bot.Nickname}'s run {run.Id} was stopped after {TeamRender.Elapsed(elapsed)}{usage}"
+                 : r.Ok ? $"{bot.Nickname}'s run {run.Id} finished — {rep.Status} in {TeamRender.Elapsed(elapsed)}{usage}: {TeamRender.OneLine(rep.Summary, 200)}"
+                 : $"{bot.Nickname}'s run {run.Id} failed after {TeamRender.Elapsed(elapsed)}{usage}: {TeamRender.OneLine(r.Error, 200)}",
         });
         Log.Info("Team.run.end", $"run={run.Id} bot={bot.Slug} ok={r.Ok} canceled={canceled} status={rep.Status} cost={r.CostUsd:F3} ms={elapsed}");
         var rows = new List<RoomEntry> { row };
@@ -2532,7 +2542,7 @@ internal sealed class TeamController
         var sess = _h.SessionById(run.SessionId);
         if (sess != null && bot.SessionId == run.SessionId)
         {
-            var line = TeamRender.RunResultLine(bot, run.Id, run.TaskId, rep, reportPath, canceled);
+            var line = TeamRender.RunResultLine(bot, run.Id, run.TaskId, rep, reportPath, canceled, r.CostUsd);
             var attempts = Attempt(new List<TeamBot> { bot }, line, everyone: false, row.Seq, raw: true);
             rows.AddRange(Record(store, row, attempts));
         }
@@ -2562,6 +2572,40 @@ internal sealed class TeamController
     {
         if (!_runs.TryGetValue(msg.RunId, out var run) || run.Project != msg.ProjectId) return;
         CancelRun(run, "Joseph");
+    }
+
+    /// The owner's "Sleep team" from the room's header, after the page's
+    /// confirmation: every run of the project is stopped and every bot with a
+    /// running tab is put to sleep. Nothing is lost — a sleeping bot resumes
+    /// its conversation when a tag or a click wakes it, and posts made
+    /// meanwhile are parked for it.
+    public void OnDeactivate(TeamDeactivateMsg msg)
+    {
+        var proj = _h.ProjectById(msg.ProjectId);
+        var store = StoreFor(msg.ProjectId);
+        if (proj == null || store == null) return;
+        var stopped = 0;
+        foreach (var run in _runs.Values.Where(r => r.Project == proj.Id).ToList()) { CancelRun(run, "Joseph (team asleep)"); stopped++; }
+        var slept = new List<string>();
+        foreach (var bot in store.Doc.Bots)
+        {
+            var sess = bot.SessionId is Guid id ? _h.SessionById(id) : null;
+            if (sess == null || sess.Dormant) continue;
+            _h.Sleep?.Invoke(sess);
+            slept.Add(bot.Nickname);
+        }
+        Log.Info("Team.deactivate", $"project={proj.Id:N} slept={slept.Count} runs={stopped}");
+        var e = store.Ledger.Append(new RoomEntry
+        {
+            Kind = "system", From = "perch", Event = "asleep",
+            Text = slept.Count == 0 && stopped == 0 ? "Joseph put the team to sleep — nobody was running"
+                 : $"Joseph put the team to sleep: {(slept.Count > 0 ? TeamRender.Names(slept) : "nobody")} stopped"
+                   + (stopped > 0 ? $", {stopped} run{(stopped == 1 ? "" : "s")} cancelled" : "")
+                   + ". A tag from the room, or a click on a bot's row, wakes it.",
+        });
+        RefreshRoster(proj, store);
+        _h.PushState();
+        PostEntries(proj.Id, store, new[] { e });
     }
 
     /// Runs in flight, for the page and the roster: bot slug → (id, task, started).
