@@ -1,0 +1,95 @@
+{
+  "current": {
+    "latencyMs": {
+      "median": 2.95,
+      "p95": 17.2,
+      "max": 18
+    },
+    "synchronizedLatencyMs": {
+      "median": 56.95,
+      "p95": 64.7,
+      "max": 66.5
+    },
+    "loadedLatencyMs": {
+      "median": 11.65,
+      "p95": 19.8,
+      "max": 185.1
+    },
+    "startupPrivateMiB": 417.0,
+    "startupGpuMiB": 135.3,
+    "afterPrivateMiB": 680.5,
+    "afterGpuMiB": 308.3,
+    "journal": {
+      "initial": {
+        "rows": 1000,
+        "wire": {
+          "events": 1000,
+          "bytes": 127048
+        }
+      },
+      "unchanged": {
+        "sameRow": false,
+        "wire": {
+          "events": 1000,
+          "bytes": 127048
+        }
+      },
+      "appended": {
+        "sameRow": false,
+        "rows": 1001,
+        "wire": {
+          "events": 1001,
+          "bytes": 127176
+        }
+      }
+    }
+  },
+  "fixed": {
+    "latencyMs": {
+      "median": 3.4,
+      "p95": 17.4,
+      "max": 18.1
+    },
+    "synchronizedLatencyMs": {
+      "median": 16.95,
+      "p95": 29.3,
+      "max": 29.8
+    },
+    "loadedLatencyMs": {
+      "median": 7.3,
+      "p95": 17.8,
+      "max": 87.4
+    },
+    "startupPrivateMiB": 413.6,
+    "startupGpuMiB": 133.0,
+    "afterPrivateMiB": 474.7,
+    "afterGpuMiB": 139.5,
+    "journal": {
+      "initial": {
+        "rows": 1000,
+        "wire": {
+          "events": 1000,
+          "start": 0,
+          "bytes": 127174
+        }
+      },
+      "unchanged": {
+        "sameRow": true,
+        "wire": {
+          "events": 0,
+          "start": 1000,
+          "bytes": 288
+        }
+      },
+      "appended": {
+        "sameRow": true,
+        "rows": 1001,
+        "wire": {
+          "events": 1,
+          "start": 1000,
+          "bytes": 415
+        }
+      }
+    }
+  }
+}

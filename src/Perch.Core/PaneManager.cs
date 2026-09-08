@@ -54,6 +54,7 @@ internal sealed class PaneManager : IDisposable
     /// PTY process exited. The dead PTY + IPC are already scheduled for
     /// teardown on the UI thread (so a later pane.resize respawns cleanly).
     public event Action<Guid, int>? Exited;
+    public event Action<Guid, Exception>? InputFailed;
 
     // Agent IPC (perch status / notify / meta / …) with the owning session
     // and pane bound at spawn time. Fired on the UI thread (PerchIpcServer
@@ -90,6 +91,13 @@ internal sealed class PaneManager : IDisposable
         if (!_ptys.TryGetValue(paneId, out var pty)) return;
         _lastInputTicks[paneId] = System.Diagnostics.Stopwatch.GetTimestamp();
         pty.Write(bytes);
+    }
+
+    public System.Threading.Tasks.Task WriteAsync(Guid paneId, byte[] bytes)
+    {
+        if (!_ptys.TryGetValue(paneId, out var pty)) throw new InvalidOperationException("The terminal has closed.");
+        _lastInputTicks[paneId] = System.Diagnostics.Stopwatch.GetTimestamp();
+        return ((QueuedPty)pty).WriteAsync(bytes);
     }
 
     public bool TryGetLastInputTicks(Guid paneId, out long ticks) =>
@@ -176,7 +184,8 @@ internal sealed class PaneManager : IDisposable
             Log.Info($"Pane.spawn.dup pane={pane.Id:N} -- already has a PTY, skipping");
             return;
         }
-        var pty = _ptyFactory.Start(startCmd, cols: cols, rows: rows, cwd: cwd);
+        var pty = new QueuedPty(_ptyFactory.Start(startCmd, cols: cols, rows: rows, cwd: cwd));
+        pty.WriteFailed += ex => _ui.Post(() => InputFailed?.Invoke(pane.Id, ex));
         var paneId = pane.Id;
         pty.OutputReceived += (_, bytes) =>
         {
@@ -191,7 +200,7 @@ internal sealed class PaneManager : IDisposable
             // Drop the dead PTY + IPC so a subsequent pane.resize naturally
             // respawns into the same paneId. Without this the resize handler
             // sees a stale entry and just calls Resize on a dead pty.
-            _ui.Post(() => Destroy(paneId));
+            _ui.Post(() => { if (_ptys.GetValueOrDefault(paneId) == pty) Destroy(paneId); });
             Exited?.Invoke(paneId, code);
         };
         _ptys[paneId] = pty;

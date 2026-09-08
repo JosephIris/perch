@@ -1,0 +1,44 @@
+[
+  {
+    "Id": 55084,
+    "Role": "Perch",
+    "PrivateMiB": 184.6,
+    "WorkingMiB": 269.0
+  },
+  {
+    "Id": 45140,
+    "Role": "msedgewebview2",
+    "PrivateMiB": 40.0,
+    "WorkingMiB": 134.0
+  },
+  {
+    "Id": 48920,
+    "Role": "crashpad-handler",
+    "PrivateMiB": 3.3,
+    "WorkingMiB": 14.0
+  },
+  {
+    "Id": 44672,
+    "Role": "gpu-process",
+    "PrivateMiB": 124.0,
+    "WorkingMiB": 151.2
+  },
+  {
+    "Id": 8932,
+    "Role": "utility",
+    "PrivateMiB": 13.8,
+    "WorkingMiB": 39.3
+  },
+  {
+    "Id": 33948,
+    "Role": "utility",
+    "PrivateMiB": 8.5,
+    "WorkingMiB": 20.4
+  },
+  {
+    "Id": 47932,
+    "Role": "renderer",
+    "PrivateMiB": 75.9,
+    "WorkingMiB": 127.2
+  }
+]

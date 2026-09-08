@@ -19,6 +19,13 @@ internal sealed record PaneRef
     public required Guid PaneId { get; init; }
 }
 
+internal sealed record InspectorRequestMsg
+{
+    public required Guid PaneId { get; init; }
+    public string? Revision { get; init; }
+    public long RequestId { get; init; }
+}
+
 internal sealed record SessionRef
 {
     public required Guid Id { get; init; }
@@ -28,6 +35,8 @@ internal sealed record PaneInMsg
 {
     public required Guid PaneId { get; init; }
     public required string B64 { get; init; }
+    public long Sequence { get; init; }
+    public string? InputId { get; init; }
 }
 
 internal sealed record PaneAckMsg

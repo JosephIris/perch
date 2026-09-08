@@ -3,10 +3,12 @@
 // plumbing that ships bytes to/from the host.
 
 import { Terminal } from "@xterm/xterm";
+import { InputPump } from "./input-pump.js";
 import { SyncBatcher } from "./sync-output.js";
 import type { ILinkProvider, ILink } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
+import { SerializeAddon } from "@xterm/addon-serialize";
 import { WebglAddon } from "@xterm/addon-webgl";
 
 import { b64ToBytes, bytesToB64, send } from "./bridge.js";
@@ -57,7 +59,20 @@ export const DEFAULT_FONT_SIZE = 13;
 export const MIN_FONT_SIZE = 9;
 export const MAX_FONT_SIZE = 32;
 
+export interface PaneSnapshot { data: string; cols: number; rows: number; viewport: number; cwd: string; }
+
 export class Pane {
+  private readonly inputId = crypto.randomUUID();
+  private readonly input = new InputPump((bytes, sequence) => send({
+    type: "pane.in", paneId: this.paneId, b64: bytesToB64(bytes), sequence, inputId: this.inputId,
+  }));
+  private running = false;
+  canSleep(): boolean { return !this.running; }
+  readyForInput(): void { this.running = true; this.input.resume(); }
+  acknowledgeInput(sequence: number, failed: boolean, inputId?: string) { if (inputId === this.inputId) this.input.ack(sequence, failed); }
+  private restoring = false;
+  private outputVersion = 0;
+  private readonly serializer = new SerializeAddon();
   private webgl?: WebglAddon;
   private rendererActive = true;
   private disposed = false;
@@ -113,6 +128,7 @@ export class Pane {
 
   constructor(paneId: string, name: string, fontSize: number = DEFAULT_FONT_SIZE, fontFamily?: string) {
     this.paneId = paneId;
+    this.input.pause();
 
     this.element = document.createElement("div");
     this.element.className = "pane";
@@ -224,6 +240,7 @@ export class Pane {
     });
     this.fit = new FitAddon();
     this.term.loadAddon(this.fit);
+    this.term.loadAddon(this.serializer);
     this.term.loadAddon(new Unicode11Addon());
     this.term.unicode.activeVersion = "11";
     this.smoothCursorVisibility();
@@ -261,11 +278,8 @@ export class Pane {
     });
 
     this.term.onData((data) => {
-      send({
-        type: "pane.in",
-        paneId: this.paneId,
-        b64: bytesToB64(utf8.encode(data)),
-      });
+      this.sync.noteInput();
+      this.input.enqueue(utf8.encode(data));
     });
 
     // Any focus inside the pane (clicking the terminal, header, or X) marks
@@ -382,6 +396,7 @@ export class Pane {
   attach(host: HTMLElement) {
     host.appendChild(this.element);
     requestAnimationFrame(() => {
+      if (this.disposed) return;
       try { this.term.open(this.termHost); }
       catch (err) { console.error("[pane] term.open failed:", err); return; }
       // Switch to the WebGL renderer AFTER the canvas is mounted. WebGL's
@@ -413,9 +428,9 @@ export class Pane {
     this.observer?.disconnect();
     this.observer = undefined;
     this.sync.dispose();
-    // Take the WebGL addon off first: its dispose throws (see unloadWebgl),
-    // and thrown from inside term.dispose it would skip the other addons.
-    this.unloadWebgl(false);
+    this.input.dispose();
+    // Dispose WebGL while its compatible fallback can still reach the core.
+    this.unloadWebgl();
     try { this.term.dispose(); } catch { /* ignore */ }
     this.element.remove();
   }
@@ -455,43 +470,50 @@ export class Pane {
     addon.onContextLoss(() => { if (this.webgl === addon) this.unloadWebgl(); });
   }
 
-  /** Take the WebGL renderer off this terminal.
-   *
-   *  @xterm/addon-webgl 0.19's dispose tears its renderer down and THEN
-   *  throws against xterm 5.5's core (it reads a `_store` field only newer
-   *  cores have), so it never installs the DOM renderer it meant to leave
-   *  behind: the terminal keeps a dead renderer and paints nothing. Left
-   *  uncaught, that exception also aborted the workspace's session switch
-   *  half-way — the old stage stayed on screen with a dead canvas. That was
-   *  the black pane. Catch it, and install the fallback ourselves. */
-  private unloadWebgl(fallback = true) {
+  /** Dispose before the terminal itself, while the fallback renderer can
+   *  still access the live core. Addon versions are pinned to xterm 5.5. */
+  private unloadWebgl() {
     const addon = this.webgl;
     if (!addon) return;
     this.webgl = undefined;
-    let threw = false;
     try { addon.dispose(); }
-    catch (err) { threw = true; console.warn("[pane] WebGL addon dispose threw:", err); }
-    if (threw && fallback) this.restoreDomRenderer(addon);
+    catch (err) { console.error("[pane] WebGL disposal failed", err); }
   }
 
-  /** The addon's own fallback, done by hand: if the dead WebGL renderer is
-   *  still the one in charge, swap in a fresh DOM renderer. Reaches into the
-   *  same xterm internals the addon uses; guarded so a core without them is
-   *  a no-op rather than a second exception. */
-  private restoreDomRenderer(addon: WebglAddon) {
-    const core = (this.term as any)._core;
-    const rs = core?._renderService;
-    if (!rs || typeof core._createRenderer !== "function") return;
-    if (rs._renderer?.value !== (addon as any)._renderer) return;
-    try {
-      rs.setRenderer(core._createRenderer());
-      rs.handleResize(this.term.cols, this.term.rows);
-    } catch (err) {
-      console.error("[pane] could not restore the DOM renderer:", err);
-    }
+  /** Drain pending parses before serializing both buffers. A restarted PTY sets fresh modes. */
+  snapshot(): Promise<{ snapshot: PaneSnapshot; version: number }> {
+    this.sync.flush();
+    return new Promise(resolve => this.term.write(new Uint8Array(), () => resolve({
+      snapshot: { data: this.serializer.serialize({ excludeModes: true }), cols: this.term.cols, rows: this.term.rows,
+        viewport: this.term.buffer.active.viewportY, cwd: this.cwd },
+      version: this.outputVersion,
+    })));
+  }
+
+  unchangedSince(version: number): boolean { return !this.disposed && version === this.outputVersion && !this.restoring; }
+
+  restore(snapshot: PaneSnapshot): void {
+    this.restoring = true;
+    this.cwd = snapshot.cwd;
+    this.term.resize(snapshot.cols, snapshot.rows);
+    // A dormant PTY is gone. Preserve its final viewport as history BEFORE a
+    // fresh console paints its startup screen. Fold an alternate screen into
+    // normal scrollback too; the new process starts with fresh terminal modes.
+    const boundary = `\x1b[0m\x1b[r\x1b[${snapshot.rows};1H` + "\r\n".repeat(snapshot.rows);
+    const data = snapshot.data.replace("\x1b[?1049h\x1b[H", boundary + "\x1b[H") + boundary;
+    this.term.options.scrollback = 10_000 + snapshot.rows * 2;
+    this.term.write(data, () => {
+      if (this.disposed) return;
+      this.term.scrollToLine(snapshot.viewport);
+      this.restoring = false;
+      this.reportResize();
+    });
   }
 
   feed(b64: string) {
+    this.running = true;
+    this.input.resume();
+    this.outputVersion++;
     // Inject ANSI SGR underline codes around URL matches so they render
     // persistently underlined (not just on hover). xterm's link
     // decorations are hover-only by design — to get always-underline we
@@ -520,6 +542,9 @@ export class Pane {
   }
 
   notifyExit(code: number) {
+    this.running = false;
+    this.input.pause();
+    this.outputVersion++;
     this.term.writeln(`\r\n\x1b[2m[shell exited with code ${code}]\x1b[0m`);
   }
 
@@ -819,6 +844,7 @@ export class Pane {
   }
 
   private reportResize() {
+    if (this.disposed || this.restoring) return;
     if (this.resizeFrame) return;
     this.resizeFrame = requestAnimationFrame(() => {
       this.resizeFrame = 0;

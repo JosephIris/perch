@@ -17,6 +17,7 @@
 
 import { send, onMessage, type InspectorDataMessage, type InspectorEventView,
          type PaneTreeView, type StateMessage } from "./bridge.js";
+import { mergeInspector } from "./inspector-delta.js";
 import { copyText } from "./clipboard.js";
 import { showToast } from "./toast.js";
 import { appendInline, hhmm } from "./text.js";
@@ -27,7 +28,8 @@ import { appendInline, hhmm } from "./text.js";
 // out behind it, and re-renders when it lands.
 
 const cache = new Map<string, InspectorDataMessage>();
-type Pending = { resolve: (d: InspectorDataMessage) => void; timer: number };
+let nextRequest = 0;
+type Pending = { requestId: number; resolve: (d: InspectorDataMessage) => void; timer: number };
 const inflight = new Map<string, Pending>();
 
 // The host always replies, but if it throws before posting we must not leave the
@@ -72,8 +74,9 @@ function requestInspector(paneId: string): Promise<InspectorDataMessage> {
       const known = cache.get(paneId);
       resolve(known ?? unknown(paneId));
     }, FETCH_TIMEOUT_MS);
-    inflight.set(paneId, { resolve, timer });
-    send({ type: "inspector.request", paneId });
+    const requestId = ++nextRequest;
+    inflight.set(paneId, { resolve, timer, requestId });
+    send({ type: "inspector.request", paneId, revision: cache.get(paneId)?.revision, requestId });
   });
 }
 
@@ -93,6 +96,16 @@ const empty = (paneId: string): InspectorDataMessage => ({
 
 onMessage((msg) => {
   if (msg.type !== "inspector.data") return;
+  const pending = inflight.get(msg.paneId);
+  if (msg.requestId !== undefined && pending?.requestId !== msg.requestId) return;
+  const previous = cache.get(msg.paneId);
+  const merged = mergeInspector(previous, msg);
+  if (!merged) {
+    // A cache was evicted while IO was in flight. Request a full snapshot.
+    if (pending) send({ type: "inspector.request", paneId: msg.paneId, requestId: pending.requestId });
+    return;
+  }
+  msg = merged;
   cache.set(msg.paneId, msg);
   while (cache.size > 32) cache.delete(cache.keys().next().value!);
   const p = inflight.get(msg.paneId);
@@ -585,13 +598,23 @@ export function agentLabel(agent: string | undefined): string {
   return "";
 }
 
+let renderedPane: string | null = null;
+let renderedEvents: InspectorEventView[] | null = null;
+let renderedRows: { event: InspectorEventView; canceled: boolean; row: HTMLElement }[] = [];
+
 function renderStream(host: HTMLElement, data: InspectorDataMessage): void {
   // A still-pending read must not tear down what's on screen. Returning early
   // (rather than rendering an empty state) is what stops the rail flickering
   // while the machine is busy: no reply yet means no reason to repaint.
   if (data.pending && host.childElementCount > 0) return;
 
-  host.replaceChildren();
+  if (renderedPane === data.paneId && renderedEvents === data.events) return;
+  renderedEvents = data.events;
+  if (renderedPane !== data.paneId || !data.events.length) {
+    host.replaceChildren();
+    renderedRows = [];
+    renderedPane = data.paneId;
+  }
 
   if (!data.events.length) {
     const e = el("div", "inspector__empty");
@@ -603,23 +626,27 @@ function renderStream(host: HTMLElement, data: InspectorDataMessage): void {
     return;
   }
 
-  const frag = document.createDocumentFragment();
+  if (renderedRows.length === 0) host.replaceChildren();
   // Only rows appended SINCE the last render animate in. The stream is re-created
   // every poll, so without this gate the whole list would re-cascade each tick; a
   // freshly-shown pane (prevEventCount 0) shows its history at rest.
   const fresh = prevEventCount;
   const canceled = canceledPrompts(data.events);
+  const changedRows: HTMLElement[] = [];
   data.events.forEach((ev, i) => {
+    const old = renderedRows[i];
+    if (old?.event === ev && old.canceled === canceled.has(i)) return;
     const row = renderEvent(ev, i, canceled.has(i));
     copySource.set(row, eventText(ev));
     if (fresh > 0 && i >= fresh) row.classList.add("row-enter");
-    frag.appendChild(row);
+    if (old) old.row.replaceWith(row); else host.appendChild(row);
+    renderedRows[i] = { event: ev, canceled: canceled.has(i), row };
+    changedRows.push(row);
   });
-  host.appendChild(frag);
+  for (const old of renderedRows.splice(data.events.length)) old.row.remove();
   prevEventCount = data.events.length;
 
-  markExpandable(host, "beat");
-  markExpandable(host, "turn-prompt");
+  for (const row of changedRows) { markExpandable(row, "beat"); markExpandable(row, "turn-prompt"); }
 }
 
 /** Flag the beats/prompts that ACTUALLY overflow their clamp, so only those
@@ -635,7 +662,8 @@ function renderStream(host: HTMLElement, data: InspectorDataMessage): void {
  *  because it was expandable, and journal text is append-only, so carrying the
  *  flag across is sound. */
 function markExpandable(host: HTMLElement, base: string): void {
-  for (const row of host.querySelectorAll<HTMLElement>(`.${base}`)) {
+  const rows = host.matches(`.${base}`) ? [host] : host.querySelectorAll<HTMLElement>(`.${base}`);
+  for (const row of rows) {
     const t = row.querySelector<HTMLElement>(`.${base}__text`);
     if (!t) continue;
     if (row.classList.contains(`${base}--open`)) {

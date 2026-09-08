@@ -108,11 +108,11 @@ internal sealed partial class AppController
     // Parses each agent pane's Claude transcript for the Inspector rail.
     // Stateful on purpose: it tails by byte offset, so re-reading a pane after
     // the agent has appended a few rows costs only those rows.
-    private readonly TranscriptReader _transcripts = new();
-    /// The same rail, fed from codex's rollout file instead of Claude's
-    /// transcript. Which one a pane uses is decided by which session id it
-    /// carries — see InspectorFor.
-    private readonly CodexTranscriptReader _codexTranscripts = new();
+    private readonly TranscriptService _transcripts = new();
+    private PaneOutputBatcher? _outputBatcher;
+    private bool _shuttingDown;
+    private readonly Dictionary<Guid, (string Revision, InspectorData? Data)> _inspectorSent = new();
+    private readonly Dictionary<Guid, long> _inspectorRequests = new();
 
     // Above this, we don't pre-cache clipboard text to the page — a giant
     // cross-app copy would be ferried on every clipboard change for a paste
@@ -348,7 +348,7 @@ internal sealed partial class AppController
             SessionById = id => _store.Sessions.FirstOrDefault(s => s.Id == id),
             Sessions = () => _store.Sessions,
             ResolveCwd = ResolvePaneCwd,
-            ReadTranscript = (pane, sid, cwd) => _transcripts.Read(pane, sid, cwd),
+            ReadTranscript = (pane, sid, cwd) => _transcripts.ReadCached(new TranscriptKey(pane, sid, cwd)),
             TypeToClaude = TypeToClaude,
             PressEnter = PressEnterInClaude,
             Wake = WakeSession,
@@ -402,8 +402,18 @@ internal sealed partial class AppController
         });
         WireBoardController();
         _router = BuildRouter();
-        _panes.Output += PostPaneOut;
-        _panes.Exited += PostPaneExit;
+        _transcripts.ModelChanged += key => _ui.Post(() =>
+        {
+            if (_shuttingDown) return;
+            var session = OwningSession(key.PaneId);
+            var pane = session == null ? null : FindPane(session, key.PaneId);
+            if (pane?.ClaudeSessionId == key.SessionId && !key.Codex)
+                _teamCtrl.OnModelLimits(EffectiveModelLimits());
+        });
+        _outputBatcher = new PaneOutputBatcher(_ui, PostPaneOut);
+        _panes.Output += _outputBatcher.Add;
+        _panes.InputFailed += (id, ex) => PostHostError($"Terminal input failed: {ex.Message}");
+        _panes.Exited += (id, code) => _outputBatcher.Complete(id, () => PostPaneExit(id, code));
         _panes.AgentStatus += OnAgentStatus;
         _panes.AgentNotify += OnAgentNotify;
         _panes.AgentMeta += OnAgentMeta;
@@ -566,6 +576,7 @@ internal sealed partial class AppController
     /// gets to finish writing its profile).
     public void Shutdown()
     {
+        _shuttingDown = true;
         _local?.Dispose();
         _cloud?.Dispose();
         _idleWatchdog?.Stop();
@@ -575,6 +586,8 @@ internal sealed partial class AppController
         _usageTimer?.Stop();
         _usage?.Dispose();
         _control?.Dispose();
+        _outputBatcher?.Dispose();
+        _transcripts.Clear();
         _panes.Dispose();
         _store.Save();
     }
@@ -766,7 +779,7 @@ internal sealed partial class AppController
         .Add<UrlOpenMsg>("url.open", OnUrlOpen)
         .Add<PrefsSetMsg>("prefs.set", OnPrefsSet)
         .Add<PaneRef>("commits.request", OnCommitsRequest)
-        .Add<PaneRef>("inspector.request", OnInspectorRequest)
+        .Add<InspectorRequestMsg>("inspector.request", OnInspectorRequest)
         .Add<InspectorImageMsg>("inspector.image", OnInspectorImage)
         .Add("settings.request", OnSettingsRequest)
         .Add<SettingsSaveMsg>("settings.save", OnSettingsSave)
@@ -1013,10 +1026,11 @@ internal sealed partial class AppController
     /// pane carrying a codex thread reads codex's rollout; everything else
     /// reads Claude's transcript, which is also the right answer for a pane
     /// with neither (both return null and the rail shows its empty state).
-    private InspectorData? InspectorFor(PaneNode pane, string? claudeSessionId, string cwd)
-        => !string.IsNullOrEmpty(pane.CodexSessionId) && string.IsNullOrEmpty(claudeSessionId)
-            ? _codexTranscripts.Read(pane.Id, pane.CodexSessionId, pane.CodexTranscriptPath)
-            : _transcripts.Read(pane.Id, claudeSessionId, cwd);
+    private TranscriptKey TranscriptFor(PaneNode pane, string? claudeSessionId, string cwd)
+    {
+        var codex = !string.IsNullOrEmpty(pane.CodexSessionId) && string.IsNullOrEmpty(claudeSessionId);
+        return new(pane.Id, codex ? pane.CodexSessionId : claudeSessionId, cwd, codex, pane.CodexTranscriptPath);
+    }
 
     /// The cwd a pane spawns in: its own persisted cwd, then the session cwd,
     /// then the configured default. Single source so the resume pre-flight and
@@ -1236,6 +1250,7 @@ internal sealed partial class AppController
             // into our IPC layer (stage 4 reactivates that pipe).
             var startCmd = Shell.BuildStartupCommandLine(baseShell, cwd, pane.Id, initialCommand);
             _panes.Spawn(sess, pane, startCmd, cwd, cols, rows, baseShell);
+            PostPaneReady(pane.Id);
             // Cover the pane while Claude Code boots (a fresh `claude --session-id`
             // or a `claude --resume`), so nothing the user types lands in cc mid-
             // boot. Dropped on the session-start hook (OnAgentSession) or failsafe.
@@ -1788,7 +1803,7 @@ internal sealed partial class AppController
             pane.CodexTranscriptPath = string.IsNullOrWhiteSpace(msg.Path) ? null : msg.Path;
             // Same reasoning as the claude branch below: a new thread is a
             // different rollout file, so the parsed tail must go.
-            _codexTranscripts.Forget(paneId);
+            _transcripts.Forget(paneId);
             _store.Save();
         }
         else if (id != null && !fromCodex && pane.ClaudeSessionId != id)
@@ -2474,11 +2489,16 @@ internal sealed partial class AppController
 
     // ---- Page → host handlers --------------------------------------------
 
-    private void OnPaneIn(PaneInMsg msg)
+    private void PostPaneReady(Guid id) => _web.PostJson(JsonSerializer.Serialize(new { type = "pane.ready", paneId = id.ToString("D") }));
+
+    private async void OnPaneIn(PaneInMsg msg)
     {
-        if (!_panes.TryGet(msg.PaneId, out var pty)) return;
-        try { pty.Write(Convert.FromBase64String(msg.B64)); }
-        catch (Exception ex) { Log.Error("Pane.In", ex); }
+        string? error = null;
+        try { await _panes.WriteAsync(msg.PaneId, Convert.FromBase64String(msg.B64)); }
+        catch (Exception ex) { error = ex.Message; Log.Error("Pane.In", ex); PostHostError(ex.Message); }
+        if (_shuttingDown) return;
+        if (msg.Sequence > 0)
+            _web.PostJson(JsonSerializer.Serialize(new { type = "pane.in.ack", paneId = msg.PaneId.ToString("D"), sequence = msg.Sequence, inputId = msg.InputId, error }));
 
         // Waiting / Permission are deliberately STICKY across keystrokes.
         // These states mean "the agent needs you", and they must persist
@@ -2537,7 +2557,7 @@ internal sealed partial class AppController
         // Lazy spawn: first valid pane.resize for a pane creates its
         // ConPty at the page's measured size, so PowerShell's banner is
         // laid out at the final dimensions and never has to be cleared.
-        if (_panes.TryResize(id, cols, rows)) return;
+        if (_panes.TryResize(id, cols, rows)) { PostPaneReady(id); return; }
 
         var sess = OwningSession(id);
         var pane = sess == null ? null : AllLeaves(sess.Root).FirstOrDefault(p => p.Id == id);
@@ -3249,9 +3269,11 @@ internal sealed partial class AppController
     // a few hundred journal rows per pane would make a hot path quadratic.
     // Resolve pane state on the UI thread first (we must not touch it after the
     // await), then do the IO off-thread. Mirrors OnCommitsRequest.
-    private async void OnInspectorRequest(PaneRef msg)
+    private async void OnInspectorRequest(InspectorRequestMsg msg)
     {
         var id = msg.PaneId;
+        _inspectorRequests[id] = msg.RequestId;
+        var previous = _inspectorSent.GetValueOrDefault(id);
         var sess = OwningSession(id);
         var pane = sess == null ? null : AllLeaves(sess.Root).FirstOrDefault(p => p.Id == id);
         if (pane == null) return;
@@ -3275,20 +3297,29 @@ internal sealed partial class AppController
 
         try
         {
-            var data = InspectorFor(pane, sessionId, cwd);
+            var key = TranscriptFor(pane, sessionId, cwd);
+            var data = await _transcripts.ReadAsync(key);
+            if (_shuttingDown || OwningSession(id) != sess || TranscriptFor(pane, pane.ClaudeSessionId, _paneCwd.GetValueOrDefault(id, pane.Cwd ?? "")) != key) return;
             var detail = string.IsNullOrEmpty(cwd)
                 ? null
                 : await GitProc.SessionDetailAsync(baseline, cwd, untracked, filter, touched);
 
-            var payload = new
+            var agent = pane.AgentType ?? "";
+            var revision = Guid.NewGuid().ToString("N");
+            var delta = msg.Revision != null && previous.Revision == msg.Revision;
+            var eventStart = delta ? InspectorDelta.CommonPrefix(previous.Data, data) : 0;
+            var events = data?.Events ?? Array.Empty<InspectorEvent>();
+            var payload = await Task.Run(() => JsonSerializer.Serialize(new
             {
                 type = "inspector.data",
                 paneId = id.ToString("D"),
+                requestId = msg.RequestId, revision,
+                baseRevision = delta ? msg.Revision : null, eventStart,
                 hasAgent = data != null,
                 // Which agent's journal this is, so the rail can name it in its
                 // own prose instead of always saying "Claude".
-                agent = pane.AgentType ?? "",
-                events = (data?.Events ?? Array.Empty<InspectorEvent>()).Select(e => new
+                agent,
+                events = events.Skip(eventStart).Select(e => new
                 {
                     kind = e.Kind,
                     ts = e.Ts,
@@ -3317,8 +3348,13 @@ internal sealed partial class AppController
                 }).ToArray(),
                 added = detail?.Added ?? 0,
                 deleted = detail?.Deleted ?? 0,
-            };
-            _web.PostJson(JsonSerializer.Serialize(payload));
+            }));
+            if (!_shuttingDown && OwningSession(id) == sess && _inspectorRequests.GetValueOrDefault(id) == msg.RequestId && TranscriptFor(pane, pane.ClaudeSessionId, _paneCwd.GetValueOrDefault(id, pane.Cwd ?? "")) == key)
+            {
+                _inspectorSent[id] = (revision, data);
+                while (_inspectorSent.Count > 32) _inspectorSent.Remove(_inspectorSent.Keys.First());
+                _web.PostJson(payload);
+            }
         }
         catch (Exception ex) { Log.Error("OnInspectorRequest", ex); }
     }
@@ -3336,7 +3372,10 @@ internal sealed partial class AppController
         string mediaType = "", data = "";
         try
         {
-            if (_transcripts.LocateImage(msg.PaneId, msg.ImageId) is { } loc)
+            var imageSession = OwningSession(msg.PaneId);
+            var imagePane = imageSession == null ? null : AllLeaves(imageSession.Root).FirstOrDefault(p => p.Id == msg.PaneId);
+            if (imagePane != null && await _transcripts.LocateImageAsync(
+                TranscriptFor(imagePane, imagePane.ClaudeSessionId, _paneCwd.GetValueOrDefault(msg.PaneId, imagePane.Cwd ?? "")), msg.ImageId) is { } loc)
             {
                 var img = await Task.Run(() => TranscriptReader.ExtractImage(loc, thumb: !full));
                 if (img is { } i) { mediaType = i.MediaType; data = i.Data; }
@@ -4764,10 +4803,12 @@ internal sealed partial class AppController
             // current without hooking each rename path separately. Cheap —
             // string compares, a file write only on an actual change.
             var existing = _store.Sessions.SelectMany(s => AllLeaves(s.Root)).Select(p => p.Id).ToHashSet();
+            foreach (var id in _inspectorRequests.Keys.Where(id => !existing.Contains(id)).ToArray()) _inspectorRequests.Remove(id);
             foreach (var id in _paneCwd.Keys.Where(id => !existing.Contains(id)).ToArray())
             {
                 _transcripts.Forget(id);
-                _codexTranscripts.Forget(id);
+                _inspectorSent.Remove(id);
+                _inspectorRequests.Remove(id);
                 _paneCwd.Remove(id);
                 _lastResizeTicks.Remove(id);
                 _lastByteCounts.Remove(id);
@@ -4783,6 +4824,8 @@ internal sealed partial class AppController
                 _armedResumePanes.Remove(id);
             }
             _repoWatchers?.Retain(_store.Sessions.Where(s => !s.Dormant).SelectMany(s => AllLeaves(s.Root)).Select(p => _paneCwd.GetValueOrDefault(p.Id, "")));
+            _transcripts.Retain(_store.Sessions.Where(s => !s.Dormant).SelectMany(s => AllLeaves(s.Root)).Select(p => p.Id).ToHashSet());
+            foreach (var sleeping in _store.Sessions.Where(s => s.Dormant).SelectMany(s => AllLeaves(s.Root))) _inspectorSent.Remove(sleeping.Id);
             SweepPeerNames();
             var snap = StateProjection.BuildSnapshot(
                 _store, _activePaneId, _settings.FontSize, _settings.OnboardingSeen,
@@ -4803,45 +4846,36 @@ internal sealed partial class AppController
 
     private void PostPaneOut(Guid paneId, ReadOnlyMemory<byte> bytes)
     {
-        _ui.Post(() =>
+        // PaneOutputBatcher already marshals one coalesced slice to the UI.
+        try
         {
-            try
+            _web.PostJson(JsonSerializer.Serialize(new
             {
-                var payload = JsonSerializer.Serialize(new
-                {
-                    type   = "pane.out",
-                    paneId = paneId.ToString("D"),
-                    b64    = Convert.ToBase64String(bytes.Span),
-                });
-                _web.PostJson(payload);
-            }
-            catch (Exception ex) { Log.Error("PostPaneOut", ex); }
-
-            // cc is still painting → push the boot cover's quiet deadline out.
-            NoteSetupOutput(paneId, bytes.Length);
-        });
+                type = "pane.out", paneId = paneId.ToString("D"),
+                b64 = Convert.ToBase64String(bytes.Span),
+            }));
+        }
+        catch (Exception ex) { Log.Error("PostPaneOut", ex); }
+        NoteSetupOutput(paneId, bytes.Length);
     }
 
     private void PostPaneExit(Guid paneId, int code)
     {
-        _ui.Post(() =>
+        try
         {
-            try
+            var payload = JsonSerializer.Serialize(new
             {
-                var payload = JsonSerializer.Serialize(new
-                {
-                    type   = "pane.exit",
-                    paneId = paneId.ToString("D"),
-                    code,
-                });
-                _web.PostJson(payload);
-            }
-            catch (Exception ex) { Log.Error("PostPaneExit", ex); }
+                type   = "pane.exit",
+                paneId = paneId.ToString("D"),
+                code,
+            });
+            _web.PostJson(payload);
+        }
+        catch (Exception ex) { Log.Error("PostPaneExit", ex); }
 
-            // The PTY died — there is nothing left to set up. Drop the cover now
-            // rather than letting it sit there until the cap.
-            CancelSetupOverlay(paneId);
-        });
+        // The PTY died — there is nothing left to set up. Drop the cover now
+        // rather than letting it sit there until the cap.
+        CancelSetupOverlay(paneId);
     }
 
     private void PostHostError(string message)

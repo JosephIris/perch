@@ -198,7 +198,7 @@ internal sealed class UnixPty : IPty
             _stream!.Write(bytes);
             _stream.Flush();
         }
-        catch (IOException ex) { Log.Error("UnixPty.write", ex); }
+        catch (IOException ex) { Log.Error("UnixPty.write", ex); throw; }
     }
 
     public void Ack(long bytes)

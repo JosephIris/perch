@@ -36,6 +36,8 @@ internal sealed class CodexTranscriptReader
     {
         public string Path = "";
         public long Offset;
+        public long SnapshotOffset = -1;
+        public InspectorData? Snapshot;
         public readonly List<InspectorEvent> Events = new();
         public string Model = "";
         public long Input, Output, CacheRead, CacheWrite;
@@ -69,7 +71,12 @@ internal sealed class CodexTranscriptReader
         try { Ingest(tail); }
         catch (Exception ex) { Log.Error("CodexTranscriptReader.Ingest", ex); }
 
-        return new InspectorData(Collapse(tail.Events), Vitals(tail));
+        if (tail.Snapshot is null || tail.SnapshotOffset != tail.Offset)
+        {
+            tail.Snapshot = new InspectorData(Collapse(tail.Events), Vitals(tail));
+            tail.SnapshotOffset = tail.Offset;
+        }
+        return tail.Snapshot;
     }
 
     private static void Ingest(Tail tail)
@@ -80,6 +87,7 @@ internal sealed class CodexTranscriptReader
         if (fs.Length < tail.Offset)
         {
             tail.Offset = 0;
+            tail.Snapshot = null;
             tail.Events.Clear();
             tail.Input = tail.Output = tail.CacheRead = tail.CacheWrite = 0;
             tail.LastContext = 0;
@@ -87,22 +95,12 @@ internal sealed class CodexTranscriptReader
         }
         if (fs.Length == tail.Offset) return;
 
-        fs.Seek(tail.Offset, SeekOrigin.Begin);
-        var buf = new byte[fs.Length - tail.Offset];
-        fs.ReadExactly(buf, 0, buf.Length);
-
-        var lastNl = Array.LastIndexOf(buf, (byte)'\n');
-        if (lastNl < 0) return;                     // no complete line yet
-        tail.Offset += lastNl + 1;
-
-        var text = Encoding.UTF8.GetString(buf, 0, lastNl + 1);
-        foreach (var line in text.Split('\n'))
+        tail.Offset = TranscriptLines.Read(fs, tail.Offset, (line, offset, length) =>
         {
-            var trimmed = line.TrimEnd('\r');
-            if (trimmed.Length == 0) continue;
-            try { Row(tail, trimmed); }
+            if (line.Length == 0) return;
+            try { Row(tail, line.TrimEnd('\r')); }
             catch (JsonException) { /* one bad row must not kill the rest */ }
-        }
+        });
     }
 
     private static void Row(Tail tail, string line)

@@ -20,7 +20,7 @@ declare global {
 
 export type OutMessage =
   | { type: "ready" }
-  | { type: "pane.in"; paneId: string; b64: string }
+  | { type: "pane.in"; paneId: string; b64: string; sequence?: number; inputId?: string }
   /* Backpressure ack: sent once xterm finishes writing a pane.out chunk so
    * the host can shrink that PTY's unacked backlog and resume reading.
    * `bytes` is the ORIGINAL pane.out byte count (pre-underline-injection),
@@ -172,7 +172,7 @@ export type OutMessage =
    * re-serialized in full on every agent status change (several times a second
    * under load), and a few hundred journal rows per pane would make that hot
    * path quadratic for data only ONE pane's rail ever displays. */
-  | { type: "inspector.request"; paneId: string }
+  | { type: "inspector.request"; paneId: string; revision?: string; requestId?: number }
   /* Inspector rail: fetch one conversation image's bytes. Journal image rows
    * carry only an id (see InspectorEventView) — pixels are pulled on demand,
    * "thumb" for the rail (host downscales to ≤320px JPEG), "full" when the
@@ -738,6 +738,10 @@ export type InspectorImageDataMessage = {
  * can still be populated in that case: a shell pane in a repo has git changes
  * even with nothing to narrate. */
 export type InspectorDataMessage = {
+  revision?: string;
+  baseRevision?: string | null;
+  eventStart?: number;
+  requestId?: number;
   type: "inspector.data";
   paneId: string;
   hasAgent: boolean;
@@ -1018,6 +1022,8 @@ export type InMessage =
   | ToastMessage
   | SettingsDataMessage
   | CommitsDataMessage
+  | { type: "pane.ready"; paneId: string }
+  | { type: "pane.in.ack"; paneId: string; sequence: number; inputId?: string; error?: string | null }
   | InspectorDataMessage
   | InspectorImageDataMessage
   | ProjectsCandidatesMessage

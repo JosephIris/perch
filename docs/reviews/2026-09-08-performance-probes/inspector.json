@@ -1,0 +1,27 @@
+{
+  "initial": {
+    "rows": 1000,
+    "wire": {
+      "events": 1000,
+      "start": 0,
+      "bytes": 127174
+    }
+  },
+  "unchanged": {
+    "sameRow": true,
+    "wire": {
+      "events": 0,
+      "start": 1000,
+      "bytes": 288
+    }
+  },
+  "appended": {
+    "sameRow": true,
+    "rows": 1001,
+    "wire": {
+      "events": 1,
+      "start": 1000,
+      "bytes": 415
+    }
+  }
+}

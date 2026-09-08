@@ -240,6 +240,12 @@ onMessage((msg) => {
     case "projects.candidates":
       showProjectsDialog(msg);
       break;
+    case "pane.ready":
+      workspace.readyForInput(msg.paneId);
+      break;
+    case "pane.in.ack":
+      workspace.acknowledgeInput(msg.paneId, msg.sequence, !!msg.error, msg.inputId);
+      break;
     case "pane.out":
       workspace.feed(msg.paneId, msg.b64);
       break;

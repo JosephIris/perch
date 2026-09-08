@@ -16,7 +16,7 @@
 
 import type { PaneTreeView, SessionView, BoardNodeView, BoardLinkView } from "./bridge.js";
 import { send } from "./bridge.js";
-import { Pane, DEFAULT_FONT_SIZE } from "./pane.js";
+import { Pane, DEFAULT_FONT_SIZE, type PaneSnapshot } from "./pane.js";
 import { openSettings } from "./settings.js";
 import { UrlPane } from "./url-pane.js";
 import { BoardPane } from "./board-pane.js";
@@ -46,6 +46,29 @@ export class Workspace {
   // One stage per session id. Stages persist across switches; a stage is
   // disposed only when its session is closed (gone from the state push).
   private readonly stages = new Map<string, Stage>();
+  private readonly sleeping = new Map<string, PaneSnapshot>();
+  private readonly saving = new Set<string>();
+
+  private reclaimDormant() {
+    for (const session of this.sessions) {
+      if (!session.dormant || session.id === this.activeSessionId) continue;
+      const stage = this.stages.get(session.id);
+      if (!stage) continue;
+      for (const [id, pane] of stage.panes) {
+        if (!(pane instanceof Pane) || !pane.canSleep() || this.saving.has(id)) continue;
+        this.saving.add(id);
+        void pane.snapshot().then(({ snapshot, version }) => {
+          if (!this.sessions.some(s => s.id === session.id && s.dormant) ||
+              this.activeSessionId === session.id || stage.panes.get(id) !== pane || !pane.canSleep() || !pane.unchangedSince(version)) return;
+          this.sleeping.set(id, snapshot);
+          pane.dispose();
+          stage.panes.delete(id);
+          stage.signature = null;
+        }).catch(err => console.error("[workspace] terminal snapshot failed", err))
+          .finally(() => this.saving.delete(id));
+      }
+    }
+  }
   // Bytes that arrive before the matching Pane is attached.
   private readonly pendingBytes = new Map<string, string[]>();
   private sessions: SessionView[] = [];
@@ -170,6 +193,7 @@ export class Workspace {
       else node.children.forEach(collect);
     };
     sessions.forEach(s => collect(s.rootPane));
+    for (const id of this.sleeping.keys()) if (!paneIds.has(id)) this.sleeping.delete(id);
     for (const id of this.pendingBytes.keys()) if (!paneIds.has(id)) this.pendingBytes.delete(id);
     // A cold PTY may reach its high-water mark before this state arrives.
     // Give known queued output a consumer even if no more bytes can arrive.
@@ -204,6 +228,7 @@ export class Workspace {
       // lands here rather than waking a dormant shell. Sessions may still
       // exist (dormant ones, other projects) — say so anyway.
       this.emptyState.hidden = false;
+      this.reclaimDormant();
       return;
     }
     this.emptyState.hidden = true;
@@ -248,6 +273,7 @@ export class Workspace {
 
     // 6. Gentle fade-in when this stage just became visible.
     if (switching || isNew) this.fadeInStage(stage);
+    this.reclaimDormant();
   }
 
   /** Hide a stage that's being switched away from: HIDE its URL panes' native
@@ -439,8 +465,19 @@ export class Workspace {
     this.pendingBytes.set(paneId, queue);
   }
 
+  readyForInput(paneId: string) {
+    const pane = this.findPane(paneId);
+    if (pane instanceof Pane) pane.readyForInput();
+  }
+
+  acknowledgeInput(paneId: string, sequence: number, failed: boolean, inputId?: string) {
+    const pane = this.findPane(paneId);
+    if (pane instanceof Pane) pane.acknowledgeInput(sequence, failed, inputId);
+  }
+
   notifyExit(paneId: string, code: number) {
     this.findPane(paneId)?.notifyExit(code);
+    this.reclaimDormant();
   }
 
   /** Show/hide a Claude Code pane's boot cover (host-driven, pane.setup).
@@ -614,6 +651,10 @@ export class Workspace {
           ? new BoardPane(node.paneId, node.name, stage.boardPath)
           : new Pane(node.paneId, node.name, this.defaultFontSize, this.defaultFontFamily);
         stage.panes.set(node.paneId, pane);
+        if (pane instanceof Pane) {
+          const snapshot = this.sleeping.get(node.paneId);
+          if (snapshot) { pane.restore(snapshot); this.sleeping.delete(node.paneId); }
+        }
         pane.attach(host);
         // Push initial state so the freshly-created pane header reflects
         // whatever the host already knows.

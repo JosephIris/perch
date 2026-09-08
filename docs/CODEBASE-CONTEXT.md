@@ -35,10 +35,10 @@ parity table fully captures this scope.
 | Host contracts | `Hosting.cs`, `UiThread.cs`, `Pty.cs`, `SystemProbeTypes.cs` |
 | Session model | `Session.cs`, `SessionStore.cs`, `PaneTree.cs`, `StateProjection.cs` |
 | Projects/worktrees | `Project.cs`, `Worktree.cs`, `GitProc.cs`, `RepoWatcher.cs` |
-| Terminal/process lifetime | `PaneManager.cs`; Windows `ConPty.cs`, `PaneJob.cs`, `JobObjectGuard.cs`; mac `UnixPty.cs`, `PtyOrphans.cs` |
+| Terminal/process lifetime | `PaneManager.cs`, ordered `QueuedPty.cs`, fair `PaneOutputBatcher.cs`; Windows `ConPty.cs`, `PaneJob.cs`, `JobObjectGuard.cs`; mac `UnixPty.cs`, `PtyOrphans.cs` |
 | Reclamation | `IdleReaper.cs` judges sessions; `JobSweep.cs` handles leftover process scopes |
 | Agent integration | `tools/perch-cli/{ClaudeWrapper,CodexWrapper,HookHandler,BinResolver}.cs`; per-pane `PerchIpc.cs` |
-| Transcripts | `TranscriptReader.cs`, `CodexTranscriptReader.cs` and their locator helpers; `ModelLimitWatch.cs`, `UsageService.cs` |
+| Transcripts | `TranscriptService.cs` owns background readers; `TranscriptLines.cs` streams JSONL; `TranscriptReader.cs`, `CodexTranscriptReader.cs` and locator helpers; `ModelLimitWatch.cs`, `UsageService.cs` |
 | Teams | `TeamController.cs` orchestration; `TeamStore.cs`, `Team.cs`, `TeamTasks.cs`, `RoomLedger.cs`, `TeamRender.cs`, `TeamMarkers.cs` |
 | Boards | `BoardController.cs`, `BoardStore.cs`, `BoardPaths.cs`; separate from team task cards |
 | Resource panels | `LocalController/LocalPoller/LocalLedger`; `CloudController/CloudPoller/CloudLedger/CloudPriceCatalog` |
@@ -72,6 +72,13 @@ flowchart LR
 3. PTY bytes are posted to the page as base64. xterm consumes them and emits
    `pane.ack`; both PTY implementations use 256 KiB/64 KiB high/low watermarks.
    Every live producer needs a consumer even if its tab has never been opened.
+   `PaneOutputBatcher` coalesces output with a 64 KiB per-pane slice and an
+   aggregate dispatcher budget; exit notifications follow queued output.
+   Input uses a separate protocol: `pane.ready` releases cold input, the page
+   sends at most 16 KiB until `pane.in.ack` confirms native write completion.
+   Sequence and input-instance IDs reject stale acknowledgements after restore.
+   `QueuedPty` serializes keyboard, paste and team writes off the UI thread;
+   non-page producers have a 16 MiB queue budget with explicit failure reporting.
 4. Wrappers locate the real agent while excluding Perch's tools directories.
    Hooks send typed IPC; `PaneManager` forwards subscribed events to Core.
    State changes project back to the web UI. The watchdog and terminal probes
@@ -83,6 +90,23 @@ flowchart LR
 6. Team sends must be acknowledged by the agent's prompt-submit hook. A successful
    PTY write is not proof of delivery. Preserve parked/held/failed states and
    avoid blind retries that could duplicate a submitted prompt.
+
+Sleeping terminals now wait for PTY exit and drained output, serialize their
+buffers, and release xterm/DOM/addon instances. Ordinary tab switching still
+retains live terminals and only disposes their WebGL renderer. Wake restores
+normal and alternate-screen contents into history before the new shell paints
+its startup screen. Snapshots are in-memory, not a new persistence contract;
+an application restart still uses the existing session/agent resume behavior.
+The fit, WebGL and serialize addon versions are pinned for xterm 5.5 compatibility.
+
+Inspector requests carry a request ID and the last revision held by the page.
+Responses either replace the journal or carry an event suffix and its base
+revision. A missing base triggers a full fetch; stale requests cannot overwrite
+a newer response. Unchanged journal rows keep their DOM nodes. Transcript reads
+run on per-conversation workers, stream complete rows, and reuse unchanged
+immutable projections. Reloadable caches are capped and evicted for sleeping
+panes; a recently requested team snapshot stays through the next room poll to
+preserve final replies. Model discovery asynchronously re-evaluates team limits.
 
 Core mutates state on `IUiThread`. On Windows that wraps WPF's dispatcher; on
 macOS it is a managed thread with a synchronization context. Native AppKit work

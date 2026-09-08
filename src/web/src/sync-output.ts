@@ -52,7 +52,7 @@ function concat(parts: Uint8Array[]): Uint8Array {
 export interface SyncBatcherOptions {
   /** Quiet time that ends a batch (ms). Default 16 — one display frame. */
   quietMs?: number;
-  /** Longest a batch may be held under continuous output (ms). Default 100. */
+  /** Longest a batch may be held under continuous output (ms). Default 32. Input limits it to 24. */
   maxMs?: number;
   /** Clock, for tests. */
   now?: () => number;
@@ -63,6 +63,8 @@ export class SyncBatcher {
   private held = false;              // a frame is being held
   private since = 0;                 // clock reading when the hold began
   private quietTimer: ReturnType<typeof setTimeout> | null = null;
+  private deadlineTimer: ReturnType<typeof setTimeout> | null = null;
+  private inputUntil = 0;
   private readonly quietMs: number;
   private readonly maxMs: number;
   private readonly now: () => number;
@@ -70,7 +72,7 @@ export class SyncBatcher {
   /** `out` receives each write exactly as xterm should see it. */
   constructor(private readonly out: (bytes: Uint8Array) => void, opts: SyncBatcherOptions = {}) {
     this.quietMs = opts.quietMs ?? 16;
-    this.maxMs = opts.maxMs ?? 100;
+    this.maxMs = opts.maxMs ?? 32;
     this.now = opts.now ?? (() => Date.now());
   }
 
@@ -80,7 +82,10 @@ export class SyncBatcher {
   feed(bytes: Uint8Array): void {
     if (!this.held && !hasSyncBegin(bytes)) { this.out(bytes); return; }
     const t = this.now();
-    if (!this.held) { this.held = true; this.since = t; }
+    if (!this.held) {
+      this.held = true; this.since = t;
+      this.deadlineTimer = setTimeout(() => this.flush(), t < this.inputUntil ? Math.min(24, this.maxMs) : this.maxMs);
+    }
     this.parts.push(bytes);
     if (this.quietTimer) clearTimeout(this.quietTimer);
     this.quietTimer = null;
@@ -88,8 +93,18 @@ export class SyncBatcher {
     this.quietTimer = setTimeout(() => this.flush(), this.quietMs);
   }
 
+  /** Keep the trailing cursor-return burst atomic while shortening echo delay. */
+  noteInput(): void {
+    this.inputUntil = this.now() + 250;
+    if (this.held) {
+      if (this.deadlineTimer) clearTimeout(this.deadlineTimer);
+      this.deadlineTimer = setTimeout(() => this.flush(), Math.max(0, Math.min(24, this.maxMs) - (this.now() - this.since)));
+    }
+  }
+
   /** Hand whatever is held to `out` now, as one write. */
   flush(): void {
+    if (this.deadlineTimer) { clearTimeout(this.deadlineTimer); this.deadlineTimer = null; }
     if (this.quietTimer) { clearTimeout(this.quietTimer); this.quietTimer = null; }
     const parts = this.parts;
     this.parts = [];
@@ -98,6 +113,7 @@ export class SyncBatcher {
   }
 
   dispose(): void {
+    if (this.deadlineTimer) { clearTimeout(this.deadlineTimer); this.deadlineTimer = null; }
     if (this.quietTimer) { clearTimeout(this.quietTimer); this.quietTimer = null; }
     this.parts = [];
     this.held = false;

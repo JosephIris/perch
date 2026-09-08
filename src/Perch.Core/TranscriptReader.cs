@@ -61,7 +61,7 @@ internal sealed record InspectorData(
 
 /// Where one image's bytes live: which transcript file, the byte range of the
 /// JSONL line holding it, and which image (in document order) within that line.
-/// Captured on the UI thread by LocateImage, then handed to ExtractImage on a
+/// Captured by the transcript worker, then handed to ExtractImage on a
 /// worker — the extract re-reads the line from disk rather than keeping the
 /// base64 in memory, because a screenshot-heavy session would otherwise pin
 /// tens of MB for images the user may never click.
@@ -70,12 +70,9 @@ internal sealed record ImageLocator(string Path, long Offset, int Length, int Or
 /// Reads Claude Code's JSONL transcript for a pane and projects it into the
 /// Inspector's stream + vitals.
 ///
-/// Tails by byte offset: the first read of a pane parses the whole file, every
-/// later read parses only the bytes appended since. That matters because the
-/// file is fat but the EXTRACT is tiny — the largest transcript on a real
-/// machine (5.8 MB / 2,384 rows) yields ~300 prose beats and ~340 tool calls,
-/// a few hundred KB. So we keep ALL history rather than windowing it; there is
-/// no budget worth spending here.
+/// Tails complete JSONL rows by byte offset with a bounded read buffer. The
+/// worker service owns these readers and evicts reloadable pane caches. Events
+/// retain complete history; an unchanged read reuses its immutable projection.
 ///
 /// Every failure path returns what we have so far (or null) — a transcript we
 /// can't parse must never take a pane's Inspector down with it.
@@ -88,6 +85,8 @@ internal sealed class TranscriptReader
     {
         public string Path = "";
         public long Offset;
+        public long SnapshotOffset = -1;
+        public InspectorData? Snapshot;
         public readonly List<InspectorEvent> Events = new();
         /// Image id → where its bytes live in the file. Metadata only — the
         /// base64 stays on disk until the page asks for that image.
@@ -125,7 +124,12 @@ internal sealed class TranscriptReader
         try { Ingest(tail); }
         catch (Exception ex) { Log.Error("TranscriptReader.Ingest", ex); }
 
-        return new InspectorData(Collapse(tail.Events), Vitals(tail));
+        if (tail.Snapshot is null || tail.SnapshotOffset != tail.Offset)
+        {
+            tail.Snapshot = new InspectorData(Collapse(tail.Events), Vitals(tail));
+            tail.SnapshotOffset = tail.Offset;
+        }
+        return tail.Snapshot;
     }
 
     /// Parse the bytes appended since the last read. Only whole lines are
@@ -141,6 +145,7 @@ internal sealed class TranscriptReader
         if (fs.Length < tail.Offset)
         {
             tail.Offset = 0;
+            tail.Snapshot = null;
             tail.Events.Clear();
             tail.Images.Clear();
             tail.Input = tail.Output = tail.CacheRead = tail.CacheWrite = 0;
@@ -149,37 +154,12 @@ internal sealed class TranscriptReader
         }
         if (fs.Length == tail.Offset) return;
 
-        fs.Seek(tail.Offset, SeekOrigin.Begin);
-        var buf = new byte[fs.Length - tail.Offset];
-        fs.ReadExactly(buf, 0, buf.Length);
-
-        var lastNl = Array.LastIndexOf(buf, (byte)'\n');
-        if (lastNl < 0) return;                       // no complete line yet
-        var baseOffset = tail.Offset;                 // where this batch began
-        tail.Offset += lastNl + 1;
-
-        foreach (var range in SplitLines(buf.AsSpan(0, lastNl + 1)))
+        tail.Offset = TranscriptLines.Read(fs, tail.Offset, (line, offset, length) =>
         {
-            var line = Encoding.UTF8.GetString(buf, range.Start, range.Length);
-            if (line.Length == 0) continue;
-            try { Row(tail, line, baseOffset + range.Start, range.Length); }
+            if (line.Length == 0) return;
+            try { Row(tail, line, offset, length); }
             catch (JsonException) { /* one bad row must not kill the rest */ }
-        }
-    }
-
-    private static List<(int Start, int Length)> SplitLines(ReadOnlySpan<byte> span)
-    {
-        var lines = new List<(int, int)>();
-        var start = 0;
-        for (var i = 0; i < span.Length; i++)
-        {
-            if (span[i] != (byte)'\n') continue;
-            var end = i;
-            if (end > start && span[end - 1] == (byte)'\r') end--;   // tolerate CRLF
-            lines.Add((start, end - start));
-            start = i + 1;
-        }
-        return lines;
+        });
     }
 
     private static void Row(Tail tail, string line, long lineOffset, int lineLength)
@@ -323,7 +303,7 @@ internal sealed class TranscriptReader
         src.TryGetProperty("data", out var d) &&
         d.ValueKind == JsonValueKind.String;
 
-    /// Resolve an image id to its on-disk location. UI-thread only (touches
+    /// Resolve an image id to its on-disk location. Reader-owner only (touches
     /// _tails); the returned locator is immutable and safe to carry to a worker.
     public ImageLocator? LocateImage(Guid paneId, string imageId) =>
         _tails.TryGetValue(paneId, out var tail) &&
