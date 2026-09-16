@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -16,7 +15,8 @@ namespace Perch;
 /// expensive spawn in the app. Everything here is an in-process call.
 ///
 /// The split matters for cost. Toolhelp32 gives pid/ppid/name for every process
-/// in about a millisecond, which is all the ancestry walk needs. Command lines
+/// in about a millisecond, and NtQuerySystemInformation dates every process
+/// in one more, which is all the ancestry walk needs. Command lines
 /// are the expensive field (WMI), and only the LISTENING process's command line
 /// is ever read — Describe() never looks at an ancestor's — so the WMI query is
 /// filtered to that handful of pids instead of enumerating the box.
@@ -176,19 +176,29 @@ internal sealed class WindowsSystemProbe : ISystemProbe
         }
         finally { CloseHandle(snap); }
 
-        // Only listening processes need a command line (framework detection) and
-        // a start time (the "up 4m" label). Ancestors are walked for ppid alone,
-        // so enriching them would be pure cost.
         var want = new HashSet<int>();
         foreach (var l in listeners) if (l.Pid > 4) want.Add(l.Pid);
         if (want.Count == 0) return rows;
 
+        // Every row gets a start time: the ancestry walk needs them for the
+        // whole chain above a listener (an ancestor that started after its
+        // child is a recycled pid, and without the times the walk can't tell),
+        // and one kernel call dates the box, so there is nothing to save by
+        // picking. Only listening processes need a command line (framework
+        // detection) — that is the expensive field, and it stays filtered.
+        var times = CreateTimes();
         var cmds = CommandLines(want);
         for (var i = 0; i < rows.Count; i++)
         {
-            if (!want.Contains(rows[i].Pid)) continue;
-            cmds.TryGetValue(rows[i].Pid, out var cmd);
-            rows[i] = rows[i] with { Cmd = Scrub(cmd ?? ""), StartMs = StartMs(rows[i].Pid) };
+            var pid = rows[i].Pid;
+            times.TryGetValue(pid, out var start);
+            var row = rows[i] with { StartMs = start };
+            if (want.Contains(pid))
+            {
+                cmds.TryGetValue(pid, out var cmd);
+                row = row with { Cmd = Scrub(cmd ?? "") };
+            }
+            rows[i] = row;
         }
         return rows;
     }
@@ -222,15 +232,65 @@ internal sealed class WindowsSystemProbe : ISystemProbe
         return map;
     }
 
-    private static long StartMs(int pid)
+    private const int SystemProcessInformation = 5;
+    private const int STATUS_INFO_LENGTH_MISMATCH = unchecked((int)0xC0000004);
+
+    [DllImport("ntdll.dll")]
+    private static extern int NtQuerySystemInformation(int infoClass, IntPtr buf, int len, out int needed);
+
+    /// pid → creation time (unix ms) for every process on the box, from one
+    /// NtQuerySystemInformation call and no process handles. The handle route
+    /// (OpenProcess + GetProcessTimes, which is also what Process.StartTime
+    /// does) is refused for SYSTEM's services when Perch runs as a normal
+    /// user — so it could date the pane's perch.exe but never the wininit that
+    /// pointed at its recycled pid, which is the one comparison the pid-reuse
+    /// check exists to make. This is the source Task Manager and .NET's own
+    /// Process.GetProcesses read; the layout is the x64 SYSTEM_PROCESS_INFORMATION
+    /// (offsets derived from IntPtr.Size so an x86 build reads it too). A
+    /// missing pid, or a failed call, just leaves a time at 0 — the "up 4m"
+    /// label omits it and the reuse check skips it.
+    private static Dictionary<int, long> CreateTimes()
     {
+        var map = new Dictionary<int, long>();
+        var len = 512 * 1024;
+        var buf = Marshal.AllocHGlobal(len);
         try
         {
-            using var p = Process.GetProcessById(pid);
-            return new DateTimeOffset(p.StartTime.ToUniversalTime()).ToUnixTimeMilliseconds();
+            int status;
+            while ((status = NtQuerySystemInformation(SystemProcessInformation, buf, len, out var needed))
+                   == STATUS_INFO_LENGTH_MISMATCH)
+            {
+                len = Math.Max(needed + 64 * 1024, len * 2);
+                Marshal.FreeHGlobal(buf);
+                buf = Marshal.AllocHGlobal(len);
+            }
+            if (status != 0) { Log.Info($"SystemProbe.CreateTimes: NTSTATUS 0x{status:X8}"); return map; }
+
+            // NextEntryOffset(4) NumberOfThreads(4) WorkingSetPrivateSize(8)
+            // HardFaultCount(4) NumberOfThreadsHighWatermark(4) CycleTime(8)
+            // CreateTime(8) UserTime(8) KernelTime(8) ImageName(UNICODE_STRING)
+            // BasePriority(4, then pointer-aligned) UniqueProcessId(ptr) ...
+            const int createOff = 32;
+            var pidOff = Align(56 + 2 * IntPtr.Size + 4, IntPtr.Size);
+            var p = buf;
+            var end = IntPtr.Add(buf, len);
+            while (IntPtr.Add(p, pidOff + IntPtr.Size).ToInt64() <= end.ToInt64())
+            {
+                var next = Marshal.ReadInt32(p, 0);
+                var create = Marshal.ReadInt64(p, createOff);
+                var pid = (int)Marshal.ReadIntPtr(p, pidOff).ToInt64();
+                if (pid > 0 && create > 0)
+                    map[pid] = DateTimeOffset.FromFileTime(create).ToUnixTimeMilliseconds();
+                if (next <= 0) break;
+                p = IntPtr.Add(p, next);
+            }
         }
-        catch { return 0; }   // protected or already gone — the label just omits it
+        catch (Exception ex) { Log.Error("SystemProbe.CreateTimes", ex); }
+        finally { Marshal.FreeHGlobal(buf); }
+        return map;
     }
+
+    private static int Align(int v, int to) => (v + to - 1) / to * to;
 
     /// Command lines are arbitrary user text. One process launched with a raw
     /// BEL in its arguments used to poison the whole scan; the JSON hop that

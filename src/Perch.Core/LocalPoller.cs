@@ -119,11 +119,15 @@ internal sealed class LocalPoller
         var byPid = new Dictionary<int, RawProc>();
         foreach (var p in procs) if (p.Pid > 0) byPid[p.Pid] = p;
 
-        // pid → owning pane. Built with the indexer (not ToDictionary) so a
-        // duplicated pid — impossible in practice, but cheap to be safe about —
-        // can't throw the whole scan away.
+        // pid → owning pane, for the ancestry walk ONLY — so only panes without
+        // a job go in. A pane with a job has already been asked, and its "no"
+        // is final: letting the walk reach it anyway is how every Windows
+        // service once showed up owned by one pane (see FindOwnerByAncestry).
+        // Built with the indexer (not ToDictionary) so a duplicated pid —
+        // impossible in practice, but cheap to be safe about — can't throw the
+        // whole scan away.
         var paneByPid = new Dictionary<int, PaneProc>();
-        foreach (var p in panes) paneByPid[p.Pid] = p;
+        foreach (var p in panes) if (p.Scope == null) paneByPid[p.Pid] = p;
 
         var result = new List<LocalListener>();
         var seen = new HashSet<(int, int)>();
@@ -183,18 +187,34 @@ internal sealed class LocalPoller
     }
 
     /// Fallback: walk the listener's process ancestry until it hits a live
-    /// pane's root pid. Only reachable for a pane whose job we never got, since
-    /// a job answers first. Bounded and cycle-guarded — a corrupt ppid chain
-    /// must not spin — and it gives up the moment an ancestor is missing,
-    /// because a dead pid ends the chain.
+    /// pane's root pid. Only for panes whose job we never got (paneByPid holds
+    /// nothing else), since a job answers first and its answer is final.
+    /// Bounded and cycle-guarded — a corrupt ppid chain must not spin — and it
+    /// gives up the moment an ancestor is missing, because a dead pid ends the
+    /// chain.
+    ///
+    /// A dead pid can also be REUSED, and then the chain doesn't end, it lies:
+    /// wininit's ppid was the boot-time smss.exe, long gone, and the day that
+    /// number was handed to a `perch.exe wrap-claude` in a pane, every Windows
+    /// service "descended" from that pane. A parent always exists before its
+    /// child, so an ancestor that started AFTER the process pointing at it is a
+    /// recycled pid, and the walk stops there. Start times are 0 when unknown
+    /// (the mac probe, a protected process); 0 skips the check rather than
+    /// failing it.
     private static PaneProc? FindOwnerByAncestry(int pid, Dictionary<int, RawProc> procs, Dictionary<int, PaneProc> paneByPid)
     {
         var visited = new HashSet<int>();
         var cur = pid;
+        long childStart = 0;
         for (var hops = 0; hops < 32 && cur > 4 && visited.Add(cur); hops++)
         {
+            procs.TryGetValue(cur, out var row);
+            // Checked before the pane lookup: the recycled pid can be the
+            // pane's own root, and that must not attribute either.
+            if (row != null && childStart > 0 && row.StartMs > 0 && row.StartMs > childStart) break;
             if (paneByPid.TryGetValue(cur, out var pane)) return pane;
-            if (!procs.TryGetValue(cur, out var row)) break;
+            if (row == null) break;
+            childStart = row.StartMs;
             cur = row.Ppid;
         }
         return null;

@@ -118,4 +118,81 @@ public class LocalPollerParseTests
         var clean = "weird xarg";
         Assert.Same(clean, LocalPoller.StripControlChars(clean));
     }
+
+    /// The real shape from the box this bit: svchost(1280) → services(1724) →
+    /// wininit(1584) → ppid 1408. Pid 1408 was the boot-time smss.exe, long
+    /// dead, reused today by a `perch.exe wrap-claude` under pane root 3516.
+    /// Boot-time services carry an early start; the recycled pid a late one.
+    private const long Boot = 1_000;
+    private const long Today = 9_000;
+    private static IReadOnlyList<RawListener> SvchostListener() =>
+        new[] { new RawListener(135, 1280, "0.0.0.0") };
+    private static IReadOnlyList<RawProc> ReusedPidChain(int paneRoot) =>
+        new[]
+        {
+            new RawProc(1280, 1724, "svchost.exe", "svchost -k RPCSS", Boot),
+            new RawProc(1724, 1584, "services.exe", "", Boot),
+            new RawProc(1584, 1408, "wininit.exe", "", Boot),
+            new RawProc(1408, paneRoot, "perch.exe", "perch wrap-claude", Today),
+            new RawProc(paneRoot, 900, "cmd.exe", "", Today),
+        };
+
+    /// A scope that answers no to everything — a job that does not contain
+    /// the pid. Its "no" is final; the ancestry walk must not overrule it.
+    private sealed class NeverScope : IProcScope
+    {
+        public bool ContainsPid(int pid) => false;
+    }
+
+    /// Fix 1: a pane with a job is never a candidate for the ancestry walk,
+    /// so the reused pid cannot hand it every Windows service.
+    [Fact]
+    public void AJobsNoIsFinalEvenWhenAncestryWouldReachThePane()
+    {
+        var panes = new[] { new PaneProc(3516, "pane1", "shabtay-improve", "working", new NeverScope()) };
+        Assert.Empty(new LocalPoller().Build(SvchostListener(), ReusedPidChain(3516), panes));
+    }
+
+    /// Fix 2: with no job at all the walk runs, and stops at the ancestor that
+    /// started after its child — a parent exists before its child, so that pid
+    /// was recycled.
+    [Fact]
+    public void AReusedPidEndsTheAncestryWalkForAJoblessPane()
+    {
+        var panes = new[] { new PaneProc(3516, "pane1", "shabtay-improve", "working") };
+        Assert.Empty(new LocalPoller().Build(SvchostListener(), ReusedPidChain(3516), panes));
+    }
+
+    /// The recycled pid can be the pane's own root; that must not attribute
+    /// either, so the time check runs before the pane lookup.
+    [Fact]
+    public void AReusedPidThatIsThePaneRootStillDoesNotAttribute()
+    {
+        var listeners = new[] { new RawListener(135, 1280, "0.0.0.0") };
+        var procs = new[]
+        {
+            new RawProc(1280, 1584, "svchost.exe", "svchost -k RPCSS", Boot),
+            new RawProc(1584, 1408, "wininit.exe", "", Boot),
+            new RawProc(1408, 900, "cmd.exe", "", Today),
+        };
+        var panes = new[] { new PaneProc(1408, "pane1", "web", "working") };
+        Assert.Empty(new LocalPoller().Build(listeners, procs, panes));
+    }
+
+    /// Unknown start times (0) skip the check rather than failing it — the mac
+    /// probe fills none, and a jobless pane must still attribute there.
+    [Fact]
+    public void UnknownStartTimesDoNotBreakTheAncestryWalk()
+    {
+        var listeners = new[] { new RawListener(5173, 200, "127.0.0.1") };
+        var procs = new[]
+        {
+            new RawProc(200, 150, "node.exe", "node vite", 0),
+            new RawProc(150, 100, "sh", "", 0),
+            new RawProc(100, 1, "zsh", "", 0),
+        };
+        var panes = new[] { new PaneProc(100, "pane1", "web", "working") };
+        var l = Assert.Single(new LocalPoller().Build(listeners, procs, panes));
+        Assert.Equal("pane1", l.OwnerPaneId);
+    }
 }
