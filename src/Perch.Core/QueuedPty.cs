@@ -46,7 +46,11 @@ internal sealed class QueuedPty : IPty
             _queuedBytes += bytes.Length;
             if (_writing) return;
             _writing = true;
-            _ = Task.Run(Drain);
+            // A dedicated thread, not the pool: Drain blocks on the shell for
+            // as long as the shell wants, and a pool thread held that way is
+            // one the rest of the app (and a starved CI runner) waits seconds
+            // for. It exits as soon as the queue empties.
+            _ = Task.Factory.StartNew(Drain, TaskCreationOptions.LongRunning);
         }
     }
 
