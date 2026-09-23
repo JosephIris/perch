@@ -138,9 +138,11 @@ public sealed class Settings
     /// than a key file so the secret stays wherever it already lives.
     public string InboxKeyCommand { get; set; } = "";
 
-    /// Where an email's Claude starts. Empty = the inbox's own folder; set it
-    /// to a repo whose skills and data the emails usually need.
-    public string InboxWorkDir { get; set; } = "";
+    /// The project an email's session is filed under: it starts in that
+    /// repo (whose skills and data the emails usually need) and takes a colour
+    /// from the project like any of its tabs. Empty = no project; the session
+    /// starts in the inbox's own folder.
+    public string InboxProjectId { get; set; } = "";
 
     public string ResolveDefaultCwd()
     {

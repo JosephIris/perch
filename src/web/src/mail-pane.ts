@@ -54,75 +54,37 @@ function peekOf(body: string): string {
   return splitQuoted(body).fresh.replace(/\[image:[^\]]*\]/g, "").replace(/\s+/g, " ").trim().slice(0, 140);
 }
 
-export class MailPane {
-  readonly paneId: string;
-  readonly threadId: string;
-  readonly element: HTMLElement;
-  private readonly nameEl: HTMLElement;
-  private readonly stateDotEl: HTMLElement;
-  private readonly colorDotEl: HTMLElement;
-  private readonly branchEl: HTMLElement;
-  private readonly commitsEl: HTMLElement;
-  private readonly surface: HTMLElement;
+/** The thread itself — subject, state buttons, messages — rendered into a
+ *  scrolling surface. Shared by the email pane in a session and the Inbox's
+ *  reading panel; `requestId` is what the host's replies are addressed to. */
+export class MailView {
+  readonly surface: HTMLElement;
+  private readonly requestId: string;
+  threadId: string;
   /** Latest-message time of the copy on screen; a newer one in an inbox
    *  push means the thread was re-exported with new mail, so re-request. */
   private shownDate = "";
   private readonly stateButtons = new Map<InboxStateName, HTMLButtonElement>();
   private readonly images = new Map<string, HTMLImageElement>();
+  /** Extra controls for the header, beside the state buttons (the Inbox
+   *  reader adds "Open session" here). */
+  headerExtras: (() => HTMLElement | null) | null = null;
 
-  constructor(paneId: string, name: string, threadId: string) {
-    this.paneId = paneId;
+  constructor(requestId: string, threadId: string) {
+    this.requestId = requestId;
     this.threadId = threadId;
-
-    this.element = el("div", "pane pane--mail");
-    this.element.dataset.paneId = paneId;
-
-    const header = buildPaneHeader(paneId);
-    this.element.appendChild(header.root);
-    this.nameEl = header.nameEl;
-    this.stateDotEl = header.stateDotEl;
-    this.colorDotEl = header.colorDotEl;
-    this.branchEl = header.branchEl;
-    this.commitsEl = header.commitsEl;
-    this.nameEl.textContent = name;
-
-    const slot = el("div", "pane__mailslot");
     this.surface = el("div", "mail");
-    slot.appendChild(this.surface);
-    this.element.appendChild(slot);
     this.surface.appendChild(el("div", "mail__empty", "Loading the email…"));
-
-    this.element.addEventListener("mousedown", () => send({ type: "pane.focus", paneId: this.paneId }));
   }
 
-  attach(host: HTMLElement) {
-    host.appendChild(this.element);
-    send({ type: "inbox.mail.request", paneId: this.paneId, id: this.threadId });
-  }
-
-  dispose() { this.element.remove(); }
-  setName(name: string) { this.nameEl.textContent = name; }
-  setActive(active: boolean) { this.element.classList.toggle("pane--active", active); }
-  focus() { /* read-only surface */ }
-  feed(_b64: string) { /* no terminal to feed */ }
-  notifyExit(_code: number) { /* nothing to exit */ }
-  forceRefit() { /* flows like a document; nothing to re-measure */ }
-  changeFontSize(): number { return 0; }
-  resetFontSize(): number { return 0; }
-
-  applyLeafView(leaf: Extract<PaneTreeView, { kind: "leaf" }>) {
-    this.nameEl.textContent = leaf.name;
-    this.stateDotEl.dataset.state = leaf.agentState;
-    this.colorDotEl.dataset.color = String(leaf.colorIndex);
-    this.element.dataset.color = String(leaf.colorIndex);
-    applyChips(this.branchEl, this.commitsEl, leaf, false);
+  request() {
+    send({ type: "inbox.mail.request", paneId: this.requestId, id: this.threadId });
   }
 
   /** This thread's row from the latest inbox push, if it's in the list. */
   applyInboxItem(item: InboxItemView) {
     this.setState(item.state);
-    if (this.shownDate && item.date !== this.shownDate)
-      send({ type: "inbox.mail.request", paneId: this.paneId, id: this.threadId });
+    if (this.shownDate && item.date !== this.shownDate) this.request();
   }
 
   applyImage(name: string, dataUrl: string) {
@@ -135,6 +97,7 @@ export class MailPane {
   }
 
   applyMail(msg: InboxMailMessage) {
+    if (msg.threadId !== this.threadId) return;   // a reply for a thread no longer shown
     this.images.clear();
     this.stateButtons.clear();
     const frag = document.createDocumentFragment();
@@ -162,6 +125,8 @@ export class MailPane {
       this.stateButtons.set(a.state, b);
     }
     head.appendChild(actions);
+    const extra = this.headerExtras?.();
+    if (extra) head.appendChild(extra);
     frag.appendChild(head);
 
     const list = el("div", "mail__messages");
@@ -255,11 +220,74 @@ export class MailPane {
     img.title = `${name} — click to open`;
     img.addEventListener("click", () => this.openAttachment(name));
     this.images.set(name, img);
-    send({ type: "inbox.image.request", paneId: this.paneId, id: this.threadId, name });
+    send({ type: "inbox.image.request", paneId: this.requestId, id: this.threadId, name });
     return img;
   }
 
   private openAttachment(name: string) {
-    send({ type: "inbox.attachment.open", paneId: this.paneId, id: this.threadId, name });
+    send({ type: "inbox.attachment.open", paneId: this.requestId, id: this.threadId, name });
   }
+}
+
+export class MailPane {
+  readonly paneId: string;
+  readonly threadId: string;
+  readonly element: HTMLElement;
+  readonly view: MailView;
+  private readonly nameEl: HTMLElement;
+  private readonly stateDotEl: HTMLElement;
+  private readonly colorDotEl: HTMLElement;
+  private readonly branchEl: HTMLElement;
+  private readonly commitsEl: HTMLElement;
+
+  constructor(paneId: string, name: string, threadId: string) {
+    this.paneId = paneId;
+    this.threadId = threadId;
+
+    this.element = el("div", "pane pane--mail");
+    this.element.dataset.paneId = paneId;
+
+    const header = buildPaneHeader(paneId);
+    this.element.appendChild(header.root);
+    this.nameEl = header.nameEl;
+    this.stateDotEl = header.stateDotEl;
+    this.colorDotEl = header.colorDotEl;
+    this.branchEl = header.branchEl;
+    this.commitsEl = header.commitsEl;
+    this.nameEl.textContent = name;
+
+    const slot = el("div", "pane__mailslot");
+    this.view = new MailView(paneId, threadId);
+    slot.appendChild(this.view.surface);
+    this.element.appendChild(slot);
+
+    this.element.addEventListener("mousedown", () => send({ type: "pane.focus", paneId: this.paneId }));
+  }
+
+  attach(host: HTMLElement) {
+    host.appendChild(this.element);
+    this.view.request();
+  }
+
+  dispose() { this.element.remove(); }
+  setName(name: string) { this.nameEl.textContent = name; }
+  setActive(active: boolean) { this.element.classList.toggle("pane--active", active); }
+  focus() { /* read-only surface */ }
+  feed(_b64: string) { /* no terminal to feed */ }
+  notifyExit(_code: number) { /* nothing to exit */ }
+  forceRefit() { /* flows like a document; nothing to re-measure */ }
+  changeFontSize(): number { return 0; }
+  resetFontSize(): number { return 0; }
+
+  applyLeafView(leaf: Extract<PaneTreeView, { kind: "leaf" }>) {
+    this.nameEl.textContent = leaf.name;
+    this.stateDotEl.dataset.state = leaf.agentState;
+    this.colorDotEl.dataset.color = String(leaf.colorIndex);
+    this.element.dataset.color = String(leaf.colorIndex);
+    applyChips(this.branchEl, this.commitsEl, leaf, false);
+  }
+
+  applyInboxItem(item: InboxItemView) { this.view.applyInboxItem(item); }
+  applyImage(name: string, dataUrl: string) { this.view.applyImage(name, dataUrl); }
+  applyMail(msg: InboxMailMessage) { this.view.applyMail(msg); }
 }

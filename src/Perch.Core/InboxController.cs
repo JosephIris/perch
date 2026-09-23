@@ -244,7 +244,7 @@ internal sealed class InboxController : IDisposable
         }
         catch (DriveException ex) when (ex.Status == 403 && ex.Message.Contains("quota", StringComparison.OrdinalIgnoreCase))
         {
-            _message = $"Drive won't let the service account create files in your Drive. In the inbox folder, create an empty file named {InboxModel.StateFileName}, then press Refresh.";
+            _message = $"Google won't let the service account create files in your Drive. The Gmail inbox script creates {InboxModel.StateFileName} for you on its next run (update it to the latest version), or upload an empty one to the folder yourself.";
         }
         catch (DriveException ex) when (ex.Status is 403 or 404)
         {

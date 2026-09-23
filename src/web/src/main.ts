@@ -21,7 +21,7 @@ import { setHomeDir } from "./link-detect.js";
 import { Sidebar } from "./sidebar.js";
 import { Workspace } from "./workspace.js";
 import { Dashboard } from "./dashboard.js";
-import { Inbox } from "./inbox.js";
+import { Inbox, READER_ID } from "./inbox.js";
 import { installShortcutHint } from "./shortcut-hint.js";
 import { Toast } from "./toast.js";
 import { openSettings, applySettingsData, applyUpdateStatus } from "./settings.js";
@@ -241,6 +241,7 @@ onMessage((msg) => {
       // and disposes a stage only when its session drops out of this list.
       workspace.render(msg.sessions, msg.activeSessionId || null, msg.activePaneId || null);
       dashboard.render(msg.sessions);
+      inbox.setLiveSessions(msg.sessions.map((s) => s.id));
       const active = activeOf(msg);
       setStatus(active ? `${active.title}  ${active.shell}` : "no session");
       break;
@@ -338,10 +339,12 @@ onMessage((msg) => {
       workspace.applyInbox(msg.items);
       break;
     case "inbox.mail":
-      workspace.applyMail(msg);
+      if (msg.paneId === READER_ID) inbox.applyMail(msg);
+      else workspace.applyMail(msg);
       break;
     case "inbox.image":
-      workspace.applyMailImage(msg.paneId, msg.name, msg.dataUrl);
+      if (msg.paneId === READER_ID) inbox.applyImage(msg.name, msg.dataUrl);
+      else workspace.applyMailImage(msg.paneId, msg.name, msg.dataUrl);
       break;
     case "board.state":
       workspace.applyBoardState(msg.paneId, msg.nodes, msg.links);

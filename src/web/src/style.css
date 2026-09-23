@@ -8584,6 +8584,30 @@ body.show-inbox .inbox { display: flex; }
 .inbox__filter-count { font-family: var(--font-small); font-size: 11px; color: var(--color-text-tertiary); }
 
 .inbox__list { display: flex; flex-direction: column; gap: 2px; }
+.inbox__body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+/* Reading: list on the left, the email on the right, and the whole window
+ * width, since the width cap exists for a lone list. */
+.inbox.inbox--reading { padding-inline: var(--sp-32); }
+.inbox--reading .inbox__body { flex-direction: row; gap: var(--sp-16); }
+.inbox--reading .inbox__list { flex: 0 0 400px; overflow-y: auto; }
+.inbox__reader {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  border-left: 1px solid var(--color-stroke);
+  padding-left: var(--sp-8);
+}
+.inbox__row[aria-selected="true"] { background: var(--color-subtle-tertiary); }
+/* In the narrow list the reader has the state buttons; keep the row to
+ * sender, subject, snippet and date. */
+.inbox--reading .inbox__row { align-items: flex-start; }
+.inbox--reading .inbox__meta .chip,
+.inbox--reading .inbox__actions { display: none !important; }
+.inbox--reading .inbox__row:hover .inbox__meta { display: flex; }
+.inbox--reading .inbox__line1 { flex-wrap: wrap; }
+.mail__session { flex: 0 0 auto; white-space: nowrap; }
+.inbox { overflow-y: hidden; }
+.inbox:not(.inbox--reading) .inbox__body { overflow-y: auto; }
 .inbox__row {
   display: flex;
   align-items: center;

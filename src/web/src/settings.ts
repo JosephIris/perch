@@ -46,7 +46,7 @@ let facesToggle: HTMLButtonElement | null = null;
 let inboxToggle: HTMLButtonElement | null = null;
 let inboxFolderInput: HTMLInputElement | null = null;
 let inboxKeyInput: HTMLInputElement | null = null;
-let inboxWorkDirInput: HTMLInputElement | null = null;
+let inboxProjectDropdown: Dropdown | null = null;
 let newTabDropdown: Dropdown | null = null;
 let sleepIdleDropdown: Dropdown | null = null;
 let updateCheckBtn: HTMLButtonElement | null = null;
@@ -81,7 +81,8 @@ export function closeSettings(): void {
   inboxToggle = null;
   inboxFolderInput = null;
   inboxKeyInput = null;
-  inboxWorkDirInput = null;
+  inboxProjectDropdown?.dispose();
+  inboxProjectDropdown = null;
   newTabDropdown?.dispose();
   newTabDropdown = null;
   sleepIdleDropdown?.dispose();
@@ -132,7 +133,12 @@ export function applySettingsData(msg: SettingsDataMessage): void {
   if (inboxToggle) setToggle(inboxToggle, msg.inboxEnabled ?? false);
   if (inboxFolderInput) inboxFolderInput.value = msg.inboxDriveFolderId ?? "";
   if (inboxKeyInput) inboxKeyInput.value = msg.inboxKeyCommand ?? "";
-  if (inboxWorkDirInput) inboxWorkDirInput.value = msg.inboxWorkDir ?? "";
+  // A project that has since been unregistered falls back to "none" rather
+  // than a blank control.
+  const inboxProjects = [{ value: "", label: "None (the inbox's own folder)" },
+    ...(msg.projects ?? []).map((p) => ({ value: p.id, label: p.name }))];
+  inboxProjectDropdown?.setOptions(inboxProjects,
+    inboxProjects.some((o) => o.value === msg.inboxProjectId) ? msg.inboxProjectId! : "");
 
   // Absent → "top", matching the host's Settings.NewTabPosition default.
   newTabDropdown?.setOptions(
@@ -342,7 +348,7 @@ function save(): void {
     inboxEnabled: inboxToggle ? getToggle(inboxToggle) : undefined,
     inboxDriveFolderId: inboxFolderInput ? inboxFolderInput.value.trim() : undefined,
     inboxKeyCommand: inboxKeyInput ? inboxKeyInput.value.trim() : undefined,
-    inboxWorkDir: inboxWorkDirInput ? inboxWorkDirInput.value.trim() : undefined,
+    inboxProjectId: inboxProjectDropdown ? inboxProjectDropdown.value : undefined,
   });
   closeSettings();
 }
@@ -677,10 +683,10 @@ function buildSkeleton(): void {
   inboxPane.appendChild(makeWideRow("Key command",
     "A command that prints the service account's JSON key. Perch runs it when it syncs and never stores the key.",
     inboxKeyInput));
-  inboxWorkDirInput = textInput("The inbox's own folder");
-  inboxPane.appendChild(makeWideRow("Start Claude in",
-    "The folder an email's Claude works in, for example a repo whose tools the emails usually need. Empty uses the inbox folder.",
-    inboxWorkDirInput));
+  inboxProjectDropdown = new Dropdown();
+  inboxPane.appendChild(makeRow("Project",
+    "Email sessions are filed under this project: Claude starts in its folder, and each session gets a colour like the project's other tabs.",
+    inboxProjectDropdown.element));
 
   // ── About ───────────────────────────────────────────────────────────────
   const welcomeBtn = document.createElement("button");

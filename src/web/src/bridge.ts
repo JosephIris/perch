@@ -202,7 +202,7 @@ export type OutMessage =
       inboxEnabled?: boolean;
       inboxDriveFolderId?: string;
       inboxKeyCommand?: string;
-      inboxWorkDir?: string;
+      inboxProjectId?: string;
     }
   /* Email inbox. refresh = sync with Drive now; open = go to the email's tab,
    * making it (email left, Claude right) if there isn't one yet. */
@@ -211,6 +211,9 @@ export type OutMessage =
   | { type: "inbox.createStateFile" }
   | { type: "inbox.setState"; id: string; state: InboxStateName }
   | { type: "inbox.open"; id: string }
+  /* Read an email in the Inbox's panel: marks it read, answers with
+   * inbox.mail addressed to the reader (the empty id). */
+  | { type: "inbox.view"; id: string }
   /* From an email pane: its thread, one inline image, or open an attachment
    * with the system's default app. */
   | { type: "inbox.mail.request"; paneId: string; id: string }
@@ -1029,7 +1032,7 @@ export type SettingsDataMessage = {
   inboxEnabled?: boolean;
   inboxDriveFolderId?: string;
   inboxKeyCommand?: string;
-  inboxWorkDir?: string;
+  inboxProjectId?: string;
 };
 
 export type InboxStateName = "new" | "read" | "pending" | "done";

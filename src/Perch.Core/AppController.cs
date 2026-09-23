@@ -806,6 +806,9 @@ internal sealed partial class AppController
         .Add("inbox.createStateFile", () => _ = _inbox?.CreateStateFileAsync())
         .Add<InboxSetStateMsg>("inbox.setState", m => _inbox?.SetState(m.Id, m.State))
         .Add<InboxRef>("inbox.open", OnInboxOpen)
+        // Reading an email in the Inbox's panel: that's its read receipt. The
+        // panel isn't a pane, so the reply is addressed to the empty id.
+        .Add<InboxRef>("inbox.view", m => { _inbox?.MarkReadIfNew(m.Id); _inbox?.PostMail(Guid.Empty, m.Id); })
         .Add<InboxMailRequestMsg>("inbox.mail.request", m => _inbox?.PostMail(m.PaneId, m.Id))
         .Add<InboxMailRequestMsg>("inbox.image.request", m => _inbox?.PostImage(m.PaneId, m.Id, m.Name ?? ""))
         .Add<InboxMailRequestMsg>("inbox.attachment.open", OnInboxAttachmentOpen)
@@ -2625,9 +2628,19 @@ internal sealed partial class AppController
             PostToast("Couldn't write the email's instructions for Claude", "error", Guid.Empty);
             return;
         }
-        var cwd = FirstExistingDir(_settings.InboxWorkDir) ?? InboxController.Root;
+        var proj = Guid.TryParse(_settings.InboxProjectId, out var pid) ? _projects.ById(pid) : null;
+        if (proj != null && !Directory.Exists(proj.Path)) proj = null;
+        var cwd = proj?.Path ?? InboxController.Root;
 
         var s = _store.AddNew();
+        // Filed under the inbox's project like any of its tabs: nested in the
+        // sidebar, and a hue no sibling tab is using. Picked before ProjectId is
+        // set so the new tab's own placeholder colour doesn't count as taken.
+        if (proj != null)
+        {
+            s.Root.ColorIndex = _store.PickUnusedColorForProject(proj.Id);
+            s.ProjectId = proj.Id;
+        }
         var title = thread.Subject.Length > 0 ? thread.Subject : "Email";
         s.Title = title.Length > 60 ? title[..60] : title;
         s.IsAutoTitle = false;
@@ -4014,7 +4027,7 @@ internal sealed partial class AppController
                 inboxEnabled = _settings.InboxEnabled,
                 inboxDriveFolderId = _settings.InboxDriveFolderId,
                 inboxKeyCommand = _settings.InboxKeyCommand,
-                inboxWorkDir = _settings.InboxWorkDir,
+                inboxProjectId = _settings.InboxProjectId,
                 appVersion = _updates?.CurrentVersion,
                 updatable = _updates?.IsUpdatable ?? false,
             };
@@ -4116,7 +4129,7 @@ internal sealed partial class AppController
         if (msg.InboxDriveFolderId is string fid && _settings.InboxDriveFolderId != InboxFolderId(fid))
         { _settings.InboxDriveFolderId = InboxFolderId(fid); inboxDirty = true; }
         if (msg.InboxKeyCommand is string kc && _settings.InboxKeyCommand != kc.Trim()) { _settings.InboxKeyCommand = kc.Trim(); inboxDirty = true; }
-        if (msg.InboxWorkDir is string wd && _settings.InboxWorkDir != wd.Trim()) { _settings.InboxWorkDir = wd.Trim(); dirty = true; }
+        if (msg.InboxProjectId is string ip && _settings.InboxProjectId != ip.Trim()) { _settings.InboxProjectId = ip.Trim(); dirty = true; }
         if (inboxDirty) { dirty = true; _inbox?.OnSettingsChanged(); }
         if (dirty) _settings.Save();
         // Re-push so the font size propagates to live panes (no-op for

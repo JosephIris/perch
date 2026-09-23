@@ -3,12 +3,18 @@
 // family as the dashboard: opened from the sidebar's Inbox button, Esc or ✕
 // closes it.
 //
-// A row's click is its main verb: go to the email's session, making one
-// (email on the left, a Claude on the right) if there isn't one yet. The
-// state buttons on the row set read / pending / done without leaving the list.
+// Clicking a row READS the email, in a panel beside the list; starting a
+// session for it (email on the left, a Claude on the right) is a separate,
+// deliberate button in that panel. The row's hover buttons set read /
+// pending / done without opening anything.
 
 import { send } from "./bridge.js";
-import type { InboxStateMessage, InboxItemView, InboxStateName } from "./bridge.js";
+import type { InboxStateMessage, InboxItemView, InboxStateName, InboxMailMessage } from "./bridge.js";
+import { MailView } from "./mail-pane.js";
+
+/** Address of the reading panel in inbox.mail / inbox.image replies — not a
+ *  pane, so the empty id. */
+export const READER_ID = "00000000-0000-0000-0000-000000000000";
 import { closeTeamRoom } from "./team-room.js";
 import { openSettings } from "./settings.js";
 import { agoSpan } from "./elapsed.js";
@@ -57,6 +63,28 @@ export class Inbox {
   private readonly badge: HTMLElement;
   private last: InboxStateMessage | null = null;
   private filter: Filter = "open";
+  /** The email being read, if any. The reader outlives re-renders (its DOM
+   *  is moved, not rebuilt) so a list refresh doesn't reload the email. */
+  private selected: string | null = null;
+  private readonly reader = new MailView(READER_ID, "");
+  /** Tabs that exist right now, from the latest state push. The host's
+   *  thread → tab link outlives a closed tab; this is what says whether
+   *  "Go to session" still has somewhere to go. */
+  private liveSessions = new Set<string>();
+
+  setLiveSessions(ids: string[]) {
+    const next = new Set(ids);
+    const changed = next.size !== this.liveSessions.size || ids.some((id) => !this.liveSessions.has(id));
+    this.liveSessions = next;
+    if (changed && this.isOpen()) {
+      this.render();
+      if (this.selected) this.reader.request();   // the header's button label
+    }
+  }
+
+  private hasSession(item: InboxItemView | undefined): boolean {
+    return !!item?.sessionId && this.liveSessions.has(item.sessionId);
+  }
 
   constructor(root: HTMLElement, button: HTMLElement, badge: HTMLElement) {
     this.root = root;
@@ -88,7 +116,38 @@ export class Inbox {
     this.badge.textContent = String(n);
     this.badge.style.display = n > 0 ? "" : "none";
     if (!msg.enabled && this.isOpen()) this.hide();
+    const item = msg.items.find((i) => i.id === this.selected);
+    if (item) this.reader.applyInboxItem(item);
     this.render();
+  }
+
+  applyMail(msg: InboxMailMessage) { this.reader.applyMail(msg); }
+  applyImage(name: string, dataUrl: string) { this.reader.applyImage(name, dataUrl); }
+
+  private select(id: string) {
+    if (this.selected === id) return;
+    this.selected = id;
+    this.reader.threadId = id;
+    this.reader.surface.replaceChildren(el("div", "mail__empty", "Loading the email…"));
+    this.reader.headerExtras = () => this.sessionButton(id);
+    // The host marks it read and answers with inbox.mail for READER_ID.
+    send({ type: "inbox.view", id });
+    this.render();
+  }
+
+  /** The panel's one call to action: start working on this email with Claude,
+   *  or go back to the session already started for it. */
+  private sessionButton(id: string): HTMLElement {
+    const item = this.last?.items.find((i) => i.id === id);
+    const b = el("button", "settings-btn settings-btn--accent mail__session",
+      this.hasSession(item) ? "Go to session" : "Open session") as HTMLButtonElement;
+    b.type = "button";
+    b.addEventListener("click", () => {
+      closeTeamRoom();
+      send({ type: "inbox.open", id });
+      this.hide();
+    });
+    return b;
   }
 
   private render() {
@@ -169,16 +228,25 @@ export class Inbox {
     frag.appendChild(tabs);
 
     const items = msg.items.filter((i) => matches(this.filter, i.state));
+    if (this.selected && !msg.items.some((i) => i.id === this.selected)) this.selected = null;
+    this.root.classList.toggle("inbox--reading", this.selected !== null);
+    const body = el("div", "inbox__body");
     if (!items.length) {
-      frag.appendChild(el("div", "inbox__empty",
+      body.appendChild(el("div", "inbox__empty",
         msg.items.length
           ? "Nothing in this view."
           : "No emails yet. Label an email “claude” in Gmail and it shows up here within about 5 minutes."));
     } else {
       const list = el("div", "inbox__list");
       for (const item of items) list.appendChild(this.row(item));
-      frag.appendChild(list);
+      body.appendChild(list);
     }
+    if (this.selected) {
+      const panel = el("div", "inbox__reader");
+      panel.appendChild(this.reader.surface);
+      body.appendChild(panel);
+    }
+    frag.appendChild(body);
     this.root.replaceChildren(frag);
   }
 
@@ -186,14 +254,9 @@ export class Inbox {
     const row = el("div", "inbox__row");
     row.dataset.state = item.state;
     row.tabIndex = 0;
-    row.title = item.sessionId ? "Go to this email's session" : "Open a session for this email";
-    const open = () => {
-      closeTeamRoom();
-      send({ type: "inbox.open", id: item.id });
-      this.hide();
-    };
-    row.addEventListener("click", open);
-    row.addEventListener("keydown", (ev) => { if (ev.key === "Enter") open(); });
+    row.setAttribute("aria-selected", String(item.id === this.selected));
+    row.addEventListener("click", () => this.select(item.id));
+    row.addEventListener("keydown", (ev) => { if (ev.key === "Enter") this.select(item.id); });
 
     row.appendChild(el("span", "inbox__dot"));
     const main = el("div", "inbox__main");
@@ -208,7 +271,7 @@ export class Inbox {
     const side = el("div", "inbox__side");
     const meta = el("div", "inbox__meta");
     if (item.attachmentCount) meta.appendChild(el("span", "chip", `${item.attachmentCount} file${item.attachmentCount === 1 ? "" : "s"}`));
-    if (item.sessionId) meta.appendChild(el("span", "chip inbox__chip-session", "Session"));
+    if (this.hasSession(item)) meta.appendChild(el("span", "chip inbox__chip-session", "Session"));
     meta.appendChild(el("span", `inbox__state inbox__state--${item.state}`, STATE_LABEL[item.state]));
     meta.appendChild(el("span", "inbox__date", shortDate(item.date)));
     side.appendChild(meta);

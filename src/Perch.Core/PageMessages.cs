@@ -418,7 +418,7 @@ internal sealed record SettingsSaveMsg
     public bool? InboxEnabled { get; init; }
     public string? InboxDriveFolderId { get; init; }
     public string? InboxKeyCommand { get; init; }
-    public string? InboxWorkDir { get; init; }
+    public string? InboxProjectId { get; init; }
 }
 
 /// A thread in the email inbox, by its Gmail thread id.
