@@ -386,7 +386,9 @@ internal sealed class ChatController : IDisposable
         var v = name switch
         {
             "Bash" => S("command"),
-            "Read" or "Edit" or "Write" => S("file_path") is { } f ? Path.GetFileName(f) : null,
+            // Either separator: Claude on Windows reports C:\x\y, and a Mac
+            // build must still show just the file name.
+            "Read" or "Edit" or "Write" => S("file_path") is { } f ? f.Split('/', '\\').Last() : null,
             "Grep" or "Glob" => S("pattern"),
             "WebFetch" => S("url"),
             "WebSearch" => S("query"),
