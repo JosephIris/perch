@@ -139,7 +139,7 @@ export class MailView {
     this.shownDate = msg.messages.length ? msg.messages[lastIdx].date : "";
     // Older messages are folded, so the newest one sits right under the
     // header; start at the top.
-    this.surface.scrollTop = 0;
+    list.scrollTop = 0;
   }
 
   /** One message card. `folded` = an earlier message in the thread: one line

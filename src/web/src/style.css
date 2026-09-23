@@ -4168,6 +4168,9 @@ button.pane__chip--ports:hover {
   border-color: var(--color-accent);
 }
 .settings-control--text {
+  /* Paths and commands: a ligature turning " --" into one glyph hides the
+   * space, and the space is the part you are checking. */
+  font-variant-ligatures: none;
   width: 260px;
   font-family: var(--font-mono);
   font-size: 13px;
@@ -8663,16 +8666,19 @@ body.show-inbox .inbox { display: flex; }
  * The left half of an email's session: the thread as a readable document.
  * Built by mail-pane.ts. */
 .pane__mailslot { flex: 1 1 auto; min-height: 0; min-width: 0; display: flex; }
-.mail { flex: 1 1 auto; min-width: 0; overflow-y: auto; overflow-x: hidden; padding: var(--sp-16) var(--sp-24) var(--sp-24); }
+/* A header row that stays put, and the messages scrolling under it. The
+ * header is a row of the layout, not a sticky overlay, so it needs no
+ * background of its own (a painted one read as a stray band). */
+.mail { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .mail__empty { color: var(--color-text-tertiary); padding: var(--sp-24) 0; }
 .mail__head {
-  display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--sp-8) var(--sp-16);
-  /* Pinned: the state buttons are what you reach for after reading. */
-  position: sticky; top: calc(-1 * var(--sp-16)); z-index: 1;
-  margin: calc(-1 * var(--sp-16)) 0 var(--sp-16);
-  padding: var(--sp-16) 0 var(--sp-12);
-  background: var(--color-terminal-bg);
+  flex: 0 0 auto;
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-8) var(--sp-12);
+  padding: var(--sp-16) var(--sp-24) var(--sp-12);
+  border-bottom: 1px solid var(--color-stroke);
 }
+.mail__messages { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: var(--sp-16) var(--sp-24) var(--sp-24); }
+.mail > .mail__empty { padding: var(--sp-24); }
 .mail__subject {
   flex: 1 1 16ch;
   min-width: 0;
@@ -8683,16 +8689,22 @@ body.show-inbox .inbox { display: flex; }
   line-height: 1.3;
   color: var(--color-text-primary);
 }
-.mail__states { display: flex; gap: 2px; flex: 0 0 auto; }
+/* One segmented control, so the three states read as a single choice. */
+.mail__states {
+  display: inline-flex; flex: 0 0 auto; gap: 2px; padding: 2px;
+  border: 1px solid var(--color-stroke); border-radius: var(--r-pill);
+}
 .mail__state {
   font-size: var(--type-caption-size);
-  padding: 3px var(--sp-8);
+  line-height: 16px;
+  padding: 4px var(--sp-12);
   border-radius: var(--r-pill);
   color: var(--color-text-secondary);
 }
-.mail__state:hover { background: var(--color-subtle-secondary); }
+.mail__state:hover { background: var(--color-subtle-secondary); color: var(--color-text-primary); }
 .mail__state[aria-pressed="true"] { background: var(--color-subtle-tertiary); color: var(--color-text-primary); }
 .mail__messages { display: flex; flex-direction: column; gap: var(--sp-12); }
+.mail__messages > * { flex: 0 0 auto; }
 .mail__msg { background: var(--color-layer); border-radius: var(--r-card); padding: var(--sp-12) var(--sp-16); }
 .mail__meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px var(--sp-12); cursor: pointer; }
 /* Folded = an earlier message: sender, first words, date. Click opens it. */
