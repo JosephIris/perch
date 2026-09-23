@@ -33,6 +33,19 @@ public class ProtocolTests
     }
 
     [Fact]
+    public void Inbox_Messages()
+    {
+        Assert.Equal("t1", Round<InboxRef>("{\"type\":\"inbox.view\",\"id\":\"t1\"}").Id);
+        var st = Round<InboxSetStateMsg>("{\"type\":\"inbox.setState\",\"id\":\"t1\",\"state\":\"done\"}");
+        Assert.Equal(("t1", "done"), (st.Id, st.State));
+        var img = Round<InboxMailRequestMsg>($"{{\"type\":\"inbox.image.request\",\"paneId\":\"{G1}\",\"id\":\"t1\",\"name\":\"1_1_image.png\"}}");
+        Assert.Equal((Guid.Parse(G1), "1_1_image.png"), (img.PaneId, img.Name));
+        Assert.Null(Round<InboxMailRequestMsg>($"{{\"type\":\"inbox.mail.request\",\"paneId\":\"{G1}\",\"id\":\"t1\"}}").Name);
+        var s = Round<SettingsSaveMsg>("{\"type\":\"settings.save\",\"inboxEnabled\":true,\"inboxProjectId\":\"\"}");
+        Assert.Equal((true, ""), (s.InboxEnabled, s.InboxProjectId));
+    }
+
+    [Fact]
     public void PaneAck()
     {
         var m = Round<PaneAckMsg>($"{{\"type\":\"pane.ack\",\"paneId\":\"{G1}\",\"bytes\":65536}}");
