@@ -143,6 +143,24 @@ export function pullPairsAdjacent(list: SessionView[]): SessionView[] {
   return out;
 }
 
+/** The project chat's mark in the sidebar: a single-stroke speech bubble. */
+function chatGlyph(): SVGElement {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("class", "session-item__agent session-item__chat");
+  svg.setAttribute("width", "14");
+  svg.setAttribute("height", "14");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "1.8");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+  const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  p.setAttribute("d", "M4 5h16v11H9l-5 4z");
+  svg.appendChild(p);
+  return svg;
+}
+
 /** A project chat's threads sit directly under it, in number order, when
  *  they share a list with it. Threads whose project chat is elsewhere (in
  *  another group, or closed) keep their place. */
@@ -1402,7 +1420,10 @@ export class Sidebar {
     // Who runs here, before the title: the agent's own mark (Claude Code's
     // creature, the Codex blob), one per distinct agent in the tab. A plain
     // shell has none, and its title simply starts where the mark would.
-    for (const agent of (s.agents ?? []).slice(0, 2)) {
+    // A project chat wears a speech bubble instead: it is a conversation, not
+    // an agent in a terminal, and its row should say so at a glance.
+    if (s.isLead) primary.appendChild(chatGlyph());
+    for (const agent of (s.isLead ? [] : s.agents ?? []).slice(0, 2)) {
       const glyph = agentGlyph(agent);
       if (glyph) {
         glyph.classList.add("session-item__agent");

@@ -14,7 +14,7 @@
 // pane would float over the visible one — we tear those down on hide and let
 // them rebuild (page reload, no scrollback to lose) when the session returns.
 
-import type { PaneTreeView, SessionView, BoardNodeView, BoardLinkView, InboxMailMessage, InboxItemView } from "./bridge.js";
+import type { PaneTreeView, SessionView, BoardNodeView, BoardLinkView, InboxMailMessage, InboxItemView, ChatEntryView } from "./bridge.js";
 import { send } from "./bridge.js";
 import { Pane, DEFAULT_FONT_SIZE, type PaneSnapshot } from "./pane.js";
 import { openSettings } from "./settings.js";
@@ -22,12 +22,13 @@ import { UrlPane } from "./url-pane.js";
 import { BoardPane } from "./board-pane.js";
 import { MailPane } from "./mail-pane.js";
 import { ThreadsPane } from "./threads-pane.js";
+import { ChatPane } from "./chat-pane.js";
 import { PANE_LEAVE_MS } from "./anim.js";
 import { showPaneChooser } from "./pane-chooser.js";
 import { closeTeamRoom } from "./team-room.js";
 import { treeSignature, computeEdge, isStageEntry, type Edge } from "./layout.js";
 
-type LeafPane = Pane | UrlPane | BoardPane | MailPane | ThreadsPane;
+type LeafPane = Pane | UrlPane | BoardPane | MailPane | ThreadsPane | ChatPane;
 
 /** One mounted session: its container DIV (hidden when inactive), the panes
  *  keyed by id (reused across renders to preserve terminal state), and the
@@ -429,6 +430,8 @@ export class Workspace {
       if (pane instanceof BoardPane) pane.setBoardPath(stage.boardPath);
       // A project chat's threads are sessions pointing back at this tab.
       if (pane instanceof ThreadsPane) pane.setThreads(this.sessions.filter((s) => s.threadOf === stage.sessionId));
+      if (pane instanceof ChatPane)
+        pane.setSession(this.sessions.find((s) => s.id === stage.sessionId), this.sessions.filter((s) => s.threadOf === stage.sessionId));
       return;
     }
     for (const c of node.children) this.applyState(stage, c);
@@ -588,6 +591,20 @@ export class Workspace {
     }
   }
 
+  /** A project chat's conversation from the host. */
+  applyChatHistory(paneId: string, entries: ChatEntryView[], running: boolean, queued: number) {
+    const pane = this.findPane(paneId);
+    if (pane instanceof ChatPane) pane.applyHistory(entries, running, queued);
+  }
+  applyChatEntry(paneId: string, entry: ChatEntryView) {
+    const pane = this.findPane(paneId);
+    if (pane instanceof ChatPane) pane.applyEntry(entry);
+  }
+  applyChatStatus(paneId: string, running: boolean, queued: number) {
+    const pane = this.findPane(paneId);
+    if (pane instanceof ChatPane) pane.applyStatus(running, queued);
+  }
+
   /** An email pane's thread arrived (inbox.mail). */
   applyMail(msg: InboxMailMessage) {
     const pane = this.findPane(msg.paneId);
@@ -680,6 +697,8 @@ export class Workspace {
           ? new MailPane(node.paneId, node.name, node.mailId)
           : node.isThreads
           ? new ThreadsPane(node.paneId, node.name)
+          : node.isChat
+          ? new ChatPane(node.paneId)
           : new Pane(node.paneId, node.name, this.defaultFontSize, this.defaultFontFamily);
         stage.panes.set(node.paneId, pane);
         if (pane instanceof Pane) {

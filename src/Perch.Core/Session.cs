@@ -121,6 +121,10 @@ internal sealed class Session : INotifyPropertyChanged
     public string ThreadLastReply { get; set; } = "";
     public long ThreadReplyAtMs { get; set; }
 
+    /// On a project chat: whether its Claude conversation exists yet. The
+    /// first turn creates it (`--session-id`), every later one resumes it.
+    public bool ChatStarted { get; set; }
+
     // ----- Incoming pair note (transient, like NotificationText) -----------
     // The last cross-session message that ARRIVED at this tab (or, warn level,
     // the last delivery failure by this tab). Rendered as a quiet note line on
@@ -350,6 +354,11 @@ internal sealed class PaneNode
     /// sessions, and the page draws the panel from the state push.
     public bool IsThreads { get; set; }
 
+    /// When true on a leaf, the pane is a project chat's CHAT: a conversation
+    /// drawn by the page, each turn a headless run of the leaf's Claude
+    /// session (ClaudeSessionId) — see ChatController. Never a terminal.
+    public bool IsChat { get; set; }
+
     /// Last working directory this leaf's shell reported via OSC 7. PERSISTED
     /// (not [JsonIgnore]) so a restored/respawned pane reopens in the same
     /// directory the user had cd'd to — previously cwd lived only at the
@@ -572,7 +581,7 @@ internal sealed class PaneNode
     /// so anything that spawns, resumes, names-from-agent-output, or counts as
     /// "a pane doing work" should ask for this rather than testing !IsWebView
     /// and forgetting boards exist.
-    [JsonIgnore] public bool IsTerminal => IsLeaf && !IsWebView && !IsBoard && !IsMail && !IsThreads;
+    [JsonIgnore] public bool IsTerminal => IsLeaf && !IsWebView && !IsBoard && !IsMail && !IsThreads && !IsChat;
     [JsonIgnore] public bool IsMail => IsLeaf && !string.IsNullOrEmpty(MailId);
     [JsonIgnore] public bool HasNotification => !string.IsNullOrEmpty(NotificationText);
 }

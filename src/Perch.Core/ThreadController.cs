@@ -42,11 +42,34 @@ internal sealed class ThreadController
         public required Action PushState { get; init; }
         public required Action<string> Toast { get; init; }
         public required LineDelivery.Host Delivery { get; init; }
+        /// A project chat drawn by the page: tell it something (a notice row
+        /// and the text its next turn gets). False when the lead is an older
+        /// terminal project chat, which is typed into instead.
+        public Func<Session, string, string, bool>? NotifyChat { get; init; }
+        /// Show a notice in a project chat without giving it to Claude — for
+        /// things only the user can act on. `threadId` makes it openable.
+        public Action<Session, string, Guid?>? InformChat { get; init; }
     }
 
     /// What a project chat and its threads may run without a permission
     /// prompt: their own `perch thread` commands, and nothing else.
     public const string AllowedTools = "Bash(perch thread:*)";
+
+    /// The same rule for each shell tool Claude Code may run commands with:
+    /// Bash everywhere, and PowerShell on Windows when it is enabled — a
+    /// pattern for one never matches a command run through the other.
+    internal static IEnumerable<string> ForShells(params string[] commands) =>
+        commands.SelectMany(c => new[] { $"Bash({c}:*)", $"PowerShell({c}:*)" });
+
+    /// What a thread may do without asking, on top of editing files (it runs
+    /// with acceptEdits): its `perch thread` commands and committing on its
+    /// own branch. A thread's worktree is its own, so none of this can touch
+    /// the user's checkout; pushing, installing and the rest still ask.
+    public static readonly string[] ThreadAllowedTools =
+        ForShells("perch thread", "git add", "git commit", "git status", "git diff", "git log").ToArray();
+
+    /// Threads last seen blocked on the user, so each wait is announced once.
+    private readonly HashSet<Guid> _waiting = new();
 
     private readonly Host _h;
     public LineDelivery Delivery { get; }
@@ -91,13 +114,15 @@ internal sealed class ThreadController
         - `perch thread read <n>` prints a thread's last full report.
         - `perch thread close <n>` closes a thread's tab; its branch and commits stay.
 
-        When a thread finishes a turn, a line starting with `[Perch #…]` arrives here saying so. Read the report with `perch thread read <n>`, check it, then decide: follow up with that thread, start others, or report to the user. A thread can also ask you something mid-task the same way.
+        When a thread finishes a turn, a message starting with `[Perch` arrives saying so, usually with its report. Check the report (`perch thread read <n>` if it isn't included), then decide: follow up with that thread, start others, or report to the user. A thread can also ask you something mid-task the same way.
+
+        Never wait for threads: no sleeping, no scheduling a wake-up, no checking `perch thread list` over and over. Once the threads are started, tell the user briefly what is running and end your turn. Perch starts your next turn when a thread reports or asks you something. If a thread is stuck waiting for the user's permission, the user is told directly; you don't need to watch for it.
 
         ## How to work
         - Scope the request first. If what the user wants is unclear, ask before starting threads.
-        - Do small things yourself (a quick lookup, a one-line answer). Give a thread anything substantial, and give independent pieces separate threads so they run in parallel. Ask the user before running more than four at once.
+        - You can read and search this repo, look at git history and diffs, and search the web, but you can't edit files or run other commands. Anything that changes something is a thread's job, and so is anything substantial. Answer quick questions yourself. Give independent pieces separate threads so they run in parallel. Ask the user before running more than four at once.
         - Threads commit on their own branches. Merging into the main branch is the user's decision: tell them which branch holds what and offer to merge it.
-        - Keep the user posted briefly and lead with results. Lines starting with `[Perch #…]` come from Perch, not from the user.
+        - Keep the user posted briefly and lead with results. Messages starting with `[Perch` come from Perch, not from the user; you may get several in one turn, together with what the user wrote.
         """;
 
     // ---- a thread ----------------------------------------------------------
@@ -175,7 +200,8 @@ internal sealed class ThreadController
                 if ((m.Target ?? "").Equals("lead", StringComparison.OrdinalIgnoreCase))
                 {
                     if (!fromThread) return "error\nYou are the project chat.";
-                    Delivery.Enqueue(lead.Id, $"Thread {sess.ThreadNumber} ({sess.Title}) asks: {text}");
+                    TellLead(lead, $"Thread {sess.ThreadNumber} ({sess.Title}) asks: {text}",
+                        $"Thread {sess.ThreadNumber} ({sess.Title}) asks: {text}");
                     return "ok\nQueued for the project chat.\n";
                 }
                 if (fromThread) return "error\nA thread can only message the project chat: perch thread send lead \"…\"";
@@ -241,7 +267,9 @@ internal sealed class ThreadController
 
     internal static string FirstLine(string text, int max)
     {
-        var l = (text ?? "").Split('\n').Select(x => x.Trim()).FirstOrDefault(x => x.Length > 0) ?? "";
+        // A one-line summary is shown as plain text, so drop Markdown's marks.
+        var plain = System.Text.RegularExpressions.Regex.Replace(text ?? "", @"\*\*|__|`|^#+\s*", "", System.Text.RegularExpressions.RegexOptions.Multiline);
+        var l = plain.Split('\n').Select(x => x.Trim()).FirstOrDefault(x => x.Length > 0) ?? "";
         return l.Length > max ? l[..max].TrimEnd() + "…" : l;
     }
 
@@ -266,11 +294,24 @@ internal sealed class ThreadController
         switch (msg.State)
         {
             case "working":
+                _waiting.Remove(sess.Id);
                 if (!string.IsNullOrEmpty(msg.Detail)) Delivery.OnPromptSubmitted(sess.Id, msg.Detail);
                 break;
             case "done":
                 Delivery.OnFree(sess.Id);
+                _waiting.Remove(sess.Id);
                 if (sess.ThreadOf != null) _ = CaptureAsync(sess);
+                break;
+            case "permission":
+            case "waiting":
+                // A thread stuck on a question only the user can answer: say so
+                // in the chat, once per wait, with a way to go and answer it.
+                if (sess.ThreadOf is Guid lid && _waiting.Add(sess.Id) && _h.SessionById(lid) is Session lead)
+                    _h.InformChat?.Invoke(lead,
+                        msg.State == "permission"
+                            ? $"Thread {sess.ThreadNumber} ({sess.Title}) is waiting for your permission."
+                            : $"Thread {sess.ThreadNumber} ({sess.Title}) is waiting for you.",
+                        sess.Id);
                 break;
             case "idle":
                 Delivery.OnFree(sess.Id);
@@ -312,8 +353,23 @@ internal sealed class ThreadController
         if (string.IsNullOrWhiteSpace(reply) || reply == thread.ThreadLastReply) return;
         Record(thread, reply);
         if (thread.ThreadOf is Guid lid && _h.SessionById(lid) is Session lead)
-            Delivery.Enqueue(lead.Id,
-                $"Thread {thread.ThreadNumber} ({thread.Title}) finished its turn: \"{FirstLine(reply, 160)}\" Full report: perch thread read {thread.ThreadNumber}");
+        {
+            var shown = $"Thread {thread.ThreadNumber} ({thread.Title}) finished its turn: \"{FirstLine(reply, 160)}\"";
+            TellLead(lead,
+                shown + $" Full report: perch thread read {thread.ThreadNumber}",
+                $"Thread {thread.ThreadNumber} ({thread.Title}) finished its turn. Its report:\n\n{reply.Trim()}",
+                shown);
+        }
+    }
+
+    /// Tell the project chat something: its page conversation when it has
+    /// one, else type it into its terminal. `line` is what a terminal gets
+    /// typed; `full` what a chat's next turn gets; `shown` the chat's notice
+    /// (defaults to `line`).
+    private void TellLead(Session lead, string line, string full, string? shown = null)
+    {
+        if (_h.NotifyChat?.Invoke(lead, shown ?? line, full) == true) return;
+        Delivery.Enqueue(lead.Id, line);
     }
 
     private void Record(Session thread, string reply)

@@ -423,6 +423,13 @@ internal sealed record SettingsSaveMsg
     public string? InboxProjectId { get; init; }
 }
 
+/// A message typed into a project chat's conversation.
+internal sealed record ChatSendMsg
+{
+    public required Guid PaneId { get; init; }
+    public required string Text { get; init; }
+}
+
 /// A thread in the email inbox, by its Gmail thread id.
 internal sealed record InboxRef
 {

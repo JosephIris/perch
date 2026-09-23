@@ -210,6 +210,10 @@ export type OutMessage =
   | { type: "inbox.refresh" }
   /* A new project chat under this project: coordinator Claude + threads panel. */
   | { type: "projectchat.new"; id: string }
+  /* A project chat's conversation: its history, a message, stop the turn. */
+  | { type: "chat.request"; paneId: string }
+  | { type: "chat.send"; paneId: string; text: string }
+  | { type: "chat.stop"; paneId: string }
   /* Make perch-state.json in the Drive folder so states are shared. */
   | { type: "inbox.createStateFile" }
   | { type: "inbox.setState"; id: string; state: InboxStateName }
@@ -415,6 +419,8 @@ export type PaneTreeView =
       mailId?: string | null;
       /* Fourth leaf kind: the threads panel of a project chat. */
       isThreads?: boolean;
+      /* Fifth: a project chat's conversation, drawn by the page. */
+      isChat?: boolean;
       /* Color tag (0–5) into the pane palette in style.css. */
       colorIndex: number;
       /* Per-pane agent state — pane header surfaces this directly so
@@ -1054,6 +1060,11 @@ export type SettingsDataMessage = {
 
 export type InboxStateName = "new" | "read" | "pending" | "done";
 
+/* One row of a project chat: "user" (what you wrote), "claude" (its prose,
+ * Markdown), "tool" (a tool it used: `tool` is the name, `text` the target),
+ * "notice" (from Perch: a thread finished, a thread asks) or "error". */
+export type ChatEntryView = { id: string; kind: "user" | "claude" | "tool" | "notice" | "error"; text: string; tool: string; atMs: number };
+
 export type InboxItemView = {
   id: string;
   subject: string;
@@ -1107,6 +1118,9 @@ export type InMessage =
   | SettingsDataMessage
   | InboxStateMessage
   | InboxMailMessage
+  | { type: "chat.history"; paneId: string; entries: ChatEntryView[]; running: boolean; queued: number }
+  | { type: "chat.entry"; paneId: string; entry: ChatEntryView }
+  | { type: "chat.status"; paneId: string; running: boolean; queued: number }
   | { type: "inbox.image"; paneId: string; name: string; dataUrl: string }
   | CommitsDataMessage
   | { type: "pane.ready"; paneId: string }

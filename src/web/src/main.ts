@@ -340,6 +340,15 @@ onMessage((msg) => {
       inbox.apply(msg);
       workspace.applyInbox(msg.items);
       break;
+    case "chat.history":
+      workspace.applyChatHistory(msg.paneId, msg.entries, msg.running, msg.queued);
+      break;
+    case "chat.entry":
+      workspace.applyChatEntry(msg.paneId, msg.entry);
+      break;
+    case "chat.status":
+      workspace.applyChatStatus(msg.paneId, msg.running, msg.queued);
+      break;
     case "inbox.mail":
       if (msg.paneId === READER_ID) inbox.applyMail(msg);
       else workspace.applyMail(msg);

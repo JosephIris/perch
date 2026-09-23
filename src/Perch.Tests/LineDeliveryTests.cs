@@ -130,5 +130,6 @@ public class LineDeliveryTests
         Assert.Contains("Make the login page load.", p);
         Assert.Contains("perch thread send lead", p);
         Assert.Equal("First line", ThreadController.FirstLine("\n  First line\nsecond", 50));
+        Assert.Equal("Done. Added farewell().", ThreadController.FirstLine("**Done.** Added `farewell()`.", 50));
     }
 }

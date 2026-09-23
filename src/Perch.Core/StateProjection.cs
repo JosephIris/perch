@@ -320,6 +320,8 @@ internal static class StateProjection
                 mailId = node.MailId,
                 // Fourth: the threads panel of a project chat (PaneNode.IsThreads).
                 isThreads = node.IsThreads,
+                // Fifth: a project chat's conversation (PaneNode.IsChat).
+                isChat = node.IsChat,
                 colorIndex = node.ColorIndex,
                 // Per-pane state — shows up in the pane header so each
                 // pane's agent status is visible at a glance, no clicking

@@ -420,6 +420,36 @@ internal sealed partial class AppController
                 EnsureRunning = sess => { if (sess.Dormant) WakeSession(sess); EnsureSessionRunning(sess); },
                 GaveUp = (sess, line) => PostToast($"Perch couldn't get a message into \"{sess.Title}\"", "error", Guid.Empty),
             },
+            InformChat = (lead, text, threadId) => _chatCtrl?.Inform(lead, text, threadId),
+            NotifyChat = (lead, line, full) =>
+            {
+                if (!AllLeaves(lead.Root).Any(p => p.IsChat)) return false;
+                _chatCtrl?.Notice(lead, line, full);
+                return true;
+            },
+        });
+        _chatCtrl = new ChatController(new ChatController.Host
+        {
+            ChatByPane = paneId =>
+            {
+                var s = OwningSession(paneId);
+                var leaf = s == null ? null : AllLeaves(s.Root).FirstOrDefault(p => p.Id == paneId && p.IsChat);
+                return s != null && leaf != null ? (s, leaf) : null;
+            },
+            ProjectById = id => _projects.ById(id),
+            Post = PostToPage,
+            ThreadCommand = (lead, paneId, msg) => _threadCtrl.OnThreadCommand(lead, paneId, msg),
+            SetWorking = (lead, leaf, working) =>
+            {
+                leaf.AgentState = working ? AgentState.Working : AgentState.Done;
+                leaf.StateInferred = false;
+                var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                if (working) leaf.TurnStartUnixMs = now;
+                else { leaf.TurnStartUnixMs = 0; leaf.DoneAtUnixMs = now; }
+                PushState();
+            },
+            Save = () => _store.Save(),
+            Ui = _ui,
         });
         WireBoardController();
         _router = BuildRouter();
@@ -604,6 +634,7 @@ internal sealed partial class AppController
         _shuttingDown = true;
         _local?.Dispose();
         _inbox?.Dispose();
+        _chatCtrl.Dispose();
         _cloud?.Dispose();
         _idleWatchdog?.Stop();
         _reapTimer?.Stop();
@@ -816,6 +847,9 @@ internal sealed partial class AppController
         .Add<ProjectAddMsg>("project.add", OnProjectAdd)
         .Add<ProjectRef>("project.remove", OnProjectRemove)
         .Add<ProjectRef>("projectchat.new", OnProjectChatNew)
+        .Add<PaneRef>("chat.request", m => _chatCtrl.OnRequest(m.PaneId))
+        .Add<ChatSendMsg>("chat.send", m => _chatCtrl.OnSend(m.PaneId, m.Text))
+        .Add<PaneRef>("chat.stop", m => _chatCtrl.OnStop(m.PaneId))
         .Add<ProjectUpdateMsg>("project.update", OnProjectUpdate)
         .Add<ProjectTabNewMsg>("project.tab.new", OnProjectTabNew)
         .Add("update.apply", OnUpdateApply)
@@ -2657,8 +2691,9 @@ internal sealed partial class AppController
     }
 
     /// "New project chat" from a project's menu: a tab filed under the
-    /// project, its Claude on the left (in the main checkout, primed as the
-    /// coordinator) and the threads panel on the right.
+    /// project whose one pane is the chat — a conversation drawn by the page
+    /// with the threads beside it (ChatController). No terminal: every turn is
+    /// a headless run of the chat's own Claude session.
     private void OnProjectChatNew(ProjectRef msg)
     {
         var proj = _projects.ById(msg.Id);
@@ -2675,28 +2710,14 @@ internal sealed partial class AppController
         s.IsAutoTitle = false;
         s.Cwd = proj.Path;
         var chat = s.Root;
+        chat.IsChat = true;
+        chat.Name = "chat";
         chat.Cwd = proj.Path;
         chat.ColorIndex = colorIndex;
-        var panel = new PaneNode { IsThreads = true, Name = "threads", ColorIndex = colorIndex };
-        var root = InsertBesideImpl(chat, chat.Id, panel, SplitOrientation.Vertical, before: false);
-        if (root == null) return;
-        s.Root = root;
-        AutoName(s.Root);
-
-        string promptPath;
-        try { promptPath = ThreadController.WriteCoordinatorPrompt(s, proj); }
-        catch (Exception ex)
-        {
-            Log.Error("ProjectChat.prompt", ex);
-            PostToast("Couldn't write the project chat's instructions", "error", Guid.Empty);
-            return;
-        }
-        var sid = Guid.NewGuid().ToString();
-        chat.ClaudeSessionId = sid;
-        var ccName = ClaudePeerNames.ForTitle(proj.Name + " chat");
-        chat.PeerName = ccName;
-        static string Q(string v) => "'" + v.Replace("'", "''") + "'";
-        _pendingInitialCommand[chat.Id] = $"claude --session-id {sid} --name {ccName} --allowedTools {Q(ThreadController.AllowedTools)} --append-system-prompt-file {Q(promptPath)}";
+        chat.ClaudeSessionId = Guid.NewGuid().ToString();
+        chat.AgentType = "claude";
+        try { ThreadController.WriteCoordinatorPrompt(s, proj); }
+        catch (Exception ex) { Log.Error("ProjectChat.prompt", ex); }
 
         PlaceNewTab(s);
         _store.ActiveSessionId = s.Id;
@@ -4036,11 +4057,14 @@ internal sealed partial class AppController
             // single-quoted: the command is spliced into pwsh's -Command "…" or
             // sh -c, and both take a single-quoted argument verbatim.
             static string Q(string v) => "'" + v.Replace("'", "''") + "'";
-            // A system prompt means a project-chat thread, which may run its own
-            // `perch thread` commands without a permission prompt. The allow
-            // list goes BEFORE the next flag: --allowedTools takes every word
-            // up to one, and would swallow the first prompt.
-            var extra = (systemPromptFile != null ? $" --allowedTools {Q(ThreadController.AllowedTools)} --append-system-prompt-file {Q(systemPromptFile)}" : "")
+            // A system prompt means a project-chat thread. It works in its own
+            // worktree, so it edits files and commits there without asking,
+            // and runs its `perch thread` commands; anything else still asks.
+            // The allow list goes BEFORE the next flag: --allowedTools takes
+            // every word up to one, and would swallow the first prompt.
+            var extra = (systemPromptFile != null
+                    ? $" --allowedTools {string.Join(' ', ThreadController.ThreadAllowedTools.Select(Q))} --permission-mode acceptEdits --append-system-prompt-file {Q(systemPromptFile)}"
+                    : "")
                       + (firstPrompt != null ? $" {Q(firstPrompt)}" : "");
             _pendingInitialCommand[s.Root.Id] = $"claude --session-id {sid} --name {ccName}{extra}";
             // Creation-time model pick. Set on the PaneNode NOW — the PTY
@@ -4708,6 +4732,7 @@ internal sealed partial class AppController
     private readonly BoardController _boardCtrl;
     private readonly TeamController _teamCtrl;
     private readonly ThreadController _threadCtrl;
+    private readonly ChatController _chatCtrl;
 
     /// Wire the board controller's outbound events to the page. Called from the
     /// constructor; kept separate so the field initializer stays a one-liner.
