@@ -13,6 +13,7 @@ namespace Perch.Tests;
 // a new one in the same breath, and the app could never show an empty state.
 // In project mode it was worse: that auto-seeded session belonged to no project,
 // so it had no row anywhere in the sidebar while still owning a live pane. A ghost.
+[Collection("Data dir")]
 public class SessionStoreTests
 {
     [Fact]

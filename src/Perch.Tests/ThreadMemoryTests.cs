@@ -1,3 +1,4 @@
+using System.IO;
 using Xunit;
 
 namespace Perch.Tests;
@@ -6,6 +7,7 @@ namespace Perch.Tests;
 // is Perch's (the coordinator and threads write it through `perch thread
 // remember`), so round-tripping it — and ignoring anything that isn't a note —
 // is what keeps the notes every new thread reads intact.
+[Collection("Data dir")]
 public class ThreadMemoryTests : IDisposable
 {
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "perch-mem-" + Guid.NewGuid().ToString("N"));
