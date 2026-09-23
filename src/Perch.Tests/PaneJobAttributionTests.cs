@@ -29,7 +29,12 @@ public class PaneJobAttributionTests
     /// Stand-in for a pane's shell: alive, and — crucially — assigned to the job
     /// BEFORE it has spawned anything, exactly as ConPty does with a suspended
     /// process. Everything it later spawns must inherit membership.
-    private static Process StartShellInJob(PaneJob job)
+    /// The shell's output is DRAINED into `log`. Left unread, a redirected
+    /// pipe fills and the shell — and anything it started with `start /b`,
+    /// which inherits the same handles — blocks on its next write: the
+    /// background server then "never starts". That was an intermittent CI
+    /// failure; `log` is also what a timeout reports.
+    private static Process StartShellInJob(PaneJob job, System.Text.StringBuilder log)
     {
         var p = Process.Start(new ProcessStartInfo("cmd.exe")
         {
@@ -40,7 +45,25 @@ public class PaneJobAttributionTests
             CreateNoWindow = true,
         })!;
         Assert.True(job.Assign(p.Handle), "could not put the pane's shell in its job");
+        void Keep(object _, DataReceivedEventArgs e) { if (e.Data != null) lock (log) log.AppendLine(e.Data); }
+        p.OutputDataReceived += Keep;
+        p.ErrorDataReceived += Keep;
+        p.BeginOutputReadLine();
+        p.BeginErrorReadLine();
         return p;
+    }
+
+    /// A cold Windows PowerShell on a loaded CI runner (both test targets run
+    /// at once there) can take far longer than on a dev box.
+    private static readonly TimeSpan ServerStart = TimeSpan.FromSeconds(120);
+
+    private static string Tail(System.Text.StringBuilder log)
+    {
+        lock (log)
+        {
+            var t = log.ToString().Trim();
+            return t.Length > 800 ? t[^800..] : t;
+        }
     }
 
     /// The pane's shell is alive, but the inner cmd that launched the server
@@ -67,15 +90,16 @@ public class PaneJobAttributionTests
         Assert.NotNull(job);
         Process? shell = null;
         var serverPid = 0;
+        var log = new System.Text.StringBuilder();
         try
         {
-            shell = StartShellInJob(job);
+            shell = StartShellInJob(job, log);
             await shell.StandardInput.WriteLineAsync(
                 $"cmd /c start /b \"\" powershell -NoProfile -ExecutionPolicy Bypass -File \"{script}\"");
             await shell.StandardInput.FlushAsync();
 
-            serverPid = await WaitForPid(pidFile, TimeSpan.FromSeconds(60));
-            Assert.True(serverPid > 0, "the background server never started");
+            serverPid = await WaitForPid(pidFile, ServerStart);
+            Assert.True(serverPid > 0, "the background server never started. Shell said: " + Tail(log));
             await WaitUntilOrphaned(serverPid, shell.Id, TimeSpan.FromSeconds(30));
 
             // The poller no longer picks a probe by itself (Core is host-agnostic);
@@ -132,15 +156,16 @@ public class PaneJobAttributionTests
         var job = PaneJob.Create()!;
         Process? shell = null;
         var serverPid = 0;
+        var log = new System.Text.StringBuilder();
         try
         {
-            shell = StartShellInJob(job);
+            shell = StartShellInJob(job, log);
             await shell.StandardInput.WriteLineAsync(
                 $"cmd /c start /b \"\" powershell -NoProfile -ExecutionPolicy Bypass -File \"{script}\"");
             await shell.StandardInput.FlushAsync();
 
-            serverPid = await WaitForPid(pidFile, TimeSpan.FromSeconds(60));
-            Assert.True(serverPid > 0, "the background server never started");
+            serverPid = await WaitForPid(pidFile, ServerStart);
+            Assert.True(serverPid > 0, "the background server never started. Shell said: " + Tail(log));
 
             // The pane closes: shell dies, our handle to the job goes away.
             KillShell(shell);
