@@ -143,6 +143,29 @@ export function pullPairsAdjacent(list: SessionView[]): SessionView[] {
   return out;
 }
 
+/** A project chat's threads sit directly under it, in number order, when
+ *  they share a list with it. Threads whose project chat is elsewhere (in
+ *  another group, or closed) keep their place. */
+export function pullThreadsUnderLead(list: SessionView[]): SessionView[] {
+  const ids = new Set(list.map((s) => s.id));
+  const threadsOf = new Map<string, SessionView[]>();
+  for (const s of list)
+    if (s.threadOf && ids.has(s.threadOf)) {
+      const arr = threadsOf.get(s.threadOf) ?? [];
+      arr.push(s);
+      threadsOf.set(s.threadOf, arr);
+    }
+  if (threadsOf.size === 0) return list;
+  const out: SessionView[] = [];
+  for (const s of list) {
+    if (s.threadOf && ids.has(s.threadOf)) continue;   // placed under its lead
+    out.push(s);
+    const kids = threadsOf.get(s.id);
+    if (kids) out.push(...kids.sort((a, b) => (a.threadNumber ?? 0) - (b.threadNumber ?? 0)));
+  }
+  return out;
+}
+
 /** Is this pair's bracket carrying live traffic right now? A send in flight
  *  (the "messaging X" activity detail) or a note that landed in the last few
  *  seconds warms the rail; the next pushes cool it back down. */
@@ -926,7 +949,7 @@ export class Sidebar {
     // with a gutter bracket. The flat session-mode lists don't — their
     // state-derived sections can split a pair anyway, so paired rows there
     // wear the link tag instead (see renderItem).
-    const ordered = nested ? pullPairsAdjacent(sessions) : sessions;
+    const ordered = pullThreadsUnderLead(nested ? pullPairsAdjacent(sessions) : sessions);
     for (let i = 0; i < ordered.length; i++) {
       const s = ordered[i];
       const partner =
@@ -1302,7 +1325,8 @@ export class Sidebar {
   ): HTMLElement {
     const item = document.createElement("button");
     item.type = "button";
-    item.className = "session-item" + (active ? " session-item--active" : "");
+    item.className = "session-item" + (active ? " session-item--active" : "")
+      + (s.threadOf ? " session-item--thread" : "") + (s.isLead ? " session-item--lead" : "");
     // Just changed sides (slept or woken) → animate in at its new home, once.
     if (this.regrouped.has(s.id)) item.classList.add("session-item--regrouped");
     item.dataset.sessionId = s.id;

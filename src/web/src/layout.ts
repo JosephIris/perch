@@ -28,7 +28,7 @@ export function treeSignature(node: PaneTreeView): string {
     // `:` and `\` into this `:`-delimited string, and would force a full-stage
     // rebuild (and so kill every sibling xterm's transitions) every time a
     // board moved on disk, which is not a shape change at all.
-    return `L:${node.paneId}:${node.url ?? ""}:${node.isBoard ? "B" : ""}${node.mailId ? "M" : ""}`;
+    return `L:${node.paneId}:${node.url ?? ""}:${node.isBoard ? "B" : ""}${node.mailId ? "M" : ""}${node.isThreads ? "T" : ""}`;
   }
   return `S(${node.orientation}:${node.children.map(treeSignature).join(",")})`;
 }

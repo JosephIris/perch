@@ -71,6 +71,7 @@ const EXPECTED_TYPES = [
   "project.remove",
   "project.tab.new",
   "project.update",
+  "projectchat.new",
   "projects.scan",
   "ready",
   "render.pong",

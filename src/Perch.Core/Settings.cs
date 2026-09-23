@@ -92,10 +92,11 @@ public sealed class Settings
     public bool TeamFacesColor { get; set; } = false;
 
     /// Whether team rooms show at all: the project's "Team room" row, the
-    /// project menu's "Add a bot…" and the room shortcut. On by default; off
+    /// project menu's "Add a bot…" and the room shortcut. Off by default now that
+    /// project chats replace the room (ThreadController); off
     /// hides the feature for someone who has stopped using it. Hiding only
     /// hides — bots that exist keep their tabs and are not stopped.
-    public bool ShowTeamRooms { get; set; } = true;
+    public bool ShowTeamRooms { get; set; } = false;
 
     /// Parent folders searched (ONE level deep) for repos to offer as projects.
     /// A list, not a single root, because a dev machine keeps code in several

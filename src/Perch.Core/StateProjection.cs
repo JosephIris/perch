@@ -137,7 +137,7 @@ internal static class StateProjection
                     title = s.Title,
                     // Boards excluded: this count answers "how much was running
                     // in that tab", and a board is never running anything.
-                    paneCount = leaves.Count(p => !p.IsBoard && !p.IsMail),
+                    paneCount = leaves.Count(p => p.IsTerminal || p.IsWebView),
                     // Either agent's saved conversation counts — both can be
                     // resumed, just with different commands (see ResumeCommand).
                     resumableCount = leaves.Count(p => !string.IsNullOrEmpty(p.ClaudeSessionId)
@@ -165,7 +165,7 @@ internal static class StateProjection
         var anyNotify = leaves.FirstOrDefault(p => p.HasNotification);
         // "3 panes · 1 waiting" is a statement about work in flight, so a board
         // — which never runs anything — is not one of the three.
-        var workLeaves = leaves.Where(p => !p.IsBoard && !p.IsMail).ToArray();
+        var workLeaves = leaves.Where(p => p.IsTerminal || p.IsWebView).ToArray();
         var paneCount = workLeaves.Length;
         var waitingCount = workLeaves.Count(p => p.AgentState is AgentState.Waiting or AgentState.Permission);
         var workingCount = workLeaves.Count(p => p.AgentState == AgentState.Working);
@@ -235,6 +235,15 @@ internal static class StateProjection
              * bracket, and renders the note as a quiet info line — never an
              * attention state. */
             pairedWith = s.PairedWithId?.ToString("D") ?? "",
+            /* Project chat (see Session.IsLead): the coordinating tab, or one
+             * of its threads with its number and the head of its last reply.
+             * The reply is cut here because this ships on every push; the full
+             * text is what `perch thread read` returns. */
+            isLead = s.IsLead,
+            threadOf = s.ThreadOf?.ToString("D") ?? "",
+            threadNumber = s.ThreadNumber,
+            threadReply = s.ThreadLastReply.Length > 400 ? s.ThreadLastReply[..400] + "…" : s.ThreadLastReply,
+            threadReplyAtMs = s.ThreadReplyAtMs,
             pairNote = string.IsNullOrEmpty(s.PairNoteText) ? null : new
             {
                 from  = s.PairNoteFrom,
@@ -309,6 +318,8 @@ internal static class StateProjection
                 isBoard = node.IsBoard,
                 // Third leaf kind: an email from the inbox (PaneNode.MailId).
                 mailId = node.MailId,
+                // Fourth: the threads panel of a project chat (PaneNode.IsThreads).
+                isThreads = node.IsThreads,
                 colorIndex = node.ColorIndex,
                 // Per-pane state — shows up in the pane header so each
                 // pane's agent status is visible at a glance, no clicking

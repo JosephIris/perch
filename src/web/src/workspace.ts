@@ -21,12 +21,13 @@ import { openSettings } from "./settings.js";
 import { UrlPane } from "./url-pane.js";
 import { BoardPane } from "./board-pane.js";
 import { MailPane } from "./mail-pane.js";
+import { ThreadsPane } from "./threads-pane.js";
 import { PANE_LEAVE_MS } from "./anim.js";
 import { showPaneChooser } from "./pane-chooser.js";
 import { closeTeamRoom } from "./team-room.js";
 import { treeSignature, computeEdge, isStageEntry, type Edge } from "./layout.js";
 
-type LeafPane = Pane | UrlPane | BoardPane | MailPane;
+type LeafPane = Pane | UrlPane | BoardPane | MailPane | ThreadsPane;
 
 /** One mounted session: its container DIV (hidden when inactive), the panes
  *  keyed by id (reused across renders to preserve terminal state), and the
@@ -426,6 +427,8 @@ export class Workspace {
       // A board's path lives on the session, so it arrives here rather than in
       // the leaf view. setBoardPath is a no-op when unchanged.
       if (pane instanceof BoardPane) pane.setBoardPath(stage.boardPath);
+      // A project chat's threads are sessions pointing back at this tab.
+      if (pane instanceof ThreadsPane) pane.setThreads(this.sessions.filter((s) => s.threadOf === stage.sessionId));
       return;
     }
     for (const c of node.children) this.applyState(stage, c);
@@ -675,6 +678,8 @@ export class Workspace {
           ? new BoardPane(node.paneId, node.name, stage.boardPath)
           : node.mailId
           ? new MailPane(node.paneId, node.name, node.mailId)
+          : node.isThreads
+          ? new ThreadsPane(node.paneId, node.name)
           : new Pane(node.paneId, node.name, this.defaultFontSize, this.defaultFontFamily);
         stage.panes.set(node.paneId, pane);
         if (pane instanceof Pane) {

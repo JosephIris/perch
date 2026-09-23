@@ -379,27 +379,47 @@ internal sealed partial class AppController
             },
             SetPaneModel = (paneId, alias) => OnPaneModel(new PaneModelMsg { PaneId = paneId, Model = alias }),
             HasPty = paneId => _panes.Has(paneId),
-            EnsureRunning = sess =>
-            {
-                // The lazy spawn only fires when the page lays the pane out,
-                // which never happens for a restored tab nobody has opened.
-                // Arm its resume exactly as waking does, then spawn its
-                // terminals now; the page's first pane.resize just resizes.
-                var cold = AllLeaves(sess.Root).Where(p => p.IsTerminal && !_panes.Has(p.Id)).ToList();
-                if (cold.Count == 0) return;
-                foreach (var p in cold) CancelPendingShutdown(p.Id);
-                if (_settings.ResumeAgentsOnLaunch)
-                {
-                    var resumable = cold.Where(p => Resumable(sess, p)).ToList();
-                    // No "Resuming session" lightbox here: the room's roster
-                    // already says the bot is coming up, and the box would
-                    // land on top of the room the owner is typing in.
-                    foreach (var p in resumable) _armedResumePanes.Add(p.Id);
-                }
-                foreach (var p in cold) SpawnPty(sess, p);
-                Log.Info("Team.start", $"session={sess.Id:N} spawned {cold.Count} cold pane(s) for a room post");
-            },
+            EnsureRunning = EnsureSessionRunning,
             Sleep = sess => OnSessionDormant(new SessionRef { Id = sess.Id }),
+        });
+        _threadCtrl = new ThreadController(new ThreadController.Host
+        {
+            Sessions = () => _store.Sessions,
+            SessionById = id => _store.Sessions.FirstOrDefault(s => s.Id == id),
+            ProjectById = id => _projects.ById(id),
+            CreateClaudeTab = async (proj, title, promptPath, firstPrompt, worktree) =>
+            {
+                // In the background: starting a thread must not pull the user
+                // out of the project chat they are typing in. Nothing lays a
+                // background tab out, so its terminal is started here.
+                var tab = await CreateProjectTabAsync(proj, title, "claude", worktree, null, null, promptPath, firstPrompt, activate: false);
+                if (tab != null) EnsureSessionRunning(tab);
+                return tab;
+            },
+            ReadLastReply = ReadLastReplyAsync,
+            CloseSession = id => OnSessionClose(new SessionCloseMsg { Id = id, RemoveWorktree = false }),
+            // "Yes, I trust this folder" is the second choice: Down, then Enter.
+            AcceptTrust = paneId => { if (_panes.Has(paneId)) _panes.Write(paneId, System.Text.Encoding.ASCII.GetBytes("\u001b[B\r")); },
+            Save = () => _store.Save(),
+            PushState = PushState,
+            Toast = text => PostToast(text, "info", Guid.Empty),
+            Delivery = new LineDelivery.Host
+            {
+                SessionById = id => _store.Sessions.FirstOrDefault(s => s.Id == id),
+                ClaudeUp = sess => ClaudePaneOf(sess) != null,
+                Busy = sess => AllLeaves(sess.Root).Any(p => p.IsTerminal &&
+                    p.AgentState is AgentState.Working or AgentState.Permission or AgentState.Waiting),
+                Type = TypeToClaude,
+                PressEnter = PressEnterInClaude,
+                Delay = (action, delay) =>
+                {
+                    IUiTimer timer = null!;
+                    timer = _ui.CreateTimer(delay, () => { timer.Stop(); timer.Dispose(); action(); });
+                    timer.Start();
+                },
+                EnsureRunning = sess => { if (sess.Dormant) WakeSession(sess); EnsureSessionRunning(sess); },
+                GaveUp = (sess, line) => PostToast($"Perch couldn't get a message into \"{sess.Title}\"", "error", Guid.Empty),
+            },
         });
         WireBoardController();
         _router = BuildRouter();
@@ -432,6 +452,7 @@ internal sealed partial class AppController
         _panes.PeerMsg += (s, p, m) => _teamCtrl.OnPeerMsg(s, p, m);
         _panes.TeamPost += (s, p, m) => _teamCtrl.OnTeamPost(s, p, m);
         _panes.TeamTask += (s, p, m) => _teamCtrl.OnTeamTask(s, p, m);
+        _panes.Thread += (s, p, m) => _threadCtrl.OnThreadCommand(s, p, m);
         _panes.TeamAsk += (s, p, m) => _teamCtrl.OnTeamAsk(s, p, m);
         _panes.TeamReact += (s, p, m) => _teamCtrl.OnTeamReact(s, p, m);
         _panes.TeamArtefact += (s, p, m) => _teamCtrl.OnTeamArtefact(s, p, m);
@@ -794,6 +815,7 @@ internal sealed partial class AppController
         .Add("project.browse", OnProjectBrowse)
         .Add<ProjectAddMsg>("project.add", OnProjectAdd)
         .Add<ProjectRef>("project.remove", OnProjectRemove)
+        .Add<ProjectRef>("projectchat.new", OnProjectChatNew)
         .Add<ProjectUpdateMsg>("project.update", OnProjectUpdate)
         .Add<ProjectTabNewMsg>("project.tab.new", OnProjectTabNew)
         .Add("update.apply", OnUpdateApply)
@@ -1464,6 +1486,7 @@ internal sealed partial class AppController
         // (a prompt-submit confirms a typed post; a state change frees a
         // parked one), and a repeat it would skip can still be that.
         _teamCtrl.OnAgentStatus(sess, msg);
+        _threadCtrl.OnAgentStatus(sess, msg);
         var prev = pane.AgentState;
         var newState  = StateProjection.ParseAgentState(msg.State);
         var newDetail = msg.Detail ?? "";
@@ -1599,6 +1622,7 @@ internal sealed partial class AppController
                     changed = true;
                     Log.Info("IdleWatchdog", $"pane={pane.Id:N} working->done (output-silent)");
                     _teamCtrl.OnPaneIdle(sess);
+                    _threadCtrl.OnPaneIdle(sess);
                 }
                 else if (pane.AgentState == AgentState.Done && pane.StateInferred && sustained)
                 {
@@ -1864,6 +1888,7 @@ internal sealed partial class AppController
         // A team post parked while this bot's Claude was down lands now, on
         // the same settle delay as the pairing intro.
         _teamCtrl.OnAgentUp(sess);
+        _threadCtrl.OnAgentUp(sess);
         MarkRestorePaneReady(paneId);
         // cc is listening — but NOT yet painted. This only arms the boot cover's
         // quiet-watch; the cover drops once cc's paint settles and the pane's
@@ -2097,7 +2122,11 @@ internal sealed partial class AppController
         PostToPage(new { type = "pane.setup", paneId = paneId.ToString("D"), show = false, colorIndex = 0 });
         // A team bot's question goes to the room as a card the owner can
         // answer without hunting for the terminal.
-        if (OwningSession(paneId) is Session bsess) _teamCtrl.OnPromptStuck(bsess, paneId);
+        if (OwningSession(paneId) is Session bsess)
+        {
+            _teamCtrl.OnPromptStuck(bsess, paneId);
+            _threadCtrl.OnPromptStuck(bsess, paneId);
+        }
     }
 
     private static void RestartSetupQuiet(SetupState st)
@@ -2577,7 +2606,7 @@ internal sealed partial class AppController
 
         var sess = OwningSession(id);
         var pane = sess == null ? null : AllLeaves(sess.Root).FirstOrDefault(p => p.Id == id);
-        if (sess == null || pane == null || pane.IsMail) return;
+        if (sess == null || pane == null || !pane.IsTerminal) return;
         // New-pane chooser: park the spawn and ask the user what to run
         // here. Released by OnPaneChooserChoose (or closed on cancel).
         if (_pendingChoosers.ContainsKey(id))
@@ -2589,6 +2618,92 @@ internal sealed partial class AppController
         }
         Log.Info($"Pane.resize.spawn pane={id:N} cols={cols} rows={rows}");
         SpawnPty(sess, pane, cols, rows);
+    }
+
+    // ---- Project chat -----------------------------------------------------
+
+    /// Spawn a tab's terminals now, for a tab nobody has opened: the lazy
+    /// spawn only fires when the page lays a pane out, which never happens
+    /// for a restored background tab. Resume is armed exactly as waking does.
+    private void EnsureSessionRunning(Session sess)
+    {
+        var cold = AllLeaves(sess.Root).Where(p => p.IsTerminal && !_panes.Has(p.Id)).ToList();
+        if (cold.Count == 0) return;
+        foreach (var p in cold) CancelPendingShutdown(p.Id);
+        if (_settings.ResumeAgentsOnLaunch)
+            foreach (var p in cold.Where(p => Resumable(sess, p))) _armedResumePanes.Add(p.Id);
+        foreach (var p in cold) SpawnPty(sess, p);
+        Log.Info("Session.start", $"session={sess.Id:N} spawned {cold.Count} cold pane(s) for a delivery");
+    }
+
+    /// A tab's Claude's REPORT for its last turn: the final prose block it
+    /// wrote after the last prompt it was given — what a person reads as "its
+    /// answer", as opposed to the "I'll do X now" narration earlier in the
+    /// turn. Null when the turn ends on a tool call (still going) or has no
+    /// prose. A fresh read, not the cached snapshot.
+    private async Task<string?> ReadLastReplyAsync(Session sess)
+    {
+        var pane = AllLeaves(sess.Root).FirstOrDefault(p => p.IsTerminal && !string.IsNullOrEmpty(p.ClaudeSessionId));
+        if (pane == null) return null;
+        var data = await _transcripts.ReadAsync(new TranscriptKey(pane.Id, pane.ClaudeSessionId, ResolvePaneCwd(sess, pane)));
+        if (data == null) return null;
+        var events = data.Events;
+        var start = 0;
+        for (int i = events.Count - 1; i >= 0; i--)
+            if (events[i].Kind == "prompt") { start = i + 1; break; }
+        var turn = events.Skip(start).ToList();
+        var last = turn.LastOrDefault(e => e.Kind is "beat" or "work");
+        return last is { Kind: "beat" } && last.Text.Trim().Length > 0 ? last.Text.Trim() : null;
+    }
+
+    /// "New project chat" from a project's menu: a tab filed under the
+    /// project, its Claude on the left (in the main checkout, primed as the
+    /// coordinator) and the threads panel on the right.
+    private void OnProjectChatNew(ProjectRef msg)
+    {
+        var proj = _projects.ById(msg.Id);
+        if (proj == null || !Directory.Exists(proj.Path))
+        {
+            PostToast("That project's folder isn't there any more", "error", Guid.Empty);
+            return;
+        }
+        var s = _store.AddNew();
+        var colorIndex = _store.PickUnusedColorForProject(proj.Id);
+        s.ProjectId = proj.Id;
+        s.IsLead = true;
+        s.Title = "Project chat";
+        s.IsAutoTitle = false;
+        s.Cwd = proj.Path;
+        var chat = s.Root;
+        chat.Cwd = proj.Path;
+        chat.ColorIndex = colorIndex;
+        var panel = new PaneNode { IsThreads = true, Name = "threads", ColorIndex = colorIndex };
+        var root = InsertBesideImpl(chat, chat.Id, panel, SplitOrientation.Vertical, before: false);
+        if (root == null) return;
+        s.Root = root;
+        AutoName(s.Root);
+
+        string promptPath;
+        try { promptPath = ThreadController.WriteCoordinatorPrompt(s, proj); }
+        catch (Exception ex)
+        {
+            Log.Error("ProjectChat.prompt", ex);
+            PostToast("Couldn't write the project chat's instructions", "error", Guid.Empty);
+            return;
+        }
+        var sid = Guid.NewGuid().ToString();
+        chat.ClaudeSessionId = sid;
+        var ccName = ClaudePeerNames.ForTitle(proj.Name + " chat");
+        chat.PeerName = ccName;
+        static string Q(string v) => "'" + v.Replace("'", "''") + "'";
+        _pendingInitialCommand[chat.Id] = $"claude --session-id {sid} --name {ccName} --allowedTools {Q(ThreadController.AllowedTools)} --append-system-prompt-file {Q(promptPath)}";
+
+        PlaceNewTab(s);
+        _store.ActiveSessionId = s.Id;
+        _activePaneId = chat.Id;
+        _store.Save();
+        Log.Info("ProjectChat.new", $"project={proj.Id:N} session={s.Id:N}");
+        PushState();
     }
 
     // ---- Email inbox ------------------------------------------------------
@@ -3853,7 +3968,8 @@ internal sealed partial class AppController
     /// Returns the session, or null when the tab could not be made (the
     /// reason has already been toasted).
     private async Task<Session?> CreateProjectTabAsync(
-        Project proj, string? rawName, string agent, bool worktree, string? model, string? pinnedPeerName)
+        Project proj, string? rawName, string agent, bool worktree, string? model, string? pinnedPeerName,
+        string? systemPromptFile = null, string? firstPrompt = null, bool activate = true)
     {
         var name = (rawName ?? "").Trim();
         if (name.Length == 0) name = proj.Name;
@@ -3916,7 +4032,17 @@ internal sealed partial class AppController
             // and an observed SendMessage target resolves back to this row.
             s.Root.PeerName = ccName;
             s.Root.PinnedPeerName = pinnedPeerName;
-            _pendingInitialCommand[s.Root.Id] = $"claude --session-id {sid} --name {ccName}";
+            // Optional system prompt and first prompt (a project chat's thread),
+            // single-quoted: the command is spliced into pwsh's -Command "…" or
+            // sh -c, and both take a single-quoted argument verbatim.
+            static string Q(string v) => "'" + v.Replace("'", "''") + "'";
+            // A system prompt means a project-chat thread, which may run its own
+            // `perch thread` commands without a permission prompt. The allow
+            // list goes BEFORE the next flag: --allowedTools takes every word
+            // up to one, and would swallow the first prompt.
+            var extra = (systemPromptFile != null ? $" --allowedTools {Q(ThreadController.AllowedTools)} --append-system-prompt-file {Q(systemPromptFile)}" : "")
+                      + (firstPrompt != null ? $" {Q(firstPrompt)}" : "");
+            _pendingInitialCommand[s.Root.Id] = $"claude --session-id {sid} --name {ccName}{extra}";
             // Creation-time model pick. Set on the PaneNode NOW — the PTY
             // spawns lazily AFTER the PushState below (page renders → first
             // pane.resize → SpawnPty), and SpawnPty writes the wrap-claude
@@ -3933,8 +4059,11 @@ internal sealed partial class AppController
         }
 
         PlaceNewTab(s);
-        _store.ActiveSessionId = s.Id;
-        _activePaneId = s.Root.Id;
+        if (activate)
+        {
+            _store.ActiveSessionId = s.Id;
+            _activePaneId = s.Root.Id;
+        }
         _store.Save();
         PushState();   // the page renders the stage → pane.resize → lazy spawn
         return s;
@@ -4578,6 +4707,7 @@ internal sealed partial class AppController
     /// and writes files.
     private readonly BoardController _boardCtrl;
     private readonly TeamController _teamCtrl;
+    private readonly ThreadController _threadCtrl;
 
     /// Wire the board controller's outbound events to the page. Called from the
     /// constructor; kept separate so the field initializer stays a one-liner.

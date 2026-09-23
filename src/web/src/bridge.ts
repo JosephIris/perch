@@ -208,6 +208,8 @@ export type OutMessage =
   /* Email inbox. refresh = sync with Drive now; open = go to the email's tab,
    * making it (email left, Claude right) if there isn't one yet. */
   | { type: "inbox.refresh" }
+  /* A new project chat under this project: coordinator Claude + threads panel. */
+  | { type: "projectchat.new"; id: string }
   /* Make perch-state.json in the Drive folder so states are shared. */
   | { type: "inbox.createStateFile" }
   | { type: "inbox.setState"; id: string; state: InboxStateName }
@@ -411,6 +413,8 @@ export type PaneTreeView =
       /* Third leaf kind: this pane shows an email thread from the inbox (the
        * value is its Gmail thread id). */
       mailId?: string | null;
+      /* Fourth leaf kind: the threads panel of a project chat. */
+      isThreads?: boolean;
       /* Color tag (0–5) into the pane palette in style.css. */
       colorIndex: number;
       /* Per-pane agent state — pane header surfaces this directly so
@@ -528,6 +532,14 @@ export type SessionView = {
    * rows pull adjacent within their project and wear the gutter bracket.
    * Optional so harness fixtures need not carry it; the host always sends it. */
   pairedWith?: string;
+  /* Project chat: true on the coordinating tab. On a thread, `threadOf` is
+   * that tab's id ("" otherwise), `threadNumber` its handle in `perch thread`,
+   * and `threadReply` the head of its last report (Unix-ms `threadReplyAtMs`). */
+  isLead?: boolean;
+  threadOf?: string;
+  threadNumber?: number;
+  threadReply?: string;
+  threadReplyAtMs?: number;
   /* The last peer message that ARRIVED at this tab ("from user-profiles ·
    * ..."), or — warn level — this tab's last delivery failure. Ambient info,
    * never an attention state; the host clears it on select and ages it out
@@ -632,7 +644,8 @@ export type StateMessage = {
     /* Team bot faces in colour (bird and circle in the bot's tag hue) rather
      * than plain ink. Off by default. */
     teamFacesColor?: boolean;
-    /* Team rooms shown at all (Settings → "Show team rooms"). Absent → on. */
+    /* Team rooms shown at all (Settings → "Show team rooms"). Absent → off:
+     * project chats replace them. */
     showTeamRooms?: boolean;
   };
   /* Account-wide Claude model rate limits — only the AT-LIMIT models appear, so

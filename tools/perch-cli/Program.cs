@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.IO;
 using System.IO.Pipes;
 using System.Text;
@@ -53,6 +55,7 @@ internal static class Program
                 "open"   => CmdOpen(pipeName, args),
                 "agent"  => CmdAgent(pipeName, args),
                 "team"   => CmdTeam(pipeName, args),
+                "thread" => CmdThread(pipeName, args),
                 "hooks"  => HookHandler.Run(pipeName, args),
                 _ => PrintUnknown(args[0]),
             };
@@ -532,6 +535,96 @@ internal static class Program
         }
     }
 
+    /// `perch thread …` — how a project chat's coordinator runs its threads,
+    /// and how a thread talks back. The host answers through a temp file named
+    /// by a request id (the pane pipe only runs one way), and we print that.
+    ///
+    ///   new <title> [--brief "…" | --brief-file <path>]   → prints the thread's number
+    ///   send <n|lead> <text…> | --file <path>             → delivered when that Claude is free
+    ///   list                                              → one line per thread
+    ///   read <n>                                          → the thread's last reply
+    ///   close <n>                                         → closes its tab (the branch stays)
+    private static int CmdThread(string pipeName, string[] args)
+    {
+        const string usage = "usage: perch thread new <title> [--brief \"…\" | --brief-file <path>] | send <n|lead> <text…> [--file <path>] | list | read <n> | close <n>";
+        if (args.Length < 2) { Console.Error.WriteLine(usage); return 2; }
+        var op = args[1];
+        string? brief = null, briefFile = null, file = null;
+        var rest = new List<string>();
+        for (int i = 2; i < args.Length; i++)
+        {
+            if (args[i] == "--brief" && i + 1 < args.Length) brief = args[++i];
+            else if (args[i] == "--brief-file" && i + 1 < args.Length) briefFile = args[++i];
+            else if (args[i] == "--file" && i + 1 < args.Length) file = args[++i];
+            else rest.Add(args[i]);
+        }
+        if (briefFile != null)
+        {
+            try { brief = File.ReadAllText(briefFile); }
+            catch (Exception ex) { Console.Error.WriteLine($"perch thread: can't read {briefFile}: {ex.Message}"); return 2; }
+        }
+        if (file != null)
+        {
+            try { file = Path.GetFullPath(file); if (!File.Exists(file)) throw new FileNotFoundException(file); }
+            catch (Exception ex) { Console.Error.WriteLine($"perch thread: {ex.Message}"); return 2; }
+        }
+        string? target = null, title = null, text = null;
+        switch (op)
+        {
+            case "new":
+                title = string.Join(' ', rest).Trim();
+                if (title.Length == 0) { Console.Error.WriteLine("perch thread new: give the thread a title"); return 2; }
+                if (string.IsNullOrWhiteSpace(brief)) { Console.Error.WriteLine("perch thread new: give it a brief (--brief \"…\" or --brief-file <path>)"); return 2; }
+                break;
+            case "send":
+                if (rest.Count < 1) { Console.Error.WriteLine("perch thread send: usage: perch thread send <n|lead> <text…>"); return 2; }
+                target = rest[0];
+                text = string.Join(' ', rest.Skip(1)).Trim();
+                if (text.Length == 0 && file == null) { Console.Error.WriteLine("perch thread send: nothing to send"); return 2; }
+                break;
+            case "read":
+            case "close":
+                if (rest.Count < 1) { Console.Error.WriteLine($"perch thread {op}: usage: perch thread {op} <n>"); return 2; }
+                target = rest[0];
+                break;
+            case "list":
+                break;
+            default:
+                Console.Error.WriteLine(usage);
+                return 2;
+        }
+
+        var reqId = Guid.NewGuid().ToString("N");
+        var replyPath = Path.Combine(Path.GetTempPath(), $"perch-thread-{reqId}.txt");
+        var rc = Send(pipeName, new { type = "thread", op, target, title, text, brief, file, reqId });
+        if (rc != 0) return rc;
+        // Making a thread creates a git worktree first, which takes a few
+        // seconds on a big repo; everything else answers at once.
+        var deadline = DateTime.UtcNow.AddSeconds(op == "new" ? 90 : 10);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (File.Exists(replyPath))
+            {
+                try
+                {
+                    var reply = File.ReadAllText(replyPath);
+                    File.Delete(replyPath);
+                    // First line "ok" or "error"; the rest is for the reader.
+                    var nl = reply.IndexOf('\n');
+                    var head = (nl < 0 ? reply : reply[..nl]).Trim();
+                    var body = nl < 0 ? "" : reply[(nl + 1)..];
+                    if (head == "ok") { Console.Write(body); if (!body.EndsWith('\n')) Console.WriteLine(); return 0; }
+                    Console.Error.WriteLine($"perch thread {op}: {body.Trim()}");
+                    return 1;
+                }
+                catch (IOException) { /* still being written */ }
+            }
+            System.Threading.Thread.Sleep(100);
+        }
+        Console.Error.WriteLine($"perch thread {op}: Perch didn't answer (is this a project chat or one of its threads?)");
+        return 1;
+    }
+
     private static int Send(string pipeName, object payload)
     {
         var json = JsonSerializer.Serialize(payload, JsonOpts);
@@ -595,6 +688,7 @@ internal static class Program
         Console.WriteLine("  perch team artefact --title \"…\" --text \"<body>\"                  (the same, written inline)");
         Console.WriteLine("  perch team react <#seq|@nick> <emoji>        (an emoji on a room row)");
         Console.WriteLine("  perch team task new <title> | assign <id> <bot> [<title>] [--status s] [--note n] | mine [<id>] [<title>] [--status s] [--note n] | done <id>");
+        Console.WriteLine("  perch thread new <title> --brief \"…\" | send <n|lead> <text…> | list | read <n> | close <n>  (project chat threads)");
         Console.WriteLine();
         Console.WriteLine("Outside a perch pane (no PERCH_PIPE set) every command is a silent no-op.");
     }

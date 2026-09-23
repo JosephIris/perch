@@ -132,7 +132,7 @@ export function applySettingsData(msg: SettingsDataMessage): void {
   setToggle(resumeToggle, msg.resumeAgentsOnLaunch ?? true);
   // Faces default to plain ink; colour is the opt-in.
   if (facesToggle) setToggle(facesToggle, msg.teamFacesColor ?? false);
-  if (roomsToggle) setToggle(roomsToggle, msg.showTeamRooms ?? true);
+  if (roomsToggle) setToggle(roomsToggle, msg.showTeamRooms ?? false);
   if (inboxToggle) setToggle(inboxToggle, msg.inboxEnabled ?? false);
   if (inboxFolderInput) inboxFolderInput.value = msg.inboxDriveFolderId ?? "";
   if (inboxKeyInput) inboxKeyInput.value = msg.inboxKeyCommand ?? "";
@@ -626,7 +626,7 @@ function buildSkeleton(): void {
   sessions.appendChild(
     makeRow(
       "Show team rooms",
-      "The Team room row under a project and “Add a bot…” in its menu. Off hides them; bots you already have keep their tabs and aren't stopped.",
+      "The old Team room row under a project and “Add a bot…” in its menu. Project chats replace them. Off hides them; bots you already have keep their tabs and aren't stopped.",
       roomsToggle,
     ),
   );

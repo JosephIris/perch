@@ -40,6 +40,7 @@ parity table fully captures this scope.
 | Agent integration | `tools/perch-cli/{ClaudeWrapper,CodexWrapper,HookHandler,BinResolver}.cs`; per-pane `PerchIpc.cs` |
 | Transcripts | `TranscriptService.cs` owns background readers; `TranscriptLines.cs` streams JSONL; `TranscriptReader.cs`, `CodexTranscriptReader.cs` and locator helpers; `ModelLimitWatch.cs`, `UsageService.cs` |
 | Teams | `TeamController.cs` orchestration; `TeamStore.cs`, `Team.cs`, `TeamTasks.cs`, `RoomLedger.cs`, `TeamRender.cs`, `TeamMarkers.cs` |
+| Project chat | `ThreadController.cs` (coordinator + threads, `perch thread` verbs), `LineDelivery.cs` (typed lines confirmed by the prompt-submit echo); web `threads-pane.ts` |
 | Boards | `BoardController.cs`, `BoardStore.cs`, `BoardPaths.cs`; separate from team task cards |
 | Resource panels | `LocalController/LocalPoller/LocalLedger`; `CloudController/CloudPoller/CloudLedger/CloudPriceCatalog` |
 | Web composition | `src/web/src/main.ts` wires modules; `bridge.ts` defines transport and DTOs |

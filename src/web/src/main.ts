@@ -229,7 +229,7 @@ onMessage((msg) => {
       // Bot faces: plain ink unless the owner opted into colour.
       setFaceColorMode(msg.prefs?.teamFacesColor ?? false);
       // Before the sidebar renders: it decides whether to draw the room row.
-      setTeamRoomsVisible(msg.prefs?.showTeamRooms ?? true);
+      setTeamRoomsVisible(msg.prefs?.showTeamRooms ?? false);
       // Account-wide model limits for the per-pane model menu (usually empty).
       setModelLimits(msg.modelLimits);
       setCodexModels(msg.codexModels);

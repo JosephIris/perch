@@ -100,6 +100,27 @@ internal sealed class Session : INotifyPropertyChanged
     /// session-start instead. Persisted with the pairing it belongs to.
     public bool PairIntroPending { get; set; }
 
+    // ----- Project chat and its threads (ThreadController) ----------------
+    // A PROJECT CHAT is a tab whose Claude coordinates: you brief it, it
+    // splits the work into THREADS — each its own tab, with its own Claude,
+    // in its own worktree — and pulls their results together. Persisted, so
+    // the relationship survives a restart like the pane tree does.
+
+    /// True on the coordinating tab.
+    public bool IsLead { get; set; }
+
+    /// On a thread: the project chat it belongs to.
+    public Guid? ThreadOf { get; set; }
+
+    /// On a thread: its number within the project chat (1, 2, …), the handle
+    /// the coordinator uses in `perch thread send 2 …`. Never reused.
+    public int ThreadNumber { get; set; }
+
+    /// On a thread: the text of its last finished turn, and when. What the
+    /// threads panel shows and `perch thread read` returns.
+    public string ThreadLastReply { get; set; } = "";
+    public long ThreadReplyAtMs { get; set; }
+
     // ----- Incoming pair note (transient, like NotificationText) -----------
     // The last cross-session message that ARRIVED at this tab (or, warn level,
     // the last delivery failure by this tab). Rendered as a quiet note line on
@@ -323,6 +344,12 @@ internal sealed class PaneNode
     /// restart like any other pane.
     public string? MailId { get; set; }
 
+    /// When true on a leaf, the pane shows the THREADS of its session's project
+    /// chat (Session.IsLead) — the right half of a project chat — instead of a
+    /// terminal. Like IsBoard it carries no data of its own: the threads are
+    /// sessions, and the page draws the panel from the state push.
+    public bool IsThreads { get; set; }
+
     /// Last working directory this leaf's shell reported via OSC 7. PERSISTED
     /// (not [JsonIgnore]) so a restored/respawned pane reopens in the same
     /// directory the user had cd'd to — previously cwd lived only at the
@@ -545,7 +572,7 @@ internal sealed class PaneNode
     /// so anything that spawns, resumes, names-from-agent-output, or counts as
     /// "a pane doing work" should ask for this rather than testing !IsWebView
     /// and forgetting boards exist.
-    [JsonIgnore] public bool IsTerminal => IsLeaf && !IsWebView && !IsBoard && !IsMail;
+    [JsonIgnore] public bool IsTerminal => IsLeaf && !IsWebView && !IsBoard && !IsMail && !IsThreads;
     [JsonIgnore] public bool IsMail => IsLeaf && !string.IsNullOrEmpty(MailId);
     [JsonIgnore] public bool HasNotification => !string.IsNullOrEmpty(NotificationText);
 }

@@ -36,6 +36,7 @@ internal sealed class PerchIpcServer : IDisposable
     public event Action<PeerMsgMessage>? OnPeerMsg;
     public event Action<TeamPostMessage>? OnTeamPost;
     public event Action<TeamTaskMessage>? OnTeamTask;
+    public event Action<ThreadMessage>? OnThread;
     public event Action<TeamAskMessage>? OnTeamAsk;
     public event Action<TeamArtefactMessage>? OnTeamArtefact;
     public event Action<TeamReactMessage>? OnTeamReact;
@@ -202,6 +203,10 @@ internal sealed class PerchIpcServer : IDisposable
                 case "team.post":
                     var tp = JsonSerializer.Deserialize<TeamPostMessage>(json, IpcJson.Options);
                     if (tp != null) _ui.Post(() => OnTeamPost?.Invoke(tp));
+                    break;
+                case "thread":
+                    var th = JsonSerializer.Deserialize<ThreadMessage>(json, IpcJson.Options);
+                    if (th != null) _ui.Post(() => OnThread?.Invoke(th));
                     break;
                 case "team.task":
                     var tt = JsonSerializer.Deserialize<TeamTaskMessage>(json, IpcJson.Options);
@@ -471,6 +476,17 @@ internal sealed record PermDeniedMessage(
 /// (the lead sets or renames the task), "assign" (the lead gives `bot` a
 /// piece), "mine" (a bot sets its own piece, status, note) or "done" (the
 /// lead asks the owner to confirm). TeamController checks who may do what.
+/// `perch thread …` from a project chat's coordinator or one of its threads
+/// (see ThreadController). `ReqId` names the temp file the answer goes to.
+internal sealed record ThreadMessage(
+    [property: JsonPropertyName("op")] string? Op,
+    [property: JsonPropertyName("target")] string? Target,
+    [property: JsonPropertyName("title")] string? Title,
+    [property: JsonPropertyName("text")] string? Text,
+    [property: JsonPropertyName("brief")] string? Brief,
+    [property: JsonPropertyName("file")] string? File,
+    [property: JsonPropertyName("reqId")] string? ReqId);
+
 internal sealed record TeamTaskMessage(
     [property: JsonPropertyName("op")] string? Op,
     [property: JsonPropertyName("bot")] string? Bot,

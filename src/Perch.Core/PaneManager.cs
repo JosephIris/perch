@@ -73,6 +73,7 @@ internal sealed class PaneManager : IDisposable
     public event Action<Session, Guid, PeerMsgMessage>? PeerMsg;
     public event Action<Session, Guid, TeamPostMessage>? TeamPost;
     public event Action<Session, Guid, TeamTaskMessage>? TeamTask;
+    public event Action<Session, Guid, ThreadMessage>? Thread;
     public event Action<Session, Guid, TeamAskMessage>? TeamAsk;
     public event Action<Session, Guid, TeamReactMessage>? TeamReact;
     public event Action<Session, Guid, TeamArtefactMessage>? TeamArtefact;
@@ -223,6 +224,7 @@ internal sealed class PaneManager : IDisposable
         ipc.OnPeerMsg += msg => PeerMsg?.Invoke(sess, paneId, msg);
         ipc.OnTeamPost += msg => TeamPost?.Invoke(sess, paneId, msg);
         ipc.OnTeamTask += msg => TeamTask?.Invoke(sess, paneId, msg);
+        ipc.OnThread += msg => Thread?.Invoke(sess, paneId, msg);
         ipc.OnTeamAsk += msg => TeamAsk?.Invoke(sess, paneId, msg);
         ipc.OnTeamReact += msg => TeamReact?.Invoke(sess, paneId, msg);
         ipc.OnTeamArtefact += msg => TeamArtefact?.Invoke(sess, paneId, msg);

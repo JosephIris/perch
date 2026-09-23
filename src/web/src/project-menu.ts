@@ -37,6 +37,23 @@ export function showProjectMenu(x: number, y: number, p: ProjectView): void {
   });
   if (teamRoomsVisible()) menu.appendChild(addBot);
 
+  // "New project chat" — a coordinator Claude that splits work into threads
+  // (see ThreadController). The door the team room used to be.
+  const chat = document.createElement("button");
+  chat.type = "button";
+  chat.className = "project-menu__item";
+  chat.setAttribute("role", "menuitem");
+  const chatLabel = document.createElement("span");
+  chatLabel.className = "project-menu__label";
+  chatLabel.textContent = "New project chat";
+  chat.appendChild(chatLabel);
+  chat.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    dismissProjectMenu();
+    send({ type: "projectchat.new", id: p.id });
+  });
+  menu.insertBefore(chat, menu.firstChild);
+
   const btn = document.createElement("button");
   btn.type = "button";
   btn.className = "project-menu__item";
