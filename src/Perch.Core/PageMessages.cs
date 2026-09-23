@@ -414,6 +414,32 @@ internal sealed record SettingsSaveMsg
     public string? WorktreeRoot { get; init; }
     /// Default list of things seeded into a new worktree (a project can override).
     public List<string>? WorktreeSeedPaths { get; init; }
+    /// The email inbox (see Settings.InboxEnabled and friends).
+    public bool? InboxEnabled { get; init; }
+    public string? InboxDriveFolderId { get; init; }
+    public string? InboxKeyCommand { get; init; }
+    public string? InboxWorkDir { get; init; }
+}
+
+/// A thread in the email inbox, by its Gmail thread id.
+internal sealed record InboxRef
+{
+    public required string Id { get; init; }
+}
+
+internal sealed record InboxSetStateMsg
+{
+    public required string Id { get; init; }
+    public required string State { get; init; }
+}
+
+/// The email pane asking for its thread, an inline image, or to open an
+/// attachment with the system's default app.
+internal sealed record InboxMailRequestMsg
+{
+    public required Guid PaneId { get; init; }
+    public required string Id { get; init; }
+    public string? Name { get; init; }
 }
 
 /// Edit a registered project: rename it, hide/show it in the sidebar, or

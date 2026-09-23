@@ -317,6 +317,12 @@ internal sealed class PaneNode
     /// session's board".
     public bool IsBoard { get; set; }
 
+    /// When set on a leaf, the pane shows this email thread from the inbox
+    /// (InboxController; the value is the Gmail thread id) instead of a
+    /// terminal. The page renders it from the local copy, so it survives a
+    /// restart like any other pane.
+    public string? MailId { get; set; }
+
     /// Last working directory this leaf's shell reported via OSC 7. PERSISTED
     /// (not [JsonIgnore]) so a restored/respawned pane reopens in the same
     /// directory the user had cd'd to — previously cwd lived only at the
@@ -539,7 +545,8 @@ internal sealed class PaneNode
     /// so anything that spawns, resumes, names-from-agent-output, or counts as
     /// "a pane doing work" should ask for this rather than testing !IsWebView
     /// and forgetting boards exist.
-    [JsonIgnore] public bool IsTerminal => IsLeaf && !IsWebView && !IsBoard;
+    [JsonIgnore] public bool IsTerminal => IsLeaf && !IsWebView && !IsBoard && !IsMail;
+    [JsonIgnore] public bool IsMail => IsLeaf && !string.IsNullOrEmpty(MailId);
     [JsonIgnore] public bool HasNotification => !string.IsNullOrEmpty(NotificationText);
 }
 

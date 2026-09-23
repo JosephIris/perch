@@ -298,6 +298,7 @@ internal sealed partial class AppController
     private readonly Dictionary<Guid, (string SessionId, string? Path)> _limitPaths = new();
     private CloudController? _cloud;
     private LocalController? _local;
+    private InboxController? _inbox;
     private IUiTimer? _usageTimer;
     /// Reclaims a torn-down pane's leftovers (MCP servers and friends), while
     /// sparing anything that's serving a port. See JobSweep.
@@ -459,6 +460,9 @@ internal sealed partial class AppController
         // attribution never reads session/pane state off-thread.
         _local = new LocalController(_ui, probe, PostToPage, SnapshotLivePanes, ApplyPanePorts);
         _local.Start();
+        // Email inbox. Inert unless switched on in Settings → Inbox.
+        _inbox = new InboxController(_ui, _settings, PostToPage, id => _store.Sessions.Any(s => s.Id == id));
+        _inbox.Start();
         // The reaper shares the Local panel's probe on purpose: "is this
         // process serving a port?" must have exactly one answer in the app.
         _jobSweep = new JobSweep(probe);
@@ -578,6 +582,7 @@ internal sealed partial class AppController
     {
         _shuttingDown = true;
         _local?.Dispose();
+        _inbox?.Dispose();
         _cloud?.Dispose();
         _idleWatchdog?.Stop();
         _reapTimer?.Stop();
@@ -797,6 +802,12 @@ internal sealed partial class AppController
         .Add("cloud.refresh", () => _ = _cloud?.RefreshAsync())
         .Add<CloudDeleteMsg>("cloud.delete", m => _ = _cloud?.DeleteAsync(m.Id))
         .Add("cloud.deleteOrphans", () => _ = _cloud?.DeleteOrphansAsync())
+        .Add("inbox.refresh", () => _ = _inbox?.SyncAsync())
+        .Add<InboxSetStateMsg>("inbox.setState", m => _inbox?.SetState(m.Id, m.State))
+        .Add<InboxRef>("inbox.open", OnInboxOpen)
+        .Add<InboxMailRequestMsg>("inbox.mail.request", m => _inbox?.PostMail(m.PaneId, m.Id))
+        .Add<InboxMailRequestMsg>("inbox.image.request", m => _inbox?.PostImage(m.PaneId, m.Id, m.Name ?? ""))
+        .Add<InboxMailRequestMsg>("inbox.attachment.open", OnInboxAttachmentOpen)
         .Add<LocalPanelMsg>("local.panel", m => _local?.SetPanelOpen(m.Open))
         .Add("local.refresh", () => _ = _local?.RefreshAsync())
         .Add<LocalOpenMsg>("local.open", m => OpenLocalUrl(m.Port))
@@ -867,6 +878,7 @@ internal sealed partial class AppController
         // PowerShell its final size up front.
         EnsureActivePane();
         PushState();
+        _inbox?.PushView();
         if (!_store.Readable || !_settings.Readable || !_projects.Readable)
             PostToast("Some saved data could not be read. Original files were preserved and saving those files is disabled; see errors.log.", "error", Guid.Empty);
         // Seed the page's clipboard cache now that it can receive messages, so
@@ -2561,7 +2573,7 @@ internal sealed partial class AppController
 
         var sess = OwningSession(id);
         var pane = sess == null ? null : AllLeaves(sess.Root).FirstOrDefault(p => p.Id == id);
-        if (sess == null || pane == null) return;
+        if (sess == null || pane == null || pane.IsMail) return;
         // New-pane chooser: park the spawn and ask the user what to run
         // here. Released by OnPaneChooserChoose (or closed on cancel).
         if (_pendingChoosers.ContainsKey(id))
@@ -2573,6 +2585,116 @@ internal sealed partial class AppController
         }
         Log.Info($"Pane.resize.spawn pane={id:N} cols={cols} rows={rows}");
         SpawnPty(sess, pane, cols, rows);
+    }
+
+    // ---- Email inbox ------------------------------------------------------
+
+    /// A pasted Drive folder URL works as well as the bare id.
+    private static string InboxFolderId(string raw)
+    {
+        var s = raw.Trim();
+        var m = System.Text.RegularExpressions.Regex.Match(s, @"/folders/([A-Za-z0-9_-]+)");
+        return m.Success ? m.Groups[1].Value : s;
+    }
+
+    /// "Open session" on an email: the tab already made for it if it is still
+    /// around, else a new one — the email on the left, a Claude on the right
+    /// that has been told where the thread is and to read it first.
+    private void OnInboxOpen(InboxRef msg)
+    {
+        if (_inbox == null) return;
+        _inbox.MarkReadIfNew(msg.Id);
+        if (_inbox.LinkedSession(msg.Id) is Guid existing)
+        {
+            OnSessionSelect(new SessionRef { Id = existing });
+            return;
+        }
+        var thread = _inbox.LoadThread(msg.Id);
+        if (thread == null)
+        {
+            PostToast("That email hasn't been copied down yet — try Refresh", "error", Guid.Empty);
+            return;
+        }
+        var mailDir = InboxController.ThreadDir(msg.Id);
+        var promptPath = Path.Combine(mailDir, ".perch-prompt.md");
+        try { AtomicFile.WriteAllText(promptPath, InboxPrompt(Path.Combine(mailDir, InboxModel.ThreadFileName), mailDir)); }
+        catch (Exception ex)
+        {
+            Log.Error("Inbox.prompt", ex);
+            PostToast("Couldn't write the email's instructions for Claude", "error", Guid.Empty);
+            return;
+        }
+        var cwd = FirstExistingDir(_settings.InboxWorkDir) ?? InboxController.Root;
+
+        var s = _store.AddNew();
+        var title = thread.Subject.Length > 0 ? thread.Subject : "Email";
+        s.Title = title.Length > 60 ? title[..60] : title;
+        s.IsAutoTitle = false;
+        s.Cwd = cwd;
+        var chat = s.Root;
+        chat.Cwd = cwd;
+        var mail = new PaneNode
+        {
+            MailId = msg.Id,
+            Name = "email",
+            ColorIndex = chat.ColorIndex,
+        };
+        var root = InsertBesideImpl(chat, chat.Id, mail, SplitOrientation.Vertical, before: true);
+        if (root == null) return;
+        s.Root = root;
+        AutoName(s.Root);
+
+        var sid = Guid.NewGuid().ToString();
+        chat.ClaudeSessionId = sid;
+        var ccName = ClaudePeerNames.ForTitle("mail " + title);
+        chat.PeerName = ccName;
+        // Single quotes: the command is spliced into pwsh's -Command "…" or
+        // sh -c, and both take a single-quoted argument verbatim.
+        static string Q(string v) => "'" + v.Replace("'", "''") + "'";
+        _pendingInitialCommand[chat.Id] =
+            $"claude --session-id {sid} --name {ccName} --add-dir {Q(mailDir)} " +
+            $"--append-system-prompt-file {Q(promptPath)} {Q("Read the email and tell me what you suggest.")}";
+
+        PlaceNewTab(s);
+        _store.ActiveSessionId = s.Id;
+        _activePaneId = chat.Id;
+        _inbox.Link(msg.Id, s.Id);
+        if (_inbox.CurrentState(msg.Id) is "new" or "read") _inbox.SetState(msg.Id, "pending");
+        _store.Save();
+        PushState();
+    }
+
+    internal static string InboxPrompt(string threadPath, string mailDir) => $"""
+        You are helping the user deal with one email thread from their work inbox.
+
+        - The full thread (every message, oldest first) is in `{threadPath}`.
+        - Its attachments are in `{mailDir}` (the `Attachment:` lines in the thread name them). Look at images and screenshots too; they often hold the actual question.
+
+        Start by reading the thread. Then, briefly:
+        1. Who wants what from the user, in one or two plain sentences.
+        2. What you suggest doing about it: a reply (draft it), something to look into (say what, and do the obvious read-only checking if it clearly helps), forwarding, or nothing.
+        If you are not sure what the user wants from this email, ask them instead of guessing.
+
+        Never send an email, post a message or change anything outside this conversation unless the user asks you to.
+        """;
+
+    private void OnInboxAttachmentOpen(InboxMailRequestMsg msg)
+    {
+        var path = _inbox?.AttachmentPath(msg.Id, msg.Name ?? "");
+        if (path == null)
+        {
+            PostToast("That attachment isn't on this PC", "error", Guid.Empty);
+            return;
+        }
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo { FileName = path, UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Inbox.attachment.open", ex);
+            PostToast("Couldn't open that attachment", "error", Guid.Empty);
+        }
     }
 
     private void OnSessionNew(SessionNewMsg msg)
@@ -3888,6 +4010,10 @@ internal sealed partial class AppController
                     seedPaths = (p.SeedPaths ?? new List<string>()).ToArray(),
                     hidden = p.Hidden,
                 }).ToArray(),
+                inboxEnabled = _settings.InboxEnabled,
+                inboxDriveFolderId = _settings.InboxDriveFolderId,
+                inboxKeyCommand = _settings.InboxKeyCommand,
+                inboxWorkDir = _settings.InboxWorkDir,
                 appVersion = _updates?.CurrentVersion,
                 updatable = _updates?.IsUpdatable ?? false,
             };
@@ -3984,6 +4110,13 @@ internal sealed partial class AppController
                 dirty = true;
             }
         }
+        var inboxDirty = false;
+        if (msg.InboxEnabled is bool ie && _settings.InboxEnabled != ie) { _settings.InboxEnabled = ie; inboxDirty = true; }
+        if (msg.InboxDriveFolderId is string fid && _settings.InboxDriveFolderId != InboxFolderId(fid))
+        { _settings.InboxDriveFolderId = InboxFolderId(fid); inboxDirty = true; }
+        if (msg.InboxKeyCommand is string kc && _settings.InboxKeyCommand != kc.Trim()) { _settings.InboxKeyCommand = kc.Trim(); inboxDirty = true; }
+        if (msg.InboxWorkDir is string wd && _settings.InboxWorkDir != wd.Trim()) { _settings.InboxWorkDir = wd.Trim(); dirty = true; }
+        if (inboxDirty) { dirty = true; _inbox?.OnSettingsChanged(); }
         if (dirty) _settings.Save();
         // Re-push so the font size propagates to live panes (no-op for
         // shell/cwd, which only matter at next spawn — but cheap).

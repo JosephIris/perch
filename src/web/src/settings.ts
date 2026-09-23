@@ -43,6 +43,10 @@ let projectListEl: HTMLElement | null = null;
 let fontInput: HTMLInputElement | null = null;
 let resumeToggle: HTMLButtonElement | null = null;
 let facesToggle: HTMLButtonElement | null = null;
+let inboxToggle: HTMLButtonElement | null = null;
+let inboxFolderInput: HTMLInputElement | null = null;
+let inboxKeyInput: HTMLInputElement | null = null;
+let inboxWorkDirInput: HTMLInputElement | null = null;
 let newTabDropdown: Dropdown | null = null;
 let sleepIdleDropdown: Dropdown | null = null;
 let updateCheckBtn: HTMLButtonElement | null = null;
@@ -74,6 +78,10 @@ export function closeSettings(): void {
   fontInput = null;
   resumeToggle = null;
   facesToggle = null;
+  inboxToggle = null;
+  inboxFolderInput = null;
+  inboxKeyInput = null;
+  inboxWorkDirInput = null;
   newTabDropdown?.dispose();
   newTabDropdown = null;
   sleepIdleDropdown?.dispose();
@@ -121,6 +129,10 @@ export function applySettingsData(msg: SettingsDataMessage): void {
   setToggle(resumeToggle, msg.resumeAgentsOnLaunch ?? true);
   // Faces default to plain ink; colour is the opt-in.
   if (facesToggle) setToggle(facesToggle, msg.teamFacesColor ?? false);
+  if (inboxToggle) setToggle(inboxToggle, msg.inboxEnabled ?? false);
+  if (inboxFolderInput) inboxFolderInput.value = msg.inboxDriveFolderId ?? "";
+  if (inboxKeyInput) inboxKeyInput.value = msg.inboxKeyCommand ?? "";
+  if (inboxWorkDirInput) inboxWorkDirInput.value = msg.inboxWorkDir ?? "";
 
   // Absent → "top", matching the host's Settings.NewTabPosition default.
   newTabDropdown?.setOptions(
@@ -327,6 +339,10 @@ function save(): void {
     worktreeSeedPaths: seedsInput
       ? seedsInput.value.split("\n").map((s) => s.trim()).filter(Boolean)
       : undefined,
+    inboxEnabled: inboxToggle ? getToggle(inboxToggle) : undefined,
+    inboxDriveFolderId: inboxFolderInput ? inboxFolderInput.value.trim() : undefined,
+    inboxKeyCommand: inboxKeyInput ? inboxKeyInput.value.trim() : undefined,
+    inboxWorkDir: inboxWorkDirInput ? inboxWorkDirInput.value.trim() : undefined,
   });
   closeSettings();
 }
@@ -347,13 +363,14 @@ function save(): void {
  * used by confirm.ts, which is exactly the kind of short, interrupting thing a
  * dialog IS right for.
  */
-type PaneId = "general" | "projects" | "worktrees" | "sessions" | "about";
+type PaneId = "general" | "projects" | "worktrees" | "sessions" | "inbox" | "about";
 
 const PANES: { id: PaneId; label: string }[] = [
   { id: "general", label: "General" },
   { id: "projects", label: "Projects" },
   { id: "worktrees", label: "Worktrees" },
   { id: "sessions", label: "Sessions" },
+  { id: "inbox", label: "Inbox" },
   { id: "about", label: "About" },
 ];
 
@@ -441,6 +458,7 @@ function buildSkeleton(): void {
   const projects = panes.get("projects")!;
   const worktrees = panes.get("worktrees")!;
   const sessions = panes.get("sessions")!;
+  const inboxPane = panes.get("inbox")!;
   const about = panes.get("about")!;
 
   // ── General ─────────────────────────────────────────────────────────────
@@ -627,6 +645,42 @@ function buildSkeleton(): void {
       sleepIdleDropdown.element,
     ),
   );
+
+  // ── Inbox ───────────────────────────────────────────────────────────────
+  // Opt-in: it needs a Gmail export script, a Drive folder and a service
+  // account, which is one person's setup rather than something to show all.
+  const inboxBlurb = document.createElement("p");
+  inboxBlurb.className = "settings-pane__blurb";
+  inboxBlurb.textContent =
+    "Emails you label “claude” in Gmail are copied to a Drive folder by a small script. " +
+    "Perch lists them, keeps each one's state (new, read, pending, done) in that folder so " +
+    "every PC sees the same, and opens a session per email with Claude beside it.";
+  inboxPane.appendChild(inboxBlurb);
+
+  inboxToggle = makeToggle("Show the inbox");
+  inboxPane.appendChild(makeRow("Show the inbox", "Adds Inbox to the sidebar and syncs every 5 minutes.", inboxToggle));
+
+  const textInput = (placeholder: string) => {
+    const i = document.createElement("input");
+    i.type = "text";
+    i.className = "settings-control settings-control--text";
+    i.spellcheck = false;
+    i.autocomplete = "off";
+    i.placeholder = placeholder;
+    return i;
+  };
+  inboxFolderInput = textInput("e.g. https://drive.google.com/drive/folders/…");
+  inboxPane.appendChild(makeWideRow("Drive folder",
+    "The folder the Gmail script writes to. Paste its link or its id. Share it with the service account as Editor so states can be saved.",
+    inboxFolderInput));
+  inboxKeyInput = textInput("e.g. gcloud secrets versions access latest --secret=…");
+  inboxPane.appendChild(makeWideRow("Key command",
+    "A command that prints the service account's JSON key. Perch runs it when it syncs and never stores the key.",
+    inboxKeyInput));
+  inboxWorkDirInput = textInput("The inbox's own folder");
+  inboxPane.appendChild(makeWideRow("Start Claude in",
+    "The folder an email's Claude works in, for example a repo whose tools the emails usually need. Empty uses the inbox folder.",
+    inboxWorkDirInput));
 
   // ── About ───────────────────────────────────────────────────────────────
   const welcomeBtn = document.createElement("button");

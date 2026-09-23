@@ -14,18 +14,19 @@
 // pane would float over the visible one — we tear those down on hide and let
 // them rebuild (page reload, no scrollback to lose) when the session returns.
 
-import type { PaneTreeView, SessionView, BoardNodeView, BoardLinkView } from "./bridge.js";
+import type { PaneTreeView, SessionView, BoardNodeView, BoardLinkView, InboxMailMessage, InboxItemView } from "./bridge.js";
 import { send } from "./bridge.js";
 import { Pane, DEFAULT_FONT_SIZE, type PaneSnapshot } from "./pane.js";
 import { openSettings } from "./settings.js";
 import { UrlPane } from "./url-pane.js";
 import { BoardPane } from "./board-pane.js";
+import { MailPane } from "./mail-pane.js";
 import { PANE_LEAVE_MS } from "./anim.js";
 import { showPaneChooser } from "./pane-chooser.js";
 import { closeTeamRoom } from "./team-room.js";
 import { treeSignature, computeEdge, isStageEntry, type Edge } from "./layout.js";
 
-type LeafPane = Pane | UrlPane | BoardPane;
+type LeafPane = Pane | UrlPane | BoardPane | MailPane;
 
 /** One mounted session: its container DIV (hidden when inactive), the panes
  *  keyed by id (reused across renders to preserve terminal state), and the
@@ -584,6 +585,29 @@ export class Workspace {
     }
   }
 
+  /** An email pane's thread arrived (inbox.mail). */
+  applyMail(msg: InboxMailMessage) {
+    const pane = this.findPane(msg.paneId);
+    if (pane instanceof MailPane) pane.applyMail(msg);
+  }
+
+  applyMailImage(paneId: string, name: string, dataUrl: string) {
+    const pane = this.findPane(paneId);
+    if (pane instanceof MailPane) pane.applyImage(name, dataUrl);
+  }
+
+  /** Every open email pane hears the inbox list, for its state buttons and
+   *  to notice that its thread got new mail. */
+  applyInbox(items: InboxItemView[]) {
+    const byId = new Map(items.map((i) => [i.id, i]));
+    for (const stage of this.stages.values())
+      for (const pane of stage.panes.values())
+        if (pane instanceof MailPane) {
+          const item = byId.get(pane.threadId);
+          if (item) pane.applyInboxItem(item);
+        }
+  }
+
   /** Push a board's contents into its pane. Same all-stages search as above:
    *  a board.state can land for a tab that isn't on screen. */
   applyBoardState(paneId: string, nodes: BoardNodeView[], links: BoardLinkView[]) {
@@ -649,6 +673,8 @@ export class Workspace {
           ? new UrlPane(node.paneId, node.name, node.url)
           : node.isBoard
           ? new BoardPane(node.paneId, node.name, stage.boardPath)
+          : node.mailId
+          ? new MailPane(node.paneId, node.name, node.mailId)
           : new Pane(node.paneId, node.name, this.defaultFontSize, this.defaultFontFamily);
         stage.panes.set(node.paneId, pane);
         if (pane instanceof Pane) {

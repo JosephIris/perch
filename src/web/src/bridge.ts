@@ -199,7 +199,21 @@ export type OutMessage =
       projectScanRoots?: string[];
       worktreeRoot?: string;
       worktreeSeedPaths?: string[];
+      inboxEnabled?: boolean;
+      inboxDriveFolderId?: string;
+      inboxKeyCommand?: string;
+      inboxWorkDir?: string;
     }
+  /* Email inbox. refresh = sync with Drive now; open = go to the email's tab,
+   * making it (email left, Claude right) if there isn't one yet. */
+  | { type: "inbox.refresh" }
+  | { type: "inbox.setState"; id: string; state: InboxStateName }
+  | { type: "inbox.open"; id: string }
+  /* From an email pane: its thread, one inline image, or open an attachment
+   * with the system's default app. */
+  | { type: "inbox.mail.request"; paneId: string; id: string }
+  | { type: "inbox.image.request"; paneId: string; id: string; name: string }
+  | { type: "inbox.attachment.open"; paneId: string; id: string; name: string }
   /* Page dismissed the onboarding lightbox → host marks it seen so it won't
    * auto-open next launch. */
   | { type: "onboarding.seen" }
@@ -388,6 +402,9 @@ export type PaneTreeView =
        * window onto its session's board. Carries no path — that is on the
        * session (SessionView.boardPath). */
       isBoard?: boolean;
+      /* Third leaf kind: this pane shows an email thread from the inbox (the
+       * value is its Gmail thread id). */
+      mailId?: string | null;
       /* Color tag (0–5) into the pane palette in style.css. */
       colorIndex: number;
       /* Per-pane agent state — pane header surfaces this directly so
@@ -1007,6 +1024,51 @@ export type SettingsDataMessage = {
   /* Whether this copy can self-update (a real Velopack install). False on a
    * dev/portable copy, where "Check now" is disabled. */
   updatable?: boolean;
+  inboxEnabled?: boolean;
+  inboxDriveFolderId?: string;
+  inboxKeyCommand?: string;
+  inboxWorkDir?: string;
+};
+
+export type InboxStateName = "new" | "read" | "pending" | "done";
+
+export type InboxItemView = {
+  id: string;
+  subject: string;
+  /* Display name of the latest message's sender. */
+  from: string;
+  /* ISO time of the latest message. */
+  date: string;
+  messageCount: number;
+  attachmentCount: number;
+  snippet: string;
+  state: InboxStateName;
+  /* The tab opened for this email on this PC, if it still exists. */
+  sessionId?: string | null;
+};
+
+export type InboxStateMessage = {
+  type: "inbox.state";
+  enabled: boolean;
+  status: "idle" | "syncing" | "ok" | "error";
+  message: string;
+  lastSync?: string | null;
+  /* Whether states are shared through the Drive state file. */
+  shared: boolean;
+  counts: Record<InboxStateName, number>;
+  items: InboxItemView[];
+};
+
+export type InboxAttachmentView = { name: string; isImage: boolean; present: boolean };
+
+export type InboxMailMessage = {
+  type: "inbox.mail";
+  paneId: string;
+  threadId: string;
+  found: boolean;
+  subject: string;
+  state: InboxStateName;
+  messages: { from: string; to: string; cc: string; date: string; body: string; attachments: InboxAttachmentView[] }[];
 };
 
 /* One pane being brought back in the restore-progress lightbox. */
@@ -1021,6 +1083,9 @@ export type InMessage =
   | { type: "pane.setup"; paneId: string; show: boolean; colorIndex: number }
   | ToastMessage
   | SettingsDataMessage
+  | InboxStateMessage
+  | InboxMailMessage
+  | { type: "inbox.image"; paneId: string; name: string; dataUrl: string }
   | CommitsDataMessage
   | { type: "pane.ready"; paneId: string }
   | { type: "pane.in.ack"; paneId: string; sequence: number; inputId?: string; error?: string | null }

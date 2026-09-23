@@ -8521,3 +8521,153 @@ body.show-dashboard .dashboard { display: flex; }
 .tf-sys--card > .tf-sys__text--wrap { flex: 1 1 220px; min-width: 0; }
 .tf-sys__open { white-space: nowrap; }
 .tf-sys--card > .tf-sys__details { flex-basis: 100%; }
+
+/* --- Inbox ----------------------------------------------------------------
+ * Full-window list of emails labelled `claude` in Gmail. Same overlay family
+ * as the dashboard (its head/count/close classes are reused), its own
+ * visibility class so opening one never shows the other. Built by inbox.ts. */
+.inbox {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: var(--color-terminal-bg);
+  display: none;
+  flex-direction: column;
+  padding: var(--sp-32) var(--sp-32) var(--sp-24);
+  overflow-y: auto;
+}
+body.show-inbox .inbox { display: flex; }
+.sidebar__action[hidden] { display: none; }
+.sidebar__top-actions:has(> .sidebar__action[hidden]) { display: none; }
+
+.inbox__headtail { margin-left: auto; display: flex; align-items: center; gap: var(--sp-12); }
+.inbox__headtail .dash__close { margin-left: 0; }
+.inbox__sync { font-family: var(--font-small); font-size: var(--type-caption-size); color: var(--color-text-tertiary); }
+.inbox__sync--error { color: var(--color-error); }
+.inbox__note {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  background: var(--color-layer);
+  border-radius: var(--r-card);
+  padding: var(--sp-8) var(--sp-12);
+  margin-bottom: var(--sp-16);
+  max-width: 80ch;
+}
+.inbox__note--error { color: var(--color-error); }
+
+.inbox__filters { display: flex; gap: var(--sp-4); margin-bottom: var(--sp-12); }
+.inbox__filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px var(--sp-12);
+  border-radius: var(--r-pill);
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+.inbox__filter:hover { background: var(--color-subtle-secondary); }
+.inbox__filter[aria-selected="true"] { background: var(--color-subtle-tertiary); color: var(--color-text-primary); }
+.inbox__filter-count { font-family: var(--font-small); font-size: 11px; color: var(--color-text-tertiary); }
+
+.inbox__list { display: flex; flex-direction: column; gap: 2px; }
+.inbox__row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-12);
+  padding: var(--sp-8) var(--sp-12);
+  border-radius: var(--r-card);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-entry);
+}
+.inbox__row:hover, .inbox__row:focus-visible { background: var(--color-layer-alt); outline: none; }
+.inbox__dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+.inbox__row[data-state="new"] .inbox__dot { background: var(--color-accent); }
+.inbox__main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.inbox__line1 { display: flex; align-items: baseline; gap: var(--sp-8); min-width: 0; }
+.inbox__from { flex: 0 0 auto; max-width: 24ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text-secondary); }
+.inbox__n { font-family: var(--font-small); font-size: 11px; color: var(--color-text-tertiary); }
+.inbox__subject { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text-primary); }
+.inbox__row[data-state="new"] .inbox__subject,
+.inbox__row[data-state="new"] .inbox__from { font-weight: 600; color: var(--color-text-primary); }
+.inbox__row[data-state="done"] .inbox__subject { color: var(--color-text-tertiary); }
+.inbox__snippet { font-size: 13px; color: var(--color-text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inbox__side { position: relative; flex: 0 0 auto; display: flex; align-items: center; }
+.inbox__meta { display: flex; align-items: center; gap: 6px; }
+.inbox__date { font-family: var(--font-small); font-size: var(--type-caption-size); color: var(--color-text-tertiary); min-width: 5ch; text-align: right; }
+.inbox__state { font-family: var(--font-small); font-size: 11px; padding: 1px 6px; border-radius: 8px; color: var(--color-text-tertiary); }
+.inbox__state--pending { color: var(--color-caution); background: var(--color-subtle-secondary); }
+.inbox__state--done { color: var(--color-state-done); }
+.inbox__state--new { color: var(--color-accent); }
+/* Row actions replace the meta on hover, like a mail client's hover toolbar. */
+.inbox__actions { display: none; gap: var(--sp-4); }
+.inbox__row:hover .inbox__meta, .inbox__row:focus-within .inbox__meta { display: none; }
+.inbox__row:hover .inbox__actions, .inbox__row:focus-within .inbox__actions { display: flex; }
+.inbox__act {
+  font-size: var(--type-caption-size);
+  padding: 3px var(--sp-8);
+  border-radius: var(--r-pill);
+  border: 1px solid var(--color-stroke);
+  color: var(--color-text-secondary);
+}
+.inbox__act:hover { background: var(--color-subtle-secondary); color: var(--color-text-primary); }
+.inbox__empty {
+  margin: var(--sp-48) auto 0;
+  max-width: 48ch;
+  text-align: center;
+  color: var(--color-text-secondary);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-12);
+}
+
+/* --- Email pane --------------------------------------------------------------
+ * The left half of an email's session: the thread as a readable document.
+ * Built by mail-pane.ts. */
+.pane__mailslot { flex: 1 1 auto; min-height: 0; min-width: 0; display: flex; }
+.mail { flex: 1 1 auto; overflow-y: auto; padding: var(--sp-16) var(--sp-24) var(--sp-24); }
+.mail__empty { color: var(--color-text-tertiary); padding: var(--sp-24) 0; }
+.mail__head { display: flex; align-items: flex-start; gap: var(--sp-16); margin-bottom: var(--sp-16); }
+.mail__subject {
+  flex: 1 1 auto;
+  font-family: var(--font-display);
+  font-size: var(--type-subtitle-size);
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--color-text-primary);
+}
+.mail__states { display: flex; gap: 2px; flex: 0 0 auto; }
+.mail__state {
+  font-size: var(--type-caption-size);
+  padding: 3px var(--sp-8);
+  border-radius: var(--r-pill);
+  color: var(--color-text-secondary);
+}
+.mail__state:hover { background: var(--color-subtle-secondary); }
+.mail__state[aria-pressed="true"] { background: var(--color-subtle-tertiary); color: var(--color-text-primary); }
+.mail__messages { display: flex; flex-direction: column; gap: var(--sp-12); }
+.mail__msg { background: var(--color-layer); border-radius: var(--r-card); padding: var(--sp-12) var(--sp-16); }
+.mail__meta { display: flex; align-items: baseline; gap: var(--sp-12); }
+.mail__from { flex: 1 1 auto; min-width: 0; font-weight: 600; color: var(--color-text-primary); overflow-wrap: anywhere; }
+.mail__date { flex: 0 0 auto; font-family: var(--font-small); font-size: var(--type-caption-size); color: var(--color-text-tertiary); }
+.mail__to { margin-top: 2px; font-family: var(--font-small); font-size: var(--type-caption-size); color: var(--color-text-tertiary); overflow-wrap: anywhere; }
+.mail__body {
+  margin-top: var(--sp-12);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: var(--type-body-size);
+  line-height: 1.5;
+  color: var(--color-text-primary);
+  user-select: text;
+}
+.mail__atts { display: flex; flex-wrap: wrap; gap: var(--sp-8); margin-top: var(--sp-12); }
+.mail__img { max-width: 100%; max-height: 360px; border-radius: var(--r-input); border: 1px solid var(--color-stroke); cursor: zoom-in; }
+.mail__att {
+  font-size: var(--type-caption-size);
+  padding: 3px var(--sp-8);
+  border-radius: var(--r-pill);
+  border: 1px solid var(--color-stroke);
+  color: var(--color-text-secondary);
+}
+.mail__att:hover:not(:disabled) { background: var(--color-subtle-secondary); color: var(--color-text-primary); }
+.mail__att:disabled { opacity: 0.5; cursor: default; }

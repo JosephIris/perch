@@ -137,7 +137,7 @@ internal static class StateProjection
                     title = s.Title,
                     // Boards excluded: this count answers "how much was running
                     // in that tab", and a board is never running anything.
-                    paneCount = leaves.Count(p => !p.IsBoard),
+                    paneCount = leaves.Count(p => !p.IsBoard && !p.IsMail),
                     // Either agent's saved conversation counts — both can be
                     // resumed, just with different commands (see ResumeCommand).
                     resumableCount = leaves.Count(p => !string.IsNullOrEmpty(p.ClaudeSessionId)
@@ -165,7 +165,7 @@ internal static class StateProjection
         var anyNotify = leaves.FirstOrDefault(p => p.HasNotification);
         // "3 panes · 1 waiting" is a statement about work in flight, so a board
         // — which never runs anything — is not one of the three.
-        var workLeaves = leaves.Where(p => !p.IsBoard).ToArray();
+        var workLeaves = leaves.Where(p => !p.IsBoard && !p.IsMail).ToArray();
         var paneCount = workLeaves.Length;
         var waitingCount = workLeaves.Count(p => p.AgentState is AgentState.Waiting or AgentState.Permission);
         var workingCount = workLeaves.Count(p => p.AgentState == AgentState.Working);
@@ -307,6 +307,8 @@ internal static class StateProjection
                 // and is projected there, so a leaf only says "I am the window
                 // onto this tab's board".
                 isBoard = node.IsBoard,
+                // Third leaf kind: an email from the inbox (PaneNode.MailId).
+                mailId = node.MailId,
                 colorIndex = node.ColorIndex,
                 // Per-pane state — shows up in the pane header so each
                 // pane's agent status is visible at a glance, no clicking

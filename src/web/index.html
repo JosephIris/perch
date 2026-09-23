@@ -60,6 +60,22 @@
           <span class="sidebar__action-badge" id="dash-badge" style="display:none">0</span>
         </button>
       </div>
+      <!-- Inbox: emails labelled `claude` in Gmail. Hidden unless the host
+           reports the feature on (Settings → Inbox). Badge = new emails. -->
+      <div class="sidebar__top-actions">
+        <button id="open-inbox" class="sidebar__action sidebar__action--secondary"
+                type="button" title="Open inbox" hidden>
+          <span class="sidebar__action-icon" aria-hidden="true">
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none"
+                 stroke="currentColor" stroke-width="1.4" stroke-linejoin="round">
+              <path d="M2 9.5V13a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V9.5"/>
+              <path d="M2 9.5 4 3h8l2 6.5h-3.5l-1 1.5h-3l-1-1.5z"/>
+            </svg>
+          </span>
+          <span class="sidebar__action-label">Inbox</span>
+          <span class="sidebar__action-badge" id="inbox-badge" style="display:none">0</span>
+        </button>
+      </div>
       <!-- Sections (Needs you / Projects) are rendered by sidebar.ts into
            this scroll container. -->
       <div id="sidebar-scroll" class="sidebar__scroll"></div>
@@ -294,6 +310,10 @@
     <!-- Dashboard: full-window attention view. Hidden until opened via the
          ▦ button or Ctrl+Shift+A. Rendered entirely by dashboard.ts. -->
     <section id="dashboard" class="dashboard" aria-hidden="true"></section>
+
+    <!-- Inbox: full-window email list, same overlay family as the dashboard.
+         Rendered entirely by inbox.ts. -->
+    <section id="inbox" class="inbox" aria-hidden="true"></section>
 
     <!-- Toast surface for perch notify messages. Same frosted acrylic
          family as the shortcut hint but anchored slightly higher and

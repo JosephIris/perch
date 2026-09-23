@@ -125,6 +125,23 @@ public sealed class Settings
     /// value falls back to %USERPROFILE% at use time.
     public string DefaultCwd { get; set; } = "";
 
+    /// The email inbox (InboxController). Off by default: it needs a Gmail
+    /// export script, a Drive folder and a service-account key, which is one
+    /// user's setup, not something to show everyone.
+    public bool InboxEnabled { get; set; } = false;
+
+    /// Id of the Drive folder the export writes to (the tail of its URL).
+    public string InboxDriveFolderId { get; set; } = "";
+
+    /// A command that prints the service account's JSON key — e.g.
+    /// `gcloud secrets versions access latest --secret=…`. A command rather
+    /// than a key file so the secret stays wherever it already lives.
+    public string InboxKeyCommand { get; set; } = "";
+
+    /// Where an email's Claude starts. Empty = the inbox's own folder; set it
+    /// to a repo whose skills and data the emails usually need.
+    public string InboxWorkDir { get; set; } = "";
+
     public string ResolveDefaultCwd()
     {
         if (!string.IsNullOrWhiteSpace(DefaultCwd) && Directory.Exists(DefaultCwd))

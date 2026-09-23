@@ -21,6 +21,7 @@ import { setHomeDir } from "./link-detect.js";
 import { Sidebar } from "./sidebar.js";
 import { Workspace } from "./workspace.js";
 import { Dashboard } from "./dashboard.js";
+import { Inbox } from "./inbox.js";
 import { installShortcutHint } from "./shortcut-hint.js";
 import { Toast } from "./toast.js";
 import { openSettings, applySettingsData, applyUpdateStatus } from "./settings.js";
@@ -57,6 +58,7 @@ const $ = <T extends HTMLElement>(id: string): T => {
 const sidebar = new Sidebar($("sidebar-scroll"), $("new-session-button"), $("recently-closed"));
 const workspace = new Workspace($("workspace"));
 const dashboard = new Dashboard($("dashboard"), $("dash-badge"));
+const inbox = new Inbox($("inbox"), $("open-inbox"), $("inbox-badge"));
 const toast = new Toast($("toast"));
 const restoreProgress = new RestoreProgress();
 const statusEl = $("status-text");
@@ -133,10 +135,16 @@ modeSessions.addEventListener("click", () => send({ type: "ui.mode", mode: "sess
 modeProjects.addEventListener("click", () => send({ type: "ui.mode", mode: "projects" }));
 
 // Dashboard: open via the ▦ sidebar button or Ctrl+Shift+A; Esc closes it.
-$("open-dashboard").addEventListener("click", () => dashboard.toggle());
+$("open-dashboard").addEventListener("click", () => { inbox.hide(); dashboard.toggle(); });
+// Inbox: shown only when the host says the feature is on (Settings → Inbox).
+$("open-inbox").addEventListener("click", () => { dashboard.hide(); inbox.toggle(); });
 window.addEventListener("keydown", (ev) => {
   if (ev.key === "Escape" && dashboard.isOpen()) {
     dashboard.hide();
+    ev.preventDefault();
+    ev.stopPropagation();
+  } else if (ev.key === "Escape" && inbox.isOpen()) {
+    inbox.hide();
     ev.preventDefault();
     ev.stopPropagation();
   }
@@ -324,6 +332,16 @@ onMessage((msg) => {
       break;
     case "ui.urlpane.error":
       workspace.showUrlPaneError(msg.paneId, msg.message);
+      break;
+    case "inbox.state":
+      inbox.apply(msg);
+      workspace.applyInbox(msg.items);
+      break;
+    case "inbox.mail":
+      workspace.applyMail(msg);
+      break;
+    case "inbox.image":
+      workspace.applyMailImage(msg.paneId, msg.name, msg.dataUrl);
       break;
     case "board.state":
       workspace.applyBoardState(msg.paneId, msg.nodes, msg.links);
