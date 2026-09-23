@@ -43,6 +43,7 @@ let projectListEl: HTMLElement | null = null;
 let fontInput: HTMLInputElement | null = null;
 let resumeToggle: HTMLButtonElement | null = null;
 let facesToggle: HTMLButtonElement | null = null;
+let roomsToggle: HTMLButtonElement | null = null;
 let inboxToggle: HTMLButtonElement | null = null;
 let inboxFolderInput: HTMLInputElement | null = null;
 let inboxKeyInput: HTMLInputElement | null = null;
@@ -78,6 +79,7 @@ export function closeSettings(): void {
   fontInput = null;
   resumeToggle = null;
   facesToggle = null;
+  roomsToggle = null;
   inboxToggle = null;
   inboxFolderInput = null;
   inboxKeyInput = null;
@@ -130,6 +132,7 @@ export function applySettingsData(msg: SettingsDataMessage): void {
   setToggle(resumeToggle, msg.resumeAgentsOnLaunch ?? true);
   // Faces default to plain ink; colour is the opt-in.
   if (facesToggle) setToggle(facesToggle, msg.teamFacesColor ?? false);
+  if (roomsToggle) setToggle(roomsToggle, msg.showTeamRooms ?? true);
   if (inboxToggle) setToggle(inboxToggle, msg.inboxEnabled ?? false);
   if (inboxFolderInput) inboxFolderInput.value = msg.inboxDriveFolderId ?? "";
   if (inboxKeyInput) inboxKeyInput.value = msg.inboxKeyCommand ?? "";
@@ -330,6 +333,7 @@ function save(): void {
     fontSize,
     resumeAgentsOnLaunch: resumeToggle ? getToggle(resumeToggle) : undefined,
     teamFacesColor: facesToggle ? getToggle(facesToggle) : undefined,
+    showTeamRooms: roomsToggle ? getToggle(roomsToggle) : undefined,
     newTabPosition: newTabDropdown
       ? (newTabDropdown.value as NewTabPosition)
       : undefined,
@@ -618,6 +622,15 @@ function buildSkeleton(): void {
   // Team bot faces: plain ink by default (the mascot as it is everywhere
   // else); colour is the opt-in. Applied on the spot so the room shows the
   // change while the dialog is still open; the host persists it on save.
+  roomsToggle = makeToggle("Show team rooms");
+  sessions.appendChild(
+    makeRow(
+      "Show team rooms",
+      "The Team room row under a project and “Add a bot…” in its menu. Off hides them; bots you already have keep their tabs and aren't stopped.",
+      roomsToggle,
+    ),
+  );
+
   facesToggle = makeToggle("Bot faces in colour");
   facesToggle.addEventListener("click", () => setFaceColorMode(getToggle(facesToggle!)));
   sessions.appendChild(

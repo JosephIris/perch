@@ -91,6 +91,12 @@ public sealed class Settings
     /// mascot as it appears everywhere else in the app; colour is the opt-in.
     public bool TeamFacesColor { get; set; } = false;
 
+    /// Whether team rooms show at all: the project's "Team room" row, the
+    /// project menu's "Add a bot…" and the room shortcut. On by default; off
+    /// hides the feature for someone who has stopped using it. Hiding only
+    /// hides — bots that exist keep their tabs and are not stopped.
+    public bool ShowTeamRooms { get; set; } = true;
+
     /// Parent folders searched (ONE level deep) for repos to offer as projects.
     /// A list, not a single root, because a dev machine keeps code in several
     /// places — work repos here, side projects there. Empty by default: we

@@ -385,6 +385,15 @@ export function openTeamRoom(id: string): void {
   composer?.focus();
 }
 
+/** Whether team rooms show at all (Settings → "Show team rooms"). Off hides
+ *  every door into a room; bots themselves are untouched. */
+let roomsVisible = true;
+export function teamRoomsVisible(): boolean { return roomsVisible; }
+export function setTeamRoomsVisible(v: boolean): void {
+  roomsVisible = v;
+  if (!v) closeTeamRoom();
+}
+
 export function closeTeamRoom(): void {
   if (!root || closing) return;
   const id = projectId;
@@ -394,6 +403,7 @@ export function closeTeamRoom(): void {
 }
 
 export function toggleTeamRoom(id: string): void {
+  if (!roomsVisible) return;
   if (isTeamRoomOpen(id)) closeTeamRoom();
   else openTeamRoom(id);
 }

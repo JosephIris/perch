@@ -193,6 +193,7 @@ export type OutMessage =
       resumeAgentsOnLaunch?: boolean;
       /* Team bot faces in colour rather than plain ink. */
       teamFacesColor?: boolean;
+      showTeamRooms?: boolean;
       newTabPosition?: NewTabPosition;
       /* Hours idle before an agent tab is slept; 0 = never. */
       sleepIdleAgentsAfterHours?: number;
@@ -631,6 +632,8 @@ export type StateMessage = {
     /* Team bot faces in colour (bird and circle in the bot's tag hue) rather
      * than plain ink. Off by default. */
     teamFacesColor?: boolean;
+    /* Team rooms shown at all (Settings → "Show team rooms"). Absent → on. */
+    showTeamRooms?: boolean;
   };
   /* Account-wide Claude model rate limits — only the AT-LIMIT models appear, so
    * the model menu disables exactly these and annotates each with its reset
@@ -1004,6 +1007,7 @@ export type SettingsDataMessage = {
   resumeAgentsOnLaunch?: boolean;
   /* Team bot faces in colour (Settings → "Bot faces in colour"). Absent → off. */
   teamFacesColor?: boolean;
+  showTeamRooms?: boolean;
   /* Where a new tab is inserted in its project (Settings → "New tab position").
    * Absent → "top", matching the host's Settings.NewTabPosition default. */
   newTabPosition?: NewTabPosition;

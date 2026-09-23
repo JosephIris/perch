@@ -4007,6 +4007,7 @@ internal sealed partial class AppController
                 fontSize = _settings.FontSize,
                 resumeAgentsOnLaunch = _settings.ResumeAgentsOnLaunch,
                 teamFacesColor = _settings.TeamFacesColor,
+                showTeamRooms = _settings.ShowTeamRooms,
                 newTabPosition = _settings.NewTabPosition,
                 sleepIdleAgentsAfterHours = _settings.SleepIdleAgentsAfterHours,
                 projectScanRoots = _settings.ProjectScanRoots.ToArray(),
@@ -4070,6 +4071,13 @@ internal sealed partial class AppController
         {
             _settings.TeamFacesColor = faces;
             dirty = true;
+        }
+        // The sidebar draws from the state push, so a change re-pushes below.
+        if (msg.ShowTeamRooms is bool rooms && _settings.ShowTeamRooms != rooms)
+        {
+            _settings.ShowTeamRooms = rooms;
+            dirty = true;
+            fontChanged = true;
         }
         // Clamped to a sane band rather than trusted: 0 is the off switch, and
         // anything under an hour would turn a memory net into a tab-closer.
@@ -4979,6 +4987,7 @@ internal sealed partial class AppController
                 _projects, _settings.SidebarMode, EffectiveModelLimits(), _settings.InspectorOpen,
                 _settings.WideLayout, _settings.LocalPerchOnly, _teamCtrl.ProjectTeamView,
                 teamFacesColor: _settings.TeamFacesColor,
+                showTeamRooms: _settings.ShowTeamRooms,
                 fontFamily: _settings.FontFamily,
                 codexModels: CodexModels.List(),
                 // "Opening this tab picks up its conversation." Armed AND not

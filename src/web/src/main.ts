@@ -37,7 +37,7 @@ import { initUtilityMini } from "./mini-mode.js";
 import { initInspector, toggleInspector, openInspectorSearch } from "./inspector.js";
 import { setModelLimits, setCodexModels } from "./model-menu.js";
 import { initWebPaneSuppression } from "./webpane-suppress.js";
-import { applyTeamState, toggleTeamRoom, closeTeamRoom, onTeamRoomChange, applyPasteResult, applyArtefact, applyArtefactIndex } from "./team-room.js";
+import { applyTeamState, toggleTeamRoom, closeTeamRoom, onTeamRoomChange, applyPasteResult, applyArtefact, applyArtefactIndex, setTeamRoomsVisible } from "./team-room.js";
 import { setFaceColorMode } from "./bot-face.js";
 import { teamProjectFor } from "./team.js";
 import { applyBriefProgress, applyBriefResult, applyReferencePicked } from "./new-bot-dialog.js";
@@ -228,6 +228,8 @@ onMessage((msg) => {
       applyLayout(msg.prefs?.wideLayout ?? false);
       // Bot faces: plain ink unless the owner opted into colour.
       setFaceColorMode(msg.prefs?.teamFacesColor ?? false);
+      // Before the sidebar renders: it decides whether to draw the room row.
+      setTeamRoomsVisible(msg.prefs?.showTeamRooms ?? true);
       // Account-wide model limits for the per-pane model menu (usually empty).
       setModelLimits(msg.modelLimits);
       setCodexModels(msg.codexModels);

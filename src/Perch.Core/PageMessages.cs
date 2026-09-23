@@ -403,6 +403,8 @@ internal sealed record SettingsSaveMsg
     public bool? ResumeAgentsOnLaunch { get; init; }
     /// Team bot faces in colour (see Settings.TeamFacesColor).
     public bool? TeamFacesColor { get; init; }
+    /// Team rooms shown at all (see Settings.ShowTeamRooms).
+    public bool? ShowTeamRooms { get; init; }
     /// Where a new tab lands in its project: "top" or "bottom".
     public string? NewTabPosition { get; init; }
     /// Hours an agent tab may sit idle before it is slept; 0 = never.

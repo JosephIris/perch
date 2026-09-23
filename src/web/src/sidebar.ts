@@ -30,7 +30,7 @@ import { attachCommitsHover, openCommitsLightbox } from "./commits-view.js";
 import { showPairMenu } from "./pair-menu.js";
 import { showProjectMenu } from "./project-menu.js";
 import { showBotMenu } from "./bot-menu.js";
-import { isTeamRoomOpen, openTeamRoom, closeTeamRoom, unreadFor } from "./team-room.js";
+import { isTeamRoomOpen, openTeamRoom, closeTeamRoom, unreadFor, teamRoomsVisible } from "./team-room.js";
 import { teamSummary } from "./team.js";
 import type { TeamBotView } from "./bridge.js";
 
@@ -762,7 +762,7 @@ export class Sidebar {
     // bots. Stays visible when the group is folded: it's the one row that
     // summarizes the team, and an unread count must not fold out of sight.
     const bots = project.team?.bots ?? [];
-    if (bots.length > 0) frag.appendChild(this.teamRow(project, bots));
+    if (bots.length > 0 && teamRoomsVisible()) frag.appendChild(this.teamRow(project, bots));
     // Collapsed means collapsed — every tab folds away, including the active
     // one. Keeping the active tab visible under a closed chevron made the
     // control contradict itself: the arrow said "shut" while a row sat right

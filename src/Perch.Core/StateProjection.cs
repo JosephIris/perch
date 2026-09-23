@@ -83,7 +83,7 @@ internal static class StateProjection
         bool wideLayout = false, bool localPerchOnly = false,
         Func<Guid, object?>? teamOf = null, bool teamFacesColor = false,
         IReadOnlyList<CodexModel>? codexModels = null,
-        Func<Guid, bool>? resumesOnOpen = null, string? fontFamily = null)
+        Func<Guid, bool>? resumesOnOpen = null, string? fontFamily = null, bool showTeamRooms = true)
     {
         return new
         {
@@ -94,7 +94,7 @@ internal static class StateProjection
             // Code abbreviates the home dir in its file recaps) into a real
             // file:// URL for the HTML-file link menu.
             homeDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            prefs = new { fontFamily, fontSize, onboardingSeen, sidebarMode, inspectorOpen, wideLayout, localPerchOnly, teamFacesColor },
+            prefs = new { fontFamily, fontSize, onboardingSeen, sidebarMode, inspectorOpen, wideLayout, localPerchOnly, teamFacesColor, showTeamRooms },
             // Account-wide model rate limits (usually empty — the endpoint 429s).
             // Only the AT-LIMIT models ship: the picker disables exactly these
             // and annotates each with its reset time. Empty / absent → every
