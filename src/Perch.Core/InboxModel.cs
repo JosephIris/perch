@@ -111,7 +111,8 @@ internal static class InboxModel
         var parts = new List<string>();
         foreach (var raw in last.Body.Split('\n'))
         {
-            var l = raw.Trim();
+            // Gmail's plain body marks a pasted image as "[image: name.png]".
+            var l = Regex.Replace(raw, @"\[image:[^\]]*\]", "").Trim();
             if (l.StartsWith(">")) continue;
             if (Regex.IsMatch(l, @"^On .+wrote:$")) break;
             if (l.Length == 0) continue;

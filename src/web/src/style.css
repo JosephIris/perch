@@ -8538,6 +8538,7 @@ body.show-dashboard .dashboard { display: flex; }
 }
 body.show-inbox .inbox { display: flex; }
 .sidebar__action[hidden] { display: none; }
+.sidebar__nav-group { display: flex; flex-direction: column; min-width: 0; }
 .sidebar__top-actions:has(> .sidebar__action[hidden]) { display: none; }
 
 .inbox__headtail { margin-left: auto; display: flex; align-items: center; gap: var(--sp-12); }
@@ -8625,11 +8626,13 @@ body.show-inbox .inbox { display: flex; }
  * The left half of an email's session: the thread as a readable document.
  * Built by mail-pane.ts. */
 .pane__mailslot { flex: 1 1 auto; min-height: 0; min-width: 0; display: flex; }
-.mail { flex: 1 1 auto; overflow-y: auto; padding: var(--sp-16) var(--sp-24) var(--sp-24); }
+.mail { flex: 1 1 auto; min-width: 0; overflow-y: auto; overflow-x: hidden; padding: var(--sp-16) var(--sp-24) var(--sp-24); }
 .mail__empty { color: var(--color-text-tertiary); padding: var(--sp-24) 0; }
-.mail__head { display: flex; align-items: flex-start; gap: var(--sp-16); margin-bottom: var(--sp-16); }
+.mail__head { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--sp-8) var(--sp-16); margin-bottom: var(--sp-16); }
 .mail__subject {
-  flex: 1 1 auto;
+  flex: 1 1 16ch;
+  min-width: 0;
+  overflow-wrap: anywhere;
   font-family: var(--font-display);
   font-size: var(--type-subtitle-size);
   font-weight: 600;
@@ -8647,8 +8650,8 @@ body.show-inbox .inbox { display: flex; }
 .mail__state[aria-pressed="true"] { background: var(--color-subtle-tertiary); color: var(--color-text-primary); }
 .mail__messages { display: flex; flex-direction: column; gap: var(--sp-12); }
 .mail__msg { background: var(--color-layer); border-radius: var(--r-card); padding: var(--sp-12) var(--sp-16); }
-.mail__meta { display: flex; align-items: baseline; gap: var(--sp-12); }
-.mail__from { flex: 1 1 auto; min-width: 0; font-weight: 600; color: var(--color-text-primary); overflow-wrap: anywhere; }
+.mail__meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px var(--sp-12); }
+.mail__from { flex: 1 1 16ch; min-width: 0; font-weight: 600; color: var(--color-text-primary); overflow-wrap: anywhere; }
 .mail__date { flex: 0 0 auto; font-family: var(--font-small); font-size: var(--type-caption-size); color: var(--color-text-tertiary); }
 .mail__to { margin-top: 2px; font-family: var(--font-small); font-size: var(--type-caption-size); color: var(--color-text-tertiary); overflow-wrap: anywhere; }
 .mail__body {

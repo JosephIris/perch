@@ -43,7 +43,10 @@
       <!-- Dashboard (full-window attention view). A LABELLED button, not a bare
            icon: a 4-square glyph tells you nothing about what it opens, and this
            is one of only two verbs in the sidebar. Badge = how many sessions are
-           waiting on you. -->
+           waiting on you.
+           Dashboard and Inbox share ONE grid row (.sidebar's
+           grid-template-rows counts its children), hence the wrapper. -->
+      <div class="sidebar__nav-group">
       <div class="sidebar__top-actions">
         <button id="open-dashboard" class="sidebar__action sidebar__action--secondary"
                 type="button" title="Open dashboard (Ctrl+Shift+A)">
@@ -75,6 +78,7 @@
           <span class="sidebar__action-label">Inbox</span>
           <span class="sidebar__action-badge" id="inbox-badge" style="display:none">0</span>
         </button>
+      </div>
       </div>
       <!-- Sections (Needs you / Projects) are rendered by sidebar.ts into
            this scroll container. -->
