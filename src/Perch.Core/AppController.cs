@@ -803,6 +803,7 @@ internal sealed partial class AppController
         .Add<CloudDeleteMsg>("cloud.delete", m => _ = _cloud?.DeleteAsync(m.Id))
         .Add("cloud.deleteOrphans", () => _ = _cloud?.DeleteOrphansAsync())
         .Add("inbox.refresh", () => _ = _inbox?.SyncAsync())
+        .Add("inbox.createStateFile", () => _ = _inbox?.CreateStateFileAsync())
         .Add<InboxSetStateMsg>("inbox.setState", m => _inbox?.SetState(m.Id, m.State))
         .Add<InboxRef>("inbox.open", OnInboxOpen)
         .Add<InboxMailRequestMsg>("inbox.mail.request", m => _inbox?.PostMail(m.PaneId, m.Id))

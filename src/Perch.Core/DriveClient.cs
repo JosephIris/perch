@@ -139,6 +139,23 @@ internal sealed class DriveClient : IDisposable
         using var _ = await SendAsync(req, ct);
     }
 
+    /// Create a file in a folder. Drive may refuse this for a service account
+    /// in a user's My Drive (it has no storage quota of its own); the caller
+    /// turns that refusal into instructions.
+    public async Task<string> CreateFileAsync(string folderId, string name, byte[] content, string mime, CancellationToken ct)
+    {
+        var meta = JsonSerializer.Serialize(new { name, parents = new[] { folderId } });
+        var body = new MultipartContent("related");
+        body.Add(new StringContent(meta, Encoding.UTF8, "application/json"));
+        var data = new ByteArrayContent(content);
+        data.Headers.ContentType = new MediaTypeHeaderValue(mime);
+        body.Add(data);
+        var req = new HttpRequestMessage(HttpMethod.Post, $"{UploadApi}?uploadType=multipart&supportsAllDrives=true&fields=id") { Content = body };
+        using var resp = await SendAsync(req, ct);
+        using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+        return doc.RootElement.GetProperty("id").GetString() ?? "";
+    }
+
     private static DriveFile Parse(JsonElement f)
     {
         var parents = f.TryGetProperty("parents", out var ps)

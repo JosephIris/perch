@@ -207,6 +207,8 @@ export type OutMessage =
   /* Email inbox. refresh = sync with Drive now; open = go to the email's tab,
    * making it (email left, Claude right) if there isn't one yet. */
   | { type: "inbox.refresh" }
+  /* Make perch-state.json in the Drive folder so states are shared. */
+  | { type: "inbox.createStateFile" }
   | { type: "inbox.setState"; id: string; state: InboxStateName }
   | { type: "inbox.open"; id: string }
   /* From an email pane: its thread, one inline image, or open an attachment

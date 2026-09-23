@@ -8533,10 +8533,24 @@ body.show-dashboard .dashboard { display: flex; }
   background: var(--color-terminal-bg);
   display: none;
   flex-direction: column;
-  padding: var(--sp-32) var(--sp-32) var(--sp-24);
+  /* A mail list reads badly edge to edge on a wide screen: cap the column. */
+  padding: var(--sp-32) max(var(--sp-32), calc((100% - 1040px) / 2)) var(--sp-24);
   overflow-y: auto;
 }
 body.show-inbox .inbox { display: flex; }
+.inbox__refresh {
+  white-space: nowrap;
+  flex: 0 0 auto;
+  font-size: var(--type-caption-size);
+  padding: 4px var(--sp-12);
+  border-radius: var(--r-pill);
+  border: 1px solid var(--color-stroke);
+  color: var(--color-text-secondary);
+}
+.inbox__refresh:hover:not(:disabled) { background: var(--color-subtle-secondary); color: var(--color-text-primary); }
+.inbox__refresh:disabled { opacity: 0.5; }
+.inbox__note { display: flex; align-items: center; gap: var(--sp-12); }
+.inbox__note-text { flex: 1 1 auto; }
 .sidebar__action[hidden] { display: none; }
 .sidebar__nav-group { display: flex; flex-direction: column; min-width: 0; }
 .sidebar__top-actions:has(> .sidebar__action[hidden]) { display: none; }
@@ -8552,7 +8566,6 @@ body.show-inbox .inbox { display: flex; }
   border-radius: var(--r-card);
   padding: var(--sp-8) var(--sp-12);
   margin-bottom: var(--sp-16);
-  max-width: 80ch;
 }
 .inbox__note--error { color: var(--color-error); }
 
@@ -8628,7 +8641,14 @@ body.show-inbox .inbox { display: flex; }
 .pane__mailslot { flex: 1 1 auto; min-height: 0; min-width: 0; display: flex; }
 .mail { flex: 1 1 auto; min-width: 0; overflow-y: auto; overflow-x: hidden; padding: var(--sp-16) var(--sp-24) var(--sp-24); }
 .mail__empty { color: var(--color-text-tertiary); padding: var(--sp-24) 0; }
-.mail__head { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--sp-8) var(--sp-16); margin-bottom: var(--sp-16); }
+.mail__head {
+  display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--sp-8) var(--sp-16);
+  /* Pinned: the state buttons are what you reach for after reading. */
+  position: sticky; top: calc(-1 * var(--sp-16)); z-index: 1;
+  margin: calc(-1 * var(--sp-16)) 0 var(--sp-16);
+  padding: var(--sp-16) 0 var(--sp-12);
+  background: var(--color-terminal-bg);
+}
 .mail__subject {
   flex: 1 1 16ch;
   min-width: 0;
@@ -8650,7 +8670,24 @@ body.show-inbox .inbox { display: flex; }
 .mail__state[aria-pressed="true"] { background: var(--color-subtle-tertiary); color: var(--color-text-primary); }
 .mail__messages { display: flex; flex-direction: column; gap: var(--sp-12); }
 .mail__msg { background: var(--color-layer); border-radius: var(--r-card); padding: var(--sp-12) var(--sp-16); }
-.mail__meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px var(--sp-12); }
+.mail__meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px var(--sp-12); cursor: pointer; }
+/* Folded = an earlier message: sender, first words, date. Click opens it. */
+.mail__peek { display: none; margin-top: 2px; font-size: 13px; color: var(--color-text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mail__msg--folded .mail__peek { display: block; }
+.mail__msg--folded .mail__full { display: none; }
+.mail__msg--folded { padding-block: var(--sp-8); background: transparent; border: 1px solid var(--color-stroke); }
+.mail__msg--folded .mail__from { font-weight: 500; color: var(--color-text-secondary); }
+.mail__quote-toggle {
+  margin-top: var(--sp-8);
+  padding: 0 var(--sp-8);
+  border-radius: var(--r-input);
+  background: var(--color-subtle-tertiary);
+  color: var(--color-text-secondary);
+  font-size: var(--type-caption-size);
+  line-height: 16px;
+}
+.mail__quote-toggle:hover { color: var(--color-text-primary); }
+.mail__quoted { color: var(--color-text-tertiary); font-size: 13px; }
 .mail__from { flex: 1 1 16ch; min-width: 0; font-weight: 600; color: var(--color-text-primary); overflow-wrap: anywhere; }
 .mail__date { flex: 0 0 auto; font-family: var(--font-small); font-size: var(--type-caption-size); color: var(--color-text-tertiary); }
 .mail__to { margin-top: 2px; font-family: var(--font-small); font-size: var(--type-caption-size); color: var(--color-text-tertiary); overflow-wrap: anywhere; }
@@ -8664,7 +8701,8 @@ body.show-inbox .inbox { display: flex; }
   user-select: text;
 }
 .mail__atts { display: flex; flex-wrap: wrap; gap: var(--sp-8); margin-top: var(--sp-12); }
-.mail__img { max-width: 100%; max-height: 360px; border-radius: var(--r-input); border: 1px solid var(--color-stroke); cursor: zoom-in; }
+.mail__body .mail__img { display: block; margin: var(--sp-8) 0; }
+.mail__img { max-width: 100%; max-height: 480px; border-radius: var(--r-input); border: 1px solid var(--color-stroke); cursor: zoom-in; }
 .mail__att {
   font-size: var(--type-caption-size);
   padding: 3px var(--sp-8);

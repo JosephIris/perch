@@ -109,7 +109,7 @@ internal sealed class InboxController : IDisposable
             await PushStateAsync(client, pullFirst: true);
             _status = "ok";
             if (_stateFileId == null)
-                _message = $"States are only on this PC: create an empty {InboxModel.StateFileName} in the inbox folder to share them.";
+                _message = "States are only saved on this PC. Create the state file in the Drive folder to share them across PCs.";
             _lastSync = DateTimeOffset.UtcNow;
         }
         catch (Exception ex)
@@ -223,6 +223,38 @@ internal sealed class InboxController : IDisposable
             }
         }
         finally { _writeLock.Release(); }
+    }
+
+    /// The "Create state file" button: make perch-state.json in the folder so
+    /// states are shared. Needs the folder shared as Editor, and Drive may
+    /// still refuse a service account a new file in someone's My Drive — both
+    /// come back as a plain instruction instead of an error code.
+    public async Task CreateStateFileAsync()
+    {
+        if (!Enabled || _stateFileId != null) return;
+        try
+        {
+            var client = await ClientAsync(_settings.InboxKeyCommand.Trim());
+            InboxModel.StateFile snapshot;
+            lock (_gate) snapshot = _state;
+            _stateFileId = await client.CreateFileAsync(_settings.InboxDriveFolderId.Trim(), InboxModel.StateFileName,
+                Encoding.UTF8.GetBytes(InboxModel.SerializeState(snapshot)), "application/json", CancellationToken.None);
+            _message = "";
+            Log.Info("Inbox.stateFile", "created");
+        }
+        catch (DriveException ex) when (ex.Status == 403 && ex.Message.Contains("quota", StringComparison.OrdinalIgnoreCase))
+        {
+            _message = $"Drive won't let the service account create files in your Drive. In the inbox folder, create an empty file named {InboxModel.StateFileName}, then press Refresh.";
+        }
+        catch (DriveException ex) when (ex.Status is 403 or 404)
+        {
+            _message = "The service account can only view this folder. Share it with the service account as Editor, then try again.";
+        }
+        catch (Exception ex)
+        {
+            _message = "Couldn't create the state file: " + ex.Message;
+        }
+        PushView();
     }
 
     // ---- page requests ----------------------------------------------------

@@ -101,8 +101,8 @@ export class Inbox {
     if (msg?.enabled) {
       const counts = el("div", "dash__counts");
       const pill = (text: string, v: string) => counts.appendChild(el("span", `dash__count dash__count--${v}`, text));
-      pill(`${msg.counts.new} new`, msg.counts.new ? "work" : "muted");
-      pill(`${msg.counts.pending} pending`, msg.counts.pending ? "alert" : "muted");
+      if (msg.counts.new) pill(`${msg.counts.new} new`, "work");
+      if (msg.counts.pending) pill(`${msg.counts.pending} pending`, "alert");
       head.appendChild(counts);
     }
     const tail = el("div", "inbox__headtail");
@@ -112,7 +112,7 @@ export class Inbox {
       else if (msg.status === "error") { sync.textContent = "Sync failed"; sync.classList.add("inbox__sync--error"); }
       else if (msg.lastSync) { sync.append("Synced "); sync.appendChild(agoSpan(Date.parse(msg.lastSync))); }
       tail.appendChild(sync);
-      const refresh = el("button", "settings-btn settings-btn--subtle", "Refresh") as HTMLButtonElement;
+      const refresh = el("button", "inbox__refresh", "Refresh") as HTMLButtonElement;
       refresh.type = "button";
       refresh.disabled = msg.status === "syncing";
       refresh.addEventListener("click", () => send({ type: "inbox.refresh" }));
@@ -139,7 +139,19 @@ export class Inbox {
       return;
     }
 
-    if (msg.message) frag.appendChild(el("div", `inbox__note${msg.status === "error" ? " inbox__note--error" : ""}`, msg.message));
+    if (msg.message) {
+      const note = el("div", `inbox__note${msg.status === "error" ? " inbox__note--error" : ""}`);
+      note.appendChild(el("span", "inbox__note-text", msg.message));
+      // States aren't shared yet because the folder has no state file: offer
+      // to make it rather than send you off to Drive.
+      if (msg.status === "ok" && !msg.shared) {
+        const make = el("button", "inbox__refresh", "Create state file") as HTMLButtonElement;
+        make.type = "button";
+        make.addEventListener("click", () => { make.disabled = true; send({ type: "inbox.createStateFile" }); });
+        note.appendChild(make);
+      }
+      frag.appendChild(note);
+    }
 
     const tabs = el("div", "inbox__filters");
     tabs.setAttribute("role", "tablist");
