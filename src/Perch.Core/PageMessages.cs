@@ -423,6 +423,42 @@ internal sealed record SettingsSaveMsg
     public string? InboxProjectId { get; init; }
 }
 
+/// "New project chat": the project, and optionally a name, a one-line goal
+/// and instructions for every thread.
+internal sealed record ProjectChatNewMsg
+{
+    public required Guid Id { get; init; }
+    public string? Name { get; init; }
+    public string? Goal { get; init; }
+    public string? Instructions { get; init; }
+}
+
+/// Edit a project chat's goal / instructions, or forget a memory note
+/// (1-based `Forget`), from its Overview.
+internal sealed record ProjectChatUpdateMsg
+{
+    public required Guid SessionId { get; init; }
+    public string? Goal { get; init; }
+    public string? Instructions { get; init; }
+    public int? Forget { get; init; }
+}
+
+/// A thread, from the chat's Overview: read its transcript, message it,
+/// stop it, or mark it resolved (or not).
+internal sealed record ThreadActMsg
+{
+    public required Guid Id { get; init; }
+    public string? Text { get; init; }
+    public bool? Resolved { get; init; }
+}
+
+/// Start a proposed thread ("all" starts every one not yet started).
+internal sealed record SuggestionStartMsg
+{
+    public required Guid SessionId { get; init; }
+    public required string Id { get; init; }
+}
+
 /// A message typed into a project chat's conversation.
 internal sealed record ChatSendMsg
 {

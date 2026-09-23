@@ -544,9 +544,11 @@ internal static class Program
     ///   list                                              → one line per thread
     ///   read <n>                                          → the thread's last reply
     ///   close <n>                                         → closes its tab (the branch stays)
+    ///   suggest <title> --brief "…"                       → proposes a thread the user starts
+    ///   remember <note…> | forget <k> | memory            → the chat's shared memory
     private static int CmdThread(string pipeName, string[] args)
     {
-        const string usage = "usage: perch thread new <title> [--brief \"…\" | --brief-file <path>] | send <n|lead> <text…> [--file <path>] | list | read <n> | close <n>";
+        const string usage = "usage: perch thread new|suggest <title> [--brief \"…\" | --brief-file <path>] | send <n|lead> <text…> [--file <path>] | list | read <n> | close <n> | remember <note…> | forget <k> | memory";
         if (args.Length < 2) { Console.Error.WriteLine(usage); return 2; }
         var op = args[1];
         string? brief = null, briefFile = null, file = null;
@@ -572,9 +574,20 @@ internal static class Program
         switch (op)
         {
             case "new":
+            case "suggest":
                 title = string.Join(' ', rest).Trim();
-                if (title.Length == 0) { Console.Error.WriteLine("perch thread new: give the thread a title"); return 2; }
-                if (string.IsNullOrWhiteSpace(brief)) { Console.Error.WriteLine("perch thread new: give it a brief (--brief \"…\" or --brief-file <path>)"); return 2; }
+                if (title.Length == 0) { Console.Error.WriteLine($"perch thread {op}: give the thread a title"); return 2; }
+                if (string.IsNullOrWhiteSpace(brief)) { Console.Error.WriteLine($"perch thread {op}: give it a brief (--brief \"…\" or --brief-file <path>)"); return 2; }
+                break;
+            case "remember":
+                text = string.Join(' ', rest).Trim();
+                if (text.Length == 0) { Console.Error.WriteLine("perch thread remember: what should be remembered?"); return 2; }
+                break;
+            case "forget":
+                if (rest.Count < 1) { Console.Error.WriteLine("perch thread forget: usage: perch thread forget <k>  (see perch thread memory)"); return 2; }
+                target = rest[0];
+                break;
+            case "memory":
                 break;
             case "send":
                 if (rest.Count < 1) { Console.Error.WriteLine("perch thread send: usage: perch thread send <n|lead> <text…>"); return 2; }
@@ -688,7 +701,8 @@ internal static class Program
         Console.WriteLine("  perch team artefact --title \"…\" --text \"<body>\"                  (the same, written inline)");
         Console.WriteLine("  perch team react <#seq|@nick> <emoji>        (an emoji on a room row)");
         Console.WriteLine("  perch team task new <title> | assign <id> <bot> [<title>] [--status s] [--note n] | mine [<id>] [<title>] [--status s] [--note n] | done <id>");
-        Console.WriteLine("  perch thread new <title> --brief \"…\" | send <n|lead> <text…> | list | read <n> | close <n>  (project chat threads)");
+        Console.WriteLine("  perch thread new|suggest <title> --brief \"…\" | send <n|lead> <text…> | list | read <n> | close <n>  (project chat threads)");
+        Console.WriteLine("  perch thread remember <note…> | forget <k> | memory                                      (project chat memory)");
         Console.WriteLine();
         Console.WriteLine("Outside a perch pane (no PERCH_PIPE set) every command is a silent no-op.");
     }

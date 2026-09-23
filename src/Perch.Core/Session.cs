@@ -125,6 +125,20 @@ internal sealed class Session : INotifyPropertyChanged
     /// first turn creates it (`--session-id`), every later one resumes it.
     public bool ChatStarted { get; set; }
 
+    /// On a project chat: its one-line goal and its instructions — what every
+    /// turn of the coordinator and every new thread is given. Both optional.
+    public string ChatGoal { get; set; } = "";
+    public string ChatInstructions { get; set; } = "";
+
+    /// On a thread: marked done (by the user, or once its work is merged);
+    /// it drops to the Resolved group and stops asking for attention.
+    public bool ThreadResolved { get; set; }
+
+    /// On a thread: commits on its branch that the project's checked-out
+    /// branch doesn't have yet — work waiting to be merged. Refreshed after
+    /// each of its turns and each of the chat's; 0 once merged.
+    public int ThreadUnmerged { get; set; }
+
     // ----- Incoming pair note (transient, like NotificationText) -----------
     // The last cross-session message that ARRIVED at this tab (or, warn level,
     // the last delivery failure by this tab). Rendered as a quiet note line on

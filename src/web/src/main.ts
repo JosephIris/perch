@@ -349,6 +349,12 @@ onMessage((msg) => {
     case "chat.status":
       workspace.applyChatStatus(msg.paneId, msg.running, msg.queued);
       break;
+    case "chat.meta":
+      workspace.applyChatMeta(msg);
+      break;
+    case "thread.transcript":
+      workspace.applyThreadTranscript(msg.id, msg.events);
+      break;
     case "inbox.mail":
       if (msg.paneId === READER_ID) inbox.applyMail(msg);
       else workspace.applyMail(msg);

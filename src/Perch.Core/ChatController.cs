@@ -40,6 +40,12 @@ internal sealed class ChatController : IDisposable
         public required Action<Session, PaneNode, bool> SetWorking { get; init; }
         public required Action Save { get; init; }
         public required IUiThread Ui { get; init; }
+        /// A coordinator turn finished (it may have merged something).
+        public Action<Session>? TurnEnded { get; init; }
+        /// The chat's proposed threads and whether each has started, and the
+        /// coordinator's current system prompt path (rewritten per turn).
+        public Func<Session, object>? Suggestions { get; init; }
+        public Func<Session, string>? PromptPath { get; init; }
     }
 
     /// Tools the coordinator may use without asking — the only ones it gets.
@@ -115,6 +121,51 @@ internal sealed class ChatController : IDisposable
             running = chat.Proc != null,
             queued = chat.Queue.Count,
         });
+        PostMeta(lead);
+    }
+
+    /// The chat's goal, instructions, memory and proposed threads: what the
+    /// Overview's About tab and the suggestion cards show. Sent with the
+    /// history and again whenever any of it changes.
+    public void PostMeta(Session lead)
+    {
+        var leaf = PaneTree.AllLeaves(lead.Root).FirstOrDefault(p => p.IsChat);
+        if (leaf == null) return;
+        _h.Post(new
+        {
+            type = "chat.meta",
+            paneId = leaf.Id.ToString("D"),
+            sessionId = lead.Id.ToString("D"),
+            goal = lead.ChatGoal,
+            instructions = lead.ChatInstructions,
+            memory = ThreadController.ReadMemory(lead).ToArray(),
+            suggestions = _h.Suggestions?.Invoke(lead) ?? Array.Empty<object>(),
+        });
+    }
+
+    /// A row that stands for something rather than saying it: a thread that
+    /// was started ("thread", tool = "thread:<id>") or proposed ("suggest",
+    /// tool = "suggest:<id>"). The page draws it as a live card.
+    public void Card(Session lead, string kind, string text, string tool)
+    {
+        var leaf = PaneTree.AllLeaves(lead.Root).FirstOrDefault(p => p.IsChat);
+        if (leaf == null) return;
+        var chat = Get(leaf.Id, out _, out _);
+        if (chat == null) return;
+        Append(chat, lead, kind, text, tool);
+    }
+
+    /// A new chat with a goal takes the first turn itself, the way a chief of
+    /// staff would: look at the project and propose where to start.
+    public void Kickoff(Session lead)
+    {
+        var leaf = PaneTree.AllLeaves(lead.Root).FirstOrDefault(p => p.IsChat);
+        if (leaf == null) return;
+        var chat = Get(leaf.Id, out _, out _);
+        if (chat == null) return;
+        Append(chat, lead, "notice", "Getting started: looking at the project to propose the first work.");
+        chat.Queue.Add("[Perch] This project chat was just created. Look at the project, then propose the first one to three threads that move the goal forward with `perch thread suggest` (don't start them), and tell the user in a few lines what you propose and why.");
+        Pump(chat, lead, leaf);
     }
 
     public void OnSend(Guid paneId, string text)
@@ -185,8 +236,8 @@ internal sealed class ChatController : IDisposable
             ?? throw new InvalidOperationException("Claude Code isn't installed (no `claude` on PATH).");
         var proj = lead.ProjectId is Guid pid ? _h.ProjectById(pid) : null;
         var cwd = proj != null && Directory.Exists(proj.Path) ? proj.Path : lead.Cwd;
-        var promptPath = Path.Combine(ThreadController.DirFor(lead), "coordinator.md");
-        if (proj != null) promptPath = ThreadController.WriteCoordinatorPrompt(lead, proj);
+        var promptPath = _h.PromptPath?.Invoke(lead)
+            ?? (proj != null ? ThreadController.WriteCoordinatorPrompt(lead, proj) : Path.Combine(ThreadController.DirFor(lead), "coordinator.md"));
         if (string.IsNullOrEmpty(leaf.ClaudeSessionId)) leaf.ClaudeSessionId = Guid.NewGuid().ToString();
 
         var args = new List<string> { "-p", "--output-format", "stream-json", "--verbose" };
@@ -277,6 +328,7 @@ internal sealed class ChatController : IDisposable
         }
         chat.Stopping = false;
         _h.SetWorking(lead, leaf, false);
+        _h.TurnEnded?.Invoke(lead);
         Log.Info("Chat.turn.end", $"lead={lead.Id:N} code={code} result={sawResult}");
         Status(chat);
         Pump(chat, lead, leaf);
@@ -341,6 +393,9 @@ internal sealed class ChatController : IDisposable
             _ => null,
         } ?? "";
         v = v.Replace('\n', ' ').Trim();
+        // Claude prefixes most commands with `cd "<the repo>" &&`; the row
+        // should say what it ran, not where.
+        v = System.Text.RegularExpressions.Regex.Replace(v, @"^cd\s+(""[^""]*""|'[^']*'|\S+)\s*(&&|;)\s*", "");
         return v.Length > 160 ? v[..160] + "…" : v;
     }
 

@@ -421,6 +421,12 @@ internal sealed partial class AppController
                 GaveUp = (sess, line) => PostToast($"Perch couldn't get a message into \"{sess.Title}\"", "error", Guid.Empty),
             },
             InformChat = (lead, text, threadId) => _chatCtrl?.Inform(lead, text, threadId),
+            ThreadStarted = (lead, thread) => _chatCtrl?.Card(lead, "thread", thread.Title, "thread:" + thread.Id.ToString("D")),
+            Suggested = (lead, s) =>
+            {
+                _chatCtrl?.Card(lead, "suggest", s.Title, "suggest:" + s.Id);
+                _chatCtrl?.PostMeta(lead);
+            },
             NotifyChat = (lead, line, full) =>
             {
                 if (!AllLeaves(lead.Root).Any(p => p.IsChat)) return false;
@@ -439,6 +445,10 @@ internal sealed partial class AppController
             ProjectById = id => _projects.ById(id),
             Post = PostToPage,
             ThreadCommand = (lead, paneId, msg) => _threadCtrl.OnThreadCommand(lead, paneId, msg),
+            TurnEnded = lead => { _ = _threadCtrl.RefreshUnmergedAsync(lead); _chatCtrl?.PostMeta(lead); },
+            Suggestions = lead => _threadCtrl.LoadSuggestions(lead)
+                .Select(x => new { id = x.Id, title = x.Title, threadId = x.ThreadId?.ToString("D") }).ToArray(),
+            PromptPath = lead => _threadCtrl.WriteCoordinatorPrompt(lead),
             SetWorking = (lead, leaf, working) =>
             {
                 leaf.AgentState = working ? AgentState.Working : AgentState.Done;
@@ -846,7 +856,14 @@ internal sealed partial class AppController
         .Add("project.browse", OnProjectBrowse)
         .Add<ProjectAddMsg>("project.add", OnProjectAdd)
         .Add<ProjectRef>("project.remove", OnProjectRemove)
-        .Add<ProjectRef>("projectchat.new", OnProjectChatNew)
+        .Add<ProjectChatNewMsg>("projectchat.new", OnProjectChatNew)
+        .Add<ProjectChatUpdateMsg>("projectchat.update", OnProjectChatUpdate)
+        .Add<SuggestionStartMsg>("suggestion.start", OnSuggestionStart)
+        .Add<ThreadActMsg>("thread.transcript", m => _ = PostThreadTranscriptAsync(m.Id))
+        .Add<ThreadActMsg>("thread.send", OnThreadSend)
+        .Add<ThreadActMsg>("thread.stop", OnThreadStop)
+        .Add<ThreadActMsg>("thread.answer", OnThreadAnswer)
+        .Add<ThreadActMsg>("thread.resolve", m => { if (SessionById(m.Id) is Session t) _threadCtrl.Resolve(t, m.Resolved ?? true); })
         .Add<PaneRef>("chat.request", m => _chatCtrl.OnRequest(m.PaneId))
         .Add<ChatSendMsg>("chat.send", m => _chatCtrl.OnSend(m.PaneId, m.Text))
         .Add<PaneRef>("chat.stop", m => _chatCtrl.OnStop(m.PaneId))
@@ -2694,7 +2711,100 @@ internal sealed partial class AppController
     /// project whose one pane is the chat — a conversation drawn by the page
     /// with the threads beside it (ChatController). No terminal: every turn is
     /// a headless run of the chat's own Claude session.
-    private void OnProjectChatNew(ProjectRef msg)
+    private Session? SessionById(Guid id) => _store.Sessions.FirstOrDefault(s => s.Id == id);
+
+    /// When each thread pane's permission prompt was last answered from the
+    /// Overview (Environment.TickCount64), to refuse a double answer.
+    private readonly Dictionary<Guid, long> _threadAnsweredAt = new();
+
+    private void OnProjectChatUpdate(ProjectChatUpdateMsg msg)
+    {
+        if (SessionById(msg.SessionId) is not { IsLead: true } lead) return;
+        if (msg.Goal is string g) lead.ChatGoal = g.Trim();
+        if (msg.Instructions is string i) lead.ChatInstructions = i.Trim();
+        if (msg.Forget is int k)
+        {
+            var mem = ThreadController.ReadMemory(lead);
+            if (k >= 1 && k <= mem.Count) { mem.RemoveAt(k - 1); ThreadController.WriteMemory(lead, mem); }
+        }
+        _store.Save();
+        _chatCtrl.PostMeta(lead);
+        PushState();
+    }
+
+    private async void OnSuggestionStart(SuggestionStartMsg msg)
+    {
+        if (SessionById(msg.SessionId) is not { IsLead: true } lead) return;
+        var ids = msg.Id == "all"
+            ? _threadCtrl.LoadSuggestions(lead).Where(s => s.ThreadId == null).Select(s => s.Id).ToList()
+            : new List<string> { msg.Id };
+        foreach (var id in ids)
+        {
+            var error = await _threadCtrl.StartSuggestionAsync(lead, id);
+            if (error != null) PostToast(error, "error", Guid.Empty);
+        }
+        _chatCtrl.PostMeta(lead);
+    }
+
+    /// A thread's conversation for the chat's Overview: its prompts, its
+    /// prose and a line per tool, from its transcript. Asked for when the
+    /// thread is opened there and again as it changes.
+    private async Task PostThreadTranscriptAsync(Guid id)
+    {
+        if (SessionById(id) is not Session t) return;
+        var pane = AllLeaves(t.Root).FirstOrDefault(p => p.IsTerminal && !string.IsNullOrEmpty(p.ClaudeSessionId));
+        InspectorData? data = null;
+        if (pane != null)
+        {
+            try { data = await _transcripts.ReadAsync(new TranscriptKey(pane.Id, pane.ClaudeSessionId, ResolvePaneCwd(t, pane))); }
+            catch (Exception ex) { Log.Error("Thread.transcript", ex); }
+        }
+        var events = (data?.Events ?? Array.Empty<InspectorEvent>())
+            .Where(e => e.Kind is "prompt" or "beat" or "work")
+            .TakeLast(200)
+            .Select(e => new { kind = e.Kind, text = e.Text, verb = e.Verb, target = e.Target })
+            .ToArray();
+        PostToPage(new { type = "thread.transcript", id = id.ToString("D"), events });
+    }
+
+    /// The user typed to a thread from the Overview: it goes in when that
+    /// thread is free, confirmed like everything typed into a Claude.
+    private void OnThreadSend(ThreadActMsg msg)
+    {
+        var text = (msg.Text ?? "").Trim();
+        if (text.Length == 0 || SessionById(msg.Id) is not Session t) return;
+        t.ThreadResolved = false;
+        _threadCtrl.Delivery.Enqueue(t.Id, text);
+        PushState();
+    }
+
+    /// Answer a thread's permission prompt from the Overview: Enter takes
+    /// the prompt's highlighted first choice ("Yes"), Escape declines — the
+    /// same keys a person presses in its terminal. Only while it is on a
+    /// permission prompt, so a stray click can't type into a working Claude.
+    private void OnThreadAnswer(ThreadActMsg msg)
+    {
+        if (SessionById(msg.Id) is not Session t || ClaudePaneOf(t) is not PaneNode p) return;
+        if (p.AgentState != AgentState.Permission) return;
+        // One answer per prompt. The pane still reads "permission" for a
+        // moment after the key lands (until its hook reports), and a second
+        // Enter in that window would answer the NEXT prompt unseen.
+        var now = Environment.TickCount64;
+        if (_threadAnsweredAt.TryGetValue(p.Id, out var last) && now - last < 4000) return;
+        _threadAnsweredAt[p.Id] = now;
+        var allow = (msg.Text ?? "") == "allow";
+        _panes.Write(p.Id, allow ? new byte[] { 0x0d } : new byte[] { 0x1b });
+        Log.Info("Thread.answer", $"session={t.Id:N} allow={allow}");
+    }
+
+    /// Stop a thread's turn: Escape in its terminal, as a person would.
+    private void OnThreadStop(ThreadActMsg msg)
+    {
+        if (SessionById(msg.Id) is Session t && ClaudePaneOf(t) is PaneNode p)
+            _panes.Write(p.Id, new byte[] { 0x1b });
+    }
+
+    private void OnProjectChatNew(ProjectChatNewMsg msg)
     {
         var proj = _projects.ById(msg.Id);
         if (proj == null || !Directory.Exists(proj.Path))
@@ -2706,9 +2816,12 @@ internal sealed partial class AppController
         var colorIndex = _store.PickUnusedColorForProject(proj.Id);
         s.ProjectId = proj.Id;
         s.IsLead = true;
-        s.Title = "Project chat";
+        var name = (msg.Name ?? "").Trim();
+        s.Title = name.Length > 0 ? name : $"{proj.Name} chat";
         s.IsAutoTitle = false;
         s.Cwd = proj.Path;
+        s.ChatGoal = (msg.Goal ?? "").Trim();
+        s.ChatInstructions = (msg.Instructions ?? "").Trim();
         var chat = s.Root;
         chat.IsChat = true;
         chat.Name = "chat";
@@ -2725,6 +2838,7 @@ internal sealed partial class AppController
         _store.Save();
         Log.Info("ProjectChat.new", $"project={proj.Id:N} session={s.Id:N}");
         PushState();
+        if (s.ChatGoal.Length > 0) _chatCtrl.Kickoff(s);
     }
 
     // ---- Email inbox ------------------------------------------------------

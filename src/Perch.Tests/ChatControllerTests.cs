@@ -20,6 +20,9 @@ public class ChatControllerTests
         Assert.Equal("Bash", rows[1].Tool);
         Assert.StartsWith("perch thread new", rows[1].Text);
         Assert.Equal(("tool", "app.ts", "Read"), rows[2]);
+
+        var cd = ChatController.ParseLine("""{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"cd \"C:\\repo x\" && git log --oneline"}}]}}""", out _, out _);
+        Assert.Equal("git log --oneline", cd[0].Text);
     }
 
     [Fact]

@@ -8,6 +8,7 @@ import type { ProjectView } from "./bridge.js";
 import { send } from "./bridge.js";
 import { showNewBotDialog } from "./new-bot-dialog.js";
 import { teamRoomsVisible } from "./team-room.js";
+import { showProjectChatDialog } from "./project-chat-dialog.js";
 
 let openMenu: HTMLElement | null = null;
 
@@ -50,7 +51,7 @@ export function showProjectMenu(x: number, y: number, p: ProjectView): void {
   chat.addEventListener("click", (ev) => {
     ev.stopPropagation();
     dismissProjectMenu();
-    send({ type: "projectchat.new", id: p.id });
+    showProjectChatDialog(p);
   });
   menu.insertBefore(chat, menu.firstChild);
 

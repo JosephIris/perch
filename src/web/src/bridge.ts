@@ -209,7 +209,16 @@ export type OutMessage =
    * making it (email left, Claude right) if there isn't one yet. */
   | { type: "inbox.refresh" }
   /* A new project chat under this project: coordinator Claude + threads panel. */
-  | { type: "projectchat.new"; id: string }
+  | { type: "projectchat.new"; id: string; name?: string; goal?: string; instructions?: string }
+  | { type: "projectchat.update"; sessionId: string; goal?: string; instructions?: string; forget?: number }
+  | { type: "suggestion.start"; sessionId: string; id: string }
+  /* A thread, from a project chat's Overview. */
+  | { type: "thread.transcript"; id: string }
+  | { type: "thread.send"; id: string; text: string }
+  | { type: "thread.stop"; id: string }
+  /* Answer a thread's permission prompt: text "allow" or "deny". */
+  | { type: "thread.answer"; id: string; text: "allow" | "deny" }
+  | { type: "thread.resolve"; id: string; resolved: boolean }
   /* A project chat's conversation: its history, a message, stop the turn. */
   | { type: "chat.request"; paneId: string }
   | { type: "chat.send"; paneId: string; text: string }
@@ -546,6 +555,10 @@ export type SessionView = {
   threadNumber?: number;
   threadReply?: string;
   threadReplyAtMs?: number;
+  /* A thread marked done; commits on its branch not yet merged; a chat's goal. */
+  threadResolved?: boolean;
+  threadUnmerged?: number;
+  chatGoal?: string;
   /* The last peer message that ARRIVED at this tab ("from user-profiles ·
    * ..."), or — warn level — this tab's last delivery failure. Ambient info,
    * never an attention state; the host clears it on select and ages it out
@@ -1063,7 +1076,18 @@ export type InboxStateName = "new" | "read" | "pending" | "done";
 /* One row of a project chat: "user" (what you wrote), "claude" (its prose,
  * Markdown), "tool" (a tool it used: `tool` is the name, `text` the target),
  * "notice" (from Perch: a thread finished, a thread asks) or "error". */
-export type ChatEntryView = { id: string; kind: "user" | "claude" | "tool" | "notice" | "error"; text: string; tool: string; atMs: number };
+export type ChatEntryView = { id: string; kind: "user" | "claude" | "tool" | "notice" | "error" | "thread" | "suggest"; text: string; tool: string; atMs: number };
+
+/* A project chat's goal, instructions, memory notes and proposed threads. */
+export type ChatMetaMessage = {
+  type: "chat.meta"; paneId: string; sessionId: string;
+  goal: string; instructions: string; memory: string[];
+  suggestions: { id: string; title: string; threadId: string | null }[];
+};
+
+/* One step of a thread's conversation, for the Overview: a prompt it was
+ * given, prose it wrote ("beat"), or a tool it used ("work"). */
+export type ThreadEventView = { kind: "prompt" | "beat" | "work"; text: string; verb: string; target: string };
 
 export type InboxItemView = {
   id: string;
@@ -1121,6 +1145,8 @@ export type InMessage =
   | { type: "chat.history"; paneId: string; entries: ChatEntryView[]; running: boolean; queued: number }
   | { type: "chat.entry"; paneId: string; entry: ChatEntryView }
   | { type: "chat.status"; paneId: string; running: boolean; queued: number }
+  | ChatMetaMessage
+  | { type: "thread.transcript"; id: string; events: ThreadEventView[] }
   | { type: "inbox.image"; paneId: string; name: string; dataUrl: string }
   | CommitsDataMessage
   | { type: "pane.ready"; paneId: string }

@@ -49,6 +49,10 @@ internal sealed class ThreadController
         /// Show a notice in a project chat without giving it to Claude — for
         /// things only the user can act on. `threadId` makes it openable.
         public Action<Session, string, Guid?>? InformChat { get; init; }
+        /// A thread was started from this chat (a card goes under the turn).
+        public Action<Session, Session>? ThreadStarted { get; init; }
+        /// The coordinator proposed a thread instead of starting it.
+        public Action<Session, Suggestion>? Suggested { get; init; }
     }
 
     /// What a project chat and its threads may run without a permission
@@ -90,53 +94,68 @@ internal sealed class ThreadController
 
     // ---- the coordinator ---------------------------------------------------
 
-    /// Write the coordinator's system prompt for a new project chat; returns
-    /// its path.
+    /// Write the coordinator's system prompt; returns its path. Rewritten at
+    /// every turn, so a changed goal, instruction or memory note is in force
+    /// from the next one.
+    public string WriteCoordinatorPrompt(Session lead) =>
+        lead.ProjectId is Guid pid && _h.ProjectById(pid) is Project proj ? WriteCoordinatorPrompt(lead, proj) : Path.Combine(DirFor(lead), "coordinator.md");
+
     public static string WriteCoordinatorPrompt(Session lead, Project proj)
     {
         var dir = DirFor(lead);
         Directory.CreateDirectory(dir);
         var path = Path.Combine(dir, "coordinator.md");
-        AtomicFile.WriteAllText(path, CoordinatorPrompt(proj));
+        AtomicFile.WriteAllText(path, CoordinatorPrompt(proj, lead.ChatGoal, lead.ChatInstructions, ReadMemory(lead)));
         return path;
     }
 
-    internal static string CoordinatorPrompt(Project proj) => $"""
+    internal static string CoordinatorPrompt(Project proj, string goal = "", string instructions = "", IReadOnlyList<string>? memory = null) => $"""
         You are the coordinator of a project chat in Perch, for the project "{proj.Name}" at `{proj.Path}`.
-        The user briefs you the way they would brief a chief of staff. You turn what they ask for into work, hand the work to threads, check what comes back, and put the result together for them.
+        The user briefs you the way they would brief a chief of staff. You turn what they ask for into work, hand the work to threads, check what comes back, and put the result together for them. You see what threads report back, not every step they take.
+        {Section("The goal", goal)}{Section("The user's instructions for this project", instructions)}{MemorySection(memory)}
+        ## Routing each message
+        - A quick question: answer it here.
+        - New work: start a thread for it, or pass it to a thread already working in that area (`perch thread send`). Say which.
+        - Several unrelated tasks in one message: a separate thread for each.
+        - If the user wants to review threads before they run (they may say so, or it's in the memory above), propose them with `perch thread suggest` instead of starting them. Also propose rather than start when the request is large or unclear.
 
         ## Threads
-        A thread is a separate Claude Code session with its own git worktree and branch of this repo. The user sees them in the Threads panel beside you and can open any of them. Run these with Bash:
+        A thread is a separate Claude Code session with its own git worktree and branch of this repo. It works on its own, commits on its branch, and reports back when it finishes a turn. The user sees threads beside this chat, grouped by what needs them, and can open one to read or steer it. Run these with Bash:
 
-        - `perch thread new "<title>" --brief "<brief>"` starts a thread and prints its number. The brief is everything the thread knows, so make it complete: the goal, the context and files that matter, constraints, what "done" looks like, and what to report back. For a long brief write it to a file and use `--brief-file <path>`.
-        - `perch thread send <n> "<message>"` steers a running thread. It is delivered when that thread is free.
-        - `perch thread list` shows every thread with its state and last report.
-        - `perch thread read <n>` prints a thread's last full report.
-        - `perch thread close <n>` closes a thread's tab; its branch and commits stay.
+        - `perch thread new "<title>" --brief "<brief>"` starts a thread; prints its number. The brief is everything the thread knows, so make it complete: the goal, the context and files that matter, constraints, what "done" looks like, and what to report back. For a long brief write it to a file and use `--brief-file <path>`.
+        - `perch thread suggest "<title>" --brief "<brief>"` proposes a thread; the user starts it with a click.
+        - `perch thread send <n> "<message>"` steers a running thread; delivered when it is free.
+        - `perch thread list` / `perch thread read <n>` / `perch thread close <n>`.
+        - `perch thread remember "<note>"` saves a note to project memory (a decision, a requirement, how the user likes to work); `perch thread forget <k>` removes one; `perch thread memory` lists them. Save the user's working preferences as they come up ("run at most two threads", "shorter updates").
 
-        When a thread finishes a turn, a message starting with `[Perch` arrives saying so, usually with its report. Check the report (`perch thread read <n>` if it isn't included), then decide: follow up with that thread, start others, or report to the user. A thread can also ask you something mid-task the same way.
+        When a thread finishes a turn, a message starting with `[Perch` arrives with its report. Check it, then decide: follow up with that thread, start others, or report to the user.
 
-        Never wait for threads: no sleeping, no scheduling a wake-up, no checking `perch thread list` over and over. Once the threads are started, tell the user briefly what is running and end your turn. Perch starts your next turn when a thread reports or asks you something. If a thread is stuck waiting for the user's permission, the user is told directly; you don't need to watch for it.
+        Never wait for threads: no sleeping, no scheduling a wake-up, no checking `perch thread list` over and over. Once threads are running, tell the user briefly what is running and end your turn. Perch starts your next turn when a thread reports or asks you something. A thread waiting for the user's permission is shown to the user directly.
 
         ## How to work
-        - Scope the request first. If what the user wants is unclear, ask before starting threads.
-        - You can read and search this repo, look at git history and diffs, and search the web, but you can't edit files or run other commands. Anything that changes something is a thread's job, and so is anything substantial. Answer quick questions yourself. Give independent pieces separate threads so they run in parallel. Ask the user before running more than four at once.
-        - Threads commit on their own branches. You assemble the result: when the user asks you to merge, or asked you to finish the whole job, merge each thread's branch into the branch checked out here with `git merge --no-ff <branch>`. Never push.
-        - If a merge clashes, run `git merge --abort` (you don't edit files, so you can't resolve it yourself) and send that thread: `perch thread send <n> "Merge <this branch> into your branch, resolve the conflicts, commit, and report."` When it reports, merge again.
-        - Before merging, check what a thread did (`git log`, `git diff <main>...<branch>`) and tell the user if something looks wrong instead of merging it.
-        - Keep the user posted briefly and lead with results. Messages starting with `[Perch` come from Perch, not from the user; you may get several in one turn, together with what the user wrote.
+        - You can read and search this repo, look at git, and search the web, but you can't edit files or run other commands. Anything that changes something is a thread's job, and so is anything substantial. Give independent pieces separate threads so they run in parallel.
+        - Threads commit on their own branches. Assembling the result is yours: when the user asks you to merge (or asked you to finish the whole job), check the thread's work (`git log`, `git diff <here>...<branch>`) and merge its branch into the branch checked out here with `git merge --no-ff <branch>`. Tell the user which order to merge in when it matters. Never push.
+        - If a merge clashes, run `git merge --abort` and send that thread: `perch thread send <n> "Merge <this branch> into your branch, resolve the conflicts, commit, and report."` When it reports, merge again.
+        - Keep the user posted briefly and lead with results. Messages starting with `[Perch` come from Perch, not from the user; several may arrive in one turn with what the user wrote.
         """;
+
+    private static string Section(string title, string body) =>
+        string.IsNullOrWhiteSpace(body) ? "" : $"\n## {title}\n{body.Trim()}\n";
+
+    private static string MemorySection(IReadOnlyList<string>? memory) =>
+        memory is { Count: > 0 } ? $"\n## Project memory\n{string.Join("\n", memory.Select((m, i) => $"{i + 1}. {m}"))}\n" : "";
 
     // ---- a thread ----------------------------------------------------------
 
-    internal static string ThreadPrompt(int n, string title, string brief) => $"""
+    internal static string ThreadPrompt(int n, string title, string brief, string instructions = "", IReadOnlyList<string>? memory = null) => $"""
         You are thread {n} of a project chat in Perch: "{title}". A coordinator Claude gave you this task and will review your result.
 
         - You work in your own git worktree on your own branch (`git branch --show-current`). Commit your work there. Don't push or merge unless the brief says to.
         - When you finish, or you are blocked, end your turn with a short report: first line, the outcome in one sentence; then what you did, what's left, and anything the coordinator has to decide. That report goes to the coordinator on its own.
         - To ask the coordinator something mid-task, run `perch thread send lead "<question>"` and carry on with what you can.
-        - Messages from the coordinator arrive as lines starting with `[Perch #…]`.
-
+        - To save something every later thread should know (a decision, a pitfall), run `perch thread remember "<note>"`.
+        - Messages from the coordinator or the user arrive as lines starting with `[Perch #…]`.
+        {Section("The user's instructions for this project", instructions)}{MemorySection(memory)}
         ## Your brief
         {brief}
         """;
@@ -169,23 +188,43 @@ internal sealed class ThreadController
             case "new":
             {
                 if (fromThread) return "error\nOnly the project chat starts threads. Ask it with: perch thread send lead \"…\"";
-                var proj = lead.ProjectId is Guid pid ? _h.ProjectById(pid) : null;
-                if (proj == null) return "error\nThis project chat's project is no longer registered.";
-                var title = (m.Title ?? "").Trim();
-                var n = ++lead.ThreadNumber;   // on the lead: the last number handed out
-                _h.Save();
-                var dir = DirFor(lead);
-                Directory.CreateDirectory(dir);
-                var promptPath = Path.Combine(dir, $"thread-{n}.md");
-                AtomicFile.WriteAllText(promptPath, ThreadPrompt(n, title, m.Brief ?? ""));
-                var tab = await _h.CreateClaudeTab(proj, title, promptPath, "Start on the task in your brief.", true);
-                if (tab == null) return "error\nPerch couldn't make the thread's tab (see the toast in Perch).";
-                tab.ThreadOf = lead.Id;
-                tab.ThreadNumber = n;
-                _h.Save();
-                _h.PushState();
-                Log.Info("Thread.new", $"lead={lead.Id:N} n={n} session={tab.Id:N}");
-                return $"ok\n{n}\n";
+                var (tab, error) = await StartThreadAsync(lead, (m.Title ?? "").Trim(), m.Brief ?? "");
+                return tab == null ? "error\n" + error : $"ok\n{tab.ThreadNumber}\n";
+            }
+            case "suggest":
+            {
+                if (fromThread) return "error\nOnly the project chat proposes threads.";
+                var s = new Suggestion { Id = Guid.NewGuid().ToString("N")[..10], Title = (m.Title ?? "").Trim(), Brief = m.Brief ?? "" };
+                var all = LoadSuggestions(lead);
+                all.Add(s);
+                SaveSuggestions(lead, all);
+                _h.Suggested?.Invoke(lead, s);
+                return "ok\nProposed. It starts when the user clicks Start on it in the chat.\n";
+            }
+            case "remember":
+            {
+                var text = (m.Text ?? "").Trim();
+                if (text.Length == 0) return "error\nNothing to remember.";
+                var mem = ReadMemory(lead);
+                mem.Add($"{text} ({DateTime.Now:yyyy-MM-dd})");
+                WriteMemory(lead, mem);
+                if (!fromThread) WriteCoordinatorPrompt(lead);
+                return $"ok\nRemembered as note {mem.Count}.\n";
+            }
+            case "forget":
+            {
+                var mem = ReadMemory(lead);
+                if (!int.TryParse((m.Target ?? "").Trim(), out var k) || k < 1 || k > mem.Count)
+                    return $"error\nNo note {m.Target}. Run perch thread memory to see them numbered.";
+                mem.RemoveAt(k - 1);
+                WriteMemory(lead, mem);
+                return $"ok\nForgot note {k}.\n";
+            }
+            case "memory":
+            {
+                var mem = ReadMemory(lead);
+                return mem.Count == 0 ? "ok\nNo notes yet.\n"
+                    : "ok\n" + string.Join("\n", mem.Select((x, i) => $"{i + 1}. {x}")) + "\n";
             }
             case "send":
             {
@@ -249,6 +288,140 @@ internal sealed class ThreadController
                 return "error\nUnknown thread command.";
         }
     }
+
+    /// Start a thread: its own worktree tab under the project, primed with
+    /// the brief (plus the chat's instructions and memory), shown as a card
+    /// in the chat. Shared by `perch thread new` and starting a suggestion.
+    public async Task<(Session? Tab, string Error)> StartThreadAsync(Session lead, string title, string brief)
+    {
+        var proj = lead.ProjectId is Guid pid ? _h.ProjectById(pid) : null;
+        if (proj == null) return (null, "This project chat's project is no longer registered.");
+        if (title.Length == 0) title = "Thread";
+        var n = ++lead.ThreadNumber;   // on the lead: the last number handed out
+        _h.Save();
+        var dir = DirFor(lead);
+        Directory.CreateDirectory(dir);
+        var promptPath = Path.Combine(dir, $"thread-{n}.md");
+        AtomicFile.WriteAllText(promptPath, ThreadPrompt(n, title, brief, lead.ChatInstructions, ReadMemory(lead)));
+        var tab = await _h.CreateClaudeTab(proj, title, promptPath, "Start on the task in your brief.", true);
+        if (tab == null) return (null, "Perch couldn't make the thread's tab (see the toast in Perch).");
+        tab.ThreadOf = lead.Id;
+        tab.ThreadNumber = n;
+        _h.Save();
+        _h.PushState();
+        _h.ThreadStarted?.Invoke(lead, tab);
+        Log.Info("Thread.new", $"lead={lead.Id:N} n={n} session={tab.Id:N}");
+        return (tab, "");
+    }
+
+    // ---- suggestions -------------------------------------------------------
+
+    internal sealed class Suggestion
+    {
+        public string Id { get; set; } = "";
+        public string Title { get; set; } = "";
+        public string Brief { get; set; } = "";
+        /// The thread started from it, once someone clicked Start.
+        public Guid? ThreadId { get; set; }
+    }
+
+    private static string SuggestionsPath(Session lead) => Path.Combine(DirFor(lead), "suggestions.json");
+
+    public List<Suggestion> LoadSuggestions(Session lead)
+    {
+        try
+        {
+            var path = SuggestionsPath(lead);
+            if (File.Exists(path))
+                return System.Text.Json.JsonSerializer.Deserialize<List<Suggestion>>(File.ReadAllText(path)) ?? new();
+        }
+        catch (Exception ex) { Log.Error("Thread.suggestions", ex); }
+        return new();
+    }
+
+    private static void SaveSuggestions(Session lead, List<Suggestion> all)
+    {
+        Directory.CreateDirectory(DirFor(lead));
+        AtomicFile.WriteAllText(SuggestionsPath(lead), System.Text.Json.JsonSerializer.Serialize(all));
+    }
+
+    /// The user clicked Start on a proposed thread (or Start all).
+    public async Task<string?> StartSuggestionAsync(Session lead, string id)
+    {
+        var all = LoadSuggestions(lead);
+        var s = all.FirstOrDefault(x => x.Id == id);
+        if (s == null) return "That suggestion is gone.";
+        if (s.ThreadId != null) return null;   // already started
+        var (tab, error) = await StartThreadAsync(lead, s.Title, s.Brief);
+        if (tab == null) return error;
+        all = LoadSuggestions(lead);
+        if (all.FirstOrDefault(x => x.Id == id) is { } again) again.ThreadId = tab.Id;
+        SaveSuggestions(lead, all);
+        return null;
+    }
+
+    // ---- memory ------------------------------------------------------------
+    // The chat's shared memory: short notes (decisions, requirements, how the
+    // user likes to work) that the coordinator and every new thread are given.
+    // Kept by Perch through `perch thread remember|forget|memory`, so neither
+    // the coordinator nor a thread needs write access to a file outside its
+    // own folder.
+
+    private static string MemoryPath(Session lead) => Path.Combine(DirFor(lead), "memory.md");
+
+    public static List<string> ReadMemory(Session lead)
+    {
+        try
+        {
+            var path = MemoryPath(lead);
+            if (!File.Exists(path)) return new();
+            return File.ReadAllLines(path).Where(l => l.StartsWith("- ")).Select(l => l[2..].Trim()).Where(l => l.Length > 0).ToList();
+        }
+        catch { return new(); }
+    }
+
+    public static void WriteMemory(Session lead, List<string> notes)
+    {
+        Directory.CreateDirectory(DirFor(lead));
+        AtomicFile.WriteAllText(MemoryPath(lead), "# Project memory\n\n" + string.Join("", notes.Select(n => $"- {n.Replace('\n', ' ')}\n")));
+    }
+
+    // ---- threads' state ----------------------------------------------------
+
+    public void Resolve(Session thread, bool resolved)
+    {
+        thread.ThreadResolved = resolved;
+        _h.Save();
+        _h.PushState();
+    }
+
+    /// How many of each thread's commits the project's checked-out branch
+    /// doesn't have yet. Runs after a thread's turn and after the chat's (the
+    /// coordinator may just have merged). A thread whose work all landed and
+    /// that has nothing left to do is resolved on its own.
+    public async Task RefreshUnmergedAsync(Session lead)
+    {
+        var proj = lead.ProjectId is Guid pid ? _h.ProjectById(pid) : null;
+        if (proj == null || !Directory.Exists(proj.Path)) return;
+        var changed = false;
+        foreach (var t in ThreadsOf(lead).Where(t => t.WorktreeBranch.Length > 0).ToList())
+        {
+            var (code, stdout, _) = await ProcRunner.RunAsync("git", $"rev-list --count HEAD..\"{t.WorktreeBranch}\"", "thread.unmerged",
+                workingDir: proj.Path, timeoutMs: 10000);
+            if (code != 0 || !int.TryParse(stdout.Trim(), out var n)) continue;
+            if (n != t.ThreadUnmerged)
+            {
+                // Its commits just landed: that thread's job is done.
+                if (n == 0 && t.ThreadUnmerged > 0 && !Busy(t)) t.ThreadResolved = true;
+                t.ThreadUnmerged = n;
+                changed = true;
+            }
+        }
+        if (changed) { _h.Save(); _h.PushState(); }
+    }
+
+    private static bool Busy(Session s) => PaneTree.AllLeaves(s.Root).Any(p => p.IsTerminal &&
+        p.AgentState is AgentState.Working or AgentState.Permission or AgentState.Waiting);
 
     private Session? Find(Session lead, string? target)
     {
@@ -352,7 +525,9 @@ internal sealed class ThreadController
             if (reply != null && reply == prev) break;
             prev = reply;
         }
+        if (thread.ThreadOf is Guid owner && _h.SessionById(owner) is Session chatLead) await RefreshUnmergedAsync(chatLead);
         if (string.IsNullOrWhiteSpace(reply) || reply == thread.ThreadLastReply) return;
+        thread.ThreadResolved = false;   // it did something new: back in play
         Record(thread, reply);
         if (thread.ThreadOf is Guid lid && _h.SessionById(lid) is Session lead)
         {

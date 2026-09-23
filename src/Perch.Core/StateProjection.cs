@@ -244,6 +244,9 @@ internal static class StateProjection
             threadNumber = s.ThreadNumber,
             threadReply = s.ThreadLastReply.Length > 400 ? s.ThreadLastReply[..400] + "…" : s.ThreadLastReply,
             threadReplyAtMs = s.ThreadReplyAtMs,
+            threadResolved = s.ThreadResolved,
+            threadUnmerged = s.ThreadUnmerged,
+            chatGoal = s.ChatGoal,
             pairNote = string.IsNullOrEmpty(s.PairNoteText) ? null : new
             {
                 from  = s.PairNoteFrom,

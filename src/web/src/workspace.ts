@@ -14,7 +14,7 @@
 // pane would float over the visible one — we tear those down on hide and let
 // them rebuild (page reload, no scrollback to lose) when the session returns.
 
-import type { PaneTreeView, SessionView, BoardNodeView, BoardLinkView, InboxMailMessage, InboxItemView, ChatEntryView } from "./bridge.js";
+import type { PaneTreeView, SessionView, BoardNodeView, BoardLinkView, InboxMailMessage, InboxItemView, ChatEntryView, ChatMetaMessage, ThreadEventView } from "./bridge.js";
 import { send } from "./bridge.js";
 import { Pane, DEFAULT_FONT_SIZE, type PaneSnapshot } from "./pane.js";
 import { openSettings } from "./settings.js";
@@ -603,6 +603,16 @@ export class Workspace {
   applyChatStatus(paneId: string, running: boolean, queued: number) {
     const pane = this.findPane(paneId);
     if (pane instanceof ChatPane) pane.applyStatus(running, queued);
+  }
+  applyChatMeta(msg: ChatMetaMessage) {
+    const pane = this.findPane(msg.paneId);
+    if (pane instanceof ChatPane) pane.applyMeta(msg);
+  }
+  /** A thread's conversation: whichever chat has that thread open shows it. */
+  applyThreadTranscript(id: string, events: ThreadEventView[]) {
+    for (const stage of this.stages.values())
+      for (const pane of stage.panes.values())
+        if (pane instanceof ChatPane) pane.applyThreadTranscript(id, events);
   }
 
   /** An email pane's thread arrived (inbox.mail). */
