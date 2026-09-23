@@ -664,7 +664,7 @@ function buildSkeleton(): void {
   inboxPane.appendChild(inboxBlurb);
 
   inboxToggle = makeToggle("Show the inbox");
-  inboxPane.appendChild(makeRow("Show the inbox", "Adds Inbox to the sidebar and syncs every 5 minutes.", inboxToggle));
+  inboxPane.appendChild(makeRow("Show the inbox", "Adds Inbox to the sidebar and checks for new email every minute.", inboxToggle));
 
   const textInput = (placeholder: string) => {
     const i = document.createElement("input");

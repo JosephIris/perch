@@ -235,7 +235,7 @@ export class Inbox {
       body.appendChild(el("div", "inbox__empty",
         msg.items.length
           ? "Nothing in this view."
-          : "No emails yet. Label an email “claude” in Gmail and it shows up here within about 5 minutes."));
+          : "No emails yet. Label an email “claude” in Gmail and it shows up here within a minute or two."));
     } else {
       const list = el("div", "inbox__list");
       for (const item of items) list.appendChild(this.row(item));

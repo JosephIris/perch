@@ -51,7 +51,10 @@ internal sealed class InboxController : IDisposable
     /// Threads found in the last sync, id → (folder name, thread.md modified).
     private Dictionary<string, (string Folder, DateTimeOffset Modified)> _threads = new();
 
-    private const int SyncMinutes = 5;
+    /// Once a minute: the Gmail export also runs every minute, so a labelled
+    /// email shows up within about two. A quiet sync is three small Drive
+    /// calls, well inside Drive's free quota.
+    private const int SyncMinutes = 1;
     /// A single attachment above this is listed but not copied down.
     private const long MaxAttachmentBytes = 25L * 1024 * 1024;
 
