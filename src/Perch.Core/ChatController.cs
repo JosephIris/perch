@@ -22,7 +22,8 @@ namespace Perch;
 ///
 /// What a headless run cannot do is ask for permission, so the coordinator
 /// runs with a fixed allow-list: read and search the repo, run its
-/// `perch thread` commands, look at git. Changing anything is a thread's job.
+/// `perch thread` commands, look at git, and merge threads' branches. It edits
+/// nothing itself: writing code and resolving merge clashes are threads' work.
 ///
 /// One run at a time per chat. Anything that arrives meanwhile — the user's
 /// next message, a thread's report — is queued and goes in together as the
@@ -43,8 +44,21 @@ internal sealed class ChatController : IDisposable
 
     /// Tools the coordinator may use without asking — the only ones it gets.
     public static readonly string[] AllowedTools = new[] { "Read", "Grep", "Glob", "LS", "WebSearch", "WebFetch", "TodoWrite" }
-        .Concat(ThreadController.ForShells("perch thread", "git log", "git diff", "git status", "git show", "git branch"))
+        .Concat(ThreadController.ForShells("perch thread", "git log", "git diff", "git status", "git show", "git branch",
+            // Assembling the result: merging a thread's branch, and backing
+            // out of a merge that clashes (a thread resolves it, not the chat).
+            "git merge", "git rev-parse", "git worktree list"))
         .ToArray();
+
+    /// Tools the coordinator must not use even though they need no
+    /// permission: its way to delegate is a thread, so no subagents (which
+    /// then wander into worktrees of their own), and no waking itself later —
+    /// Perch starts its next turn when there is something to act on.
+    public static readonly string[] DeniedTools =
+    {
+        "Agent", "Task", "EnterWorktree", "ExitWorktree", "ScheduleWakeup",
+        "CronCreate", "CronDelete", "Monitor", "Edit", "Write", "NotebookEdit",
+    };
 
     private sealed class Chat
     {
@@ -181,6 +195,7 @@ internal sealed class ChatController : IDisposable
             : new[] { "--session-id", leaf.ClaudeSessionId! });
         args.Add("--append-system-prompt-file"); args.Add(promptPath);
         args.Add("--allowedTools"); args.AddRange(AllowedTools);
+        args.Add("--disallowedTools"); args.AddRange(DeniedTools);
         // Ends the variadic list above, and is what a headless run without a
         // prompt to show would do anyway.
         args.Add("--permission-mode"); args.Add("default");

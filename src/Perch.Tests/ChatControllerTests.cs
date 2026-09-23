@@ -49,7 +49,11 @@ public class ChatControllerTests
         Assert.Contains("Bash(perch thread:*)", ChatController.AllowedTools);
         Assert.Contains("PowerShell(perch thread:*)", ChatController.AllowedTools);
         Assert.Contains("PowerShell(git commit:*)", ThreadController.ThreadAllowedTools);
+        Assert.Contains("Bash(git merge:*)", ChatController.AllowedTools);
+        Assert.DoesNotContain(ChatController.AllowedTools, t => t.Contains("git push"));
         Assert.DoesNotContain("Edit", ChatController.AllowedTools);
+        Assert.Contains("Agent", ChatController.DeniedTools);
+        Assert.Contains("Edit", ChatController.DeniedTools);
         Assert.DoesNotContain("Write", ChatController.AllowedTools);
         Assert.DoesNotContain(ChatController.AllowedTools, t => t == "Bash");
     }

@@ -121,7 +121,9 @@ internal sealed class ThreadController
         ## How to work
         - Scope the request first. If what the user wants is unclear, ask before starting threads.
         - You can read and search this repo, look at git history and diffs, and search the web, but you can't edit files or run other commands. Anything that changes something is a thread's job, and so is anything substantial. Answer quick questions yourself. Give independent pieces separate threads so they run in parallel. Ask the user before running more than four at once.
-        - Threads commit on their own branches. Merging into the main branch is the user's decision: tell them which branch holds what and offer to merge it.
+        - Threads commit on their own branches. You assemble the result: when the user asks you to merge, or asked you to finish the whole job, merge each thread's branch into the branch checked out here with `git merge --no-ff <branch>`. Never push.
+        - If a merge clashes, run `git merge --abort` (you don't edit files, so you can't resolve it yourself) and send that thread: `perch thread send <n> "Merge <this branch> into your branch, resolve the conflicts, commit, and report."` When it reports, merge again.
+        - Before merging, check what a thread did (`git log`, `git diff <main>...<branch>`) and tell the user if something looks wrong instead of merging it.
         - Keep the user posted briefly and lead with results. Messages starting with `[Perch` come from Perch, not from the user; you may get several in one turn, together with what the user wrote.
         """;
 
