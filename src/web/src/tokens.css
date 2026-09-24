@@ -26,6 +26,18 @@
   font-display: block;
 }
 
+/* Newsreader Variable (productiontype/Newsreader, OFL; latin, opsz + wght
+ * axes). Bundled at build time. ONE use: the project chat Overview's
+ * greeting, where a serif sets the panel's voice apart from the chrome —
+ * the hierarchy reason the constitution asks for. Not for anything else. */
+@font-face {
+  font-family: "Newsreader Variable";
+  src: url("/fonts/NewsreaderVariable.woff2") format("woff2-variations");
+  font-weight: 200 800;
+  font-style: normal;
+  font-display: swap;
+}
+
 /* Geist Mono Variable (vercel/geist-font, OFL). Bundled at build time.
  * Picked as the terminal font because it's a humanist, SF-Mono-inspired
  * design that pairs with Inter without feeling out of place, and the
@@ -77,6 +89,7 @@
    * just as well thanks to xterm's WebGL renderer extending block glyphs
    * to the full cell. See docs/DESIGN-BIBLE.md "Font policy". */
   --font-mono:    "Geist Mono Variable", "Cascadia Code", "Cascadia Mono", Consolas, monospace;
+  --font-serif:   "Newsreader Variable", Georgia, "Times New Roman", serif;
 
   --type-caption-size:    12px;
   --type-body-size:       14px;
@@ -280,6 +293,23 @@
    * distinct from the header's globe "open browser pane" action so the two don't
    * read as the same thing. */
   --server-glyph: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect x='4' y='5' width='16' height='6' rx='1.5'/><rect x='4' y='13' width='16' height='6' rx='1.5'/><path d='M7.5 8h.01'/><path d='M7.5 16h.01'/></svg>");
+
+  /* Project chat (chat-pane.ts, chat-overview.ts). The conversation reads a
+   * step larger than chrome (it is a document, not a control); the Overview's
+   * group bars and cards sit on one quiet fill; a thread named inline is an
+   * accent-tinted tag; the "New" rule wears the Claude mark's colour. */
+  --pc-prose-size:   15px;
+  --pc-prose-line:   1.6;
+  --pc-greet-size:   28px;
+  --pc-measure:      720px;
+  --pc-fill:         rgba(255, 255, 255, 0.045);
+  --pc-fill-hover:   rgba(255, 255, 255, 0.07);
+  --pc-chip-fill:    var(--color-accent-faint);
+  --pc-chip-text:    var(--color-accent);
+  --pc-new:          var(--color-agent-claude);
+  --pc-strong-fill:  rgba(255, 255, 255, 0.92);
+  --pc-strong-text:  #161616;
+  --pc-ov-width:     380px;
 
   /* Motion. Win11 entry curve. */
   --ease-entry:   cubic-bezier(0.0, 0.0, 0.0, 1.0);

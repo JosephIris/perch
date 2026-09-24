@@ -341,19 +341,19 @@ onMessage((msg) => {
       workspace.applyInbox(msg.items);
       break;
     case "chat.history":
-      workspace.applyChatHistory(msg.paneId, msg.entries, msg.running, msg.queued);
+      workspace.applyChatHistory(msg.paneId, msg.entries, msg.running, msg.queued, msg.model ?? "");
       break;
     case "chat.entry":
       workspace.applyChatEntry(msg.paneId, msg.entry);
       break;
     case "chat.status":
-      workspace.applyChatStatus(msg.paneId, msg.running, msg.queued);
+      workspace.applyChatStatus(msg.paneId, msg.running, msg.queued, msg.model ?? "");
       break;
     case "chat.meta":
       workspace.applyChatMeta(msg);
       break;
     case "thread.transcript":
-      workspace.applyThreadTranscript(msg.id, msg.events);
+      workspace.applyThreadTranscript(msg.id, msg.events, msg.tasks ?? []);
       break;
     case "inbox.mail":
       if (msg.paneId === READER_ID) inbox.applyMail(msg);

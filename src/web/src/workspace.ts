@@ -14,7 +14,7 @@
 // pane would float over the visible one — we tear those down on hide and let
 // them rebuild (page reload, no scrollback to lose) when the session returns.
 
-import type { PaneTreeView, SessionView, BoardNodeView, BoardLinkView, InboxMailMessage, InboxItemView, ChatEntryView, ChatMetaMessage, ThreadEventView } from "./bridge.js";
+import type { PaneTreeView, SessionView, BoardNodeView, BoardLinkView, InboxMailMessage, InboxItemView, ChatEntryView, ChatMetaMessage, ThreadEventView, ThreadTaskView } from "./bridge.js";
 import { send } from "./bridge.js";
 import { Pane, DEFAULT_FONT_SIZE, type PaneSnapshot } from "./pane.js";
 import { openSettings } from "./settings.js";
@@ -592,27 +592,27 @@ export class Workspace {
   }
 
   /** A project chat's conversation from the host. */
-  applyChatHistory(paneId: string, entries: ChatEntryView[], running: boolean, queued: number) {
+  applyChatHistory(paneId: string, entries: ChatEntryView[], running: boolean, queued: number, model: string) {
     const pane = this.findPane(paneId);
-    if (pane instanceof ChatPane) pane.applyHistory(entries, running, queued);
+    if (pane instanceof ChatPane) pane.applyHistory(entries, running, queued, model);
   }
   applyChatEntry(paneId: string, entry: ChatEntryView) {
     const pane = this.findPane(paneId);
     if (pane instanceof ChatPane) pane.applyEntry(entry);
   }
-  applyChatStatus(paneId: string, running: boolean, queued: number) {
+  applyChatStatus(paneId: string, running: boolean, queued: number, model: string) {
     const pane = this.findPane(paneId);
-    if (pane instanceof ChatPane) pane.applyStatus(running, queued);
+    if (pane instanceof ChatPane) pane.applyStatus(running, queued, model);
   }
   applyChatMeta(msg: ChatMetaMessage) {
     const pane = this.findPane(msg.paneId);
     if (pane instanceof ChatPane) pane.applyMeta(msg);
   }
   /** A thread's conversation: whichever chat has that thread open shows it. */
-  applyThreadTranscript(id: string, events: ThreadEventView[]) {
+  applyThreadTranscript(id: string, events: ThreadEventView[], tasks: ThreadTaskView[]) {
     for (const stage of this.stages.values())
       for (const pane of stage.panes.values())
-        if (pane instanceof ChatPane) pane.applyThreadTranscript(id, events);
+        if (pane instanceof ChatPane) pane.applyThreadTranscript(id, events, tasks);
   }
 
   /** An email pane's thread arrived (inbox.mail). */

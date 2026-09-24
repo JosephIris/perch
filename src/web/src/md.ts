@@ -102,9 +102,13 @@ export function parseInline(text: string): Span[] {
   return out;
 }
 
-function inline(host: HTMLElement, text: string) {
+/** Plain text with things drawn in it — a project chat's "#3" becomes that
+ *  thread's tag. Text goes in as text nodes either way. */
+export type TextDecorator = (host: HTMLElement, text: string) => void;
+
+function inline(host: HTMLElement, text: string, deco?: TextDecorator) {
   for (const s of parseInline(text)) {
-    if (s.kind === "text") { host.append(s.text); continue; }
+    if (s.kind === "text") { if (deco) deco(host, s.text); else host.append(s.text); continue; }
     if (s.kind === "link") {
       const a = document.createElement("a");
       a.className = "md-link";
@@ -117,29 +121,29 @@ function inline(host: HTMLElement, text: string) {
     }
     const el = document.createElement(s.kind === "code" ? "code" : s.kind === "bold" ? "strong" : "em");
     if (s.kind === "code") el.className = "md-code";
-    el.textContent = s.text;
+    if (s.kind !== "code" && deco) deco(el, s.text); else el.textContent = s.text;
     host.appendChild(el);
   }
 }
 
 /** Markdown → a fragment of safe DOM. */
-export function renderMarkdown(src: string): DocumentFragment {
+export function renderMarkdown(src: string, deco?: TextDecorator): DocumentFragment {
   const frag = document.createDocumentFragment();
   for (const b of parseBlocks(src)) {
     let el: HTMLElement;
     switch (b.kind) {
-      case "p": el = document.createElement("p"); inline(el, b.text); break;
-      case "h": el = document.createElement("div"); el.className = `md-h md-h${b.level}`; inline(el, b.text); break;
+      case "p": el = document.createElement("p"); inline(el, b.text, deco); break;
+      case "h": el = document.createElement("div"); el.className = `md-h md-h${b.level}`; inline(el, b.text, deco); break;
       case "code": {
         el = document.createElement("pre"); el.className = "md-pre";
         const c = document.createElement("code"); c.textContent = b.text; el.appendChild(c);
         break;
       }
-      case "quote": el = document.createElement("blockquote"); el.className = "md-quote"; inline(el, b.text); break;
+      case "quote": el = document.createElement("blockquote"); el.className = "md-quote"; inline(el, b.text, deco); break;
       default: {
         el = document.createElement(b.kind);
         el.className = "md-list";
-        for (const it of b.items) { const li = document.createElement("li"); inline(li, it); el.appendChild(li); }
+        for (const it of b.items) { const li = document.createElement("li"); inline(li, it, deco); el.appendChild(li); }
       }
     }
     frag.appendChild(el);

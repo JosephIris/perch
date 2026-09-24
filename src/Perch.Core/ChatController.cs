@@ -425,7 +425,7 @@ internal sealed class ChatController : IDisposable
         string? S(string k) => input.ValueKind == JsonValueKind.Object ? Str(input, k) : null;
         var v = name switch
         {
-            "Bash" => S("command"),
+            "Bash" or "PowerShell" => S("command"),
             // Either separator: Claude on Windows reports C:\x\y, and a Mac
             // build must still show just the file name.
             "Read" or "Edit" or "Write" => S("file_path") is { } f ? f.Split('/', '\\').Last() : null,

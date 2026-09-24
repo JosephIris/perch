@@ -212,6 +212,7 @@ export type OutMessage =
   | { type: "projectchat.new"; id: string; name?: string; goal?: string; instructions?: string }
   | { type: "projectchat.update"; sessionId: string; goal?: string; instructions?: string; forget?: number }
   | { type: "suggestion.start"; sessionId: string; id: string }
+  | { type: "suggestion.dismiss"; sessionId: string; id: string }
   /* A thread, from a project chat's Overview. */
   | { type: "thread.transcript"; id: string }
   | { type: "thread.send"; id: string; text: string }
@@ -560,6 +561,11 @@ export type SessionView = {
   /* A thread marked done; commits on its branch not yet merged; a chat's goal. */
   threadResolved?: boolean;
   threadUnmerged?: number;
+  /* A thread's Claude task list, summed up: done, in all, and the task in
+   * progress ("" when none). Drives the Overview's "2/3" and status line. */
+  threadTasksDone?: number;
+  threadTasksTotal?: number;
+  threadTaskNow?: string;
   chatGoal?: string;
   /* The last peer message that ARRIVED at this tab ("from user-profiles ·
    * ..."), or — warn level — this tab's last delivery failure. Ambient info,
@@ -1084,8 +1090,13 @@ export type ChatEntryView = { id: string; kind: "user" | "claude" | "tool" | "no
 export type ChatMetaMessage = {
   type: "chat.meta"; paneId: string; sessionId: string;
   goal: string; instructions: string; memory: string[];
-  suggestions: { id: string; title: string; threadId: string | null }[];
+  /* Who the Overview greets ("" until the host has read it). */
+  userName?: string;
+  suggestions: { id: string; title: string; threadId: string | null; summary?: string; dismissed?: boolean }[];
 };
+
+/* One task of a thread's Claude task list. */
+export type ThreadTaskView = { subject: string; activeForm: string; status: "pending" | "in_progress" | "completed" };
 
 /* One step of a thread's conversation, for the Overview: a prompt it was
  * given, prose it wrote ("beat"), or a tool it used ("work"). */
@@ -1148,11 +1159,11 @@ export type InMessage =
   | SettingsDataMessage
   | InboxStateMessage
   | InboxMailMessage
-  | { type: "chat.history"; paneId: string; entries: ChatEntryView[]; running: boolean; queued: number }
+  | { type: "chat.history"; paneId: string; entries: ChatEntryView[]; running: boolean; queued: number; model?: string }
   | { type: "chat.entry"; paneId: string; entry: ChatEntryView }
-  | { type: "chat.status"; paneId: string; running: boolean; queued: number }
+  | { type: "chat.status"; paneId: string; running: boolean; queued: number; model?: string }
   | ChatMetaMessage
-  | { type: "thread.transcript"; id: string; events: ThreadEventView[] }
+  | { type: "thread.transcript"; id: string; events: ThreadEventView[]; tasks?: ThreadTaskView[] }
   | { type: "inbox.image"; paneId: string; name: string; dataUrl: string }
   | CommitsDataMessage
   | { type: "pane.ready"; paneId: string }

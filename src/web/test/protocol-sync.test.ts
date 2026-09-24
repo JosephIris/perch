@@ -93,6 +93,7 @@ const EXPECTED_TYPES = [
   "settings.request",
   "settings.save",
   "sidebar.reorder",
+  "suggestion.dismiss",
   "suggestion.start",
   "team.artefact.list",
   "team.artefact.open",
