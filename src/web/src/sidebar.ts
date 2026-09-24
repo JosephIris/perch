@@ -161,6 +161,23 @@ function chatGlyph(): SVGElement {
   return svg;
 }
 
+/** Split a project's own tabs into the live list and the Idle drawer, with
+ *  its project chats pinned to the top of the live list — in any state, even
+ *  slept, since a chat is where you go to run the project — and each chat's
+ *  running threads right under it. Everything else keeps the host's order:
+ *  live tabs after the chats, slept ones in the drawer. Pure. */
+export function pinProjectChats(own: SessionView[]): { live: SessionView[]; idle: SessionView[] } {
+  const leads = own.filter((t) => t.isLead);
+  const leadIds = new Set(leads.map((t) => t.id));
+  const pinned = new Set<SessionView>(leads);
+  for (const t of own) if (t.threadOf && leadIds.has(t.threadOf) && !t.dormant) pinned.add(t);
+  const rest = own.filter((t) => !pinned.has(t));
+  return {
+    live: [...leads, ...own.filter((t) => pinned.has(t) && !t.isLead), ...rest.filter((t) => !t.dormant)],
+    idle: rest.filter((t) => t.dormant),
+  };
+}
+
 /** A project chat's threads sit directly under it, in number order, when
  *  they share a list with it. Threads whose project chat is elsewhere (in
  *  another group, or closed) keep their place. */
@@ -822,8 +839,8 @@ export class Sidebar {
       // Both partitions are stable, so each keeps the host's order — which
       // for these two runs already means newest-first (see PlaceAtProjectTop
       // / PlaceAtDormantTop).
-      const live = own.filter((t) => !t.dormant);
-      const idle = own.filter((t) => t.dormant);
+      // Project chats pin to the top of the branch (see pinProjectChats).
+      const { live, idle } = pinProjectChats(own);
 
       if (botTabs.length)
         frag.appendChild(this.botsGroup(project.id, botTabs, activeId, live.length + idle.length > 0));
