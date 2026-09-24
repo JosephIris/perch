@@ -161,6 +161,62 @@ function chatGlyph(): SVGElement {
   return svg;
 }
 
+/** An email's tab: it has a pane showing the email (its `mailId`). */
+export function isMailTab(s: SessionView): boolean {
+  const walk = (n: PaneTreeView | undefined): boolean =>
+    !!n && (n.kind === "leaf" ? !!n.mailId : n.children.some(walk));
+  return walk(s.rootPane);
+}
+
+export type Lane = { id: "chats" | "sessions" | "email"; label: string; items: SessionView[]; count: number };
+
+/** A project's live tabs in three lanes — Chats (project chats with their
+ *  threads), Sessions (everything else), Email (tabs opened from the inbox) —
+ *  each keeping the order it was given. Empty lanes are left out. Pure. */
+export function splitLanes(live: SessionView[]): Lane[] {
+  const chats = live.filter((s) => s.isLead || !!s.threadOf);
+  const email = live.filter((s) => !s.isLead && !s.threadOf && isMailTab(s));
+  const sessions = live.filter((s) => !chats.includes(s) && !email.includes(s));
+  const lanes: Lane[] = [
+    { id: "chats", label: "Chats", items: chats, count: chats.filter((s) => s.isLead).length || chats.length },
+    { id: "sessions", label: "Sessions", items: sessions, count: sessions.length },
+    { id: "email", label: "Email", items: email, count: email.length },
+  ];
+  return lanes.filter((l) => l.items.length > 0);
+}
+
+function laneLabel(lane: Lane): HTMLElement {
+  const el = document.createElement("div");
+  el.className = "lane-label";
+  el.dataset.lane = lane.id;
+  const name = document.createElement("span");
+  name.textContent = lane.label;
+  const count = document.createElement("span");
+  count.className = "lane-label__count";
+  count.textContent = String(lane.count);
+  el.append(name, count);
+  return el;
+}
+
+function mailGlyph(): SVGElement {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("class", "session-item__agent session-item__mail");
+  svg.setAttribute("width", "14");
+  svg.setAttribute("height", "14");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "1.8");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+  for (const d of ["M3.5 6.5h17v11h-17z", "M4 7l8 6 8-6"]) {
+    const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    p.setAttribute("d", d);
+    svg.appendChild(p);
+  }
+  return svg;
+}
+
 /** Split a project's own tabs into the live list and the Idle drawer, with
  *  its project chats pinned to the top of the live list — in any state, even
  *  slept, since a chat is where you go to run the project — and each chat's
@@ -361,6 +417,20 @@ export class Sidebar {
    *  time you come back — a drawer you left open is just the active list again,
    *  one launch later. */
   private readonly idleOpen = new Set<string>();
+  /** Email tabs' senders (tab id → name), from the inbox. */
+  private readonly mailFrom = new Map<string, string>();
+
+  /** The inbox's emails, for the senders of their tabs. Redraws only when a
+   *  sender changed. */
+  setInbox(items: { from: string; sessionId?: string | null }[]) {
+    const next = new Map<string, string>();
+    for (const it of items) if (it.sessionId && it.from) next.set(it.sessionId, it.from);
+    const same = next.size === this.mailFrom.size && [...next].every(([k, v]) => this.mailFrom.get(k) === v);
+    if (same) return;
+    this.mailFrom.clear();
+    for (const [k, v] of next) this.mailFrom.set(k, v);
+    this.rerender?.();
+  }
   /** Project chats whose threads are unfolded, and whose resolved threads
    *  are too. Shut by default; remembered (localStorage) per chat. */
   private readonly threadsOpen = new Set<string>(readIds(THREADS_OPEN_KEY));
@@ -875,16 +945,24 @@ export class Sidebar {
       if (botTabs.length)
         frag.appendChild(this.botsGroup(project.id, botTabs, activeId, live.length + idle.length > 0));
 
-      if (live.length) {
-        const list = this.sessionList(live, activeId, true);
-        // A drawer below means the branch keeps going — don't close the elbow.
-        if (idle.length) list.classList.add("session-list--continues");
+      // The live tabs in lanes: Chats, Sessions, Email. Labels only when
+      // there is more than one lane — alone, a label is just noise. Every
+      // lane but the last keeps the branch going (no closing elbow), and the
+      // labels sit on the project's trunk, not a level in.
+      const lanes = splitLanes(live);
+      lanes.forEach((lane, i) => {
+        if (lanes.length > 1) frag.appendChild(laneLabel(lane));
+        const list = this.sessionList(lane.items, activeId, true);
+        list.classList.add("session-list--lane");
+        list.dataset.lane = lane.id;
+        // A lane or drawer below means the branch keeps going.
+        if (i < lanes.length - 1 || idle.length) list.classList.add("session-list--continues");
         // Only the just-unfolded group animates in. (Folding shut is immediate:
         // animating a removal means keeping the node alive past its state, and a
         // fold that lingers reads as lag, not polish.)
         if (animate) list.classList.add("session-list--enter");
         frag.appendChild(list);
-      }
+      });
       if (idle.length) frag.appendChild(this.idleGroup(project.id, idle, activeId));
       this.lastIdleCount.set(project.id, idle.length);
     }
@@ -1542,8 +1620,11 @@ export class Sidebar {
     // shell has none, and its title simply starts where the mark would.
     // A project chat wears a speech bubble instead: it is a conversation, not
     // an agent in a terminal, and its row should say so at a glance.
+    // An email's tab wears an envelope, likewise: what it is about is the email.
+    const mail = !s.isLead && isMailTab(s);
     if (s.isLead) primary.appendChild(chatGlyph());
-    for (const agent of (s.isLead ? [] : s.agents ?? []).slice(0, 2)) {
+    else if (mail) primary.appendChild(mailGlyph());
+    for (const agent of (s.isLead || mail ? [] : s.agents ?? []).slice(0, 2)) {
       const glyph = agentGlyph(agent);
       if (glyph) {
         glyph.classList.add("session-item__agent");
@@ -1564,6 +1645,14 @@ export class Sidebar {
       primary.appendChild(pos);
     }
     item.appendChild(primary);
+    // …and says who it's from, on a quiet line of its own.
+    const from = mail ? this.mailFrom.get(s.id) : undefined;
+    if (from) {
+      const sub = document.createElement("span");
+      sub.className = "session-item__from";
+      sub.textContent = from;
+      item.appendChild(sub);
+    }
 
     // The tab's /color tag deliberately does NOT mark the sidebar row: we
     // tried a title tint, a trailing dot (ellipsis swallowed it on long

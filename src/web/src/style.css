@@ -8791,6 +8791,29 @@ body.show-inbox .inbox { display: flex; }
   white-space: pre-wrap; overflow-wrap: anywhere;
 }
 /* Sidebar: a thread row sits indented under its project chat. */
+/* A project's lanes (sidebar.ts splitLanes): Chats, Sessions, Email. The
+ * label is a quiet section marker on the project's trunk — not a tree level —
+ * and the lanes' lists sit flush so the trunk never breaks between them. */
+.session-list--nested.session-list--lane { margin: 0; }
+.session-list--nested.session-list--lane:last-of-type { margin-bottom: var(--sp-4); }
+.lane-label {
+  position: relative; display: flex; align-items: baseline; gap: 6px;
+  padding: var(--sp-8) var(--sp-8) 2px 24px;
+  font-family: var(--font-small); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--color-text-tertiary);
+}
+.lane-label::before {
+  content: ""; position: absolute; left: 13px; top: 0; bottom: 0; width: 1px; background: var(--color-stroke);
+}
+.lane-label__count { letter-spacing: 0; text-transform: none; font-variant-numeric: tabular-nums; }
+.session-item__mail { color: var(--color-mail); flex: 0 0 auto; }
+/* An email tab's sender, on the line under its subject. */
+.session-item__from {
+  grid-column: 2 / -1; display: block; min-width: 0; margin-top: -2px;
+  font-family: var(--font-small); font-size: var(--type-caption-size); color: var(--color-text-tertiary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
 /* A project chat's threads, folded under it (sidebar.ts threadGroup). The
  * project's trunk runs on through the group at 13px; a second rail at 29px
  * — under the chat's dot — drops from the chat to each thread and head, and

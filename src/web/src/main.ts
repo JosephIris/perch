@@ -339,6 +339,7 @@ onMessage((msg) => {
     case "inbox.state":
       inbox.apply(msg);
       workspace.applyInbox(msg.items);
+      sidebar.setInbox(msg.items);
       break;
     case "chat.history":
       workspace.applyChatHistory(msg.paneId, msg.entries, msg.running, msg.queued, msg.model ?? "");

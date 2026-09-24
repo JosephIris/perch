@@ -310,6 +310,9 @@
   --pc-strong-fill:  rgba(255, 255, 255, 0.92);
   --pc-strong-text:  #161616;
   --pc-ov-width:     380px;
+  /* An email tab's envelope in the sidebar: a warm tone apart from the
+   * chat's accent blue and Claude's terracotta. */
+  --color-mail:      #E0A96D;
 
   /* Motion. Win11 entry curve. */
   --ease-entry:   cubic-bezier(0.0, 0.0, 0.0, 1.0);

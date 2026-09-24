@@ -219,12 +219,18 @@ const ICON_PATHS: Record<string, string> = {
   copy: "M5.5 5.5V4a1.5 1.5 0 0 1 1.5-1.5h5A1.5 1.5 0 0 1 13.5 4v5a1.5 1.5 0 0 1-1.5 1.5h-1.5M3.5 5.5h5A1.5 1.5 0 0 1 10 7v5a1.5 1.5 0 0 1-1.5 1.5h-5A1.5 1.5 0 0 1 2 12V7a1.5 1.5 0 0 1 1.5-1.5z",
   stop: "M5 5h6v6H5z",
   push: "M8 12.5v-9M4.5 7L8 3.5 11.5 7M3.5 13.5h9",
-  gear: "M6.9 1.8h2.2l.35 1.6 1.2.7 1.55-.5 1.1 1.9-1.2 1.1v1.4l1.2 1.1-1.1 1.9-1.55-.5-1.2.7-.35 1.6H6.9l-.35-1.6-1.2-.7-1.55.5-1.1-1.9 1.2-1.1V7.3L2.7 6.2l1.1-1.9 1.55.5 1.2-.7zM8 10a2 2 0 1 0 0-4 2 2 0 0 0 0 4z",
+  // Drawn on a 24 grid (ICON_BOX): a cog needs the room to keep its teeth
+  // and its hole apart at 16px.
+  gear: "M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z",
 };
+
+/** Icons drawn on a grid other than 16. */
+const ICON_BOX: Record<string, number> = { gear: 24 };
 
 export function icon(name: keyof typeof ICON_PATHS | string, cls = "pc-icon"): SVGSVGElement {
   const svg = document.createElementNS(SVG, "svg");
-  svg.setAttribute("viewBox", "0 0 16 16");
+  const box = ICON_BOX[name] ?? 16;
+  svg.setAttribute("viewBox", `0 0 ${box} ${box}`);
   svg.setAttribute("width", "16");
   svg.setAttribute("height", "16");
   svg.setAttribute("aria-hidden", "true");
@@ -233,7 +239,8 @@ export function icon(name: keyof typeof ICON_PATHS | string, cls = "pc-icon"): S
   p.setAttribute("d", ICON_PATHS[name] ?? "");
   p.setAttribute("fill", "none");
   p.setAttribute("stroke", "currentColor");
-  p.setAttribute("stroke-width", "1.3");
+  // The same 1.3px line at 16px, whatever grid the icon is drawn on.
+  p.setAttribute("stroke-width", String(1.3 * box / 16));
   p.setAttribute("stroke-linecap", "round");
   p.setAttribute("stroke-linejoin", "round");
   svg.appendChild(p);
