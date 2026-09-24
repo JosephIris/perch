@@ -201,6 +201,30 @@ export function pullThreadsUnderLead(list: SessionView[]): SessionView[] {
   return out;
 }
 
+const THREADS_OPEN_KEY = "perch.sidebar.threadsOpen";
+const RESOLVED_OPEN_KEY = "perch.sidebar.resolvedOpen";
+
+function readIds(key: string): string[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(key) ?? "[]");
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  } catch { return []; }
+}
+
+/** What a project chat's folded thread list shows. Shut: only threads that
+ *  need you (waiting or asking permission) or the one on screen — folding
+ *  must never hide a thread blocked on you. Open: every open thread, and the
+ *  resolved ones only when their own drawer is open too. Pure. */
+export function visibleThreads(kids: SessionView[], activeId: string, open: boolean, resolvedOpen: boolean):
+  { rows: SessionView[]; resolved: SessionView[]; open: SessionView[] } {
+  const stays = (k: SessionView) => k.id === activeId || (!k.dormant && (k.agentState === "waiting" || k.agentState === "permission"));
+  const openKids = kids.filter((k) => !k.threadResolved);
+  const resolved = kids.filter((k) => k.threadResolved);
+  const rows = open ? openKids : openKids.filter(stays);
+  const resolvedRows = open && (resolvedOpen || openKids.length === 0) ? resolved : resolved.filter((k) => k.id === activeId);
+  return { rows, resolved: resolvedRows, open: openKids };
+}
+
 /** Is this pair's bracket carrying live traffic right now? A send in flight
  *  (the "messaging X" activity detail) or a note that landed in the last few
  *  seconds warms the rail; the next pushes cool it back down. */
@@ -337,6 +361,11 @@ export class Sidebar {
    *  time you come back — a drawer you left open is just the active list again,
    *  one launch later. */
   private readonly idleOpen = new Set<string>();
+  /** Project chats whose threads are unfolded, and whose resolved threads
+   *  are too. Shut by default; remembered (localStorage) per chat. */
+  private readonly threadsOpen = new Set<string>(readIds(THREADS_OPEN_KEY));
+  private readonly resolvedOpen = new Set<string>(readIds(RESOLVED_OPEN_KEY));
+  private justToggledThreads: string | null = null;
 
   /** Same one-render opt-in as `justToggled`, for the Idle chevron. */
   private justToggledIdle: string | null = null;
@@ -792,6 +821,7 @@ export class Sidebar {
 
     this.justToggled = null;   // one render only
     this.justToggledIdle = null;
+    this.justToggledThreads = null;
     this.justToggledBots = null;
     this.justToggledHidden = false;
 
@@ -987,6 +1017,16 @@ export class Sidebar {
     const ordered = pullThreadsUnderLead(nested ? pullPairsAdjacent(sessions) : sessions);
     for (let i = 0; i < ordered.length; i++) {
       const s = ordered[i];
+      // A project chat's threads fold under it (threadGroup).
+      if (nested && s.isLead && ordered[i + 1]?.threadOf === s.id) {
+        const kids: SessionView[] = [];
+        while (ordered[i + 1]?.threadOf === s.id) kids.push(ordered[++i]);
+        const row = this.buildRow(s, activeId, nested, null);
+        row.classList.add("session-item--has-threads");
+        list.appendChild(row);
+        list.appendChild(this.threadGroup(s, kids, activeId));
+        continue;
+      }
       const partner =
         nested && s.pairedWith && ordered[i + 1]?.id === s.pairedWith
           ? ordered[i + 1]
@@ -1189,6 +1229,69 @@ export class Sidebar {
       wrap.appendChild(list);
     }
     return wrap;
+  }
+
+  /** A project chat's threads, folded under it: a "3 threads" head (shut by
+   *  default, with what they are up to), the open threads, and a further
+   *  "2 resolved" drawer. Folded or not, a thread that needs you stays in
+   *  view. The tree goes on one level in: a rail from the chat's dot down to
+   *  each thread. */
+  private threadGroup(lead: SessionView, kids: SessionView[], activeId: string): HTMLElement {
+    const open = this.threadsOpen.has(lead.id);
+    const resolvedOpen = this.resolvedOpen.has(lead.id);
+    const vis = visibleThreads(kids, activeId, open, resolvedOpen);
+    const all = kids.filter((k) => k.threadResolved).length;
+    const wrap = document.createElement("div");
+    wrap.className = "thread-group";
+    if (this.justToggledThreads === lead.id) wrap.classList.add("thread-group--enter");
+
+    const toggle = (set: Set<string>) => {
+      if (set.has(lead.id)) set.delete(lead.id); else set.add(lead.id);
+      this.saveThreadFolds();
+      this.justToggledThreads = lead.id;
+      this.rerender?.();
+    };
+    const head = (cls: string, label: string, isOpen: boolean, onClick: () => void, summary = "") => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "thread-head " + cls;
+      b.setAttribute("aria-expanded", String(isOpen));
+      const chev = chevronSvg("idle-group__chev");
+      chev.dataset.open = String(isOpen);
+      if (this.justToggledThreads === lead.id) chev.classList.add("idle-group__chev--turning");
+      const text = document.createElement("span");
+      text.textContent = label;
+      b.append(chev, text);
+      if (summary) {
+        const sub = document.createElement("span");
+        sub.className = "thread-head__summary";
+        sub.textContent = summary;
+        b.appendChild(sub);
+      }
+      b.addEventListener("click", (e) => { e.stopPropagation(); onClick(); });
+      return b;
+    };
+
+    const n = vis.open.length;
+    const working = vis.open.filter((k) => !k.dormant && k.agentState === "working").length;
+    const waiting = vis.open.filter((k) => !k.dormant && (k.agentState === "waiting" || k.agentState === "permission")).length;
+    const summary = [working ? `${working} working` : "", waiting ? `${waiting} waiting` : ""].filter(Boolean).join(" · ");
+    wrap.appendChild(n > 0
+      ? head("", `${n} thread${n === 1 ? "" : "s"}`, open, () => toggle(this.threadsOpen), summary)
+      : head("", `${all} resolved`, open, () => toggle(this.threadsOpen)));
+    for (const k of vis.rows) wrap.appendChild(this.buildRow(k, activeId, true, null));
+    if (open && n > 0 && all > 0)
+      wrap.appendChild(head("thread-head--resolved", `${all} resolved`, resolvedOpen, () => toggle(this.resolvedOpen)));
+    for (const k of vis.resolved) wrap.appendChild(this.buildRow(k, activeId, true, null));
+    (wrap.lastElementChild as HTMLElement | null)?.classList.add("thread-last");
+    return wrap;
+  }
+
+  private saveThreadFolds() {
+    try {
+      localStorage.setItem(THREADS_OPEN_KEY, JSON.stringify([...this.threadsOpen]));
+      localStorage.setItem(RESOLVED_OPEN_KEY, JSON.stringify([...this.resolvedOpen]));
+    } catch { /* private window: folds just don't persist */ }
   }
 
   /** A project's "Bots" drawer: the team's tabs, folded under the team row.

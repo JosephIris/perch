@@ -2847,12 +2847,15 @@ button.pane__chip--ports:hover {
   width: 1px;
   background: var(--color-stroke);
 }
-.session-item--nested:last-child::before { bottom: 50%; }
+/* The elbow and every tick meet the status dot — 15px down, the first line's
+ * middle — not the middle of the row, which on a two-line row ("resumes")
+ * would land between the lines. */
+.session-item--nested:last-child::before { bottom: auto; height: 15px; }
 .session-item--nested::after {           /* horizontal tick into the row */
   content: "";
   position: absolute;
   left: 13px;
-  top: 50%;
+  top: 15px;
   /* Reaches the node (13 → 25px = the status dot/spinner's left edge) so the
    * branch terminates AT its tab's marker, not in the gap before it. */
   width: 12px;
@@ -2910,9 +2913,9 @@ button.pane__chip--ports:hover {
  * last-child of the WRAP, not of the list, and would close the └ elbow
  * mid-branch. Re-open it, and close it again only when the wrap itself ends
  * the list (with the usual continues-into-the-Idle-drawer exception). */
-.session-list--nested .pair-wrap .session-item--nested:last-child::before { bottom: 0; }
-.session-list--nested > .pair-wrap:last-child .session-item--nested:last-child::before { bottom: 50%; }
-.session-list--nested.session-list--continues > .pair-wrap:last-child .session-item--nested:last-child::before { bottom: 0; }
+.session-list--nested .pair-wrap .session-item--nested:last-child::before { bottom: 0; height: auto; }
+.session-list--nested > .pair-wrap:last-child .session-item--nested:last-child::before { bottom: auto; height: 15px; }
+.session-list--nested.session-list--continues > .pair-wrap:last-child .session-item--nested:last-child::before { bottom: 0; height: auto; }
 
 /* Incoming peer note: the base accent dot (info) or caution (delivery
  * failure) — never the alarm palette. The "from X ·" lead sits a step
@@ -2952,6 +2955,7 @@ button.pane__chip--ports:hover {
  * detached stub hanging below a finished tree. */
 .session-list--nested.session-list--continues > .session-item--nested:last-child::before {
   bottom: 0;
+  height: auto;
 }
 .idle-group__head {
   position: relative;
@@ -8787,7 +8791,47 @@ body.show-inbox .inbox { display: flex; }
   white-space: pre-wrap; overflow-wrap: anywhere;
 }
 /* Sidebar: a thread row sits indented under its project chat. */
-.session-item--thread { margin-left: var(--sp-16); width: calc(100% - var(--sp-16)); }
+/* A project chat's threads, folded under it (sidebar.ts threadGroup). The
+ * project's trunk runs on through the group at 13px; a second rail at 29px
+ * — under the chat's dot — drops from the chat to each thread and head, and
+ * closes at the last one. Heads look like the Idle drawer's, one step in. */
+.thread-group { position: relative; }
+.thread-group::before {                  /* the project's trunk, unbroken */
+  content: ""; position: absolute; left: 13px; top: 0; bottom: 0; width: 1px;
+  background: var(--color-stroke);
+}
+.session-list--nested:not(.session-list--continues) > .thread-group:last-child::before { display: none; }
+.session-list--nested:not(.session-list--continues) > .session-item--has-threads:nth-last-child(2)::before { bottom: auto; height: 15px; }
+/* The chat's own tick, plus the rail leaving its dot downwards. */
+.session-item--has-threads::after {
+  bottom: 0; height: auto; width: 17px;
+  background:
+    linear-gradient(var(--color-stroke), var(--color-stroke)) no-repeat 0 0 / 12px 1px,
+    linear-gradient(var(--color-stroke), var(--color-stroke)) no-repeat 16px 6px / 1px calc(100% - 6px);
+}
+.thread-group > .session-item--nested { padding-left: 40px; }
+.thread-group > .session-item--nested::before { display: none; }
+.thread-group > .session-item--nested::after,
+.thread-head::after {
+  content: ""; position: absolute; left: 29px; top: 0; bottom: 0; width: 11px; height: auto;
+  background:
+    linear-gradient(var(--color-stroke), var(--color-stroke)) no-repeat 0 0 / 1px 100%,
+    linear-gradient(var(--color-stroke), var(--color-stroke)) no-repeat 0 var(--tick, 15px) / 11px 1px;
+}
+.thread-group > .thread-last::after { background-size: 1px calc(var(--tick, 15px) + 1px), 11px 1px; }
+.thread-head {
+  --tick: 12px;
+  position: relative; display: flex; align-items: center; gap: 6px; width: 100%;
+  padding: 4px var(--sp-8) 4px 40px; border: 0; border-radius: var(--r-input); background: transparent;
+  font-family: var(--font-small); font-size: var(--type-caption-size); color: var(--color-text-tertiary);
+  text-align: left; cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-entry), color var(--dur-fast) var(--ease-entry);
+}
+.thread-head:hover { background: var(--color-subtle-secondary); color: var(--color-text-secondary); }
+.thread-head[aria-expanded="true"] { color: var(--color-text-secondary); }
+.thread-head:focus-visible { outline: 1px solid var(--color-accent); outline-offset: -1px; }
+.thread-head__summary { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--color-text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thread-group--enter > .session-item--nested { animation: pc-fade-in var(--dur-normal) var(--ease-entry); }
 
 /* --- Project chat ---------------------------------------------------------------
  * chat-pane.ts (the conversation) and chat-overview.ts (the Overview beside
