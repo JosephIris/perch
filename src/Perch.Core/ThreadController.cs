@@ -68,12 +68,14 @@ internal sealed class ThreadController
     internal static IEnumerable<string> ForShells(params string[] commands) =>
         commands.SelectMany(c => new[] { $"Bash({c}:*)", $"PowerShell({c}:*)" });
 
-    /// What a thread may do without asking, on top of editing files (it runs
-    /// with acceptEdits): its `perch thread` commands and committing on its
-    /// own branch. A thread's worktree is its own, so none of this can touch
-    /// the user's checkout; pushing, installing and the rest still ask.
+    /// What a thread may always do, whatever auto mode's safety check makes
+    /// of it: its task list, its `perch thread` commands and committing on
+    /// its own branch (AppController.ThreadFlags). A thread's worktree is its
+    /// own, so none of this can touch the user's checkout.
     public static readonly string[] ThreadAllowedTools =
-        new[] { "TaskCreate", "TaskUpdate", "TaskList", "TaskGet" }
+        // Edits too: auto mode is not on every model or plan, and when Claude
+        // falls back to asking, a thread must still edit its own worktree freely.
+        new[] { "TaskCreate", "TaskUpdate", "TaskList", "TaskGet", "Edit", "Write", "MultiEdit", "NotebookEdit" }
         .Concat(ForShells("perch thread", "git add", "git commit", "git status", "git diff", "git log")).ToArray();
 
     /// Threads last seen blocked on the user, so each wait is announced once.
@@ -474,8 +476,11 @@ internal sealed class ThreadController
     internal static string FirstLine(string text, int max)
     {
         // A one-line summary is shown as plain text, so drop Markdown's marks.
-        var plain = System.Text.RegularExpressions.Regex.Replace(text ?? "", @"\*\*|__|`|^#+\s*", "", System.Text.RegularExpressions.RegexOptions.Multiline);
-        var l = plain.Split('\n').Select(x => x.Trim()).FirstOrDefault(x => x.Length > 0) ?? "";
+        // A report that opens with a heading ("## Results"): the heading says
+        // nothing, the line under it does.
+        var lines = (text ?? "").Split('\n').Select(x => x.Trim()).Where(x => x.Length > 0).ToList();
+        var pick = lines.FirstOrDefault(x => !System.Text.RegularExpressions.Regex.IsMatch(x, @"^#+\s")) ?? lines.FirstOrDefault() ?? "";
+        var l = System.Text.RegularExpressions.Regex.Replace(pick, @"\*\*|__|`|^#+\s*", "");
         return l.Length > max ? l[..max].TrimEnd() + "…" : l;
     }
 
@@ -498,7 +503,6 @@ internal sealed class ThreadController
     public void OnAgentStatus(Session sess, StatusMessage msg)
     {
         if (msg.State != "permission") sess.ThreadAsk = "";
-        else if (sess.ThreadOf != null) _ = ReadAskAsync(sess);
         switch (msg.State)
         {
             case "working":
@@ -511,15 +515,18 @@ internal sealed class ThreadController
                 if (sess.ThreadOf != null) _ = CaptureAsync(sess);
                 break;
             case "permission":
+            {
+                // What it asks for, then — once per wait — a row in the chat
+                // that keeps saying what THIS request was.
+                var first = sess.ThreadOf != null && _waiting.Add(sess.Id);
+                if (sess.ThreadOf != null) _ = AnnouncePermissionAsync(sess, first);
+                break;
+            }
             case "waiting":
                 // A thread stuck on a question only the user can answer: say so
                 // in the chat, once per wait, with a way to go and answer it.
                 if (sess.ThreadOf is Guid lid && _waiting.Add(sess.Id) && _h.SessionById(lid) is Session lead)
-                    _h.InformChat?.Invoke(lead,
-                        msg.State == "permission"
-                            ? $"Thread {sess.ThreadNumber} ({sess.Title}) is waiting for your permission."
-                            : $"Thread {sess.ThreadNumber} ({sess.Title}) is waiting for you.",
-                        sess.Id);
+                    _h.InformChat?.Invoke(lead, $"Thread {sess.ThreadNumber} ({sess.Title}) is waiting for your answer.", sess.Id);
                 break;
             case "idle":
                 Delivery.OnFree(sess.Id);
@@ -530,7 +537,20 @@ internal sealed class ThreadController
     /// A thread stopped on a permission prompt: say what it asks for. The
     /// tool call is in its transcript before the prompt shows; a moment's
     /// wait lets the line reach the disk.
-    private async Task ReadAskAsync(Session thread)
+    private async Task AnnouncePermissionAsync(Session thread, bool announce)
+    {
+        var ask = await ReadAskAsync(thread);
+        if (!announce || thread.ThreadOf is not Guid lid || _h.SessionById(lid) is not Session lead) return;
+        _h.InformChat?.Invoke(lead, AskNotice(thread.ThreadNumber, thread.Title, ask), thread.Id);
+    }
+
+    /// The chat's row for one permission request. Pure.
+    internal static string AskNotice(int n, string title, string? ask) =>
+        string.IsNullOrEmpty(ask)
+            ? $"Thread {n} ({title}) is waiting for your permission."
+            : $"Thread {n} ({title}) asks to: {ask}";
+
+    private async Task<string?> ReadAskAsync(Session thread)
     {
         await Task.Delay(400);
         string? ask = null;
@@ -538,9 +558,13 @@ internal sealed class ThreadController
         catch (Exception ex) { Log.Error("Thread.ask", ex); }
         var stillAsking = PaneTree.AllLeaves(thread.Root).Any(p => p.IsTerminal && p.AgentState == AgentState.Permission);
         Log.Info("Thread.ask", $"session={thread.Id:N} asking={stillAsking} ask={(ask ?? "(none)")}");
-        if (!stillAsking || string.IsNullOrEmpty(ask) || ask == thread.ThreadAsk) return;
-        thread.ThreadAsk = ask;
-        _h.PushState();
+        if (!stillAsking || string.IsNullOrEmpty(ask)) return ask;
+        if (ask != thread.ThreadAsk)
+        {
+            thread.ThreadAsk = ask;
+            _h.PushState();
+        }
+        return ask;
     }
 
     /// The tool call a transcript is stopped on: the last `tool_use` with no

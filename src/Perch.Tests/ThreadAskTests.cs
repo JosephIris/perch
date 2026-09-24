@@ -38,7 +38,23 @@ public class ThreadAskTests
     public void DescribesTheCall(string verb, string target, string expected) =>
         Assert.Equal(expected, ThreadController.DescribeTool(verb, target));
 
+    // Each request's row in the chat keeps its own wording, so it must carry
+    // the ask itself — the page tags "Thread 3 (Title)" as the thread.
+    [Fact]
+    public void AskNoticeSaysWhatThisRequestWas()
+    {
+        Assert.Equal("Thread 3 (Add tests) asks to: Run python -m pytest", ThreadController.AskNotice(3, "Add tests", "Run python -m pytest"));
+        Assert.Equal("Thread 3 (Add tests) is waiting for your permission.", ThreadController.AskNotice(3, "Add tests", null));
+    }
+
     [Fact]
     public void KickoffAsksForATaskListFirst() =>
         Assert.StartsWith("Start on the task in your brief. First write your plan as a task list", ThreadController.Kickoff);
+
+    [Fact]
+    public void FirstLine_SkipsALeadingHeading()
+    {
+        Assert.Equal("Python 3.14 is installed.", ThreadController.FirstLine("## Results\n\n**Python 3.14** is installed.", 100));
+        Assert.Equal("Only a heading", ThreadController.FirstLine("# Only a heading", 100));
+    }
 }

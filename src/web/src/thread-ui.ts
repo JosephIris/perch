@@ -52,8 +52,11 @@ export function firstSentence(text: string | undefined): string {
 
 /** The first line of a report, without Markdown's marks. */
 export function firstLine(text: string | undefined): string {
-  const plain = (text ?? "").replace(/\*\*|__|`/g, "").replace(/^#+\s*/gm, "");
-  return plain.split("\n").map((l) => l.trim()).find((l) => l.length > 0) ?? "";
+  const lines = (text ?? "").split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+  // A report that opens with a heading ("## Results"): the heading says
+  // nothing, the line under it does.
+  const pick = lines.find((l) => !/^#+\s/.test(l)) ?? lines[0] ?? "";
+  return pick.replace(/\*\*|__|`/g, "").replace(/^#+\s*/, "");
 }
 
 /** The grey line under a thread's title: what it is doing or has to say.

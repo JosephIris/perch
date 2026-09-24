@@ -1118,6 +1118,29 @@ internal sealed partial class AppController
         _store.Sessions.SelectMany(s => AllLeaves(s.Root).Select(p => (sess: s, pane: p)))
             .Where(t => Resumable(t.sess, t.pane));
 
+    /// How a project-chat thread's Claude runs, at its start and every time
+    /// Perch puts it back after a restart (a resumed session keeps its
+    /// conversation but not its flags): auto mode — routine steps run, a
+    /// safety check stops the risky ones for the user — its task and `perch
+    /// thread` tools and commits allowed outright, and its thread prompt.
+    /// Its worktree is its own, so nothing it does lands in the user's
+    /// checkout. The allow list goes BEFORE the next flag: --allowedTools
+    /// takes every word up to one, and would swallow a prompt after it.
+    internal static string ThreadFlags(string systemPromptFile)
+    {
+        static string Q(string v) => "'" + v.Replace("'", "''") + "'";
+        return $" --allowedTools {string.Join(' ', ThreadController.ThreadAllowedTools.Select(Q))} --permission-mode auto --append-system-prompt-file {Q(systemPromptFile)}";
+    }
+
+    /// A thread coming back after a restart gets its flags again; anything
+    /// else resumes plain.
+    private string ResumeThreadFlags(Session sess)
+    {
+        if (sess.ThreadOf is not Guid lid || SessionById(lid) is not Session lead || sess.ThreadNumber <= 0) return "";
+        var prompt = Path.Combine(ThreadController.DirFor(lead), $"thread-{sess.ThreadNumber}.md");
+        return File.Exists(prompt) ? ThreadFlags(prompt) : "";
+    }
+
     /// Whether this pane can be put back into the conversation it was in.
     /// Both agents can resume, and both are checked the same way: a saved id
     /// AND that agent's own record of it on disk. The on-disk half is what
@@ -1130,11 +1153,11 @@ internal sealed partial class AppController
     /// there is nothing to resume. Claude wins if a pane somehow carries both
     /// ids — it's the one the rest of Perch (peer names, the room, the LOC
     /// chip) is built around.
-    private static string? ResumeCommand(PaneNode pane, string cwd)
+    private static string? ResumeCommand(PaneNode pane, string cwd, string threadFlags = "")
     {
         if (!string.IsNullOrEmpty(pane.ClaudeSessionId)
             && ClaudeTranscripts.Exists(pane.ClaudeSessionId!, cwd))
-            return $"claude --resume {pane.ClaudeSessionId}";
+            return $"claude --resume {pane.ClaudeSessionId}{threadFlags}";
         if (!string.IsNullOrEmpty(pane.CodexSessionId)
             && (CodexTranscripts.Exists(pane.CodexSessionId)
                 || (pane.CodexTranscriptPath is { Length: > 0 } p && System.IO.File.Exists(p))))
@@ -1346,7 +1369,7 @@ internal sealed partial class AppController
                 initialCommand = queued;
                 _armedResumePanes.Remove(pane.Id);
             }
-            if (initialCommand == null && _armedResumePanes.Remove(pane.Id) && ResumeCommand(pane, cwd) is { } resume)
+            if (initialCommand == null && _armedResumePanes.Remove(pane.Id) && ResumeCommand(pane, cwd, ResumeThreadFlags(sess)) is { } resume)
             {
                 initialCommand = resume;
                 NoteRestorePaneResuming(pane.Id);
@@ -4249,14 +4272,8 @@ internal sealed partial class AppController
             // single-quoted: the command is spliced into pwsh's -Command "…" or
             // sh -c, and both take a single-quoted argument verbatim.
             static string Q(string v) => "'" + v.Replace("'", "''") + "'";
-            // A system prompt means a project-chat thread. It works in its own
-            // worktree, so it edits files and commits there without asking,
-            // and runs its `perch thread` commands; anything else still asks.
-            // The allow list goes BEFORE the next flag: --allowedTools takes
-            // every word up to one, and would swallow the first prompt.
-            var extra = (systemPromptFile != null
-                    ? $" --allowedTools {string.Join(' ', ThreadController.ThreadAllowedTools.Select(Q))} --permission-mode acceptEdits --append-system-prompt-file {Q(systemPromptFile)}"
-                    : "")
+            // A system prompt means a project-chat thread (ThreadFlags).
+            var extra = (systemPromptFile != null ? ThreadFlags(systemPromptFile) : "")
                       + (firstPrompt != null ? $" {Q(firstPrompt)}" : "");
             _pendingInitialCommand[s.Root.Id] = $"claude --session-id {sid} --name {ccName}{extra}";
             // Creation-time model pick. Set on the PaneNode NOW — the PTY

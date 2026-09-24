@@ -4,7 +4,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { firstSentence, splitThreadRefs, summarizeWork, modelLabel, shortAge, statusLine, groupOf, dayLabel } from "../src/thread-ui.js";
+import { firstLine, firstSentence, splitThreadRefs, summarizeWork, modelLabel, shortAge, statusLine, groupOf, dayLabel } from "../src/thread-ui.js";
 import type { SessionView } from "../src/bridge.js";
 
 const t = (over: Partial<SessionView>): SessionView => ({
@@ -72,4 +72,10 @@ test("day rules: today, yesterday, then the date", () => {
   assert.equal(dayLabel(new Date(2026, 8, 23, 23, 59).getTime(), now), "Yesterday");
   assert.match(dayLabel(new Date(2026, 8, 20).getTime(), now), /20/);
   assert.match(dayLabel(new Date(2025, 8, 20).getTime(), now), /2025/);
+});
+
+test("a report that opens with a heading is summed up by the line under it", () => {
+  assert.equal(firstLine("## Results\n\n**Python 3.14** is installed."), "Python 3.14 is installed.");
+  assert.equal(firstLine("# Only a heading"), "Only a heading");
+  assert.equal(firstLine(""), "");
 });

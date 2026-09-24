@@ -25,7 +25,7 @@ import type { PaneTreeView, SessionView, ChatEntryView, ChatMetaMessage, ThreadE
 import { renderMarkdown } from "./md.js";
 import { ChatOverview, divider } from "./chat-overview.js";
 import {
-  groupOf, statusLine, askText, firstSentence, splitThreadRefs, summarizeWork, modelLabel, dayLabel, dayKey,
+  groupOf, statusLine, firstSentence, splitThreadRefs, summarizeWork, modelLabel, dayLabel, dayKey,
   el, button, icon, ring, setRing, threadChip, fillChip, hidePop, reducedMotion,
 } from "./thread-ui.js";
 import { copyText } from "./clipboard.js";
@@ -364,15 +364,16 @@ export class ChatPane {
         this.sealSegment();
         const threadId = e.tool.startsWith("thread:") ? e.tool.slice(7) : "";
         if (threadId) {
-          // A thread waiting on you: a card that follows it until answered.
-          const card = el("div", "pc-card chat-wait");
-          card.dataset.threadId = threadId;
-          card.dataset.text = e.text;
+          // A thread waiting on you: one compact row per request, keeping
+          // what that request was. A new one retires the thread's older rows.
+          const row = el("div", "chat-wait");
+          row.dataset.threadId = threadId;
+          row.dataset.text = e.text;
           const list = this.waitCards.get(threadId) ?? [];
-          list.push(card);
+          list.push(row);
           this.waitCards.set(threadId, list);
-          this.fillWaitCard(card, threadId);
-          this.append({ kind: "wait", el: card }, e, live);
+          for (const r of list) this.fillWaitCard(r, threadId);
+          this.append({ kind: "wait", el: row }, e, live);
           return;
         }
         const row = el("div", "chat-row chat-row--notice");
@@ -500,21 +501,48 @@ export class ChatPane {
   }
 
   /** A thread that asked for you: what it needs while it still does. */
-  private fillWaitCard(card: HTMLElement, id: string) {
+  /** One request from a thread, as a compact row that keeps saying what
+   *  it asked. Only the thread's newest request can still be waiting — it
+   *  gets Allow / Deny (or Answer, for a question); older ones were answered. */
+  private fillWaitCard(row: HTMLElement, id: string) {
     const t = this.byId(id);
-    const stillWaiting = !!t && groupOf(t) === "waiting";
-    const line = !t ? "This thread is closed."
-      : stillWaiting ? (t.agentState === "permission" ? `It asks to: ${askText(t)}` : (t.notification?.text || "It's waiting for your answer."))
-      : "Answered.";
-    const sig = `${stillWaiting}|${t?.title}|${line}`;
-    if (card.dataset.sig === sig) return;
-    card.dataset.sig = sig;
-    card.classList.toggle("chat-wait--done", !stillWaiting);
-    const head = el("div", "pc-card__head");
-    head.append(icon("hand", "pc-icon pc-card__hand"), el("span", "pc-card__title", t?.title ?? (card.dataset.text ?? "")));
-    const acts = el("div", "pc-card__actions");
-    if (t) acts.appendChild(button(stillWaiting ? "pc-btn pc-btn--primary" : "pc-btn pc-btn--quiet", "View thread", () => this.openThread(id)));
-    card.replaceChildren(head, el("div", "pc-card__line", line), acts);
+    const list = this.waitCards.get(id) ?? [];
+    const live = list[list.length - 1] === row && !!t && groupOf(t) === "waiting";
+    const permission = live && t!.agentState === "permission";
+    const answering = row.dataset.answering === "1" && permission;
+    const sig = `${live}|${permission}|${answering}|${t?.title}|${t ? "" : "gone"}`;
+    if (row.dataset.sig === sig) return;
+    row.dataset.sig = sig;
+    row.classList.toggle("chat-wait--live", live);
+    // What it asked comes first — that is the row's point — and the thread
+    // after it as a small tag, so a long thread name never hides the ask.
+    const raw = row.dataset.text ?? "";
+    const ask = raw.match(/\) asks to: (.*)$/s)?.[1]?.trim();
+    const text = el("span", "chat-wait__text", ask ?? (/waiting for your answer/.test(raw) ? "Has a question for you" : "Needs your permission"));
+    text.title = ask ?? raw;
+    const who = el("span", "chat-wait__who");
+    const n = Number(raw.match(/^Thread (\d+) \(/)?.[1] ?? 0);
+    const title = raw.match(/^Thread \d+ \((.*?)\) (asks to:|is waiting)/)?.[1] ?? t?.title ?? "";
+    if (t) who.appendChild(threadChip(t.id, title, (x) => this.byId(x), (x) => this.openThread(x)));
+    else who.textContent = title || (n ? `Thread ${n}` : "");
+    const end = el("span", "chat-wait__end");
+    if (permission) {
+      const answer = (reply: "allow" | "deny") => {
+        row.dataset.answering = "1";
+        send({ type: "thread.answer", id, text: reply });
+        this.fillWaitCard(row, id);
+      };
+      const allow = button("pc-btn pc-btn--sm pc-btn--primary", "Allow", () => answer("allow"));
+      const deny = button("pc-btn pc-btn--sm", "Deny", () => answer("deny"));
+      allow.disabled = deny.disabled = answering;
+      end.append(allow, deny, button("pc-btn pc-btn--sm pc-btn--quiet", "View", () => this.openThread(id), "Open this thread"));
+    } else if (live) {
+      end.appendChild(button("pc-btn pc-btn--sm pc-btn--primary", "Answer", () => this.openThread(id), "Open this thread to answer it"));
+    } else {
+      delete row.dataset.answering;
+      end.appendChild(el("span", "chat-wait__done", t ? "Answered" : "Closed"));
+    }
+    row.replaceChildren(icon("hand", "pc-icon chat-wait__hand"), text, who, end);
   }
 
   /** One proposed thread: title, why, and Start (or where it went). */

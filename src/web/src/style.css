@@ -8972,9 +8972,26 @@ body.show-inbox .inbox { display: flex; }
 .pc-card__line { padding-left: 28px; font-size: 13px; line-height: 1.5; color: var(--color-text-secondary); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .pc-card__actions { padding-left: 28px; display: flex; flex-wrap: wrap; gap: var(--sp-8); margin-top: var(--sp-4); }
 .pc-card__actions > .pc-btn--quiet:first-child { margin-left: calc(-1 * var(--sp-12)); }
-.chat-wait { transition: opacity var(--dur-normal) var(--ease-entry); }
-.chat-wait--done { opacity: 0.6; }
-.chat-wait--done .pc-card__hand { color: var(--color-text-tertiary); }
+/* A thread's request, one compact row each: what it asked, then Allow /
+ * Deny while it waits, "Answered" after. Consecutive rows sit together. */
+.chat-wait {
+  display: flex; align-items: center; gap: var(--sp-12); min-height: 36px; box-sizing: border-box;
+  padding: var(--sp-4) var(--sp-8) var(--sp-4) var(--sp-12);
+  border: 1px solid transparent; border-radius: var(--r-card);
+  font-size: 13px; color: var(--color-text-tertiary);
+  transition: background var(--dur-normal) var(--ease-entry), border-color var(--dur-normal) var(--ease-entry), color var(--dur-normal) var(--ease-entry);
+}
+.chat-wait + .chat-wait { margin-top: calc(-1 * var(--sp-8)); }
+.chat-wait--live { background: var(--pc-fill); border-color: var(--color-stroke); color: var(--color-text-secondary); }
+.chat-wait__hand { color: var(--color-text-tertiary); }
+.chat-wait--live .chat-wait__hand { color: var(--color-state-waiting); }
+.chat-wait__text { flex: 1 1 auto; min-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-wait--live .chat-wait__text { color: var(--color-text-primary); }
+.chat-wait__who { flex: 0 1 auto; min-width: 0; max-width: 32%; display: flex; overflow: hidden; }
+.chat-wait__who .pc-chip { font-size: 12px; line-height: 1.6; max-width: 100%; min-width: 0; overflow: hidden; }
+.chat-wait__end { flex: 0 0 auto; display: flex; align-items: center; gap: var(--sp-4); }
+.chat-wait__done { font-size: 12px; color: var(--color-text-tertiary); }
+.pc-btn--sm { height: 26px; padding: 0 var(--sp-8); font-size: 12px; }
 
 /* "Start new threads": proposed threads, each with Start, and all at once. */
 .chat-suggest { padding: 0; gap: 0; background: transparent; }
