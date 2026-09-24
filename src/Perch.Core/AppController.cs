@@ -98,6 +98,7 @@ internal sealed partial class AppController
     private readonly Dictionary<Guid, long> _lastSustainedTicks = new();
 
     private IUiTimer? _idleWatchdog;
+    private IUiTimer? _threadTasksTimer;
 
     private ControlIpcServer? _control;
 
@@ -447,7 +448,11 @@ internal sealed partial class AppController
             ThreadCommand = (lead, paneId, msg) => _threadCtrl.OnThreadCommand(lead, paneId, msg),
             TurnEnded = lead => { _ = _threadCtrl.RefreshUnmergedAsync(lead); _chatCtrl?.PostMeta(lead); },
             Suggestions = lead => _threadCtrl.LoadSuggestions(lead)
-                .Select(x => new { id = x.Id, title = x.Title, threadId = x.ThreadId?.ToString("D") }).ToArray(),
+                .Select(x => new
+                {
+                    id = x.Id, title = x.Title, threadId = x.ThreadId?.ToString("D"),
+                    summary = ThreadController.FirstLine(x.Brief, 200), dismissed = x.Dismissed,
+                }).ToArray(),
             PromptPath = lead => _threadCtrl.WriteCoordinatorPrompt(lead),
             SetWorking = (lead, leaf, working) =>
             {
@@ -605,6 +610,8 @@ internal sealed partial class AppController
         // a missed Stop hook can't pin a pane on "working" forever.
         _idleWatchdog = _ui.CreateTimer(TimeSpan.FromSeconds(1), OnIdleWatchdogTick);
         _idleWatchdog.Start();
+        _threadTasksTimer = _ui.CreateTimer(TimeSpan.FromSeconds(2), OnThreadTasksTick);
+        _threadTasksTimer.Start();
         _repoWatchers = new RepoWatchers(OnWorktreeChanged);
     }
 
@@ -647,6 +654,7 @@ internal sealed partial class AppController
         _chatCtrl.Dispose();
         _cloud?.Dispose();
         _idleWatchdog?.Stop();
+        _threadTasksTimer?.Stop();
         _reapTimer?.Stop();
         _repoWatchers?.Dispose();
         _updateTimer?.Stop();
@@ -859,6 +867,7 @@ internal sealed partial class AppController
         .Add<ProjectChatNewMsg>("projectchat.new", OnProjectChatNew)
         .Add<ProjectChatUpdateMsg>("projectchat.update", OnProjectChatUpdate)
         .Add<SuggestionStartMsg>("suggestion.start", OnSuggestionStart)
+        .Add<SuggestionStartMsg>("suggestion.dismiss", OnSuggestionDismiss)
         .Add<ThreadActMsg>("thread.transcript", m => _ = PostThreadTranscriptAsync(m.Id))
         .Add<ThreadActMsg>("thread.send", OnThreadSend)
         .Add<ThreadActMsg>("thread.stop", OnThreadStop)
@@ -1631,6 +1640,26 @@ internal sealed partial class AppController
     //     inferred, so genuine turn-ends are never re-promoted by stray output.
     // Only Working/Done(inferred) panes are touched — Idle shells, Waiting and
     // Permission are left exactly as the agent reported them.
+    /// Every 2s: each running thread's task list, summed up for the
+    /// Overview's progress ("2/3") and status line. A handful of small files
+    /// per thread; a push only when a count or the current task changed.
+    private void OnThreadTasksTick()
+    {
+        var changed = false;
+        foreach (var t in _store.Sessions.Where(s => s.ThreadOf != null && !s.Dormant))
+        {
+            var pane = AllLeaves(t.Root).FirstOrDefault(p => p.IsTerminal && !string.IsNullOrEmpty(p.ClaudeSessionId));
+            var (done, total, now) = ClaudeTasks.Summary(ClaudeTasks.Read(pane?.ClaudeSessionId));
+            // No list (yet, or its Claude was restarted into a new session):
+            // keep what we had rather than blink the progress away.
+            if (total == 0) continue;
+            if (done == t.ThreadTasksDone && total == t.ThreadTasksTotal && now == t.ThreadTaskNow) continue;
+            (t.ThreadTasksDone, t.ThreadTasksTotal, t.ThreadTaskNow) = (done, total, now);
+            changed = true;
+        }
+        if (changed) PushState();
+    }
+
     private void OnIdleWatchdogTick()
     {
         var now = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -2736,14 +2765,25 @@ internal sealed partial class AppController
     private async void OnSuggestionStart(SuggestionStartMsg msg)
     {
         if (SessionById(msg.SessionId) is not { IsLead: true } lead) return;
+        // One id, several ("a,b,c" — a card's "Start N threads"), or "all".
+        // One after another: each makes a git worktree, and two at once can
+        // trip over git's lock on the repo.
         var ids = msg.Id == "all"
-            ? _threadCtrl.LoadSuggestions(lead).Where(s => s.ThreadId == null).Select(s => s.Id).ToList()
-            : new List<string> { msg.Id };
+            ? _threadCtrl.LoadSuggestions(lead).Where(s => s.ThreadId == null && !s.Dismissed).Select(s => s.Id).ToList()
+            : msg.Id.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
         foreach (var id in ids)
         {
             var error = await _threadCtrl.StartSuggestionAsync(lead, id);
             if (error != null) PostToast(error, "error", Guid.Empty);
+            _chatCtrl.PostMeta(lead);
         }
+    }
+
+    /// The user waved a proposed thread away (the ✕ on its row).
+    private void OnSuggestionDismiss(SuggestionStartMsg msg)
+    {
+        if (SessionById(msg.SessionId) is not { IsLead: true } lead) return;
+        _threadCtrl.DismissSuggestion(lead, msg.Id);
         _chatCtrl.PostMeta(lead);
     }
 
@@ -2765,7 +2805,11 @@ internal sealed partial class AppController
             .TakeLast(200)
             .Select(e => new { kind = e.Kind, text = e.Text, verb = e.Verb, target = e.Target })
             .ToArray();
-        PostToPage(new { type = "thread.transcript", id = id.ToString("D"), events });
+        // Its task list, drawn as the checklist at the top of the thread.
+        var tasks = ClaudeTasks.Read(pane?.ClaudeSessionId)
+            .Select(x => new { subject = x.Subject, activeForm = x.ActiveForm, status = x.Status })
+            .ToArray();
+        PostToPage(new { type = "thread.transcript", id = id.ToString("D"), events, tasks });
     }
 
     /// The user typed to a thread from the Overview: it goes in when that

@@ -70,7 +70,8 @@ internal sealed class ThreadController
     /// own branch. A thread's worktree is its own, so none of this can touch
     /// the user's checkout; pushing, installing and the rest still ask.
     public static readonly string[] ThreadAllowedTools =
-        ForShells("perch thread", "git add", "git commit", "git status", "git diff", "git log").ToArray();
+        new[] { "TaskCreate", "TaskUpdate", "TaskList", "TaskGet" }
+        .Concat(ForShells("perch thread", "git add", "git commit", "git status", "git diff", "git log")).ToArray();
 
     /// Threads last seen blocked on the user, so each wait is announced once.
     private readonly HashSet<Guid> _waiting = new();
@@ -137,6 +138,10 @@ internal sealed class ThreadController
         - Threads commit on their own branches. Assembling the result is yours: when the user asks you to merge (or asked you to finish the whole job), check the thread's work (`git log`, `git diff <here>...<branch>`) and merge its branch into the branch checked out here with `git merge --no-ff <branch>`. Tell the user which order to merge in when it matters. Never push.
         - If a merge clashes, run `git merge --abort` and send that thread: `perch thread send <n> "Merge <this branch> into your branch, resolve the conflicts, commit, and report."` When it reports, merge again.
         - Keep the user posted briefly and lead with results. Messages starting with `[Perch` come from Perch, not from the user; several may arrive in one turn with what the user wrote.
+
+        ## How your replies look
+        - Short: a few sentences of plain prose, like a colleague's chat message. No headings, no tables, no status reports; a short list only when there really are several items. The user sees each thread's state and progress beside this chat, so don't repeat it.
+        - Name a thread as `#<n>` (for example "#3 found the slow query"). Perch shows it as a link with the thread's title, so don't write the title next to it.
         """;
 
     private static string Section(string title, string body) =>
@@ -155,6 +160,7 @@ internal sealed class ThreadController
         - To ask the coordinator something mid-task, run `perch thread send lead "<question>"` and carry on with what you can.
         - To save something every later thread should know (a decision, a pitfall), run `perch thread remember "<note>"`.
         - Messages from the coordinator or the user arrive as lines starting with `[Perch #…]`.
+        - For anything with more than one step, keep a short task list with your task tools (TaskCreate, then TaskUpdate as each task starts and completes): three to six tasks, each a few words. The user watches it as your progress.
         {Section("The user's instructions for this project", instructions)}{MemorySection(memory)}
         ## Your brief
         {brief}
@@ -323,6 +329,8 @@ internal sealed class ThreadController
         public string Brief { get; set; } = "";
         /// The thread started from it, once someone clicked Start.
         public Guid? ThreadId { get; set; }
+        /// Waved away by the user; kept so the chat's history still reads.
+        public bool Dismissed { get; set; }
     }
 
     private static string SuggestionsPath(Session lead) => Path.Combine(DirFor(lead), "suggestions.json");
@@ -352,12 +360,21 @@ internal sealed class ThreadController
         var s = all.FirstOrDefault(x => x.Id == id);
         if (s == null) return "That suggestion is gone.";
         if (s.ThreadId != null) return null;   // already started
+        s.Dismissed = false;
         var (tab, error) = await StartThreadAsync(lead, s.Title, s.Brief);
         if (tab == null) return error;
         all = LoadSuggestions(lead);
         if (all.FirstOrDefault(x => x.Id == id) is { } again) again.ThreadId = tab.Id;
         SaveSuggestions(lead, all);
         return null;
+    }
+
+    public void DismissSuggestion(Session lead, string id)
+    {
+        var all = LoadSuggestions(lead);
+        if (all.FirstOrDefault(x => x.Id == id) is not { ThreadId: null } s) return;
+        s.Dismissed = true;
+        SaveSuggestions(lead, all);
     }
 
     // ---- memory ------------------------------------------------------------

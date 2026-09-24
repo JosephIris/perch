@@ -139,6 +139,13 @@ internal sealed class Session : INotifyPropertyChanged
     /// each of its turns and each of the chat's; 0 once merged.
     public int ThreadUnmerged { get; set; }
 
+    /// On a thread: its Claude's task list, summed up (ClaudeTasks) — tasks
+    /// done, tasks in all, and the one in progress. Read from disk every few
+    /// seconds, so not saved.
+    [JsonIgnore] public int ThreadTasksDone { get; set; }
+    [JsonIgnore] public int ThreadTasksTotal { get; set; }
+    [JsonIgnore] public string ThreadTaskNow { get; set; } = "";
+
     // ----- Incoming pair note (transient, like NotificationText) -----------
     // The last cross-session message that ARRIVED at this tab (or, warn level,
     // the last delivery failure by this tab). Rendered as a quiet note line on

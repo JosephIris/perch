@@ -74,6 +74,9 @@ internal sealed class ChatController : IDisposable
         public readonly List<string> Queue = new();
         public List<ChatEntry>? Entries;
         public bool Stopping;
+        /// The model the coordinator's last run reported (its `init` line),
+        /// shown under the composer. "" until the first run of this launch.
+        public string Model = "";
     }
 
     internal sealed record ChatEntry(string Id, string Kind, string Text, string Tool, long AtMs);
@@ -81,7 +84,33 @@ internal sealed class ChatController : IDisposable
     private readonly Host _h;
     private readonly Dictionary<Guid, Chat> _chats = new();
 
-    public ChatController(Host host) { _h = host; }
+    public ChatController(Host host)
+    {
+        _h = host;
+        _userName = Task.Run(ReadUserNameAsync);
+    }
+
+    /// Who the Overview greets: the first name git knows the user by, else
+    /// the account name. Read once, off the UI thread.
+    private readonly Task<string> _userName;
+
+    private static async Task<string> ReadUserNameAsync()
+    {
+        var name = "";
+        try
+        {
+            var (code, stdout, _) = await ProcRunner.RunAsync("git", "config --global user.name", "chat.username", timeoutMs: 5000);
+            if (code == 0) name = stdout.Trim();
+        }
+        catch { }
+        return FirstName(name.Length > 0 ? name : Environment.UserName);
+    }
+
+    internal static string FirstName(string name)
+    {
+        var first = (name ?? "").Trim().Split(' ', '.', '_', '-').FirstOrDefault(p => p.Length > 0) ?? "";
+        return first.Length == 0 ? "" : char.ToUpperInvariant(first[0]) + first[1..];
+    }
 
     private static string LogPath(Session lead) => Path.Combine(ThreadController.DirFor(lead), "chat.jsonl");
 
@@ -120,6 +149,7 @@ internal sealed class ChatController : IDisposable
             entries = Entries(chat, lead).Select(View).ToArray(),
             running = chat.Proc != null,
             queued = chat.Queue.Count,
+            model = chat.Model,
         });
         PostMeta(lead);
     }
@@ -138,6 +168,7 @@ internal sealed class ChatController : IDisposable
             sessionId = lead.Id.ToString("D"),
             goal = lead.ChatGoal,
             instructions = lead.ChatInstructions,
+            userName = _userName.IsCompletedSuccessfully ? _userName.Result : "",
             memory = ThreadController.ReadMemory(lead).ToArray(),
             suggestions = _h.Suggestions?.Invoke(lead) ?? Array.Empty<object>(),
         });
@@ -163,8 +194,7 @@ internal sealed class ChatController : IDisposable
         if (leaf == null) return;
         var chat = Get(leaf.Id, out _, out _);
         if (chat == null) return;
-        Append(chat, lead, "notice", "Getting started: looking at the project to propose the first work.");
-        chat.Queue.Add("[Perch] This project chat was just created. Look at the project, then propose the first one to three threads that move the goal forward with `perch thread suggest` (don't start them), and tell the user in a few lines what you propose and why.");
+        chat.Queue.Add("[Perch] This project chat was just created. Open with a short welcome in two or three sentences: you coordinate the work here — the user asks for what they need, and you answer directly or start threads that work in parallel, and post updates when something finishes or needs them. Then look at the project. If the goal gives clear, safe work to begin with, start the first thread (or two) right away with `perch thread new` and say so in a sentence. If what to do first is a judgment call, propose one to three threads with `perch thread suggest` instead and say why in a sentence.");
         Pump(chat, lead, leaf);
     }
 
@@ -298,11 +328,12 @@ internal sealed class ChatController : IDisposable
                 string? line;
                 while ((line = await proc.StandardOutput.ReadLineAsync()) != null)
                 {
-                    var rows = ParseLine(line, out var isResult, out var resultError);
+                    var rows = ParseLine(line, out var isResult, out var resultError, out var model);
                     if (isResult) sawResult = true;
                     var err = resultError;
                     _h.Ui.Post(() =>
                     {
+                        if (model != null && model != chat.Model) { chat.Model = model; Status(chat); }
                         foreach (var (kind, text, tool) in rows) Append(chat, lead, kind, text, tool);
                         if (err != null) Append(chat, lead, "error", err);
                     });
@@ -340,8 +371,12 @@ internal sealed class ChatController : IDisposable
     /// "claude" row, a tool call a "tool" row; the final `result` line marks
     /// the turn complete (and carries an error when the run failed).
     internal static List<(string Kind, string Text, string Tool)> ParseLine(string line, out bool isResult, out string? error)
+        => ParseLine(line, out isResult, out error, out _);
+
+    /// …and the model, from the run's opening `system`/`init` line.
+    internal static List<(string Kind, string Text, string Tool)> ParseLine(string line, out bool isResult, out string? error, out string? model)
     {
-        isResult = false; error = null;
+        isResult = false; error = null; model = null;
         var rows = new List<(string, string, string)>();
         if (string.IsNullOrWhiteSpace(line)) return rows;
         try
@@ -349,6 +384,11 @@ internal sealed class ChatController : IDisposable
             using var doc = JsonDocument.Parse(line);
             var root = doc.RootElement;
             var type = Str(root, "type");
+            if (type == "system" && Str(root, "subtype") == "init")
+            {
+                model = Str(root, "model");
+                return rows;
+            }
             if (type == "result")
             {
                 isResult = true;
@@ -440,6 +480,7 @@ internal sealed class ChatController : IDisposable
         paneId = chat.PaneId.ToString("D"),
         running = chat.Proc != null,
         queued = chat.Queue.Count,
+        model = chat.Model,
     });
 
     private static object View(ChatEntry e) => new { id = e.Id, kind = e.Kind, text = e.Text, tool = e.Tool, atMs = e.AtMs };
