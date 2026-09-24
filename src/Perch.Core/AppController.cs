@@ -1660,6 +1660,18 @@ internal sealed partial class AppController
     //     inferred, so genuine turn-ends are never re-promoted by stray output.
     // Only Working/Done(inferred) panes are touched — Idle shells, Waiting and
     // Permission are left exactly as the agent reported them.
+    /// Each thread's last non-empty task list. Claude Code empties the list
+    /// once every task is done, so an empty folder after a list means "all
+    /// done", not "no plan" — the checklist and the "4/4" stay.
+    private readonly Dictionary<Guid, IReadOnlyList<ClaudeTasks.Item>> _threadTasks = new();
+
+    private IReadOnlyList<ClaudeTasks.Item> ThreadTasks(Session t, PaneNode? pane)
+    {
+        var items = ClaudeTasks.Read(pane?.ClaudeSessionId);
+        if (items.Count > 0) { _threadTasks[t.Id] = items; return items; }
+        return _threadTasks.TryGetValue(t.Id, out var last) ? ClaudeTasks.AllDone(last) : items;
+    }
+
     /// Every 2s: each running thread's task list, summed up for the
     /// Overview's progress ("2/3") and status line. A handful of small files
     /// per thread; a push only when a count or the current task changed.
@@ -1669,7 +1681,7 @@ internal sealed partial class AppController
         foreach (var t in _store.Sessions.Where(s => s.ThreadOf != null && !s.Dormant))
         {
             var pane = AllLeaves(t.Root).FirstOrDefault(p => p.IsTerminal && !string.IsNullOrEmpty(p.ClaudeSessionId));
-            var (done, total, now) = ClaudeTasks.Summary(ClaudeTasks.Read(pane?.ClaudeSessionId));
+            var (done, total, now) = ClaudeTasks.Summary(ThreadTasks(t, pane));
             // No list (yet, or its Claude was restarted into a new session):
             // keep what we had rather than blink the progress away.
             if (total == 0) continue;
@@ -2826,7 +2838,7 @@ internal sealed partial class AppController
             .Select(e => new { kind = e.Kind, text = e.Text, verb = e.Verb, target = e.Target })
             .ToArray();
         // Its task list, drawn as the checklist at the top of the thread.
-        var tasks = ClaudeTasks.Read(pane?.ClaudeSessionId)
+        var tasks = ThreadTasks(t, pane)
             .Select(x => new { subject = x.Subject, activeForm = x.ActiveForm, status = x.Status })
             .ToArray();
         PostToPage(new { type = "thread.transcript", id = id.ToString("D"), events, tasks });

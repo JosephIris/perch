@@ -102,7 +102,7 @@ export class ChatOverview {
   setThreads(threads: SessionView[]) {
     this.threads = threads;
     const sig = JSON.stringify(threads.map((t) => [t.id, t.title, t.agentState, t.dormant, t.branch, t.threadReply, t.threadReplyAtMs,
-      t.threadResolved, t.threadUnmerged, t.threadTasksDone, t.threadTasksTotal, t.threadTaskNow, t.notification?.text, t.activityDetail,
+      t.threadResolved, t.threadUnmerged, t.threadTasksDone, t.threadTasksTotal, t.threadTaskNow, t.threadAsk, t.notification?.text, t.activityDetail,
       t.turnStartMs, t.doneAtMs, t.worktreeBranch]));
     if (sig === this.lastSig) return;
     this.lastSig = sig;
@@ -597,7 +597,7 @@ class ThreadDetail {
         d.appendChild(sum);
         const list = el("div", "pc-work__list");
         for (const w of work) {
-          if (/^(TaskCreate|TaskUpdate|TaskList|TaskGet|TodoWrite)$/.test(w.verb)) continue;
+          if (/^(TaskCreate|TaskUpdate|TaskList|TaskGet|TodoWrite|ToolSearch)$/.test(w.verb)) continue;
           const r = el("div", "pc-work__row");
           r.append(el("span", "pc-work__verb", w.verb || "Used"), el("span", "pc-work__target", w.target || w.text));
           list.appendChild(r);

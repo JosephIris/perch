@@ -142,7 +142,8 @@ export function summarizeWork(steps: { verb: string; target: string }[]): string
       case "Bash": case "PowerShell": ran++; break;
       case "Grep": case "Glob": case "LS": searched++; break;
       case "WebSearch": case "WebFetch": web++; break;
-      case "TaskCreate": case "TaskUpdate": case "TaskList": case "TaskGet": case "TodoWrite": break;
+      // Task-list upkeep (and loading those tools) shows as the checklist.
+      case "TaskCreate": case "TaskUpdate": case "TaskList": case "TaskGet": case "TodoWrite": case "ToolSearch": break;
       default: other++;
     }
   }

@@ -49,6 +49,13 @@ public class ClaudeTasksTests
     }
 
     [Fact]
+    public void AnEmptiedListMeansAllDone()
+    {
+        var last = new[] { new ClaudeTasks.Item("1", "A", "", "completed"), new ClaudeTasks.Item("2", "B", "Doing B", "in_progress") };
+        Assert.Equal((2, 2, ""), ClaudeTasks.Summary(ClaudeTasks.AllDone(last)));
+    }
+
+    [Fact]
     public void InProgressWithoutActiveFormFallsBackToSubject()
     {
         var items = new[] { new ClaudeTasks.Item("1", "Fix the bug", "", "in_progress") };

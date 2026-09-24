@@ -229,6 +229,8 @@ export class ChatPane {
     this.running = running;
     if (model) this.modelEl.textContent = modelLabel(model);
     this.spinEl.classList.toggle("chat__spin--on", running);
+    // Hidden when idle; don't keep it turning.
+    this.spinEl.classList.toggle("pc-ring--spin", running);
     this.queuedEl.textContent = queued > 0 ? `${queued} more waiting` : "";
     this.busyEl.hidden = !running;
     if (running) {

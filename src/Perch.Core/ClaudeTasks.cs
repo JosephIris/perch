@@ -67,6 +67,10 @@ internal static class ClaudeTasks
         catch { return Array.Empty<Item>(); }
     }
 
+    /// The same list with every task completed — what an emptied list means.
+    public static IReadOnlyList<Item> AllDone(IReadOnlyList<Item> items) =>
+        items.Select(i => i with { Status = "completed" }).ToList();
+
     /// Done / total, and what it is doing now: the task in progress (its
     /// activeForm when it has one), else "".
     public static (int Done, int Total, string Now) Summary(IReadOnlyList<Item> items)
