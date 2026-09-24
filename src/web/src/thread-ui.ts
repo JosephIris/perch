@@ -67,8 +67,12 @@ export function statusLine(t: SessionView): { text: string; blocked: boolean } {
       if (t.agentState === "permission")
         return { text: askText(t), blocked: true };
       return { text: t.notification?.text || report || "Waiting for you", blocked: false };
-    case "working":
-      return { text: t.threadTaskNow || t.activityDetail || "Working", blocked: false };
+    case "working": {
+      // The detail is sometimes the prompt it was given — Perch's own lines
+      // or the brief's kick-off — which says nothing about what it is doing.
+      const detail = /^(\[Perch|Start on the task in your brief|From the project chat)/.test(t.activityDetail ?? "") ? "" : t.activityDetail;
+      return { text: t.threadTaskNow || detail || "Working", blocked: false };
+    }
     case "ready":
       return { text: report || stateLabel(t), blocked: false };
     default:

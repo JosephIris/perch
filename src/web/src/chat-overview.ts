@@ -621,7 +621,7 @@ class ThreadDetail {
       // Lines Perch typed carry a "[Perch #n]" tag; the brief's kick-off is
       // noise. What's left is who asked what.
       const text = e.text.replace(/^\[Perch #\d+\]\s*/, "");
-      if (/^Start on the task in your brief\.?$/.test(text)) return el("div", "ovd__note", "Started on its brief");
+      if (/^Start on the task in your brief\b/.test(text)) return el("div", "ovd__note", "Started on its brief");
       const fromChat = text.startsWith("From the project chat:");
       const row = el("div", "ovd__prompt");
       row.append(el("div", "pc-bubble", text.replace(/^From the project chat:\s*/, "")),

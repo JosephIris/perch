@@ -163,11 +163,17 @@ internal sealed class ThreadController
         - To ask the coordinator something mid-task, run `perch thread send lead "<question>"` and carry on with what you can.
         - To save something every later thread should know (a decision, a pitfall), run `perch thread remember "<note>"`.
         - Messages from the coordinator or the user arrive as lines starting with `[Perch #…]`.
-        - For anything with more than one step, keep a short task list with your task tools (TaskCreate, then TaskUpdate as each task starts and completes): three to six tasks, each a few words. The user watches it as your progress.
+        - Keep a short task list with your task tools — TaskCreate for each step before you start, TaskUpdate as each one starts and completes: two to six tasks, each a few words. The user follows your progress by it. When you get new work from the coordinator or the user, add tasks for it.
         {Section("The user's instructions for this project", instructions)}{MemorySection(memory)}
         ## Your brief
         {brief}
         """;
+
+    /// A thread's first prompt. The task list comes first because the user
+    /// follows a thread by it (the Overview's "2/3", its checklist), and the
+    /// task tools are loaded on demand — without saying so, models skip them.
+    internal const string Kickoff =
+        "Start on the task in your brief. First write your plan as a task list with TaskCreate (load the task tools with ToolSearch if you need to), then work through it, marking each task in progress and completed with TaskUpdate.";
 
     // ---- perch thread … ----------------------------------------------------
 
@@ -312,7 +318,7 @@ internal sealed class ThreadController
         Directory.CreateDirectory(dir);
         var promptPath = Path.Combine(dir, $"thread-{n}.md");
         AtomicFile.WriteAllText(promptPath, ThreadPrompt(n, title, brief, lead.ChatInstructions, ReadMemory(lead)));
-        var tab = await _h.CreateClaudeTab(proj, title, promptPath, "Start on the task in your brief.", true);
+        var tab = await _h.CreateClaudeTab(proj, title, promptPath, Kickoff, true);
         if (tab == null) return (null, "Perch couldn't make the thread's tab (see the toast in Perch).");
         tab.ThreadOf = lead.Id;
         tab.ThreadNumber = n;
@@ -526,9 +532,43 @@ internal sealed class ThreadController
         try { ask = _h.ReadPendingTool == null ? null : await _h.ReadPendingTool(thread); }
         catch (Exception ex) { Log.Error("Thread.ask", ex); }
         var stillAsking = PaneTree.AllLeaves(thread.Root).Any(p => p.IsTerminal && p.AgentState == AgentState.Permission);
+        Log.Info("Thread.ask", $"session={thread.Id:N} asking={stillAsking} ask={(ask ?? "(none)")}");
         if (!stillAsking || string.IsNullOrEmpty(ask) || ask == thread.ThreadAsk) return;
         thread.ThreadAsk = ask;
         _h.PushState();
+    }
+
+    /// The tool call a transcript is stopped on: the last `tool_use` with no
+    /// `tool_result` after it. `lines` are the transcript's last JSONL rows
+    /// (a torn first row is skipped). Pure.
+    internal static (string Verb, string Target)? PendingTool(IEnumerable<string> lines)
+    {
+        var open = new List<(string Id, string Verb, string Target)>();
+        foreach (var line in lines)
+        {
+            if (line.Length == 0 || line[0] != '{') continue;
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(line);
+                if (!doc.RootElement.TryGetProperty("message", out var msg) || !msg.TryGetProperty("content", out var content)
+                    || content.ValueKind != System.Text.Json.JsonValueKind.Array) continue;
+                foreach (var block in content.EnumerateArray())
+                {
+                    var type = block.TryGetProperty("type", out var t) ? t.GetString() : null;
+                    if (type == "tool_use")
+                    {
+                        var id = block.TryGetProperty("id", out var i) ? i.GetString() ?? "" : "";
+                        var name = block.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
+                        block.TryGetProperty("input", out var input);
+                        open.Add((id, name, ChatController.ToolTarget(name, input)));
+                    }
+                    else if (type == "tool_result" && block.TryGetProperty("tool_use_id", out var r))
+                        open.RemoveAll(x => x.Id == r.GetString());
+                }
+            }
+            catch (System.Text.Json.JsonException) { }
+        }
+        return open.Count == 0 ? null : (open[^1].Verb, open[^1].Target);
     }
 
     /// A tool call in words, for "It asks to …". Pure.

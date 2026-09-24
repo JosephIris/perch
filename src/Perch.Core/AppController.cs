@@ -428,13 +428,25 @@ internal sealed partial class AppController
                 _chatCtrl?.Card(lead, "suggest", s.Title, "suggest:" + s.Id);
                 _chatCtrl?.PostMeta(lead);
             },
-            ReadPendingTool = async t =>
+            ReadPendingTool = t =>
             {
                 var pane = AllLeaves(t.Root).FirstOrDefault(p => p.IsTerminal && !string.IsNullOrEmpty(p.ClaudeSessionId));
-                if (pane == null) return null;
-                var data = await _transcripts.ReadAsync(new TranscriptKey(pane.Id, pane.ClaudeSessionId, ResolvePaneCwd(t, pane)));
-                var last = data?.Events.LastOrDefault(e => e.Kind is "work" or "skill");
-                return last == null ? null : ThreadController.DescribeTool(last.Verb, last.Target);
+                var cwd = pane == null ? null : ResolvePaneCwd(t, pane);
+                if (pane == null || string.IsNullOrEmpty(cwd)) return Task.FromResult<string?>(null);
+                var sid = pane.ClaudeSessionId!;
+                return Task.Run<string?>(() =>
+                {
+                    var path = ClaudeTranscripts.Locate(sid, cwd);
+                    if (path == null) return null;
+                    // The tail is enough: the call it is stopped on is the last one.
+                    using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                    var start = Math.Max(0, fs.Length - 256 * 1024);
+                    fs.Seek(start, SeekOrigin.Begin);
+                    using var sr = new StreamReader(fs);
+                    var lines = sr.ReadToEnd().Split('\n');
+                    var pending = ThreadController.PendingTool(start > 0 ? lines.Skip(1) : lines);
+                    return pending is { } p ? ThreadController.DescribeTool(p.Verb, p.Target) : null;
+                });
             },
             NotifyChat = (lead, line, full) =>
             {
