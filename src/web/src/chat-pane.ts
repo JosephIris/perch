@@ -74,6 +74,7 @@ export class ChatPane {
   private readonly threadCards = new Map<string, HTMLElement[]>();
   private readonly waitCards = new Map<string, HTMLElement[]>();
   private readonly suggestRows = new Map<string, HTMLElement>();
+  private readonly pushCards = new Map<string, HTMLElement>();
   /** Suggestions you pressed Start on, until the host says they started. */
   private readonly starting = new Map<string, number>();
 
@@ -201,6 +202,7 @@ export class ChatPane {
     this.threadCards.clear();
     this.waitCards.clear();
     this.suggestRows.clear();
+    this.pushCards.clear();
     this.turns = [];
     this.unresolved = [];
     this.last = null;
@@ -358,6 +360,17 @@ export class ChatPane {
         block.el.querySelector(".chat-suggest__rows")!.appendChild(row);
         this.fillSuggestRow(row);
         this.fillSuggestFoot(block.el);
+        return;
+      }
+      case "push": {
+        // The coordinator asks to push: what would go out, and Push / Cancel.
+        const id = e.tool.replace(/^push:/, "");
+        const card = el("div", "pc-card chat-push");
+        card.dataset.id = id;
+        card.dataset.title = e.text;
+        this.pushCards.set(id, card);
+        this.fillPushCard(card);
+        this.append({ kind: "push", el: card }, e, live);
         return;
       }
       case "notice": {
@@ -615,7 +628,61 @@ export class ChatPane {
     }, 60000);
   }
 
+  /** A push the coordinator asked for, kept current as it goes: Push /
+   *  Cancel while it waits for you, then pushing, pushed, failed or
+   *  cancelled. What goes out stays listed, so the record reads later. */
+  private fillPushCard(card: HTMLElement) {
+    const id = card.dataset.id ?? "";
+    const p = this.meta?.pushes?.find((x) => x.id === id);
+    const answering = card.dataset.answering === "1" && p?.state === "pending";
+    const sig = JSON.stringify([p?.state, p?.commits.length, p?.output, answering]);
+    if (card.dataset.sig === sig) return;
+    card.dataset.sig = sig;
+    const state = p?.state ?? "pending";
+    card.dataset.state = state;
+    const head = el("div", "pc-card__head");
+    const where = el("span", "pc-card__title");
+    if (p) where.append("Push ", el("code", "md-code", p.branch), " to ", el("code", "md-code", p.remote));
+    else where.textContent = card.dataset.title ?? "Push";
+    const badge = el("span", "chat-push__state", {
+      pending: "Waiting for you", pushing: "Pushing…", pushed: "Pushed", failed: "Push failed",
+      declined: "Cancelled", replaced: "Replaced by a newer request",
+    }[state] ?? state);
+    head.append(icon("push", "pc-icon chat-push__icon"), where, badge);
+    const kids: HTMLElement[] = [head];
+    if (p) {
+      const n = p.commits.length;
+      kids.push(el("div", "pc-card__line", `${n} commit${n === 1 ? "" : "s"}${p.newBranch ? ` — ${p.remote} doesn't have this branch yet` : ""}`));
+      const list = el("ul", "chat-push__commits");
+      for (const c of p.commits.slice(0, 8)) {
+        const m = c.match(/^([0-9a-f]{6,40})\s+(.*)$/);
+        const li = el("li");
+        if (m) li.append(el("span", "chat-push__sha", m[1].slice(0, 7)), el("span", undefined, m[2]));
+        else li.textContent = c;
+        list.appendChild(li);
+      }
+      if (n > 8) list.appendChild(el("li", "chat-push__more", `and ${n - 8} more`));
+      kids.push(list);
+      if (state === "failed" && p.output) kids.push(el("pre", "chat-push__out", p.output));
+    }
+    if (state === "pending" && p) {
+      const acts = el("div", "pc-card__actions");
+      const answer = (approve: boolean) => {
+        card.dataset.answering = "1";
+        send({ type: "push.answer", sessionId: this.sessionId, id, approve });
+        this.fillPushCard(card);
+      };
+      const push = button("pc-btn pc-btn--strong", "Push", () => answer(true));
+      const cancel = button("pc-btn", "Cancel", () => answer(false));
+      push.disabled = cancel.disabled = answering;
+      acts.append(push, cancel);
+      kids.push(acts);
+    }
+    card.replaceChildren(...kids);
+  }
+
   private refreshSuggestions() {
+    for (const card of this.pushCards.values()) this.fillPushCard(card);
     for (const row of this.suggestRows.values()) this.fillSuggestRow(row);
     for (const card of this.log.querySelectorAll<HTMLElement>(".chat-suggest")) this.fillSuggestFoot(card);
   }

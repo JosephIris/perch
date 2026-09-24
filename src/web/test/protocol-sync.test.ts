@@ -78,6 +78,7 @@ const EXPECTED_TYPES = [
   "projectchat.new",
   "projectchat.update",
   "projects.scan",
+  "push.answer",
   "ready",
   "render.pong",
   "session.close",

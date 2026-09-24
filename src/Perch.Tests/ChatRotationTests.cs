@@ -44,6 +44,18 @@ public class ChatRotationTests
         Assert.True(text.IndexOf("message 30") < text.IndexOf("message 40"), "oldest first");
     }
 
+    // The coordinator's shell commands pass Perch's push guard first, so a
+    // `git push` ends at the approval card, whatever the model remembers.
+    [Fact]
+    public void GuardSettings_RunPerchBeforeEveryShellCommand()
+    {
+        using var doc = System.Text.Json.JsonDocument.Parse(ChatController.GuardSettingsJson(@"C:\Perch\tools\perch.exe"));
+        var group = doc.RootElement.GetProperty("hooks").GetProperty("PreToolUse")[0];
+        Assert.Equal("Bash|PowerShell", group.GetProperty("matcher").GetString());
+        Assert.Equal("\"C:\\Perch\\tools\\perch.exe\" hooks claude coordinator-pre-bash",
+            group.GetProperty("hooks")[0].GetProperty("command").GetString());
+    }
+
     [Fact]
     public void Handoff_ClipsAVeryLongMessage()
     {

@@ -213,6 +213,7 @@ export type OutMessage =
   | { type: "projectchat.update"; sessionId: string; goal?: string; instructions?: string; forget?: number }
   | { type: "suggestion.start"; sessionId: string; id: string }
   | { type: "suggestion.dismiss"; sessionId: string; id: string }
+  | { type: "push.answer"; sessionId: string; id: string; approve: boolean }
   /* A thread, from a project chat's Overview. */
   | { type: "thread.transcript"; id: string }
   | { type: "thread.send"; id: string; text: string }
@@ -1086,7 +1087,7 @@ export type InboxStateName = "new" | "read" | "pending" | "done";
 /* One row of a project chat: "user" (what you wrote), "claude" (its prose,
  * Markdown), "tool" (a tool it used: `tool` is the name, `text` the target),
  * "notice" (from Perch: a thread finished, a thread asks) or "error". */
-export type ChatEntryView = { id: string; kind: "user" | "claude" | "tool" | "notice" | "error" | "thread" | "suggest"; text: string; tool: string; atMs: number };
+export type ChatEntryView = { id: string; kind: "user" | "claude" | "tool" | "notice" | "error" | "thread" | "suggest" | "push"; text: string; tool: string; atMs: number };
 
 /* A project chat's goal, instructions, memory notes and proposed threads. */
 export type ChatMetaMessage = {
@@ -1095,6 +1096,14 @@ export type ChatMetaMessage = {
   /* Who the Overview greets ("" until the host has read it). */
   userName?: string;
   suggestions: { id: string; title: string; threadId: string | null; summary?: string; dismissed?: boolean }[];
+  /* Pushes the coordinator asked for: what would go out and where each
+   * stands. Perch runs one only once the user approves its card. */
+  pushes?: PushView[];
+};
+
+export type PushView = {
+  id: string; remote: string; branch: string; commits: string[]; newBranch: boolean;
+  state: "pending" | "pushing" | "pushed" | "failed" | "declined" | "replaced"; output: string;
 };
 
 /* One task of a thread's Claude task list. */

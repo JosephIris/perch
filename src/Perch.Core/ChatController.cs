@@ -49,6 +49,8 @@ internal sealed class ChatController : IDisposable
         /// The chat's threads as `perch thread list` prints them — handed to
         /// a coordinator that starts a fresh conversation.
         public Func<Session, string>? ThreadList { get; init; }
+        /// The chat's push requests and where each stands (the push cards).
+        public Func<Session, object>? Pushes { get; init; }
     }
 
     /// How long the coordinator's conversation may grow (tokens it reads per
@@ -79,6 +81,9 @@ internal sealed class ChatController : IDisposable
         "Agent", "Task", "EnterWorktree", "ExitWorktree", "ScheduleWakeup",
         "CronCreate", "CronDelete", "Monitor", "Edit", "Write", "NotebookEdit",
     };
+    // (git push isn't allowed either — it isn't in AllowedTools, and a
+    // headless run refuses what it may not ask about. The guard hook in
+    // WriteGuardSettings refuses it first, with the way that works.)
 
     private sealed class Chat
     {
@@ -211,6 +216,7 @@ internal sealed class ChatController : IDisposable
             userName = _userName.IsCompletedSuccessfully ? _userName.Result : "",
             memory = ThreadController.ReadMemory(lead).ToArray(),
             suggestions = _h.Suggestions?.Invoke(lead) ?? Array.Empty<object>(),
+            pushes = _h.Pushes?.Invoke(lead) ?? Array.Empty<object>(),
         });
     }
 
@@ -328,6 +334,7 @@ internal sealed class ChatController : IDisposable
             ? new[] { "--resume", leaf.ClaudeSessionId! }
             : new[] { "--session-id", leaf.ClaudeSessionId! });
         args.Add("--append-system-prompt-file"); args.Add(promptPath);
+        if (WriteGuardSettings(lead) is { } guard) { args.Add("--settings"); args.Add(guard); }
         args.Add("--allowedTools"); args.AddRange(AllowedTools);
         args.Add("--disallowedTools"); args.AddRange(DeniedTools);
         // Ends the variadic list above, and is what a headless run without a
@@ -504,6 +511,40 @@ internal sealed class ChatController : IDisposable
         v = System.Text.RegularExpressions.Regex.Replace(v, @"^cd\s+(""[^""]*""|'[^']*'|\S+)\s*(&&|;)\s*", "");
         return v.Length > 160 ? v[..160] + "…" : v;
     }
+
+    /// The coordinator's hooks: before each shell command, `perch hooks
+    /// claude coordinator-pre-bash` refuses a push and says to use
+    /// `perch thread push` — so even a model that forgets the prompt ends up
+    /// at the approval card. Null when the perch tool isn't beside the app.
+    private static string? WriteGuardSettings(Session lead)
+    {
+        try
+        {
+            var perch = Path.Combine(AppContext.BaseDirectory, "tools", OperatingSystem.IsWindows() ? "perch.exe" : "perch");
+            if (!File.Exists(perch)) return null;
+            var dir = ThreadController.DirFor(lead);
+            Directory.CreateDirectory(dir);
+            var path = Path.Combine(dir, "coordinator-settings.json");
+            AtomicFile.WriteAllText(path, GuardSettingsJson(perch));
+            return path;
+        }
+        catch (Exception ex) { Log.Error("Chat.guard", ex); return null; }
+    }
+
+    internal static string GuardSettingsJson(string perchPath) => JsonSerializer.Serialize(new
+    {
+        hooks = new
+        {
+            PreToolUse = new[]
+            {
+                new
+                {
+                    matcher = "Bash|PowerShell",
+                    hooks = new[] { new { type = "command", command = $"\"{perchPath}\" hooks claude coordinator-pre-bash", timeout = 5 } },
+                },
+            },
+        },
+    });
 
     /// What a coordinator starting a fresh conversation is given: where the
     /// full history is, the last rows of the conversation, and the threads.

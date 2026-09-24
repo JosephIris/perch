@@ -340,6 +340,13 @@ internal static class HookHandler
                 if (GateEdit(pipeName, root)) return 0;
                 return StampGcloud(pipeName, root);
 
+            case "coordinator-pre-bash":
+                // A project chat's coordinator (a headless run; ChatController
+                // registers this through --settings) trying to push: refused,
+                // with the way that works — Perch asks the user and pushes.
+                GateCoordinatorPush(root);
+                return 0;
+
             case "pre-edit":
                 // Registered only in a team bot's pane, with an Edit/Write
                 // matcher: on a runs-only team the bot's own session does not
@@ -589,6 +596,41 @@ internal static class HookHandler
     ///
     /// Only for a pane with a team marker: an ordinary tab's `git push` is the
     /// user's own and stays exactly as permissioned as before.
+    internal const string CoordinatorPushReason =
+        "Pushing goes through the user: run `perch thread push` (or `perch thread push <branch> --remote <name>`). " +
+        "Perch shows them the commits that would go out and pushes when they approve, then tells you how it went. " +
+        "Don't run git push yourself and don't ask a thread to push.";
+
+    /// A `git push` (or `gh pr merge`) anywhere in a command line.
+    internal static bool LooksLikeRemotePush(string command) =>
+        !string.IsNullOrWhiteSpace(command) &&
+        System.Text.RegularExpressions.Regex.IsMatch(" " + command + " ", @"\bgit\s+(-C\s+\S+\s+)?push\b|\bgh\s+pr\s+merge\b");
+
+    internal static bool GateCoordinatorPush(JsonElement? root)
+    {
+        try
+        {
+            if (StringFrom(root, "tool_name") is not ("Bash" or "PowerShell")) return false;
+            if (!LooksLikeRemotePush(CommandOf(root))) return false;
+            Console.Out.Write(JsonSerializer.Serialize(new
+            {
+                hookSpecificOutput = new
+                {
+                    hookEventName = "PreToolUse",
+                    permissionDecision = "deny",
+                    permissionDecisionReason = CoordinatorPushReason,
+                },
+            }, JsonOpts));
+            Console.Out.Flush();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"perch hooks: coordinator push gate failed: {ex.Message}");
+            return false;
+        }
+    }
+
     internal static bool GatePush(JsonElement? root)
     {
         try

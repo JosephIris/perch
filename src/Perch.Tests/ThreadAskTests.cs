@@ -51,6 +51,18 @@ public class ThreadAskTests
     public void KickoffAsksForATaskListFirst() =>
         Assert.StartsWith("Start on the task in your brief. First write your plan as a task list", ThreadController.Kickoff);
 
+    // A push's branch and remote go on git's command line: names only,
+    // never an option or anything a shell would read.
+    [Theory]
+    [InlineData("main", true)]
+    [InlineData("feature/login-fix_2", true)]
+    [InlineData("--force", false)]
+    [InlineData("-f", false)]
+    [InlineData("main;rm", false)]
+    [InlineData("a..b", false)]
+    [InlineData("", false)]
+    public void PushNamesAreNamesOnly(string name, bool ok) => Assert.Equal(ok, ThreadController.SafeRefName(name));
+
     [Fact]
     public void FirstLine_SkipsALeadingHeading()
     {

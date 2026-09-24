@@ -546,18 +546,20 @@ internal static class Program
     ///   close <n>                                         → closes its tab (the branch stays)
     ///   suggest <title> --brief "…"                       → proposes a thread the user starts
     ///   remember <note…> | forget <k> | memory            → the chat's shared memory
+    ///   push [<branch>] [--remote <name>]                 → asks the user to approve a push; Perch runs it
     private static int CmdThread(string pipeName, string[] args)
     {
-        const string usage = "usage: perch thread new|suggest <title> [--brief \"…\" | --brief-file <path>] | send <n|lead> <text…> [--file <path>] | list | read <n> | close <n> | remember <note…> | forget <k> | memory";
+        const string usage = "usage: perch thread new|suggest <title> [--brief \"…\" | --brief-file <path>] | send <n|lead> <text…> [--file <path>] | list | read <n> | close <n> | remember <note…> | forget <k> | memory | push [<branch>] [--remote <name>]";
         if (args.Length < 2) { Console.Error.WriteLine(usage); return 2; }
         var op = args[1];
-        string? brief = null, briefFile = null, file = null;
+        string? brief = null, briefFile = null, file = null, remote = null;
         var rest = new List<string>();
         for (int i = 2; i < args.Length; i++)
         {
             if (args[i] == "--brief" && i + 1 < args.Length) brief = args[++i];
             else if (args[i] == "--brief-file" && i + 1 < args.Length) briefFile = args[++i];
             else if (args[i] == "--file" && i + 1 < args.Length) file = args[++i];
+            else if (args[i] == "--remote" && i + 1 < args.Length) remote = args[++i];
             else rest.Add(args[i]);
         }
         if (briefFile != null)
@@ -601,6 +603,12 @@ internal static class Program
                 target = rest[0];
                 break;
             case "list":
+                break;
+            case "push":
+                // Branch and remote default to the project's checked-out
+                // branch and origin; the title field carries the remote.
+                target = rest.Count > 0 ? rest[0] : null;
+                title = remote;
                 break;
             default:
                 Console.Error.WriteLine(usage);

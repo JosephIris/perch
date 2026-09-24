@@ -452,6 +452,14 @@ internal sealed record ThreadActMsg
     public bool? Resolved { get; init; }
 }
 
+/// The user's answer to a push card: push it, or don't.
+internal sealed record PushAnswerMsg
+{
+    public required Guid SessionId { get; init; }
+    public required string Id { get; init; }
+    public bool Approve { get; init; }
+}
+
 /// Start a proposed thread ("all" starts every one not yet started).
 internal sealed record SuggestionStartMsg
 {

@@ -8993,6 +8993,22 @@ body.show-inbox .inbox { display: flex; }
 .chat-wait__done { font-size: 12px; color: var(--color-text-tertiary); }
 .pc-btn--sm { height: 26px; padding: 0 var(--sp-8); font-size: 12px; }
 
+/* A push the coordinator asked for: where, what goes out, Push / Cancel. */
+.chat-push .pc-card__title { display: inline-flex; align-items: center; gap: 6px; flex: 1 1 auto; }
+.chat-push__icon { color: var(--color-accent); }
+.chat-push__state { flex: 0 0 auto; font-size: 12px; color: var(--color-text-tertiary); }
+.chat-push[data-state="pending"] .chat-push__state { color: var(--color-state-waiting); }
+.chat-push[data-state="pushing"] .chat-push__state { color: var(--color-state-working); }
+.chat-push[data-state="pushed"] .chat-push__state, .chat-push[data-state="pushed"] .chat-push__icon { color: var(--color-state-done); }
+.chat-push[data-state="failed"] .chat-push__state, .chat-push[data-state="failed"] .chat-push__icon { color: var(--color-state-permission); }
+.chat-push[data-state="declined"], .chat-push[data-state="replaced"] { opacity: 0.6; }
+.chat-push__commits { list-style: none; margin: 0; padding: 0 0 0 28px; display: flex; flex-direction: column; gap: 2px; font-size: 13px; color: var(--color-text-secondary); }
+.chat-push__commits li { display: flex; gap: var(--sp-8); min-width: 0; }
+.chat-push__commits li span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-push__sha { flex: 0 0 auto; font-family: var(--font-mono); font-size: 12px; color: var(--color-text-tertiary); }
+.chat-push__more { color: var(--color-text-tertiary); }
+.chat-push__out { margin: 0 0 0 28px; padding: var(--sp-8) var(--sp-12); max-height: 160px; overflow: auto; white-space: pre-wrap; font-family: var(--font-mono); font-size: 12px; color: var(--color-text-secondary); background: var(--pc-fill); border-radius: var(--r-card); }
+
 /* "Start new threads": proposed threads, each with Start, and all at once. */
 .chat-suggest { padding: 0; gap: 0; background: transparent; }
 .chat-suggest__head { padding: var(--sp-12) var(--sp-16); font-size: 13px; color: var(--color-text-tertiary); border-bottom: 1px solid var(--color-stroke); }

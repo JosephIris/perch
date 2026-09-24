@@ -56,6 +56,10 @@ internal sealed class ThreadController
         /// What a thread on a permission prompt asks to do: its transcript's
         /// last tool call, in words. Null when it can't be read.
         public Func<Session, Task<string?>>? ReadPendingTool { get; init; }
+        /// The coordinator asked to push: a card for the user to approve.
+        public Action<Session, PushRequest>? PushRequested { get; init; }
+        /// A push request moved on (approved, pushed, failed, declined).
+        public Action<Session>? PushUpdated { get; init; }
     }
 
     /// What a project chat and its threads may run without a permission
@@ -140,7 +144,8 @@ internal sealed class ThreadController
 
         ## How to work
         - You can read and search this repo, look at git, and search the web, but you can't edit files or run other commands. Anything that changes something is a thread's job, and so is anything substantial. Give independent pieces separate threads so they run in parallel.
-        - Threads commit on their own branches. Assembling the result is yours: when the user asks you to merge (or asked you to finish the whole job), check the thread's work (`git log`, `git diff <here>...<branch>`) and merge its branch into the branch checked out here with `git merge --no-ff <branch>`. Tell the user which order to merge in when it matters. Never push.
+        - Threads commit on their own branches. Assembling the result is yours: when the user asks you to merge (or asked you to finish the whole job), check the thread's work (`git log`, `git diff <here>...<branch>`) and merge its branch into the branch checked out here with `git merge --no-ff <branch>`. Tell the user which order to merge in when it matters.
+        - Pushing: when the user asks you to push, run `perch thread push` (the branch checked out here, to origin; or `perch thread push <branch> [--remote <name>]`). Perch shows the user a card with the commits that would go out; if they approve, Perch pushes and tells you how it went. That is the only way to push: never run `git push`, and never ask a thread to push.
         - If a merge clashes, run `git merge --abort` and send that thread: `perch thread send <n> "Merge <this branch> into your branch, resolve the conflicts, commit, and report."` When it reports, merge again.
         - Keep the user posted briefly and lead with results. Messages starting with `[Perch` come from Perch, not from the user; several may arrive in one turn with what the user wrote.
 
@@ -287,6 +292,10 @@ internal sealed class ThreadController
                 _h.CloseSession(t.Id);
                 return $"ok\nClosed thread {t.ThreadNumber}. Its branch {t.WorktreeBranch} and its commits are kept.\n";
             }
+            case "push":
+                return fromThread
+                    ? "error\nOnly the project chat can ask to push. Ask it: perch thread send lead \"…\""
+                    : await RequestPushAsync(lead, (m.Target ?? "").Trim(), (m.Title ?? "").Trim());
             default:
                 return "error\nUnknown thread command.";
         }
@@ -391,6 +400,143 @@ internal sealed class ThreadController
         if (all.FirstOrDefault(x => x.Id == id) is not { ThreadId: null } s) return;
         s.Dismissed = true;
         SaveSuggestions(lead, all);
+    }
+
+    // ---- pushing -----------------------------------------------------------
+    // The coordinator can't push (a headless run can't ask permission, and
+    // auto mode's check rightly stops a Claude pushing on its own say-so).
+    // It asks Perch instead: the user sees what would go out and approves it
+    // in the chat, and Perch runs the push as the user.
+
+    internal sealed class PushRequest
+    {
+        public string Id { get; set; } = "";
+        public string Remote { get; set; } = "origin";
+        public string Branch { get; set; } = "";
+        /// What goes out: `git log --oneline` of the commits the remote lacks.
+        public List<string> Commits { get; set; } = new();
+        /// The remote doesn't have the branch yet.
+        public bool NewBranch { get; set; }
+        /// pending → pushing → pushed | failed; or declined.
+        public string State { get; set; } = "pending";
+        public string Output { get; set; } = "";
+        public long AtMs { get; set; }
+    }
+
+    /// A branch or remote name as git takes it — and never an option.
+    internal static bool SafeRefName(string s) =>
+        s.Length is > 0 and < 200 && !s.StartsWith('-') && !s.Contains("..") &&
+        System.Text.RegularExpressions.Regex.IsMatch(s, @"^[A-Za-z0-9._/\-]+$");
+
+    private static string PushesPath(Session lead) => Path.Combine(DirFor(lead), "pushes.json");
+
+    public List<PushRequest> LoadPushes(Session lead)
+    {
+        try
+        {
+            var path = PushesPath(lead);
+            if (File.Exists(path))
+                return System.Text.Json.JsonSerializer.Deserialize<List<PushRequest>>(File.ReadAllText(path)) ?? new();
+        }
+        catch (Exception ex) { Log.Error("Thread.pushes", ex); }
+        return new();
+    }
+
+    private static void SavePushes(Session lead, List<PushRequest> all)
+    {
+        Directory.CreateDirectory(DirFor(lead));
+        AtomicFile.WriteAllText(PushesPath(lead), System.Text.Json.JsonSerializer.Serialize(all));
+    }
+
+    private async Task<string> RequestPushAsync(Session lead, string branch, string remote)
+    {
+        var proj = lead.ProjectId is Guid pid ? _h.ProjectById(pid) : null;
+        if (proj == null || !Directory.Exists(proj.Path)) return "error\nThis project chat's project folder is gone.";
+        if (remote.Length == 0) remote = "origin";
+        if (branch.Length == 0)
+        {
+            var (code, head, _) = await ProcRunner.RunAsync("git", "rev-parse --abbrev-ref HEAD", "thread.push", workingDir: proj.Path, timeoutMs: 10000);
+            branch = code == 0 ? head.Trim() : "";
+            if (branch is "" or "HEAD") return "error\nThe project isn't on a branch; name one: perch thread push <branch>";
+        }
+        if (!SafeRefName(branch) || !SafeRefName(remote)) return "error\nThat isn't a branch or remote name git would take.";
+
+        var (lc, log, _) = await ProcRunner.RunAsync("git", $"log --oneline --no-decorate -n 30 {remote}/{branch}..{branch}", "thread.push",
+            workingDir: proj.Path, timeoutMs: 15000);
+        var newBranch = lc != 0;
+        if (newBranch)
+        {
+            // The remote doesn't know the branch: show its latest commits.
+            var (bc, blog, berr) = await ProcRunner.RunAsync("git", $"log --oneline --no-decorate -n 10 {branch}", "thread.push", workingDir: proj.Path, timeoutMs: 15000);
+            if (bc != 0) return $"error\nNo branch {branch} here: {berr.Trim()}";
+            log = blog;
+        }
+        var commits = log.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0).ToList();
+        if (commits.Count == 0) return $"ok\nNothing to push: {remote} already has everything on {branch}.\n";
+
+        var all = LoadPushes(lead);
+        // One open request per branch: asking again replaces the old card's content.
+        foreach (var old in all.Where(p => p.State == "pending" && p.Branch == branch && p.Remote == remote)) old.State = "replaced";
+        var req = new PushRequest
+        {
+            Id = Guid.NewGuid().ToString("N")[..10], Remote = remote, Branch = branch, Commits = commits,
+            NewBranch = newBranch, AtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        };
+        all.Add(req);
+        SavePushes(lead, all);
+        _h.PushRequested?.Invoke(lead, req);
+        Log.Info("Thread.push.ask", $"lead={lead.Id:N} {remote}/{branch} commits={commits.Count} new={newBranch}");
+        return $"ok\nAsked the user to approve pushing {branch} to {remote} ({commits.Count} commit{(commits.Count == 1 ? "" : "s")}{(newBranch ? ", a new branch there" : "")}). " +
+               "Perch runs the push if they approve and tells you how it went. End your turn now, and don't push any other way.\n";
+    }
+
+    /// The user answered a push card.
+    public async Task AnswerPushAsync(Session lead, string id, bool approve)
+    {
+        var all = LoadPushes(lead);
+        var req = all.FirstOrDefault(p => p.Id == id);
+        if (req == null || req.State != "pending") return;
+        var proj = lead.ProjectId is Guid pid ? _h.ProjectById(pid) : null;
+        if (!approve)
+        {
+            req.State = "declined";
+            SavePushes(lead, all);
+            _h.PushUpdated?.Invoke(lead);
+            TellLead(lead, $"The user declined pushing {req.Branch} to {req.Remote}.", $"The user declined pushing {req.Branch} to {req.Remote}. Don't push; ask them if it's unclear why.");
+            return;
+        }
+        req.State = "pushing";
+        SavePushes(lead, all);
+        _h.PushUpdated?.Invoke(lead);
+        int code; string stdout, stderr;
+        if (proj == null || !Directory.Exists(proj.Path)) (code, stdout, stderr) = (-1, "", "The project folder is gone.");
+        else
+        {
+            try
+            {
+                // As the user, with their credentials; never waiting on a prompt
+                // nobody can see.
+                (code, stdout, stderr) = await ProcRunner.RunAsync("git", $"push {req.Remote} {req.Branch}", "thread.push",
+                    workingDir: proj.Path, timeoutMs: 180000,
+                    env: new Dictionary<string, string?> { ["GIT_TERMINAL_PROMPT"] = "0" });
+            }
+            catch (Exception ex) { (code, stdout, stderr) = (-1, "", ex.Message); }
+        }
+        var output = (stderr + "\n" + stdout).Trim();
+        if (output.Length > 800) output = output[^800..];
+        all = LoadPushes(lead);
+        req = all.FirstOrDefault(p => p.Id == id) ?? req;
+        req.State = code == 0 ? "pushed" : "failed";
+        req.Output = output;
+        SavePushes(lead, all);
+        _h.PushUpdated?.Invoke(lead);
+        Log.Info("Thread.push", $"lead={lead.Id:N} {req.Remote}/{req.Branch} code={code}");
+        if (code == 0)
+            TellLead(lead, $"Pushed {req.Branch} to {req.Remote}.",
+                $"The user approved the push and Perch pushed {req.Branch} to {req.Remote}. git said:\n{output}");
+        else
+            TellLead(lead, $"The push of {req.Branch} to {req.Remote} failed.",
+                $"The user approved the push, but `git push {req.Remote} {req.Branch}` failed (exit {code}). git said:\n{output}\nTell the user what went wrong and what to do; if it needs a fix (e.g. the remote moved on), handle it and ask to push again.");
     }
 
     // ---- memory ------------------------------------------------------------

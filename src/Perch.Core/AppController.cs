@@ -428,6 +428,12 @@ internal sealed partial class AppController
                 _chatCtrl?.Card(lead, "suggest", s.Title, "suggest:" + s.Id);
                 _chatCtrl?.PostMeta(lead);
             },
+            PushRequested = (lead, req) =>
+            {
+                _chatCtrl?.Card(lead, "push", $"Push {req.Branch} to {req.Remote}", "push:" + req.Id);
+                _chatCtrl?.PostMeta(lead);
+            },
+            PushUpdated = lead => _chatCtrl?.PostMeta(lead),
             ReadPendingTool = t =>
             {
                 var pane = AllLeaves(t.Root).FirstOrDefault(p => p.IsTerminal && !string.IsNullOrEmpty(p.ClaudeSessionId));
@@ -475,6 +481,9 @@ internal sealed partial class AppController
                 }).ToArray(),
             PromptPath = lead => _threadCtrl.WriteCoordinatorPrompt(lead),
             ThreadList = lead => _threadCtrl.ListText(lead),
+            Pushes = lead => _threadCtrl.LoadPushes(lead)
+                .Select(p => new { id = p.Id, remote = p.Remote, branch = p.Branch, commits = p.Commits, newBranch = p.NewBranch, state = p.State, output = p.Output })
+                .ToArray(),
             SetWorking = (lead, leaf, working) =>
             {
                 leaf.AgentState = working ? AgentState.Working : AgentState.Done;
@@ -889,6 +898,10 @@ internal sealed partial class AppController
         .Add<ProjectChatUpdateMsg>("projectchat.update", OnProjectChatUpdate)
         .Add<SuggestionStartMsg>("suggestion.start", OnSuggestionStart)
         .Add<SuggestionStartMsg>("suggestion.dismiss", OnSuggestionDismiss)
+        .Add<PushAnswerMsg>("push.answer", m =>
+        {
+            if (SessionById(m.SessionId) is { IsLead: true } lead) _ = _threadCtrl.AnswerPushAsync(lead, m.Id, m.Approve);
+        })
         .Add<ThreadActMsg>("thread.transcript", m => _ = PostThreadTranscriptAsync(m.Id))
         .Add<ThreadActMsg>("thread.send", OnThreadSend)
         .Add<ThreadActMsg>("thread.stop", OnThreadStop)
