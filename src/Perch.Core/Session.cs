@@ -130,6 +130,10 @@ internal sealed class Session : INotifyPropertyChanged
     public string ChatGoal { get; set; } = "";
     public string ChatInstructions { get; set; } = "";
 
+    /// On a project chat: the model its coordinator last ran on, shown under
+    /// the composer (kept so it shows before the first turn after a restart).
+    public string ChatModel { get; set; } = "";
+
     /// On a thread: marked done (by the user, or once its work is merged);
     /// it drops to the Resolved group and stops asking for attention.
     public bool ThreadResolved { get; set; }
@@ -145,6 +149,10 @@ internal sealed class Session : INotifyPropertyChanged
     [JsonIgnore] public int ThreadTasksDone { get; set; }
     [JsonIgnore] public int ThreadTasksTotal { get; set; }
     [JsonIgnore] public string ThreadTaskNow { get; set; } = "";
+
+    /// On a thread stopped on a permission prompt: what it asks to do ("Run
+    /// python -m pytest"), from its transcript's pending tool call. "" otherwise.
+    [JsonIgnore] public string ThreadAsk { get; set; } = "";
 
     // ----- Incoming pair note (transient, like NotificationText) -----------
     // The last cross-session message that ARRIVED at this tab (or, warn level,

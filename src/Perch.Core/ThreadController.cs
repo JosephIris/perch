@@ -53,6 +53,9 @@ internal sealed class ThreadController
         public Action<Session, Session>? ThreadStarted { get; init; }
         /// The coordinator proposed a thread instead of starting it.
         public Action<Session, Suggestion>? Suggested { get; init; }
+        /// What a thread on a permission prompt asks to do: its transcript's
+        /// last tool call, in words. Null when it can't be read.
+        public Func<Session, Task<string?>>? ReadPendingTool { get; init; }
     }
 
     /// What a project chat and its threads may run without a permission
@@ -483,6 +486,8 @@ internal sealed class ThreadController
     /// A status hook from a tab's agent (before AppController applies it).
     public void OnAgentStatus(Session sess, StatusMessage msg)
     {
+        if (msg.State != "permission") sess.ThreadAsk = "";
+        else if (sess.ThreadOf != null) _ = ReadAskAsync(sess);
         switch (msg.State)
         {
             case "working":
@@ -509,6 +514,36 @@ internal sealed class ThreadController
                 Delivery.OnFree(sess.Id);
                 break;
         }
+    }
+
+    /// A thread stopped on a permission prompt: say what it asks for. The
+    /// tool call is in its transcript before the prompt shows; a moment's
+    /// wait lets the line reach the disk.
+    private async Task ReadAskAsync(Session thread)
+    {
+        await Task.Delay(400);
+        string? ask = null;
+        try { ask = _h.ReadPendingTool == null ? null : await _h.ReadPendingTool(thread); }
+        catch (Exception ex) { Log.Error("Thread.ask", ex); }
+        var stillAsking = PaneTree.AllLeaves(thread.Root).Any(p => p.IsTerminal && p.AgentState == AgentState.Permission);
+        if (!stillAsking || string.IsNullOrEmpty(ask) || ask == thread.ThreadAsk) return;
+        thread.ThreadAsk = ask;
+        _h.PushState();
+    }
+
+    /// A tool call in words, for "It asks to …". Pure.
+    internal static string DescribeTool(string verb, string target)
+    {
+        target = (target ?? "").Trim();
+        return verb switch
+        {
+            "Bash" or "PowerShell" => target.Length > 0 ? $"Run {target}" : "Run a command",
+            "Edit" or "MultiEdit" or "Write" or "NotebookEdit" => target.Length > 0 ? $"Edit {target}" : "Edit a file",
+            "Read" => target.Length > 0 ? $"Read {target}" : "Read a file",
+            "WebFetch" => target.Length > 0 ? $"Fetch {target}" : "Fetch a web page",
+            "WebSearch" => target.Length > 0 ? $"Search the web for {target}" : "Search the web",
+            _ => target.Length > 0 ? $"Use {verb}: {target}" : $"Use {verb}",
+        };
     }
 
     /// The idle watchdog decided a silent Claude has finished its turn. Only

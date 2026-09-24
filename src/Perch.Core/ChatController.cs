@@ -90,20 +90,46 @@ internal sealed class ChatController : IDisposable
         _userName = Task.Run(ReadUserNameAsync);
     }
 
-    /// Who the Overview greets: the first name git knows the user by, else
-    /// the account name. Read once, off the UI thread.
+    /// Who the Overview greets: the name on the user's Claude account (what
+    /// Claude's own apps call them), else the name git knows them by, else
+    /// the OS account. Read once, off the UI thread.
     private readonly Task<string> _userName;
 
     private static async Task<string> ReadUserNameAsync()
     {
-        var name = "";
+        var name = ClaudeAccountName() ?? "";
+        if (name.Length == 0)
+        {
+            try
+            {
+                var (code, stdout, _) = await ProcRunner.RunAsync("git", "config --global user.name", "chat.username", timeoutMs: 5000);
+                // A machine where agents commit as "Claude" is common; that's
+                // not who is reading.
+                if (code == 0 && !stdout.Trim().Equals("claude", StringComparison.OrdinalIgnoreCase)) name = stdout.Trim();
+            }
+            catch { }
+        }
+        return FirstName(name.Length > 0 ? name : Environment.UserName);
+    }
+
+    /// `oauthAccount.displayName` from Claude Code's ~/.claude.json (or the
+    /// one under CLAUDE_CONFIG_DIR); null when there is none.
+    internal static string? ClaudeAccountName(string? path = null)
+    {
         try
         {
-            var (code, stdout, _) = await ProcRunner.RunAsync("git", "config --global user.name", "chat.username", timeoutMs: 5000);
-            if (code == 0) name = stdout.Trim();
+            if (path == null)
+            {
+                var configDir = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR");
+                path = string.IsNullOrWhiteSpace(configDir)
+                    ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude.json")
+                    : Path.Combine(configDir, ".claude.json");
+            }
+            if (!File.Exists(path)) return null;
+            using var doc = JsonDocument.Parse(File.ReadAllText(path));
+            return doc.RootElement.TryGetProperty("oauthAccount", out var acct) && Str(acct, "displayName") is { Length: > 0 } n ? n.Trim() : null;
         }
-        catch { }
-        return FirstName(name.Length > 0 ? name : Environment.UserName);
+        catch { return null; }
     }
 
     internal static string FirstName(string name)
@@ -120,7 +146,7 @@ internal sealed class ChatController : IDisposable
         if (_h.ChatByPane(paneId) is not { } found) return null;
         (lead, leaf) = found;
         if (!_chats.TryGetValue(paneId, out var chat))
-            _chats[paneId] = chat = new Chat { PaneId = paneId };
+            _chats[paneId] = chat = new Chat { PaneId = paneId, Model = lead.ChatModel };
         EnsureIpc(chat, lead);
         return chat;
     }
@@ -333,7 +359,12 @@ internal sealed class ChatController : IDisposable
                     var err = resultError;
                     _h.Ui.Post(() =>
                     {
-                        if (model != null && model != chat.Model) { chat.Model = model; Status(chat); }
+                        if (model != null && model != chat.Model)
+                        {
+                            chat.Model = lead.ChatModel = model;
+                            _h.Save();
+                            Status(chat);
+                        }
                         foreach (var (kind, text, tool) in rows) Append(chat, lead, kind, text, tool);
                         if (err != null) Append(chat, lead, "error", err);
                     });

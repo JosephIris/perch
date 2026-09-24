@@ -19,7 +19,7 @@ import { send } from "./bridge.js";
 import type { SessionView, ThreadEventView, ThreadTaskView, ChatMetaMessage } from "./bridge.js";
 import { renderMarkdown } from "./md.js";
 import {
-  GROUPS, groupOf, statusLine, lastActiveMs, byRecent, summarizeWork,
+  GROUPS, groupOf, statusLine, askText, lastActiveMs, byRecent, summarizeWork,
   el, button, icon, ring, setRing, ageLabel, setAge, reducedMotion, type ThreadGroup,
 } from "./thread-ui.js";
 import { elapsedSpan } from "./elapsed.js";
@@ -635,7 +635,7 @@ class ThreadDetail {
 
   private renderTasks() {
     const t = this.thread;
-    const waiting = t && groupOf(t) === "waiting" ? (t.notification?.text || (t.agentState === "permission" ? "a permission" : "an answer")) : "";
+    const waiting = t && groupOf(t) === "waiting" ? (t.agentState === "permission" ? askText(t) : (t.notification?.text || "an answer")) : "";
     const sig = JSON.stringify([this.tasks, waiting]);
     if (sig === this.tasksSig) return;
     this.tasksSig = sig;
@@ -675,7 +675,7 @@ class ThreadDetail {
    *  here, or a question to answer in the box below. */
   private renderWait(t: SessionView, g: ThreadGroup) {
     const permission = g === "waiting" && t.agentState === "permission";
-    const text = t.notification?.text || t.activityDetail || "";
+    const text = permission ? askText(t) : (t.notification?.text || "");
     if (this.answered && (!permission || Date.now() - this.answered.at > 4000 || this.answered.text !== text)) this.answered = null;
     const sig = g === "waiting" ? `${t.agentState}|${text}|${this.answered ? 1 : 0}` : "";
     if (sig === this.waitSig) return;
@@ -686,7 +686,7 @@ class ThreadDetail {
     const head = el("div", "pc-card__head");
     head.append(icon("hand", "pc-icon pc-card__hand"),
       el("span", "pc-card__title", permission ? "It needs your permission" : "It's waiting for your answer"));
-    const body = el("div", "pc-card__line", permission ? (text || "Open its terminal to see what it asks.") : (text || "Reply in the box below."));
+    const body = el("div", "pc-card__line", permission ? `It asks to: ${text}` : (text || "Reply in the box below."));
     this.waitEl.replaceChildren(head, body);
     if (permission) {
       const acts = el("div", "pc-card__actions");

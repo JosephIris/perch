@@ -719,6 +719,12 @@ export class Workspace {
         // Push initial state so the freshly-created pane header reflects
         // whatever the host already knows.
         pane.applyLeafView(node);
+        // …and a project chat its tab and threads. Without this a chat
+        // mounted after the last state push (a reload, a tab switch in a
+        // quiet moment) shows no threads until something else changes.
+        if (pane instanceof ChatPane)
+          pane.setSession(this.sessions.find((s) => s.id === stage.sessionId), this.sessions.filter((s) => s.threadOf === stage.sessionId));
+        if (pane instanceof ThreadsPane) pane.setThreads(this.sessions.filter((s) => s.threadOf === stage.sessionId));
         // Make the pane a drag-to-rearrange source (header) + drop target.
         this.wirePaneDnd(pane);
         // Fade in. The class triggers the @keyframes pane-enter animation

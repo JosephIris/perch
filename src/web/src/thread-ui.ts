@@ -57,7 +57,7 @@ export function statusLine(t: SessionView): { text: string; blocked: boolean } {
   switch (g) {
     case "waiting":
       if (t.agentState === "permission")
-        return { text: t.notification?.text || t.activityDetail || "Needs your permission", blocked: true };
+        return { text: askText(t), blocked: true };
       return { text: t.notification?.text || report || "Waiting for you", blocked: false };
     case "working":
       return { text: t.threadTaskNow || t.activityDetail || "Working", blocked: false };
@@ -66,6 +66,12 @@ export function statusLine(t: SessionView): { text: string; blocked: boolean } {
     default:
       return { text: report || (g === "resolved" ? "Resolved" : "No report yet"), blocked: false };
   }
+}
+
+/** What a thread on a permission prompt wants: the tool call it is stopped
+ *  on when Perch could read it, else what its notification says. */
+export function askText(t: SessionView): string {
+  return t.threadAsk || t.notification?.text || t.activityDetail || "Needs your permission";
 }
 
 /** When a thread last did something: its last report, its turn starting or
@@ -189,14 +195,14 @@ const ICON_PATHS: Record<string, string> = {
   crumb: "M6.5 4.5L10 8l-3.5 3.5",
   expand: "M9.5 3.5h3v3M12.5 3.5L8.5 7.5M6.5 12.5h-3v-3M3.5 12.5l4-4",
   enter: "M12.5 3.5v5a1.5 1.5 0 0 1-1.5 1.5H4M6.5 7.5L4 10l2.5 2.5",
-  merge: "M5 3.5v9M5 6.5c0 2.5 1.5 3 6 3M11 12.5v-3",
+  merge: "M5 5.5v5M5 5.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM5 13.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM11 7.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM11 7.5c0 2.5-6 1-6 3",
   list: "M6.5 4.5h6M6.5 8h6M6.5 11.5h6M3.5 4.5h.01M3.5 8h.01M3.5 11.5h.01",
   bubble: "M3 4.5A1.5 1.5 0 0 1 4.5 3h7A1.5 1.5 0 0 1 13 4.5v5a1.5 1.5 0 0 1-1.5 1.5H7l-3 2.5V11h.5A1.5 1.5 0 0 1 3 9.5z",
   hand: "M6 8V3.8a1 1 0 0 1 2 0V7.5M8 7V3a1 1 0 0 1 2 0v4.5M10 7.5V4.5a1 1 0 0 1 2 0V10a4 4 0 0 1-4 4h-.5a4 4 0 0 1-3.3-1.8L2.8 10a1 1 0 0 1 1.6-1.2L6 10.2",
   reply: "M6.5 4.5L3.5 7.5l3 3M3.5 7.5H10a2.5 2.5 0 0 1 2.5 2.5v1.5",
   copy: "M5.5 5.5V4a1.5 1.5 0 0 1 1.5-1.5h5A1.5 1.5 0 0 1 13.5 4v5a1.5 1.5 0 0 1-1.5 1.5h-1.5M3.5 5.5h5A1.5 1.5 0 0 1 10 7v5a1.5 1.5 0 0 1-1.5 1.5h-5A1.5 1.5 0 0 1 2 12V7a1.5 1.5 0 0 1 1.5-1.5z",
   stop: "M5 5h6v6H5z",
-  gear: "M8 10a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4",
+  gear: "M6.9 1.8h2.2l.35 1.6 1.2.7 1.55-.5 1.1 1.9-1.2 1.1v1.4l1.2 1.1-1.1 1.9-1.55-.5-1.2.7-.35 1.6H6.9l-.35-1.6-1.2-.7-1.55.5-1.1-1.9 1.2-1.1V7.3L2.7 6.2l1.1-1.9 1.55.5 1.2-.7zM8 10a2 2 0 1 0 0-4 2 2 0 0 0 0 4z",
 };
 
 export function icon(name: keyof typeof ICON_PATHS | string, cls = "pc-icon"): SVGSVGElement {

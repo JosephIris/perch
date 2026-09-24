@@ -8971,6 +8971,7 @@ body.show-inbox .inbox { display: flex; }
 .pc-card__title { font-size: var(--pc-prose-size); color: var(--color-text-primary); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pc-card__line { padding-left: 28px; font-size: 13px; line-height: 1.5; color: var(--color-text-secondary); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .pc-card__actions { padding-left: 28px; display: flex; flex-wrap: wrap; gap: var(--sp-8); margin-top: var(--sp-4); }
+.pc-card__actions > .pc-btn--quiet:first-child { margin-left: calc(-1 * var(--sp-12)); }
 .chat-wait { transition: opacity var(--dur-normal) var(--ease-entry); }
 .chat-wait--done { opacity: 0.6; }
 .chat-wait--done .pc-card__hand { color: var(--color-text-tertiary); }
@@ -9130,7 +9131,7 @@ body.show-inbox .inbox { display: flex; }
   border: 1px solid var(--color-stroke-strong); border-radius: 999px;
   font-size: 12px; color: var(--color-text-secondary); font-variant-numeric: tabular-nums;
 }
-.pc-cap--bare { padding: 0 5px; }
+.pc-cap--bare { padding: 0 5px; gap: 0; }
 .pc-cap--tasks { color: var(--color-text-primary); }
 .pc-cap--tasks .pc-ring__arc { stroke: var(--color-text-primary); }
 [data-group="working"] .pc-cap--tasks .pc-ring__arc { stroke: var(--color-state-working); }

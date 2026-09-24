@@ -428,6 +428,14 @@ internal sealed partial class AppController
                 _chatCtrl?.Card(lead, "suggest", s.Title, "suggest:" + s.Id);
                 _chatCtrl?.PostMeta(lead);
             },
+            ReadPendingTool = async t =>
+            {
+                var pane = AllLeaves(t.Root).FirstOrDefault(p => p.IsTerminal && !string.IsNullOrEmpty(p.ClaudeSessionId));
+                if (pane == null) return null;
+                var data = await _transcripts.ReadAsync(new TranscriptKey(pane.Id, pane.ClaudeSessionId, ResolvePaneCwd(t, pane)));
+                var last = data?.Events.LastOrDefault(e => e.Kind is "work" or "skill");
+                return last == null ? null : ThreadController.DescribeTool(last.Verb, last.Target);
+            },
             NotifyChat = (lead, line, full) =>
             {
                 if (!AllLeaves(lead.Root).Any(p => p.IsChat)) return false;

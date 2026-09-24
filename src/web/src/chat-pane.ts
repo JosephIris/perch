@@ -25,7 +25,7 @@ import type { PaneTreeView, SessionView, ChatEntryView, ChatMetaMessage, ThreadE
 import { renderMarkdown } from "./md.js";
 import { ChatOverview, divider } from "./chat-overview.js";
 import {
-  groupOf, statusLine, splitThreadRefs, summarizeWork, modelLabel, dayLabel, dayKey,
+  groupOf, statusLine, askText, splitThreadRefs, summarizeWork, modelLabel, dayLabel, dayKey,
   el, button, icon, ring, setRing, threadChip, fillChip, hidePop, reducedMotion,
 } from "./thread-ui.js";
 import { copyText } from "./clipboard.js";
@@ -70,7 +70,7 @@ export class ChatPane {
   private turn: Turn | null = null;
   private lastDay = "";
   /** Claude's rows naming "#n" before that thread was known: redrawn once it is. */
-  private unresolved: { el: HTMLElement; text: string }[] = [];
+  private unresolved: { el: HTMLElement; text: string; notice?: boolean }[] = [];
   private readonly threadCards = new Map<string, HTMLElement[]>();
   private readonly waitCards = new Map<string, HTMLElement[]>();
   private readonly suggestRows = new Map<string, HTMLElement>();
@@ -181,10 +181,11 @@ export class ChatPane {
     for (const chip of this.log.querySelectorAll<HTMLElement>(".pc-chip")) fillChip(chip, this.byId(chip.dataset.threadId ?? ""));
     // Rows that named a thread before it was known.
     if (this.unresolved.length && threads.some((t) => !known.has(t.threadNumber))) {
-      const still: { el: HTMLElement; text: string }[] = [];
+      const still: { el: HTMLElement; text: string; notice?: boolean }[] = [];
       for (const r of this.unresolved) {
-        r.el.replaceChildren(renderMarkdown(r.text, this.deco));
-        if (this.hasUnknownRef(r.text)) still.push(r);
+        if (r.notice) { r.el.replaceChildren(); this.noticeText(r.el, r.text); }
+        else r.el.replaceChildren(renderMarkdown(r.text, this.deco));
+        if (r.notice ? this.hasUnknownThread(r.text) : this.hasUnknownRef(r.text)) still.push(r);
       }
       this.unresolved = still;
     }
@@ -270,6 +271,11 @@ export class ChatPane {
       host.appendChild(threadChip(t.id, t.title, (id) => this.byId(id), (id) => this.openThread(id)));
     }
   };
+
+  private hasUnknownThread(text: string): boolean {
+    for (const m of text.matchAll(/Thread (\d+) \(/g)) if (!this.byNumber(Number(m[1]))) return true;
+    return false;
+  }
 
   private hasUnknownRef(text: string): boolean {
     for (const m of text.matchAll(/(^|[^\w&#/])#(\d{1,4})\b/g)) if (!this.byNumber(Number(m[2]))) return true;
@@ -370,6 +376,7 @@ export class ChatPane {
         const row = el("div", "chat-row chat-row--notice");
         const text = el("span", "chat-notice__text");
         this.noticeText(text, e.text);
+        if (this.hasUnknownThread(e.text)) this.unresolved.push({ el: text, text: e.text, notice: true });
         row.append(icon("reply", "pc-icon chat-notice__mark"), text);
         this.append({ kind: "notice", el: row }, e, live);
         return;
@@ -495,7 +502,7 @@ export class ChatPane {
     const t = this.byId(id);
     const stillWaiting = !!t && groupOf(t) === "waiting";
     const line = !t ? "This thread is closed."
-      : stillWaiting ? (t.notification?.text || (t.agentState === "permission" ? "It needs your permission." : "It's waiting for your answer."))
+      : stillWaiting ? (t.agentState === "permission" ? `It asks to: ${askText(t)}` : (t.notification?.text || "It's waiting for your answer."))
       : "Answered.";
     const sig = `${stillWaiting}|${t?.title}|${line}`;
     if (card.dataset.sig === sig) return;
