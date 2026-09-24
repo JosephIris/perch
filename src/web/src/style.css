@@ -8987,7 +8987,7 @@ body.show-inbox .inbox { display: flex; }
 .chat-suggest__icon { flex: 0 0 auto; margin-top: 3px; color: var(--color-text-secondary); }
 .chat-suggest__text { flex: 1 1 auto; min-width: 0; }
 .chat-suggest__title { font-size: var(--pc-prose-size); font-weight: 600; line-height: 1.4; color: var(--color-text-primary); }
-.chat-suggest__why { margin-top: 2px; font-size: 13px; line-height: 1.45; color: var(--color-text-tertiary); }
+.chat-suggest__why { margin-top: 2px; font-size: 13px; line-height: 1.45; color: var(--color-text-tertiary); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .chat-suggest__acts { flex: 0 0 auto; display: flex; align-items: center; gap: var(--sp-4); }
 .chat-suggest__x {
   width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center;

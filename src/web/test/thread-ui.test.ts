@@ -4,7 +4,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { splitThreadRefs, summarizeWork, modelLabel, shortAge, statusLine, groupOf, dayLabel } from "../src/thread-ui.js";
+import { firstSentence, splitThreadRefs, summarizeWork, modelLabel, shortAge, statusLine, groupOf, dayLabel } from "../src/thread-ui.js";
 import type { SessionView } from "../src/bridge.js";
 
 const t = (over: Partial<SessionView>): SessionView => ({
@@ -20,6 +20,12 @@ test("#n becomes a thread only when it is one", () => {
   assert.deepEqual(splitThreadRefs("PR #3 is up; issue #12 too", known), ["PR #3 is up; issue #12 too"]);
   assert.deepEqual(splitThreadRefs("(#3)", known), ["(", 3, ")"]);
   assert.deepEqual(splitThreadRefs("", known), []);
+});
+
+test("a proposal's why is its first sentence", () => {
+  assert.equal(firstSentence("Update README.md to document greet(). Keep it short."), "Update README.md to document greet().");
+  assert.equal(firstSentence("No full stop here"), "No full stop here");
+  assert.equal(firstSentence("Create a CLI, e.g. greet_cli.py. Accept args."), "Create a CLI, e.g. greet_cli.py.");
 });
 
 test("a run of tools folds into one line", () => {

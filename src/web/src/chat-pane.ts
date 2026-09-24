@@ -25,7 +25,7 @@ import type { PaneTreeView, SessionView, ChatEntryView, ChatMetaMessage, ThreadE
 import { renderMarkdown } from "./md.js";
 import { ChatOverview, divider } from "./chat-overview.js";
 import {
-  groupOf, statusLine, askText, splitThreadRefs, summarizeWork, modelLabel, dayLabel, dayKey,
+  groupOf, statusLine, askText, firstSentence, splitThreadRefs, summarizeWork, modelLabel, dayLabel, dayKey,
   el, button, icon, ring, setRing, threadChip, fillChip, hidePop, reducedMotion,
 } from "./thread-ui.js";
 import { copyText } from "./clipboard.js";
@@ -538,12 +538,13 @@ export class ChatPane {
     row.hidden = false;
     const text = el("div", "chat-suggest__text");
     text.append(el("div", "chat-suggest__title", row.dataset.title ?? ""));
-    if (s?.summary) text.appendChild(el("div", "chat-suggest__why", s.summary));
+    if (s?.summary) text.appendChild(el("div", "chat-suggest__why", firstSentence(s.summary)));
     const acts = el("div", "chat-suggest__acts");
     if (state === "started") {
-      const b = button("pc-btn pc-btn--quiet chat-suggest__went", "", () => s?.threadId && this.openThread(s.threadId));
-      if (started) fillChip(b.appendChild(el("span", "pc-chip pc-chip--flat")), started);
-      else b.textContent = "Started";
+      // Where it went: its live state dot and "Started", opening the thread.
+      const b = button("pc-btn pc-btn--quiet chat-suggest__went", "", () => s?.threadId && this.openThread(s.threadId), "Open this thread");
+      b.dataset.group = started ? groupOf(started) : "resolved";
+      b.append(el("span", "pc-dot"), el("span", undefined, "Started"));
       acts.appendChild(b);
     } else {
       const start = button("pc-btn chat-suggest__start", state === "starting" ? "Starting…" : "Start", () => this.start([id]));

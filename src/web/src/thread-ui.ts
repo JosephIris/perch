@@ -42,6 +42,14 @@ export function stateLabel(t: SessionView): string {
   return STATE_WORD[t.agentState];
 }
 
+/** The first sentence of a brief — a proposed thread's one-line "why". */
+export function firstSentence(text: string | undefined): string {
+  const line = firstLine(text);
+  // Past abbreviations like "e.g.": the word before the stop has 2+ letters.
+  const m = line.match(/^.*?[^.\s]{2}[.!?](?=\s|$)/);
+  return m ? m[0] : line;
+}
+
 /** The first line of a report, without Markdown's marks. */
 export function firstLine(text: string | undefined): string {
   const plain = (text ?? "").replace(/\*\*|__|`/g, "").replace(/^#+\s*/gm, "");
