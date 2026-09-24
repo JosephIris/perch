@@ -13,6 +13,7 @@ import { startElapsedTicker } from "./elapsed.js";
 import { startSpinnerTicker } from "./spinner.js";
 import { Sidebar } from "./sidebar.js";
 import { Dashboard } from "./dashboard.js";
+import { Inbox } from "./inbox.js";
 import { confirmDialog } from "./confirm.js";
 import { showPaneChooser } from "./pane-chooser.js";
 import { buildPaneFooter, applyPaneFooter } from "./pane-footer.js";
@@ -23,7 +24,7 @@ import { showNewTabDialog } from "./new-tab-dialog.js";
 import { RestoreProgress } from "./restore-progress.js";
 import { openCommitsPopover, openCommitsLightbox } from "./commits-view.js";
 import { showCloudPanel, applyCloudData } from "./cloud-panel.js";
-import type { SessionView, PaneTreeView, ProjectView, StateMessage, TeamDataMessage, TeamEntryView } from "./bridge.js";
+import type { SessionView, PaneTreeView, ProjectView, StateMessage, TeamDataMessage, TeamEntryView, InboxStateMessage } from "./bridge.js";
 import { openTeamRoom, applyTeamState, onTeamRoomChange, feedTeamFixture, applyArtefact, applyArtefactIndex } from "./team-room.js";
 import { showNewBotDialog, applyBriefProgress, applyBriefResult, applyReferencePicked } from "./new-bot-dialog.js";
 import { onMessage as onHostMessage } from "./bridge.js";
@@ -1175,6 +1176,20 @@ if (view === "commits") {
 
 if (view === "dashboard") {
   dash.show();
+} else if (view === "inbox-login") {
+  // Inbox whose sync failed on an expired gcloud login: the note offers the
+  // browser sign-in. ?busy=1 shows it while the sign-in is running.
+  const busy = viewParams.get("busy") === "1";
+  const root = document.getElementById("inbox") ?? document.body.appendChild(Object.assign(document.createElement("section"), { id: "inbox", className: "inbox" }));
+  const btn = document.createElement("button"), badge = document.createElement("span");
+  const inbox = new Inbox(root, btn, badge);
+  inbox.apply({
+    type: "inbox.state", enabled: true, status: "error", shared: true, lastSync: null,
+    message: busy ? "Finish signing in in your browser…" : "Your gcloud login has expired, so the inbox can't reach Drive. Log in again to resume syncing.",
+    needsLogin: true, loggingIn: busy,
+    counts: { new: 0, read: 0, pending: 0, done: 0 } as InboxStateMessage["counts"], items: [],
+  });
+  inbox.show();
 } else if (view === "confirm") {
   void confirmDialog({
     title: "Restore kanban refactor?",

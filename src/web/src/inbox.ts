@@ -209,6 +209,14 @@ export class Inbox {
         make.addEventListener("click", () => { make.disabled = true; send({ type: "inbox.createStateFile" }); });
         note.appendChild(make);
       }
+      // gcloud's login ran out: one click runs the browser sign-in and syncs.
+      if (msg.needsLogin || msg.loggingIn) {
+        const login = el("button", "inbox__refresh", msg.loggingIn ? "Waiting for browser…" : "Log in to gcloud") as HTMLButtonElement;
+        login.type = "button";
+        login.disabled = !!msg.loggingIn;
+        login.addEventListener("click", () => { login.disabled = true; send({ type: "inbox.gcloudLogin" }); });
+        note.appendChild(login);
+      }
       frag.appendChild(note);
     }
 

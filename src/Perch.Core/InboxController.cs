@@ -47,6 +47,11 @@ internal sealed class InboxController : IDisposable
     private string _status = "idle";
     private string _message = "";
     private DateTimeOffset? _lastSync;
+    /// The key command failed because gcloud's own login ran out. A background
+    /// run can't ask for a new one, so the panel offers a button that runs
+    /// `gcloud auth login` (a browser sign-in) instead of making you type it.
+    private bool _needsLogin;
+    private bool _loggingIn;
 
     /// Threads found in the last sync, id → (folder name, thread.md modified).
     private Dictionary<string, (string Folder, DateTimeOffset Modified)> _threads = new();
@@ -114,11 +119,15 @@ internal sealed class InboxController : IDisposable
             if (_stateFileId == null)
                 _message = "States are only saved on this PC. Create the state file in the Drive folder to share them across PCs.";
             _lastSync = DateTimeOffset.UtcNow;
+            _needsLogin = false;
         }
         catch (Exception ex)
         {
             _status = "error";
-            _message = ex is DriveException de && de.Status == 404
+            _needsLogin = IsGcloudLoginExpired(ex.Message);
+            _message = _needsLogin
+                ? "Your gcloud login has expired, so the inbox can't reach Drive. Log in again to resume syncing."
+                : ex is DriveException de && de.Status == 404
                 ? "Drive can't find that folder — check the folder id, and that it's shared with the service account."
                 : ex.Message;
             Log.Info("Inbox.sync", $"failed: {ex.Message}");
@@ -128,6 +137,51 @@ internal sealed class InboxController : IDisposable
             _syncing = false;
             PushView();
         }
+    }
+
+    /// gcloud's wording when its stored login needs a fresh browser sign-in.
+    internal static bool IsGcloudLoginExpired(string error) =>
+        error.Contains("gcloud", StringComparison.OrdinalIgnoreCase)
+        && (error.Contains("Reauthentication", StringComparison.OrdinalIgnoreCase)
+            || error.Contains("refreshing your current auth tokens", StringComparison.OrdinalIgnoreCase)
+            || error.Contains("gcloud auth login", StringComparison.OrdinalIgnoreCase));
+
+    /// Run `gcloud auth login`: it opens the browser and waits for the
+    /// sign-in (five minutes at most), then we sync straight away.
+    public async Task GcloudLoginAsync()
+    {
+        if (_loggingIn || _disposed) return;
+        _loggingIn = true;
+        _message = "Finish signing in in your browser…";
+        PushView();
+        try
+        {
+            var (code, stdout, stderr) = OperatingSystem.IsWindows()
+                ? await ProcRunner.RunAsync("cmd.exe", "/c gcloud auth login --quiet", "inbox.gcloudLogin", timeoutMs: 300000)
+                : await ProcRunner.RunAsync("/bin/sh", "", "inbox.gcloudLogin", timeoutMs: 300000,
+                    argumentList: new[] { "-c", "gcloud auth login --quiet" });
+            if (code != 0)
+            {
+                var why = FirstLine(stderr.Length > 0 ? stderr : stdout);
+                Log.Info("Inbox.gcloudLogin", $"failed: {why}");
+                _message = "The gcloud login didn't finish: " + why;
+                return;
+            }
+            Log.Info("Inbox.gcloudLogin", "ok");
+        }
+        catch (Exception ex)
+        {
+            Log.Info("Inbox.gcloudLogin", $"failed: {ex.Message}");
+            _message = "Couldn't start gcloud: " + ex.Message;
+            return;
+        }
+        finally
+        {
+            _loggingIn = false;
+            PushView();
+        }
+        _client = null;
+        await SyncAsync();
     }
 
     private async Task<DriveClient> ClientAsync(string keyCommand)
@@ -415,6 +469,8 @@ internal sealed class InboxController : IDisposable
             enabled = Enabled,
             status = _status,
             message = _message,
+            needsLogin = _needsLogin,
+            loggingIn = _loggingIn,
             lastSync = _lastSync?.ToString("O"),
             shared = _stateFileId != null,
             counts,

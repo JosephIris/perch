@@ -126,4 +126,17 @@ public class InboxModelTests
         Assert.Equal("pending", InboxModel.Effective(new() { State = "pending", UpdatedAt = at }, later));
         Assert.Equal("new", InboxModel.Effective(new() { State = "bogus", UpdatedAt = later }, at));
     }
+
+    [Fact]
+    public void GcloudLoginExpired_OnlyForTheReauthError()
+    {
+        // The exact line the key command printed on 2026-09-24.
+        Assert.True(InboxController.IsGcloudLoginExpired(
+            "The key command failed: ERROR: (gcloud.secrets.versions.access) There was a problem refreshing your current auth tokens: Reauthentication failed. cannot prompt during non-interactive execution."));
+        Assert.True(InboxController.IsGcloudLoginExpired(
+            "The key command failed: ERROR: (gcloud.secrets.versions.access) You do not currently have an active account selected. Please run: $ gcloud auth login"));
+        Assert.False(InboxController.IsGcloudLoginExpired(
+            "The key command failed: ERROR: (gcloud.secrets.versions.access) NOT_FOUND: Secret [x] not found or has no versions."));
+        Assert.False(InboxController.IsGcloudLoginExpired("Drive: 404 Not Found"));
+    }
 }

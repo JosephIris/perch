@@ -39,6 +39,7 @@ const EXPECTED_TYPES = [
   "commits.request",
   "inbox.attachment.open",
   "inbox.createStateFile",
+  "inbox.gcloudLogin",
   "inbox.image.request",
   "inbox.mail.request",
   "inbox.open",

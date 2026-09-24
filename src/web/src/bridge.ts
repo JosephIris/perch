@@ -225,6 +225,8 @@ export type OutMessage =
   | { type: "chat.stop"; paneId: string }
   /* Make perch-state.json in the Drive folder so states are shared. */
   | { type: "inbox.createStateFile" }
+  /* gcloud's login ran out: run `gcloud auth login` (browser sign-in), then sync. */
+  | { type: "inbox.gcloudLogin" }
   | { type: "inbox.setState"; id: string; state: InboxStateName }
   | { type: "inbox.open"; id: string }
   /* Read an email in the Inbox's panel: marks it read, answers with
@@ -1109,6 +1111,10 @@ export type InboxStateMessage = {
   enabled: boolean;
   status: "idle" | "syncing" | "ok" | "error";
   message: string;
+  /* The sync failed because gcloud needs a fresh browser sign-in. */
+  needsLogin?: boolean;
+  /* That sign-in is running now. */
+  loggingIn?: boolean;
   lastSync?: string | null;
   /* Whether states are shared through the Drive state file. */
   shared: boolean;
