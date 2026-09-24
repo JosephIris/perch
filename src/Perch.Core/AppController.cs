@@ -474,6 +474,7 @@ internal sealed partial class AppController
                     summary = ThreadController.FirstLine(x.Brief, 200), dismissed = x.Dismissed,
                 }).ToArray(),
             PromptPath = lead => _threadCtrl.WriteCoordinatorPrompt(lead),
+            ThreadList = lead => _threadCtrl.ListText(lead),
             SetWorking = (lead, leaf, working) =>
             {
                 leaf.AgentState = working ? AgentState.Working : AgentState.Done;

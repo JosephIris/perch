@@ -267,21 +267,7 @@ internal sealed class ThreadController
                 return $"ok\nQueued for thread {t.ThreadNumber}; it goes in when that thread is free.\n";
             }
             case "list":
-            {
-                var sb = new StringBuilder("ok\n");
-                var any = false;
-                foreach (var t in ThreadsOf(lead))
-                {
-                    any = true;
-                    var head = FirstLine(t.ThreadLastReply, 120);
-                    sb.Append($"{t.ThreadNumber}. {t.Title} — {StateWord(t)}");
-                    if (t.WorktreeBranch.Length > 0) sb.Append($" — branch {t.WorktreeBranch}");
-                    sb.Append('\n');
-                    if (head.Length > 0) sb.Append($"   last report: {head}\n");
-                }
-                if (!any) sb.Append("No threads yet. Start one with perch thread new \"<title>\" --brief \"…\"\n");
-                return sb.ToString();
-            }
+                return "ok\n" + ListText(lead);
             case "read":
             {
                 var t = fromThread ? null : Find(lead, m.Target);
@@ -302,6 +288,25 @@ internal sealed class ThreadController
             default:
                 return "error\nUnknown thread command.";
         }
+    }
+
+    /// Every thread of a chat, one line each with its state, branch and the
+    /// head of its last report — `perch thread list`, and what a coordinator
+    /// starting a fresh conversation is handed.
+    public string ListText(Session lead)
+    {
+        var sb = new StringBuilder();
+        foreach (var t in ThreadsOf(lead))
+        {
+            var head = FirstLine(t.ThreadLastReply, 120);
+            sb.Append($"{t.ThreadNumber}. {t.Title} — {(t.ThreadResolved ? "resolved" : StateWord(t))}");
+            if (t.WorktreeBranch.Length > 0) sb.Append($" — branch {t.WorktreeBranch}");
+            if (t.ThreadUnmerged > 0) sb.Append($" — {t.ThreadUnmerged} commit(s) not merged");
+            sb.Append('\n');
+            if (head.Length > 0) sb.Append($"   last report: {head}\n");
+        }
+        if (sb.Length == 0) sb.Append("No threads yet. Start one with perch thread new \"<title>\" --brief \"…\"\n");
+        return sb.ToString();
     }
 
     /// Start a thread: its own worktree tab under the project, primed with

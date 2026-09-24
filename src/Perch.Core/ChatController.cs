@@ -46,7 +46,21 @@ internal sealed class ChatController : IDisposable
         /// coordinator's current system prompt path (rewritten per turn).
         public Func<Session, object>? Suggestions { get; init; }
         public Func<Session, string>? PromptPath { get; init; }
+        /// The chat's threads as `perch thread list` prints them — handed to
+        /// a coordinator that starts a fresh conversation.
+        public Func<Session, string>? ThreadList { get; init; }
     }
+
+    /// How long the coordinator's conversation may grow (tokens it reads per
+    /// call) before its next turn starts a fresh one. Every turn re-reads the
+    /// whole conversation, so past this it gets slower and dearer while the
+    /// old turns matter less and less; the fresh one gets recent messages,
+    /// the threads and project memory — what Claude's own project chats say
+    /// they work from — and the full history as a file it can read.
+    internal const long RotateAtTokens = 100_000;
+
+    /// Rows of recent conversation handed over.
+    internal const int HandoffRows = 24;
 
     /// Tools the coordinator may use without asking — the only ones it gets.
     public static readonly string[] AllowedTools = new[] { "Read", "Grep", "Glob", "LS", "WebSearch", "WebFetch", "TodoWrite" }
@@ -277,6 +291,19 @@ internal sealed class ChatController : IDisposable
         if (chat.Proc != null || chat.Queue.Count == 0) return;
         var prompt = string.Join("\n\n", chat.Queue);
         chat.Queue.Clear();
+        // Grown too long: this turn starts a fresh conversation, handed what
+        // it needs to carry on.
+        if (lead.ChatStarted && lead.ChatContextTokens >= RotateAtTokens)
+        {
+            var previous = lead.ChatContextTokens;
+            prompt = Handoff(Entries(chat, lead), _h.ThreadList?.Invoke(lead) ?? "", LogPath(lead)) + "\n\n" + prompt;
+            leaf.ClaudeSessionId = Guid.NewGuid().ToString();
+            lead.ChatStarted = false;
+            lead.ChatContextTokens = 0;
+            _h.Save();
+            Append(chat, lead, "notice", "Started a fresh conversation for the coordinator — the old one had grown long. It carries on from the recent messages, the threads and project memory.");
+            Log.Info("Chat.rotate", $"lead={lead.Id:N} context={previous}");
+        }
         try { Start(chat, lead, leaf, prompt); }
         catch (Exception ex)
         {
@@ -354,11 +381,12 @@ internal sealed class ChatController : IDisposable
                 string? line;
                 while ((line = await proc.StandardOutput.ReadLineAsync()) != null)
                 {
-                    var rows = ParseLine(line, out var isResult, out var resultError, out var model);
+                    var rows = ParseLine(line, out var isResult, out var resultError, out var model, out var context);
                     if (isResult) sawResult = true;
                     var err = resultError;
                     _h.Ui.Post(() =>
                     {
+                        if (context > 0) lead.ChatContextTokens = context;
                         if (model != null && model != chat.Model)
                         {
                             chat.Model = lead.ChatModel = model;
@@ -402,12 +430,14 @@ internal sealed class ChatController : IDisposable
     /// "claude" row, a tool call a "tool" row; the final `result` line marks
     /// the turn complete (and carries an error when the run failed).
     internal static List<(string Kind, string Text, string Tool)> ParseLine(string line, out bool isResult, out string? error)
-        => ParseLine(line, out isResult, out error, out _);
+        => ParseLine(line, out isResult, out error, out _, out _);
 
-    /// …and the model, from the run's opening `system`/`init` line.
-    internal static List<(string Kind, string Text, string Tool)> ParseLine(string line, out bool isResult, out string? error, out string? model)
+    /// …and the model, from the run's opening `system`/`init` line, and how
+    /// big the conversation is: the tokens an assistant call read (input,
+    /// cache reads and cache writes), 0 on other lines.
+    internal static List<(string Kind, string Text, string Tool)> ParseLine(string line, out bool isResult, out string? error, out string? model, out long context)
     {
-        isResult = false; error = null; model = null;
+        isResult = false; error = null; model = null; context = 0;
         var rows = new List<(string, string, string)>();
         if (string.IsNullOrWhiteSpace(line)) return rows;
         try
@@ -427,8 +457,11 @@ internal sealed class ChatController : IDisposable
                 if (isError) error = Str(root, "result") is { Length: > 0 } r ? r : (Str(root, "subtype") ?? "Claude reported an error.");
                 return rows;
             }
-            if (type != "assistant" || !root.TryGetProperty("message", out var msg)
-                || !msg.TryGetProperty("content", out var content) || content.ValueKind != JsonValueKind.Array)
+            if (type != "assistant" || !root.TryGetProperty("message", out var msg))
+                return rows;
+            if (msg.TryGetProperty("usage", out var usage) && usage.ValueKind == JsonValueKind.Object)
+                context = Num(usage, "input_tokens") + Num(usage, "cache_read_input_tokens") + Num(usage, "cache_creation_input_tokens");
+            if (!msg.TryGetProperty("content", out var content) || content.ValueKind != JsonValueKind.Array)
                 return rows;
             foreach (var block in content.EnumerateArray())
             {
@@ -470,6 +503,39 @@ internal sealed class ChatController : IDisposable
         // should say what it ran, not where.
         v = System.Text.RegularExpressions.Regex.Replace(v, @"^cd\s+(""[^""]*""|'[^']*'|\S+)\s*(&&|;)\s*", "");
         return v.Length > 160 ? v[..160] + "…" : v;
+    }
+
+    /// What a coordinator starting a fresh conversation is given: where the
+    /// full history is, the last rows of the conversation, and the threads.
+    /// Tool rows are left out; a thread started or proposed is one line.
+    /// Pure.
+    internal static string Handoff(IReadOnlyList<ChatEntry> entries, string threads, string logPath)
+    {
+        static string Clip(string s, int max) { s = s.Trim(); return s.Length > max ? s[..max].TrimEnd() + "…" : s; }
+        var lines = new List<string>();
+        foreach (var e in entries)
+        {
+            var line = e.Kind switch
+            {
+                "user" => "User: " + Clip(e.Text, 1200),
+                "claude" => "You: " + Clip(e.Text, 1200),
+                "notice" => "Perch: " + Clip(e.Text, 400),
+                "error" => "Error: " + Clip(e.Text, 300),
+                "thread" => $"(You started a thread: {e.Text})",
+                "suggest" => $"(You proposed a thread: {e.Text})",
+                _ => null,
+            };
+            if (line != null) lines.Add(line);
+        }
+        var recent = lines.Skip(Math.Max(0, lines.Count - HandoffRows));
+        return "[Perch] You are continuing this project chat in a fresh conversation: the previous one grew too long to keep re-reading. "
+            + "Your instructions, the goal and project memory are in your system prompt as before. "
+            + $"The whole conversation so far is saved at `{logPath}` (one JSON object per line: Kind, Text) — read it if you need something older than what follows.\n\n"
+            + "## The conversation's last messages (oldest first)\n"
+            + string.Join("\n\n", recent) + "\n\n"
+            + "## The threads\n"
+            + threads.Trim() + "\n\n"
+            + "Carry on from here: answer what comes next as you would have.";
     }
 
     // ---- history ---------------------------------------------------------
@@ -515,6 +581,9 @@ internal sealed class ChatController : IDisposable
     });
 
     private static object View(ChatEntry e) => new { id = e.Id, kind = e.Kind, text = e.Text, tool = e.Tool, atMs = e.AtMs };
+
+    private static long Num(JsonElement el, string name)
+        => el.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out var n) ? n : 0;
 
     private static string? Str(JsonElement el, string name)
         => el.ValueKind == JsonValueKind.Object && el.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;

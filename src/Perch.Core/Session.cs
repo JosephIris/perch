@@ -134,6 +134,11 @@ internal sealed class Session : INotifyPropertyChanged
     /// the composer (kept so it shows before the first turn after a restart).
     public string ChatModel { get; set; } = "";
 
+    /// On a project chat: how big its coordinator's conversation was on its
+    /// last call (tokens read). Past ChatController.RotateAtTokens the next
+    /// turn starts a fresh conversation.
+    public long ChatContextTokens { get; set; }
+
     /// On a thread: marked done (by the user, or once its work is merged);
     /// it drops to the Resolved group and stops asking for attention.
     public bool ThreadResolved { get; set; }

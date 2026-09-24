@@ -65,11 +65,11 @@ public class ClaudeTasksTests
     [Fact]
     public void ParseLine_ReportsTheModelFromInit()
     {
-        var rows = ChatController.ParseLine("""{"type":"system","subtype":"init","model":"claude-opus-5-5","session_id":"s"}""", out var isResult, out _, out var model);
+        var rows = ChatController.ParseLine("""{"type":"system","subtype":"init","model":"claude-opus-5-5","session_id":"s"}""", out var isResult, out _, out var model, out _);
         Assert.Empty(rows);
         Assert.False(isResult);
         Assert.Equal("claude-opus-5-5", model);
-        ChatController.ParseLine("""{"type":"assistant","message":{"content":[]}}""", out _, out _, out var none);
+        ChatController.ParseLine("""{"type":"assistant","message":{"content":[]}}""", out _, out _, out var none, out _);
         Assert.Null(none);
     }
 
