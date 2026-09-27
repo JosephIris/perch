@@ -418,8 +418,27 @@ internal sealed partial class AppController
                     // back in the input box; the next typed line was appended
                     // to it and both went in as one prompt (seen live, twice)
                     // — re-sending what you stopped. Clear the box first, once.
+                    // Ctrl+U clears only the VISUAL line the cursor is on (seen
+                    // live: it took "EARLYDONE." off a wrapped prompt and left
+                    // the rest), so it is Ctrl+U, Backspace (up onto the line
+                    // above), again — both do nothing in an empty box. Each key
+                    // is its own write, a beat apart: keys arriving in one
+                    // chunk read as a paste and were ignored.
                     if (ClaudePaneOf(sess) is PaneNode p && _clearAfterStop.Remove(p.Id) && _panes.Has(p.Id))
-                        _panes.Write(p.Id, new byte[] { 0x15 });   // Ctrl+U: the line before the cursor
+                    {
+                        var keys = new Queue<byte>();
+                        for (var k = 0; k < ClearLines; k++) { keys.Enqueue(0x15); keys.Enqueue(0x7f); }
+                        keys.Enqueue(0x15);
+                        IUiTimer t = null!;
+                        t = _ui.CreateTimer(TimeSpan.FromMilliseconds(40), () =>
+                        {
+                            if (keys.Count > 0 && _panes.Has(p.Id)) { _panes.Write(p.Id, new[] { keys.Dequeue() }); return; }
+                            t.Stop(); t.Dispose();
+                            TypeToClaude(sess, line);
+                        });
+                        t.Start();
+                        return true;
+                    }
                     return TypeToClaude(sess, line);
                 },
                 PressEnter = PressEnterInClaude,
@@ -4993,6 +5012,9 @@ internal sealed partial class AppController
     /// Thread panes Stop was pressed in: their next typed line clears the
     /// input box first (see the delivery host's Type).
     private readonly HashSet<Guid> _clearAfterStop = new();
+    /// Visual lines of a stopped prompt the box is cleared of — a prompt the
+    /// Stop gave back is one Perch typed, at most 800 characters.
+    private const int ClearLines = 12;
     private readonly ChatController _chatCtrl;
 
     /// Wire the board controller's outbound events to the page. Called from the
