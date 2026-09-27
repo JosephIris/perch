@@ -74,14 +74,16 @@
               <path d="M2 9.5V13a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V9.5"/>
               <path d="M2 9.5 4 3h8l2 6.5h-3.5l-1 1.5h-3l-1-1.5z"/>
             </svg>
+            <!-- Sync broken / sign-in needed: a red dot on the tray. -->
+            <span class="inbox-cue__alert" id="inbox-alert" style="display:none"></span>
           </span>
           <span class="sidebar__action-label">Inbox</span>
-          <!-- What wants you: sync broken (!), new emails (filled), pending
-               follow-ups (outlined). Filled by inbox.ts. -->
-          <span class="sidebar__action-badges">
-            <span class="sidebar__action-badge sidebar__action-badge--alert" id="inbox-alert" style="display:none">!</span>
-            <span class="sidebar__action-badge" id="inbox-badge" style="display:none">0</span>
-            <span class="sidebar__action-badge sidebar__action-badge--pending" id="inbox-pending" style="display:none">0</span>
+          <!-- What wants you, in the project chat's idiom: "3 new" as an
+               orange tag, "2 pending" as quiet text with a waiting dot.
+               Filled by inbox.ts; the tooltip says it in full. -->
+          <span class="inbox-cue">
+            <span class="inbox-cue__pending" id="inbox-pending" style="display:none"></span>
+            <span class="inbox-cue__new" id="inbox-badge" style="display:none"></span>
           </span>
         </button>
       </div>

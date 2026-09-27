@@ -63,6 +63,7 @@ export class Inbox {
   private readonly button: HTMLElement;
   private readonly badge: HTMLElement;
   private last: InboxStateMessage | null = null;
+  private lastFresh = 0;
   private filter: Filter = "open";
   /** The email being read, if any. The reader outlives re-renders (its DOM
    *  is moved, not rebuilt) so a list refresh doesn't reload the email. */
@@ -114,14 +115,22 @@ export class Inbox {
     this.last = msg;
     this.button.hidden = !msg.enabled;
     const s = inboxSummary(msg);
-    const show = (b: HTMLElement | null, n: number, text = String(n)) => {
+    const show = (b: HTMLElement | null, on: boolean, text = "") => {
       if (!b) return;
       b.textContent = text;
-      b.style.display = n > 0 ? "" : "none";
+      b.style.display = on ? "" : "none";
     };
-    show(this.badge, s.fresh);
-    show(document.getElementById("inbox-pending"), s.pending);
-    show(document.getElementById("inbox-alert"), s.problem ? 1 : 0, "!");
+    show(this.badge, s.fresh > 0, `${s.fresh} new`);
+    // New mail arrived since the last push: the tag pops, once.
+    if (s.fresh > this.lastFresh) {
+      this.badge.classList.remove("inbox-cue__new--bump");
+      void this.badge.offsetWidth;
+      this.badge.classList.add("inbox-cue__new--bump");
+    }
+    this.lastFresh = s.fresh;
+    this.button.classList.toggle("inbox--fresh", s.fresh > 0);
+    show(document.getElementById("inbox-pending"), s.pending > 0, `${s.pending} pending`);
+    show(document.getElementById("inbox-alert"), s.problem !== null);
     this.button.title = s.title;
     this.button.setAttribute("aria-label", s.title);
     if (!msg.enabled && this.isOpen()) this.hide();
