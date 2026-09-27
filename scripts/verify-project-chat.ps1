@@ -458,6 +458,27 @@ perch thread new "Probe" --brief "$brief"
     [void](Wait-Until { (Pane-State $threadD) -in @('done', 'idle') } 60)
     Start-Sleep -Seconds 3
 
+    # ---- 7. resolve sleeps the thread; a message wakes it -----------------------
+    # A resolved thread used to keep its terminal and Claude running until the
+    # idle timer (hours). Now it sleeps at once, and a message to it wakes it
+    # where it left off (--resume) and is answered.
+    Write-Host "`n[7] resolving a thread puts it to sleep; a message wakes it and is answered"
+    Send-Json @{ verb = 'thread.resolve'; id = $threadD; resolved = $true }
+    $slept = Wait-Until { ((State-Dump).sessions | Where-Object { $_.id -eq $threadD } | Select-Object -First 1).dormant -eq $true } 15 700
+    Check "the resolved thread went to sleep" $slept
+    Start-Sleep -Seconds 4   # let its polite /exit finish
+    $subBefore = Log-Count "Delivery.submitted: session=$threadN"
+    Send-Json @{ verb = 'thread.send'; id = $threadD; text = 'Reply with exactly this word and nothing else: WOKEUP' }
+    $woke = Wait-Until { ((State-Dump).sessions | Where-Object { $_.id -eq $threadD } | Select-Object -First 1).dormant -eq $false } 20 700
+    Check "a message woke it" $woke
+    Check "the message went in once its Claude was back" (Wait-Until { Watch-Permission $threadD; (Log-Count "Delivery.submitted: session=$threadN") -gt $subBefore } 150 1500)
+    $sidNow = (Pane-Of $threadD).claudeSessionId
+    if (-not $sidNow) { $sidNow = $threadSid }
+    $answered = Wait-Until { @(Transcript $sidNow | Where-Object { $_.kind -eq 'say' -and $_.text -match 'WOKEUP' }).Count -ge 1 -or @(Transcript $threadSid | Where-Object { $_.kind -eq 'say' -and $_.text -match 'WOKEUP' }).Count -ge 1 } 120 2000
+    Check "and was answered, in the same conversation" $answered ("- session " + $(if ($sidNow -eq $threadSid) { 'kept' } else { "resumed as $sidNow" }))
+    [void](Wait-Until { (Pane-State $threadD) -in @('done', 'idle') } 60)
+    Start-Sleep -Seconds 3
+
     # ---- 6. no give-ups ----------------------------------------------------------
     Write-Host "`n[6] no line was given up on"
     # Let the thread's queue drain (every queued line either submitted or

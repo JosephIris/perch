@@ -460,6 +460,7 @@ internal sealed partial class AppController
                 SaveLong = (id, text) => _threadCtrl.SaveLongMessage(id, text),
             },
             InformChat = (lead, text, threadId) => _chatCtrl?.Inform(lead, text, threadId),
+            Sleep = t => OnSessionDormant(new SessionRef { Id = t.Id }),
             ThreadStarted = (lead, thread) => _chatCtrl?.Card(lead, "thread", thread.Title, "thread:" + thread.Id.ToString("D")),
             Suggested = (lead, s) =>
             {

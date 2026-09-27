@@ -40,6 +40,9 @@ internal sealed class ThreadController
         public required Action<Guid> AcceptTrust { get; init; }
         public required Action Save { get; init; }
         public required Action PushState { get; init; }
+        /// Put a tab to sleep (its Claude exits politely; the tab, its history
+        /// and --resume stay) — what a resolved thread does.
+        public Action<Session>? Sleep { get; init; }
         public required Action<string> Toast { get; init; }
         public required LineDelivery.Host Delivery { get; init; }
         /// A project chat drawn by the page: tell it something (a notice row
@@ -581,7 +584,21 @@ internal sealed class ThreadController
         thread.ThreadResolved = resolved;
         _h.Save();
         _h.PushState();
+        if (resolved) SleepResolved(thread);
     }
+
+    /// A resolved thread has nothing left to do, but its terminal and its
+    /// Claude kept running (and holding memory) until the idle timer, hours
+    /// later. It sleeps now; a message to it — or Reopen and a message —
+    /// wakes it where it left off. One still busy is left alone: resolving
+    /// never cuts work off mid-turn, and the idle timer still covers it.
+    private void SleepResolved(Session thread)
+    {
+        if (ShouldSleepOnResolve(thread)) _h.Sleep?.Invoke(thread);
+    }
+
+    internal static bool ShouldSleepOnResolve(Session thread) =>
+        thread.ThreadOf != null && thread.ThreadResolved && !thread.Dormant && !Busy(thread);
 
     /// How many of each thread's commits the project's checked-out branch
     /// doesn't have yet. Runs after a thread's turn and after the chat's (the
@@ -592,6 +609,7 @@ internal sealed class ThreadController
         var proj = lead.ProjectId is Guid pid ? _h.ProjectById(pid) : null;
         if (proj == null || !Directory.Exists(proj.Path)) return;
         var changed = false;
+        var landed = new List<Session>();
         foreach (var t in ThreadsOf(lead).Where(t => t.WorktreeBranch.Length > 0).ToList())
         {
             var (code, stdout, _) = await ProcRunner.RunAsync("git", $"rev-list --count HEAD..\"{t.WorktreeBranch}\"", "thread.unmerged",
@@ -600,12 +618,13 @@ internal sealed class ThreadController
             if (n != t.ThreadUnmerged)
             {
                 // Its commits just landed: that thread's job is done.
-                if (n == 0 && t.ThreadUnmerged > 0 && !Busy(t)) t.ThreadResolved = true;
+                if (n == 0 && t.ThreadUnmerged > 0 && !Busy(t)) { t.ThreadResolved = true; landed.Add(t); }
                 t.ThreadUnmerged = n;
                 changed = true;
             }
         }
         if (changed) { _h.Save(); _h.PushState(); }
+        foreach (var t in landed) SleepResolved(t);
     }
 
     private static bool Busy(Session s) => PaneTree.AllLeaves(s.Root).Any(p => p.IsTerminal &&
