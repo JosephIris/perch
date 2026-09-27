@@ -724,6 +724,7 @@ public class ProtocolTests
         Assert.Equal("", m.Text);
         Assert.Null(Round<TeamPostMsg>($"{{\"type\":\"team.post\",\"projectId\":\"{G1}\",\"text\":\"x\",\"to\":null,\"clientId\":\"c1\"}}").Image);
         Assert.Equal(Guid.Parse(G1), Round<TeamPasteMsg>($"{{\"type\":\"team.paste\",\"projectId\":\"{G1}\"}}").ProjectId);
+        Assert.Equal("C:/tmp/a.png", Round<ChatImageMsg>("{\"type\":\"chat.image\",\"path\":\"C:/tmp/a.png\"}").Path);
         Assert.Equal(Guid.Parse(G1), Round<ChatPasteMsg>($"{{\"type\":\"chat.paste\",\"sessionId\":\"{G1}\"}}").SessionId);
     }
 

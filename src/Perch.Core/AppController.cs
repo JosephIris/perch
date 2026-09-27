@@ -1010,7 +1010,8 @@ internal sealed partial class AppController
         .Add<TeamRoomMsg>("team.room", m => _teamCtrl.OnRoom(m))
         .Add<TeamBotAnswerMsg>("team.bot.answer", m => _teamCtrl.OnBotAnswer(m))
         .Add<TeamPasteMsg>("team.paste", OnTeamPaste)
-        .Add<ChatPasteMsg>("chat.paste", OnChatPaste);
+        .Add<ChatPasteMsg>("chat.paste", OnChatPaste)
+        .Add<ChatImageMsg>("chat.image", m => _ = OnChatImageAsync(m));
 
     private void OnWebMessage(string raw)
     {
@@ -4028,6 +4029,37 @@ internal sealed partial class AppController
     }
 
     private void OnProjectAdd(ProjectAddMsg msg) => AddProject(msg.Path, msg.Name);
+
+    /// A picture file a chat or thread message names — a thread's screenshot
+    /// — read for the page, which can't reach local files. Picture files
+    /// only, and not huge; anything else answers empty and the page drops it.
+    private async Task OnChatImageAsync(ChatImageMsg msg)
+    {
+        string? dataUrl = null;
+        try { dataUrl = await Task.Run(() => ChatImageDataUrl(msg.Path)); }
+        catch (Exception ex) { Log.Info("Chat.image", $"{msg.Path}: {ex.Message}"); }
+        try { _web.PostJson(JsonSerializer.Serialize(new { type = "chat.image.data", path = msg.Path, dataUrl })); }
+        catch (Exception ex) { Log.Error("OnChatImage.post", ex); }
+    }
+
+    internal const long ChatImageMaxBytes = 20L * 1024 * 1024;
+
+    /// The file as a data URL, or null when it isn't a picture file that
+    /// exists and fits. Pure but for the file read.
+    internal static string? ChatImageDataUrl(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return null;
+        var type = System.IO.Path.GetExtension(path).ToLowerInvariant() switch
+        {
+            ".png" => "image/png", ".jpg" or ".jpeg" => "image/jpeg", ".gif" => "image/gif", ".webp" => "image/webp",
+            _ => null,
+        };
+        if (type == null) return null;
+        var full = System.IO.Path.GetFullPath(path.Replace('/', System.IO.Path.DirectorySeparatorChar));
+        var info = new System.IO.FileInfo(full);
+        if (!info.Exists || info.Length == 0 || info.Length > ChatImageMaxBytes) return null;
+        return $"data:{type};base64,{Convert.ToBase64String(System.IO.File.ReadAllBytes(full))}";
+    }
 
     /// A picture pasted into a project chat's box or a thread's. As with the
     /// room: the clipboard is read here, the PNG saved in the chat's folder

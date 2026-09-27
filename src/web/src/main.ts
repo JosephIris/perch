@@ -22,6 +22,7 @@ import { Sidebar } from "./sidebar.js";
 import { Workspace } from "./workspace.js";
 import { Dashboard } from "./dashboard.js";
 import { Inbox, READER_ID } from "./inbox.js";
+import { applyChatImage } from "./chat-images.js";
 import { installShortcutHint } from "./shortcut-hint.js";
 import { Toast } from "./toast.js";
 import { openSettings, applySettingsData, applyUpdateStatus } from "./settings.js";
@@ -388,6 +389,9 @@ onMessage((msg) => {
       break;
     case "team.reference.picked":
       applyReferencePicked(msg);
+      break;
+    case "chat.image.data":
+      applyChatImage(msg);
       break;
     case "chat.paste.data":
       workspace.applyChatPaste(msg);

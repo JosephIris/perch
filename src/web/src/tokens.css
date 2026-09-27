@@ -278,6 +278,8 @@
    * 0.22 demotes primary text (0.92 white) to ~secondary prominence
    * (0.92 × 0.78 ≈ 0.72) — "background reading", not "disabled". */
   --color-pane-dim-scrim:   rgba(0, 0, 0, 0.22);
+  /* Behind a picture shown full size (chat-images.ts lightbox). */
+  --color-lightbox-scrim:   rgba(0, 0, 0, 0.8);
 
   /* Scrollbar. WebView2 is Chromium, so ::-webkit-scrollbar applies. Overlay
    * weight — no track, thumb only, inset via a transparent border so it floats

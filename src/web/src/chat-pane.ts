@@ -32,6 +32,13 @@ import { copyText } from "./clipboard.js";
 import { elapsedSpan } from "./elapsed.js";
 import { StickToEnd } from "./stick-to-end.js";
 import { ImageTray, withImages, userBubble } from "./image-attach.js";
+import { imageStrip } from "./chat-images.js";
+
+/** The pictures a message names, under it. */
+function appendShots(host: HTMLElement, text: string) {
+  const s = imageStrip(text);
+  if (s) host.appendChild(s);
+}
 
 const EASE = "cubic-bezier(0, 0, 0, 1)";
 
@@ -194,7 +201,7 @@ export class ChatPane {
       const still: { el: HTMLElement; text: string; notice?: boolean }[] = [];
       for (const r of this.unresolved) {
         if (r.notice) { r.el.replaceChildren(); this.noticeText(r.el, r.text); }
-        else r.el.replaceChildren(renderMarkdown(r.text, this.deco));
+        else { r.el.replaceChildren(renderMarkdown(r.text, this.deco)); appendShots(r.el, r.text); }
         if (r.notice ? this.hasUnknownThread(r.text) : this.hasUnknownRef(r.text)) still.push(r);
       }
       this.unresolved = still;
@@ -334,6 +341,7 @@ export class ChatPane {
       case "claude": {
         const row = el("div", "chat-row chat-row--claude md");
         row.appendChild(renderMarkdown(e.text, this.deco));
+        appendShots(row, e.text);   // a thread's screenshots it passes on
         if (this.hasUnknownRef(e.text)) this.unresolved.push({ el: row, text: e.text });
         if (!this.segment || this.segment.sealed) this.segment = { texts: [], lastAt: 0, sealed: false };
         this.segment.texts.push(e.text);
@@ -403,7 +411,9 @@ export class ChatPane {
         this.noticeText(text, e.text);
         if (this.hasUnknownThread(e.text)) this.unresolved.push({ el: text, text: e.text, notice: true });
         row.append(icon("reply", "pc-icon chat-notice__mark"), text);
+        const shots = imageStrip(e.text);
         this.append({ kind: "notice", el: row }, e, live);
+        if (shots) row.after(shots);
         return;
       }
       default: {

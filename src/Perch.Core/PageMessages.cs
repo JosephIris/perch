@@ -582,6 +582,13 @@ internal sealed record ChatPasteMsg
     public required Guid SessionId { get; init; }
 }
 
+/// A picture file a chat or thread message names (`chat.image`) — a thread's
+/// screenshot — for the page to show under the message.
+internal sealed record ChatImageMsg
+{
+    public required string Path { get; init; }
+}
+
 /// A new position, sent inline with the bot that first fills it. `brief` is
 /// the text the owner accepted (generated or hand-written).
 internal sealed record TeamPositionSpec

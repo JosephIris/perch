@@ -9029,6 +9029,27 @@ body.show-inbox .inbox { display: flex; }
 }
 @media (prefers-reduced-motion: reduce) { .pc-attach__item { animation: none; } }
 
+/* Screenshots a thread named (chat-images.ts): a strip of thumbnails under
+ * the message, one row that wraps; a click shows it full size. */
+.pc-shots { display: flex; flex-wrap: wrap; gap: var(--sp-8); margin-top: var(--sp-8); }
+.chat-row--notice + .pc-shots { margin: 0 0 var(--sp-8) var(--sp-24); }
+.pc-shot {
+  padding: 0; border: 1px solid var(--color-stroke-strong); border-radius: var(--r-card);
+  overflow: hidden; background: var(--pc-fill); cursor: zoom-in; line-height: 0;
+  transition: border-color var(--dur-fast) var(--ease-entry);
+}
+.pc-shot[hidden] { display: none; }
+.pc-shot:hover { border-color: var(--color-text-tertiary); }
+.pc-shot img { display: block; max-width: 240px; max-height: 150px; width: auto; height: auto; }
+.pc-lightbox {
+  position: fixed; inset: 0; z-index: 200; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: var(--sp-8); padding: var(--sp-32);
+  background: var(--color-lightbox-scrim); cursor: zoom-out;
+  animation: pc-fade-in var(--dur-fast) var(--ease-entry);
+}
+.pc-lightbox img { max-width: 100%; max-height: calc(100% - 32px); object-fit: contain; border-radius: var(--r-card); }
+.pc-lightbox__cap { font-size: 12px; color: var(--color-text-secondary); }
+
 /* "Go to latest" (stick-to-end.ts): a zero-height sticky row at the end of a
  * conversation's scroller, so the button floats over the bottom of the view
  * without taking a line of the log. A dot on it = something new below. */

@@ -25,6 +25,7 @@ import {
 import { elapsedSpan } from "./elapsed.js";
 import { StickToEnd } from "./stick-to-end.js";
 import { ImageTray, withImages, userBubble } from "./image-attach.js";
+import { imageStrip } from "./chat-images.js";
 import { queuedNote, queuedText } from "./thread-steer.js";
 
 export { groupOf, stateLabel } from "./thread-ui.js";
@@ -656,6 +657,9 @@ class ThreadDetail {
     }
     const row = el("div", "ovd__beat md");
     row.appendChild(renderMarkdown(e.text));
+    // Screenshots it names, right where it names them.
+    const shots = imageStrip(e.text);
+    if (shots) row.appendChild(shots);
     return row;
   }
 

@@ -333,6 +333,9 @@ export type OutMessage =
    * is that tab): the host reads the clipboard, saves the PNG in the chat's
    * folder and answers chat.paste.data. */
   | { type: "chat.paste"; sessionId: string }
+  /* A picture file a chat or thread message names (a thread's screenshot):
+   * the host reads it and answers chat.image.data. Picture files only. */
+  | { type: "chat.image"; path: string }
   /* Create a bot: an existing position by slug, or a new one whose `brief` is
    * the text the user accepted in the dialog (generated or hand-written). */
   | { type: "team.bot.create"; projectId: string; nickname: string; worktree: boolean; positionSlug?: string;
@@ -1283,6 +1286,7 @@ export type InMessage =
   | TeamImageDataMessage
   | TeamPasteDataMessage
   | ChatPasteDataMessage
+  | ChatImageDataMessage
   | TeamArtefactDataMessage
   | TeamArtefactIndexMessage;
 
@@ -1336,6 +1340,14 @@ export type ChatPasteDataMessage = {
   path?: string | null;
   dataUrl?: string | null;
   error?: string | null;
+};
+
+/** The host's answer to `chat.image`: the picture as a data URL, or empty
+ *  when it isn't there (moved, deleted, not a picture, too big). */
+export type ChatImageDataMessage = {
+  type: "chat.image.data";
+  path: string;
+  dataUrl?: string | null;
 };
 
 /** One machine (or one Dataproc cluster — a cluster is ONE row, not five). */

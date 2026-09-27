@@ -29,6 +29,7 @@ const EXPECTED_TYPES = [
   "board.remove",
   "board.request",
   "board.resize",
+  "chat.image",
   "chat.paste",
   "chat.request",
   "chat.send",
