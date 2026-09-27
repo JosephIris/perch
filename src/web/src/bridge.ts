@@ -569,6 +569,9 @@ export type SessionView = {
   threadTaskNow?: string;
   /* On a permission prompt: what it asks to do ("Run python -m pytest"). */
   threadAsk?: string;
+  /* Lines sent to this thread that haven't gone in yet (it is mid-turn or
+   * asking something), oldest first. */
+  threadQueued?: string[];
   chatGoal?: string;
   /* The last peer message that ARRIVED at this tab ("from user-profiles ·
    * ..."), or — warn level — this tab's last delivery failure. Ambient info,

@@ -20,9 +20,11 @@ import type { SessionView, ThreadEventView, ThreadTaskView, ChatMetaMessage } fr
 import { renderMarkdown } from "./md.js";
 import {
   GROUPS, groupOf, statusLine, askText, lastActiveMs, byRecent, summarizeWork,
-  el, button, icon, ring, setRing, ageLabel, setAge, reducedMotion, type ThreadGroup,
+  el, button, icon, ring, setRing, ageLabel, setAge, reducedMotion, parsePrompt, type ThreadGroup,
 } from "./thread-ui.js";
 import { elapsedSpan } from "./elapsed.js";
+import { StickToEnd } from "./stick-to-end.js";
+import { queuedNote, queuedText } from "./thread-steer.js";
 
 export { groupOf, stateLabel } from "./thread-ui.js";
 export type { ThreadGroup } from "./thread-ui.js";
@@ -103,7 +105,7 @@ export class ChatOverview {
     this.threads = threads;
     const sig = JSON.stringify(threads.map((t) => [t.id, t.title, t.agentState, t.dormant, t.branch, t.threadReply, t.threadReplyAtMs,
       t.threadResolved, t.threadUnmerged, t.threadTasksDone, t.threadTasksTotal, t.threadTaskNow, t.threadAsk, t.notification?.text, t.activityDetail,
-      t.turnStartMs, t.doneAtMs, t.worktreeBranch]));
+      t.turnStartMs, t.doneAtMs, t.worktreeBranch, t.threadQueued]));
     if (sig === this.lastSig) return;
     this.lastSig = sig;
     this.onWaiting(threads.filter((t) => groupOf(t) === "waiting").length);
@@ -146,6 +148,8 @@ export class ChatOverview {
   }
 
   dispose() { this.detail?.dispose(); }
+  /** After the pane was moved: an open thread lands its end again. */
+  refit() { this.detail?.refit(); }
 
   // ---- views ----------------------------------------------------------------
 
@@ -446,6 +450,7 @@ class ThreadDetail {
   readonly id: string;
   readonly element: HTMLElement;
   private readonly scroll: HTMLElement;
+  private readonly stick: StickToEnd;
   private readonly tasksEl: HTMLElement;
   private readonly log: HTMLElement;
   private readonly workingEl: HTMLElement;
@@ -454,6 +459,9 @@ class ThreadDetail {
   private readonly box: HTMLTextAreaElement;
   private readonly resolvedEl: HTMLElement;
   private readonly branchEl: HTMLElement;
+  /** What the box sent that hasn't gone in yet, above the box. */
+  private readonly queuedEl: HTMLElement;
+  private queuedSig = "";
   private thread: SessionView | undefined;
   private events: ThreadEventView[] | null = null;
   private tasks: ThreadTaskView[] = [];
@@ -482,6 +490,7 @@ class ThreadDetail {
     this.workingEl = el("div", "ovd__working");
     this.workingEl.hidden = true;
     this.scroll.append(this.tasksEl, this.log, this.workingEl);
+    this.stick = new StickToEnd(this.scroll);
 
     const foot = el("div", "ovd__foot");
     this.waitEl = el("div", "pc-card ovd__wait");
@@ -503,7 +512,9 @@ class ThreadDetail {
     this.resolvedEl.hidden = true;
     this.branchEl = el("div", "ovd__branch");
     this.branchEl.hidden = true;
-    foot.append(this.waitEl, this.composer, this.resolvedEl, this.branchEl);
+    this.queuedEl = el("div", "ovd__queued");
+    this.queuedEl.hidden = true;
+    foot.append(this.waitEl, this.queuedEl, this.composer, this.resolvedEl, this.branchEl);
     this.element.append(this.scroll, foot);
 
     // While it works, keep its conversation and task list current.
@@ -513,7 +524,8 @@ class ThreadDetail {
     }, 2500);
   }
 
-  dispose() { window.clearInterval(this.poll); }
+  dispose() { window.clearInterval(this.poll); this.stick.dispose(); }
+  refit() { this.stick.follow(); }
   focus() { this.box.focus(); }
   stepCount(): number { return this.events?.length ?? this.seenSteps ?? 0; }
 
@@ -530,12 +542,14 @@ class ThreadDetail {
       this.workingEl.hidden = true;
       this.branchEl.hidden = true;
       this.resolvedEl.hidden = true;
+      this.queuedEl.hidden = true;
       return;
     }
     const g = groupOf(t);
     this.renderWait(t, g);
     this.renderWorking(t);
     this.renderTasks();
+    this.renderQueued(t);
 
     this.composer.hidden = !!t.threadResolved;
     this.resolvedEl.hidden = !t.threadResolved;
@@ -571,13 +585,10 @@ class ThreadDetail {
     this.eventsSig = sig;
     const first = this.events === null;
     this.events = events;
-    const stick = first || this.scroll.scrollHeight - this.scroll.scrollTop - this.scroll.clientHeight < 60;
     this.renderLog();
-    if (stick) requestAnimationFrame(() => {
-      // First open lands on the "New" mark when there is one, else the end.
-      const mark = first ? this.log.querySelector<HTMLElement>(".pc-divider--new") : null;
-      this.scroll.scrollTop = mark ? Math.max(0, mark.offsetTop - 24) : this.scroll.scrollHeight;
-    });
+    // Opening a thread lands on its latest step (the "New" mark stays in the
+    // log above it); after that it follows only while you're at the end.
+    if (first) this.stick.toEnd(false); else this.stick.follow();
   }
 
   private renderLog() {
@@ -618,14 +629,22 @@ class ThreadDetail {
 
   private event(e: ThreadEventView): HTMLElement {
     if (e.kind === "prompt") {
-      // Lines Perch typed carry a "[Perch #n]" tag; the brief's kick-off is
-      // noise. What's left is who asked what.
-      const text = e.text.replace(/^\[Perch #\d+\]\s*/, "");
-      if (/^Start on the task in your brief\b/.test(text)) return el("div", "ovd__note", "Started on its brief");
-      const fromChat = text.startsWith("From the project chat:");
+      // Who asked what; the brief's kick-off is noise.
+      const p = parsePrompt(e.text);
+      if (p.from === "brief") return el("div", "ovd__note", "Started on its brief");
+      if (p.from === "chat") {
+        // The coordinator's instructions: a labelled card on the left, its
+        // Markdown drawn — not your bubble.
+        const card = el("div", "ovd__handoff");
+        const head = el("div", "ovd__handoff-head");
+        head.append(icon("bubble"), el("span", undefined, "From the project chat"));
+        const body = el("div", "ovd__handoff-body md");
+        body.appendChild(renderMarkdown(p.text));
+        card.append(head, body);
+        return card;
+      }
       const row = el("div", "ovd__prompt");
-      row.append(el("div", "pc-bubble", text.replace(/^From the project chat:\s*/, "")),
-        el("div", "ovd__from", fromChat ? "From the project chat" : "From you"));
+      row.append(el("div", "pc-bubble", p.text), el("div", "ovd__from", "From you"));
       return row;
     }
     const row = el("div", "ovd__beat md");
@@ -668,7 +687,30 @@ class ThreadDetail {
     const r = ring(); setRing(r, 0, 0);
     const text = el("span", "ovd__working-text", "Claude is working");
     if (t.turnStartMs) text.append(" · ", elapsedSpan(t.turnStartMs));
-    this.workingEl.replaceChildren(r, text, button("pc-btn pc-btn--quiet", "Stop", () => send({ type: "thread.stop", id: this.id })));
+    // One click, one Stop: a second Escape at Claude's idle prompt opens its
+    // rewind menu. The host marks the thread stopped, which hides this row.
+    const stop = button("pc-btn pc-btn--quiet", "Stop", () => {
+      stop.disabled = true;
+      stop.textContent = "Stopping…";
+      send({ type: "thread.stop", id: this.id });
+    });
+    this.workingEl.replaceChildren(r, text, stop);
+  }
+
+  /** Lines sent from the box that haven't gone in yet, and when they will. */
+  private renderQueued(t: SessionView) {
+    const note = queuedNote(t);
+    const sig = note ? JSON.stringify(note) : "";
+    if (sig === this.queuedSig) return;
+    this.queuedSig = sig;
+    this.queuedEl.hidden = !note;
+    if (!note) { this.queuedEl.replaceChildren(); return; }
+    const rows = note.lines.map((line) => {
+      const row = el("div", "ovd__prompt ovd__prompt--queued");
+      row.append(el("div", "pc-bubble", queuedText(line)));
+      return row;
+    });
+    this.queuedEl.replaceChildren(...rows, el("div", "ovd__from", note.when));
   }
 
   /** What it needs from you, above the composer: a permission to answer

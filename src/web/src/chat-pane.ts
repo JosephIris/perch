@@ -30,6 +30,7 @@ import {
 } from "./thread-ui.js";
 import { copyText } from "./clipboard.js";
 import { elapsedSpan } from "./elapsed.js";
+import { StickToEnd } from "./stick-to-end.js";
 
 const EASE = "cubic-bezier(0, 0, 0, 1)";
 
@@ -49,6 +50,7 @@ export class ChatPane {
   private readonly goalEl: HTMLElement;
   private readonly ovBtn: HTMLButtonElement;
   private readonly scroll: HTMLElement;
+  private readonly stick: StickToEnd;
   private readonly log: HTMLElement;
   private readonly busyEl: HTMLElement;
   private readonly input: HTMLTextAreaElement;
@@ -101,6 +103,7 @@ export class ChatPane {
     this.busyEl = el("div", "chat__busy");
     this.busyEl.hidden = true;
     this.scroll.append(this.log, this.busyEl);
+    this.stick = new StickToEnd(this.scroll);
     main.appendChild(this.scroll);
 
     const compose = el("div", "chat__compose");
@@ -152,13 +155,15 @@ export class ChatPane {
     this.autosize();
     if (!this.loaded) send({ type: "chat.request", paneId: this.paneId });
   }
-  dispose() { hidePop(true); this.overview.dispose(); this.element.remove(); }
+  dispose() { hidePop(true); this.stick.dispose(); this.overview.dispose(); this.element.remove(); }
   setName(_name: string) { /* the chat is titled by its tab */ }
   setActive(active: boolean) { this.element.classList.toggle("pane--active", active); }
   focus() { this.input.focus(); }
   feed(_b64: string) { /* no terminal */ }
   notifyExit(_code: number) { /* nothing to exit */ }
-  forceRefit() { /* flows like a document */ }
+  /** The workspace moved this pane (a tab switch back): moving resets the
+   *  scroll to the top without a resize to notice, so land the end again. */
+  forceRefit() { this.stick.follow(); this.overview.refit(); }
   changeFontSize(): number { return 0; }
   resetFontSize(): number { return 0; }
 
@@ -214,16 +219,16 @@ export class ChatPane {
     if (!entries.length) this.renderEmpty();
     this.applyStatus(running, queued, model);
     this.refreshSuggestions();
-    this.toBottom(true, false);
+    this.stick.toEnd(false);
   }
 
   applyEntry(e: ChatEntryView) {
     if (!this.loaded) return;               // the history will carry it
-    const stick = this.nearBottom();
     this.log.querySelector(".chat__welcome")?.remove();
     this.addEntry(e, true);
     this.refreshSuggestions();
-    this.toBottom(stick || e.kind === "user", true);
+    // What you just sent always shows; anything else only while you follow.
+    this.stick.follow(e.kind === "user");
   }
 
   applyStatus(running: boolean, queued: number, model: string) {
@@ -242,7 +247,7 @@ export class ChatPane {
       this.sealSegment();
     }
     this.updateButton();
-    if (running) this.toBottom(this.nearBottom(), true);
+    if (running) this.stick.follow();
   }
 
   applyMeta(meta: ChatMetaMessage) {
@@ -727,17 +732,5 @@ export class ChatPane {
     this.input.style.height = "auto";
     this.input.style.height = `${Math.min(Math.max(this.input.scrollHeight, 24), 200)}px`;
     this.updateButton();
-  }
-
-  private nearBottom(): boolean {
-    const s = this.scroll;
-    return s.scrollHeight - s.scrollTop - s.clientHeight < 80;
-  }
-
-  private toBottom(force: boolean, smooth: boolean) {
-    if (!force) return;
-    requestAnimationFrame(() => {
-      this.scroll.scrollTo({ top: this.scroll.scrollHeight, behavior: smooth && !reducedMotion() ? "smooth" : "auto" });
-    });
   }
 }

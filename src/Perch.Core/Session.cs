@@ -159,6 +159,11 @@ internal sealed class Session : INotifyPropertyChanged
     /// python -m pytest"), from its transcript's pending tool call. "" otherwise.
     [JsonIgnore] public string ThreadAsk { get; set; } = "";
 
+    /// Lines typed for this tab's Claude that have not gone in yet (it is
+    /// mid-turn or asking something), oldest first. Runtime only: the
+    /// delivery queue itself does not survive a restart.
+    [JsonIgnore] public string[] ThreadQueued { get; set; } = Array.Empty<string>();
+
     // ----- Incoming pair note (transient, like NotificationText) -----------
     // The last cross-session message that ARRIVED at this tab (or, warn level,
     // the last delivery failure by this tab). Rendered as a quiet note line on

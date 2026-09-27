@@ -250,6 +250,7 @@ internal static class StateProjection
             threadTasksTotal = s.ThreadTasksTotal,
             threadTaskNow = s.ThreadTaskNow,
             threadAsk = s.ThreadAsk,
+            threadQueued = s.ThreadQueued,
             chatGoal = s.ChatGoal,
             pairNote = string.IsNullOrEmpty(s.PairNoteText) ? null : new
             {

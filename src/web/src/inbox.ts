@@ -18,6 +18,7 @@ export const READER_ID = "00000000-0000-0000-0000-000000000000";
 import { closeTeamRoom } from "./team-room.js";
 import { openSettings } from "./settings.js";
 import { agoSpan } from "./elapsed.js";
+import { inboxSummary } from "./inbox-summary.js";
 
 type Filter = "open" | "pending" | "done" | "all";
 
@@ -112,9 +113,17 @@ export class Inbox {
   apply(msg: InboxStateMessage) {
     this.last = msg;
     this.button.hidden = !msg.enabled;
-    const n = msg.counts.new ?? 0;
-    this.badge.textContent = String(n);
-    this.badge.style.display = n > 0 ? "" : "none";
+    const s = inboxSummary(msg);
+    const show = (b: HTMLElement | null, n: number, text = String(n)) => {
+      if (!b) return;
+      b.textContent = text;
+      b.style.display = n > 0 ? "" : "none";
+    };
+    show(this.badge, s.fresh);
+    show(document.getElementById("inbox-pending"), s.pending);
+    show(document.getElementById("inbox-alert"), s.problem ? 1 : 0, "!");
+    this.button.title = s.title;
+    this.button.setAttribute("aria-label", s.title);
     if (!msg.enabled && this.isOpen()) this.hide();
     const item = msg.items.find((i) => i.id === this.selected);
     if (item) this.reader.applyInboxItem(item);

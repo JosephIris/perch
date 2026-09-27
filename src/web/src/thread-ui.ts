@@ -59,6 +59,26 @@ export function firstLine(text: string | undefined): string {
   return pick.replace(/\*\*|__|`/g, "").replace(/^#+\s*/, "");
 }
 
+/** Who a prompt in a thread's transcript came from, and its words.
+ *  Claude Code records long typed input as a paste, wrapped in
+ *  `<pasted_content id="…">…</pasted_content id="…">`; unwrapped first, or a
+ *  message the project chat sent reads as one from you. Perch's own lines
+ *  carry a "[Perch #n]" tag; the brief's kick-off is "brief". */
+export function parsePrompt(raw: string): { from: "you" | "chat" | "brief"; text: string } {
+  let text = raw.trim();
+  for (;;) {
+    const m = /^<pasted_content\b[^>]*>([\s\S]*?)<\/pasted_content\b[^>]*>$/.exec(text);
+    if (!m) break;
+    text = m[1].trim();
+  }
+  // Your steering and the chat's messages both carry the tag; only the
+  // chat's say where they're from.
+  text = text.replace(/^\[Perch #\d+\]\s*/, "");
+  if (/^Start on the task in your brief\b/.test(text)) return { from: "brief", text };
+  if (/^From the project chat:/.test(text)) return { from: "chat", text: text.replace(/^From the project chat:\s*/, "") };
+  return { from: "you", text };
+}
+
 /** The grey line under a thread's title: what it is doing or has to say.
  *  `blocked` marks a permission prompt, drawn with a "Blocked" lead. */
 export function statusLine(t: SessionView): { text: string; blocked: boolean } {
@@ -73,7 +93,8 @@ export function statusLine(t: SessionView): { text: string; blocked: boolean } {
     case "working": {
       // The detail is sometimes the prompt it was given — Perch's own lines
       // or the brief's kick-off — which says nothing about what it is doing.
-      const detail = /^(\[Perch|Start on the task in your brief|From the project chat)/.test(t.activityDetail ?? "") ? "" : t.activityDetail;
+      const d = t.activityDetail ?? "";
+      const detail = /^(<pasted_content|\[Perch)/.test(d) || parsePrompt(d).from !== "you" ? "" : d;
       return { text: t.threadTaskNow || detail || "Working", blocked: false };
     }
     case "ready":
@@ -219,6 +240,7 @@ const ICON_PATHS: Record<string, string> = {
   copy: "M5.5 5.5V4a1.5 1.5 0 0 1 1.5-1.5h5A1.5 1.5 0 0 1 13.5 4v5a1.5 1.5 0 0 1-1.5 1.5h-1.5M3.5 5.5h5A1.5 1.5 0 0 1 10 7v5a1.5 1.5 0 0 1-1.5 1.5h-5A1.5 1.5 0 0 1 2 12V7a1.5 1.5 0 0 1 1.5-1.5z",
   stop: "M5 5h6v6H5z",
   push: "M8 12.5v-9M4.5 7L8 3.5 11.5 7M3.5 13.5h9",
+  down: "M8 3.5v9M4.5 9L8 12.5 11.5 9",
   // Drawn on a 24 grid (ICON_BOX): a cog needs the room to keep its teeth
   // and its hole apart at 16px.
   gear: "M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z",

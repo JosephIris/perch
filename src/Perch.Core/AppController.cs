@@ -46,6 +46,8 @@ internal sealed partial class AppController
     // brief pauses between an agent's spinner frames, short enough that a
     // dropped Stop self-heals quickly.
     private static readonly long IdleDemoteTicks = (long)(8.0 * System.Diagnostics.Stopwatch.Frequency);
+    // After a thread's Stop: how long its repaint may not re-promote it.
+    private static readonly long EscapeGraceTicks = (long)(3.0 * System.Diagnostics.Stopwatch.Frequency);
 
     // A REAL resize fires SIGWINCH and the TUI redraws — genuine PTY output the
     // idle watchdog would read as renewed activity and use to re-promote a
@@ -420,6 +422,13 @@ internal sealed partial class AppController
                 },
                 EnsureRunning = sess => { if (sess.Dormant) WakeSession(sess); EnsureSessionRunning(sess); },
                 GaveUp = (sess, line) => PostToast($"Perch couldn't get a message into \"{sess.Title}\"", "error", Guid.Empty),
+                // What is still waiting to go in, shown under the thread.
+                Changed = id =>
+                {
+                    if (_store.Sessions.FirstOrDefault(s => s.Id == id) is not Session s) return;
+                    s.ThreadQueued = _threadCtrl.Delivery.Pending(id).ToArray();
+                    PushState();
+                },
             },
             InformChat = (lead, text, threadId) => _chatCtrl?.Inform(lead, text, threadId),
             ThreadStarted = (lead, thread) => _chatCtrl?.Card(lead, "thread", thread.Title, "thread:" + thread.Id.ToString("D")),
@@ -461,6 +470,13 @@ internal sealed partial class AppController
                 return true;
             },
         });
+        _threadSteer = new ThreadSteering(new ThreadSteering.Host
+        {
+            ClaudePane = ClaudePaneOf,
+            Write = (paneId, bytes) => _panes.Write(paneId, bytes),
+            PushState = PushState,
+            Escaped = paneId => _escapedAt[paneId] = System.Diagnostics.Stopwatch.GetTimestamp(),
+        }, _threadCtrl.Delivery);
         _chatCtrl = new ChatController(new ChatController.Host
         {
             ChatByPane = paneId =>
@@ -1774,7 +1790,10 @@ internal sealed partial class AppController
                     _teamCtrl.OnPaneIdle(sess);
                     _threadCtrl.OnPaneIdle(sess);
                 }
-                else if (pane.AgentState == AgentState.Done && pane.StateInferred && sustained)
+                else if (pane.AgentState == AgentState.Done && pane.StateInferred && sustained
+                         // A Stop from the Overview just marked it done; the
+                         // "Interrupted" repaint that follows is not a new spell.
+                         && !(_escapedAt.TryGetValue(pane.Id, out var esc) && now - esc < EscapeGraceTicks))
                 {
                     // Real output resumed (two consecutive ticks of it, not a
                     // lone repaint). Walk it back.
@@ -2882,14 +2901,11 @@ internal sealed partial class AppController
     }
 
     /// The user typed to a thread from the Overview: it goes in when that
-    /// thread is free, confirmed like everything typed into a Claude.
+    /// thread is free, confirmed like everything typed into a Claude — at
+    /// once when it is waiting on a question (ThreadSteering).
     private void OnThreadSend(ThreadActMsg msg)
     {
-        var text = (msg.Text ?? "").Trim();
-        if (text.Length == 0 || SessionById(msg.Id) is not Session t) return;
-        t.ThreadResolved = false;
-        _threadCtrl.Delivery.Enqueue(t.Id, text);
-        PushState();
+        if (SessionById(msg.Id) is Session t) _threadSteer.Send(t, msg.Text);
     }
 
     /// Answer a thread's permission prompt from the Overview: Enter takes
@@ -2911,11 +2927,11 @@ internal sealed partial class AppController
         Log.Info("Thread.answer", $"session={t.Id:N} allow={allow}");
     }
 
-    /// Stop a thread's turn: Escape in its terminal, as a person would.
+    /// Stop a thread's turn: Escape in its terminal, as a person would, and
+    /// the state the missing Stop hook would have set (ThreadSteering).
     private void OnThreadStop(ThreadActMsg msg)
     {
-        if (SessionById(msg.Id) is Session t && ClaudePaneOf(t) is PaneNode p)
-            _panes.Write(p.Id, new byte[] { 0x1b });
+        if (SessionById(msg.Id) is Session t) _threadSteer.Stop(t);
     }
 
     private void OnProjectChatNew(ProjectChatNewMsg msg)
@@ -4954,6 +4970,11 @@ internal sealed partial class AppController
     private readonly BoardController _boardCtrl;
     private readonly TeamController _teamCtrl;
     private readonly ThreadController _threadCtrl;
+    private readonly ThreadSteering _threadSteer;
+    /// When a thread's pane was last sent Escape from the Overview's Stop
+    /// (Stopwatch ticks): the watchdog doesn't read its "Interrupted" repaint
+    /// as the turn resuming.
+    private readonly Dictionary<Guid, long> _escapedAt = new();
     private readonly ChatController _chatCtrl;
 
     /// Wire the board controller's outbound events to the page. Called from the

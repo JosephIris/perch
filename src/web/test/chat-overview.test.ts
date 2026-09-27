@@ -28,3 +28,21 @@ test("labels say what the group means", () => {
   assert.equal(stateLabel(t({ agentState: "permission" })), "Needs your permission");
   assert.equal(stateLabel(t({ threadResolved: true })), "Resolved");
 });
+
+// A message the project chat sent a thread must never read "From you". Long
+// ones come back from the transcript wrapped as a paste — the case that did.
+import { parsePrompt } from "../src/thread-ui.js";
+
+test("the chat's message, even wrapped as a paste, is from the chat", () => {
+  const raw = '<pasted_content id="6ffc">\n[Perch #7] From the project chat: You are still on **41 bids**.\n- pull more\n</pasted_content id="6ffc">';
+  const p = parsePrompt(raw);
+  assert.equal(p.from, "chat");
+  assert.equal(p.text, "You are still on **41 bids**.\n- pull more");
+  assert.equal(parsePrompt("[Perch #3] From the project chat: short").from, "chat");
+});
+
+test("your own steering is from you; the brief's kick-off is the brief", () => {
+  assert.deepEqual(parsePrompt("[Perch #4] try the other table"), { from: "you", text: "try the other table" });
+  assert.deepEqual(parsePrompt('<pasted_content id="a1">[Perch #5] a long note of mine</pasted_content id="a1">'), { from: "you", text: "a long note of mine" });
+  assert.equal(parsePrompt("[Perch #1] Start on the task in your brief.").from, "brief");
+});
