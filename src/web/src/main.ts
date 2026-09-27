@@ -58,6 +58,7 @@ const $ = <T extends HTMLElement>(id: string): T => {
 const sidebar = new Sidebar($("sidebar-scroll"), $("new-session-button"), $("recently-closed"));
 const workspace = new Workspace($("workspace"));
 const dashboard = new Dashboard($("dashboard"), $("dash-badge"));
+dashboard.onOpenInbox = () => inbox.show();
 const inbox = new Inbox($("inbox"), $("open-inbox"), $("inbox-badge"));
 const toast = new Toast($("toast"));
 const restoreProgress = new RestoreProgress();
@@ -242,6 +243,7 @@ onMessage((msg) => {
       // per session alive across switches (preserving terminal scrollback)
       // and disposes a stage only when its session drops out of this list.
       workspace.render(msg.sessions, msg.activeSessionId || null, msg.activePaneId || null);
+      dashboard.setProjects(msg.projects ?? []);
       dashboard.render(msg.sessions);
       inbox.setLiveSessions(msg.sessions.map((s) => s.id));
       const active = activeOf(msg);
@@ -338,6 +340,7 @@ onMessage((msg) => {
       break;
     case "inbox.state":
       inbox.apply(msg);
+      dashboard.setInbox(msg);
       workspace.applyInbox(msg.items);
       sidebar.setInbox(msg.items);
       break;

@@ -1,85 +1,40 @@
-// Dashboard = the full-window view of the attention center. Same derived
-// state as the sidebar (the host's SessionView[]), rendered as cards grouped
-// into Needs you / Active / Idle. "Idle" = sessions whose agent finished its
-// turn ("done") or is dormant — at rest, your move, nothing blocked — distinct
-// from "Needs you" (blocked on a permission and can't proceed). Opened from the
-// ▦ button in the sidebar or Ctrl+Shift+A; Esc or the ✕ closes it.
+// Dashboard = the full-window "where does everything stand" view: one card
+// per project (dashboard-model.ts), most urgent first. A card rolls up the
+// project's chats — each with its threads counted by state and the ones that
+// need you named — its other sessions and its email tabs; under the cards,
+// the inbox. Opened from the sidebar's Dashboard button or Ctrl+Shift+A; Esc
+// or the ✕ closes it.
 //
-// Every card is clickable → selects that project + closes (navigate). Waiting
-// cards additionally show a "peek" (the agent's ask) and, when the ask is
-// simple enough to answer blind, an inline quick-reply that sends straight to
-// the pane via pane.in. When the ask is complex (long / code / multi-step),
-// the reply is withheld and only "Open to reply" is offered.
+// It points, it doesn't act: every row takes you to the tab (or thread, or
+// the inbox) where you answer, merge or reply. The sidebar badge counts what
+// is blocked on you.
 
-import type { PaneTreeView, SessionView, AgentStateName } from "./bridge.js";
+import type { SessionView, ProjectView, InboxStateMessage, InboxItemView } from "./bridge.js";
 import { agentGlyph } from "./agent-glyph.js";
-import { send, bytesToB64 } from "./bridge.js";
+import { send } from "./bridge.js";
 import { elapsedSpan, agoSpan } from "./elapsed.js";
-import { openCommitsLightbox } from "./commits-view.js";
 import { closeTeamRoom } from "./team-room.js";
+import { statusLine, groupOf, icon } from "./thread-ui.js";
+import { buildBoard, sessionNeedsYou, type ProjectCard, type ChatBlock } from "./dashboard-model.js";
+import { inboxSummary } from "./inbox-summary.js";
 
-const enc = new TextEncoder();
-
-// Peek collapses to this many lines; "show more" reveals up to PEEK_MAX.
-const PEEK_COLLAPSED = 2;
-const PEEK_MAX = 6;
-
-// A waiting ask is "complex" (→ open-only, no inline reply) when it's long,
-// spans many lines, or contains a fenced code block / diff. Tunable.
-const COMPLEX_CHARS = 180;
-const COMPLEX_LINES = 4;
-
-const STATE_WORD: Record<AgentStateName, string> = {
-  waiting: "waiting",
-  permission: "needs permission",
-  working: "working",
-  done: "idle",
-  idle: "idle",
-};
-
-const el = (tag: string, cls?: string): HTMLElement => {
+const el = (tag: string, cls?: string, text?: string): HTMLElement => {
   const e = document.createElement(tag);
   if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
   return e;
 };
 
-/** Flatten a pane tree to its leaves. */
-function leaves(node: PaneTreeView): Array<Extract<PaneTreeView, { kind: "leaf" }>> {
-  if (node.kind === "leaf") return [node];
-  return node.children.flatMap(leaves);
-}
-
-/** The pane a reply should target: the first one that needs you, else the first. */
-function replyPaneId(s: SessionView): string | null {
-  const ls = leaves(s.rootPane);
-  return (ls.find((l) => l.agentState === "waiting" || l.agentState === "permission") ?? ls[0])?.paneId ?? null;
-}
-
-/** Sum of commits-since-baseline across the session's panes. */
-function commitsTotal(s: SessionView): number {
-  return leaves(s.rootPane).reduce((a, l) => a + (l.commitCount || 0), 0);
-}
-
-/** The pane to fetch the unpushed-commit recap from: the leaf whose ahead
- *  count matches the session's (the one the ↑N badge represents), else the
- *  first leaf. */
-function aheadPaneId(s: SessionView): string | null {
-  const ls = leaves(s.rootPane);
-  return (ls.find((l) => l.ahead === s.ahead && s.ahead > 0) ?? ls[0])?.paneId ?? null;
-}
-
-function isComplexAsk(text: string): boolean {
-  if (!text) return false;
-  if (text.length > COMPLEX_CHARS) return true;
-  if (text.split("\n").length > COMPLEX_LINES) return true;
-  if (text.includes("```")) return true;
-  return false;
-}
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 export class Dashboard {
   private readonly root: HTMLElement;
   private readonly badge: HTMLElement;
   private last: SessionView[] = [];
+  private projects: ProjectView[] = [];
+  private inbox: InboxStateMessage | null = null;
+  /** Opens the inbox (main.ts owns it). */
+  onOpenInbox: () => void = () => {};
 
   constructor(root: HTMLElement, badge: HTMLElement) {
     this.root = root;
@@ -102,286 +57,227 @@ export class Dashboard {
     this.isOpen() ? this.hide() : this.show();
   }
 
-  /** Navigate to a tab: select it in the host and close the dashboard (and
-   *  the team room, if it was up — the tab is what you asked to see). */
+  setProjects(projects: ProjectView[]) { this.projects = projects; }
+
+  setInbox(msg: InboxStateMessage) {
+    this.inbox = msg;
+    if (this.isOpen()) this.render(this.last);
+  }
+
+  /** Go to a tab: select it and close the dashboard (and the team room). */
   private navigate(id: string) {
     closeTeamRoom();
     send({ type: "session.select", id });
     this.hide();
   }
 
-  /** Push the latest state. Updates the waiting badge always; rebuilds the
-   *  dashboard body only while it's open (cheap when closed). */
+  /** Push the latest state. Updates the needs-you badge always; rebuilds the
+   *  body only while open (cheap when closed). */
   render(sessions: SessionView[]) {
     this.last = sessions;
-    const needsCount = sessions.filter(
-      (s) => s.agentState === "waiting" || s.agentState === "permission"
-    ).length;
+    const needsCount = sessions.filter(sessionNeedsYou).length;
     this.badge.textContent = String(needsCount);
     this.badge.style.display = needsCount > 0 ? "" : "none";
     if (!this.isOpen()) return;
 
-    const needs = sessions.filter(
-      (s) => s.agentState === "waiting" || s.agentState === "permission"
-    );
-    const working = sessions.filter((s) => s.agentState === "working");
-    // "Idle" folds the finished-turn ("done") and dormant ("idle") sessions
-    // together — both are at rest, your move, nothing blocked.
-    const idle = sessions.filter(
-      (s) => s.agentState === "done" || s.agentState === "idle"
-    );
+    const { cards, quiet } = buildBoard(sessions, this.projects);
+    const needs = cards.reduce((a, c) => a + c.needs, 0);
+    const working = cards.reduce((a, c) => a + c.working, 0);
+    const ready = cards.reduce((a, c) => a + c.ready, 0);
 
     const frag = document.createDocumentFragment();
-
-    // Head: title + live count pills + close.
     const head = el("div", "dash__head");
-    const title = el("div", "dash__title");
-    title.textContent = "Projects";
-    head.appendChild(title);
+    head.appendChild(el("div", "dash__title", "Dashboard"));
     const counts = el("div", "dash__counts");
-    counts.appendChild(this.countPill(`${needs.length} need you`, needs.length ? "alert" : "muted"));
-    counts.appendChild(this.countPill(`${working.length} working`, "work"));
-    counts.appendChild(this.countPill(`${idle.length} idle`, "muted"));
+    counts.appendChild(el("span", `dash__count dash__count--${needs ? "alert" : "muted"}`, `${needs} need you`));
+    if (ready) counts.appendChild(el("span", "dash__count dash__count--ready", `${ready} ready for review`));
+    counts.appendChild(el("span", "dash__count dash__count--work", `${working} working`));
     head.appendChild(counts);
     const close = el("button", "dash__close");
     close.setAttribute("aria-label", "Close (Esc)");
-    close.innerHTML =
-      '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M4 4l8 8M12 4l-8 8" stroke-linecap="round"/></svg>';
+    close.appendChild(icon("close"));
     close.addEventListener("click", () => this.hide());
     head.appendChild(close);
     frag.appendChild(head);
 
-    // Needs you (with All-clear empty state).
-    frag.appendChild(this.groupLabel("Needs you"));
-    if (needs.length) {
-      const grid = el("div", "dash__grid");
-      for (const s of needs) grid.appendChild(this.card(s));
-      frag.appendChild(grid);
-    } else {
-      frag.appendChild(this.emptyCard("All clear - nothing needs you right now."));
-    }
+    if (!needs) frag.appendChild(el("div", "dash__clear", "All clear — nothing is waiting on you."));
 
-    if (working.length) {
-      frag.appendChild(this.groupLabel("Active"));
-      const grid = el("div", "dash__grid");
-      for (const s of working) grid.appendChild(this.card(s));
-      frag.appendChild(grid);
-    }
-    if (idle.length) {
-      frag.appendChild(this.groupLabel("Idle"));
-      const grid = el("div", "dash__grid");
-      for (const s of idle) grid.appendChild(this.card(s));
-      frag.appendChild(grid);
-    }
+    const grid = el("div", "dash__projects");
+    for (const c of cards) grid.appendChild(this.projectCard(c));
+    frag.appendChild(grid);
+    if (!cards.length) frag.appendChild(el("div", "dash__clear", "Nothing open. Start a session or a project chat from the sidebar."));
+    if (quiet) frag.appendChild(el("div", "dash__quiet", `${plural(quiet, "other project")} with nothing open.`));
+
+    const strip = this.inboxStrip();
+    if (strip) frag.appendChild(strip);
 
     this.root.replaceChildren(frag);
   }
 
-  private countPill(text: string, variant: "alert" | "work" | "muted"): HTMLElement {
-    const p = el("span", `dash__count dash__count--${variant}`);
-    p.textContent = text;
-    return p;
+  // ---- a project ------------------------------------------------------------
+
+  private projectCard(c: ProjectCard): HTMLElement {
+    const card = el("section", "pcard");
+    card.dataset.status = c.needs ? "needs" : c.working ? "working" : "clear";
+    const head = el("header", "pcard__head");
+    head.appendChild(el("h2", "pcard__name", c.name));
+    const status = c.needs ? `${c.needs} need${c.needs === 1 ? "s" : ""} you` : c.working ? `${c.working} working` : c.ready ? `${c.ready} ready` : "All clear";
+    head.appendChild(el("span", "pcard__status", status));
+    card.appendChild(head);
+
+    for (const b of c.chats) card.appendChild(this.chatBlock(b));
+    if (c.sessions.length) card.appendChild(this.section("Sessions", c.sessions.map((s) => this.sessionRow(s))));
+    if (c.email.length) card.appendChild(this.section("Email", c.email.map((s) => this.emailRow(s))));
+    if (c.asleep) card.appendChild(el("div", "pcard__foot", `${plural(c.asleep, "tab")} asleep`));
+    return card;
   }
 
-  private groupLabel(text: string): HTMLElement {
-    const l = el("div", "dash__group-label");
-    l.textContent = text;
-    return l;
+  private section(label: string, rows: HTMLElement[]): HTMLElement {
+    const s = el("div", "pcard__section");
+    s.appendChild(el("div", "pcard__label", label));
+    s.append(...rows);
+    return s;
   }
 
-  private emptyCard(text: string): HTMLElement {
-    const e = el("div", "card card--empty");
-    e.textContent = `✓ ${text}`;
-    return e;
+  private row(id: string, cls = ""): HTMLButtonElement {
+    const r = el("button", `prow ${cls}`.trim()) as HTMLButtonElement;
+    r.type = "button";
+    r.addEventListener("click", () => this.navigate(id));
+    return r;
   }
 
-  private card(s: SessionView): HTMLElement {
-    const c = el("div", "card");
-    c.addEventListener("click", () => this.navigate(s.id));
+  /** A project chat: its title and state, its threads counted by state, and
+   *  the threads that need you (or are ready to merge) named. */
+  private chatBlock(b: ChatBlock): HTMLElement {
+    const wrap = el("div", "pcard__section");
+    const r = this.row(b.chat.id, "prow--chat");
+    r.appendChild(icon("bubble"));
+    r.appendChild(el("span", "prow__title", b.chat.title));
+    const tally = el("span", "prow__tally");
+    const add = (n: number, group: string, word: string) => {
+      if (!n) return;
+      const t = el("span", "prow__count");
+      t.dataset.group = group;
+      t.append(el("span", "pc-dot"), `${n} ${word}`);
+      tally.appendChild(t);
+    };
+    add(b.counts.waiting, "waiting", "need you");
+    add(b.counts.working, "working", "working");
+    add(b.counts.ready, "ready", "to merge");
+    const total = b.counts.waiting + b.counts.working + b.counts.ready + b.counts.idle;
+    if (!total) tally.appendChild(el("span", "prow__count", b.chat.agentState === "working" ? "Thinking…" : "No open threads"));
+    else if (!b.counts.waiting && !b.counts.working && !b.counts.ready) tally.appendChild(el("span", "prow__count", `${plural(total, "thread")} idle`));
+    r.appendChild(tally);
+    wrap.appendChild(r);
 
-    const head = el("div", "card__head");
+    for (const t of b.attention.slice(0, 4)) {
+      const tr = this.row(t.id, "prow--thread");
+      tr.dataset.group = groupOf(t);
+      tr.appendChild(el("span", "pc-dot"));
+      tr.appendChild(el("span", "prow__num", `#${t.threadNumber ?? ""}`));
+      tr.appendChild(el("span", "prow__title", t.title));
+      const line = statusLine(t);
+      tr.appendChild(el("span", `prow__note${line.blocked ? " prow__note--blocked" : ""}`, line.text));
+      wrap.appendChild(tr);
+    }
+    if (b.attention.length > 4) wrap.appendChild(el("div", "pcard__more", `and ${b.attention.length - 4} more — open the chat's Overview`));
+    return wrap;
+  }
+
+  private sessionRow(s: SessionView): HTMLElement {
+    const r = this.row(s.id);
     const dot = el("span", "card__dot");
     dot.dataset.state = s.agentState;
-    head.appendChild(dot);
-    // The agent's mark, same as the sidebar row wears (agent-glyph.ts).
-    for (const agent of (s.agents ?? []).slice(0, 2)) {
-      const glyph = agentGlyph(agent);
-      if (glyph) {
-        glyph.classList.add("card__agent");
-        head.appendChild(glyph);
-      }
+    r.appendChild(dot);
+    for (const agent of (s.agents ?? []).slice(0, 1)) {
+      const g = agentGlyph(agent);
+      if (g) { g.classList.add("prow__agent"); r.appendChild(g); }
     }
-    const t = el("span", "card__title");
-    t.textContent = s.title;
-    head.appendChild(t);
-    const open = el("span", "card__open");
-    open.textContent = "Open →";
-    head.appendChild(open);
-    c.appendChild(head);
-
-    if (s.agentState === "waiting" || s.agentState === "permission") {
-      this.renderWaitingBody(c, s, dot);
-    } else {
-      const atRest = s.agentState === "idle" || s.agentState === "done";
-      const note = el("div", "card__note" + (atRest ? " card__note--idle" : ""));
-      note.textContent =
-        s.notification?.text ||
-        (s.agentState === "working"
-          ? s.activityDetail || "Working…"
-          : s.agentState === "done"
-          ? "Idle — your move, no rush."
-          : "No recent activity");
-      c.appendChild(note);
-    }
-
-    // Footer: last-activity + code chips (branch / +commits / ports / panes).
-    const foot = el("div", "card__foot");
-    const act = el("span", "card__activity");
-    act.textContent = STATE_WORD[s.agentState];
-    // Live elapsed for a working session; live relative-ago for a finished
-    // one (ticks on the page, no host re-push); else the host's last-activity
-    // string as a fallback for rows without a stamped turn-end.
-    if (s.agentState === "working" && s.turnStartMs > 0) {
-      act.append(" · ");
-      act.appendChild(elapsedSpan(s.turnStartMs));
+    r.appendChild(el("span", "prow__title", s.title));
+    const note = el("span", "prow__note");
+    if (sessionNeedsYou(s)) {
+      note.classList.add("prow__note--blocked");
+      note.textContent = (s.notification?.text || (s.agentState === "permission" ? "Needs your permission" : "Waiting for you")).split("\n")[0];
+    } else if (s.agentState === "working" && s.turnStartMs > 0) {
+      note.append("Working · ", elapsedSpan(s.turnStartMs));
     } else if (s.agentState === "done" && s.doneAtMs > 0) {
-      act.append(" · ");
-      act.appendChild(agoSpan(s.doneAtMs));
-    } else if (s.lastActivity) {
-      act.append(` · ${s.lastActivity}`);
-    }
-    foot.appendChild(act);
-    if (s.paneCount > 1) {
-      const ch = el("span", "chip" + (s.waitingCount > 0 ? " chip--alert" : ""));
-      ch.textContent = `${s.paneCount} panes` + (s.workingCount > 0 ? ` · ${s.workingCount} working` : "");
-      foot.appendChild(ch);
-    }
-    if (s.branch) {
-      const ch = el("span", "chip");
-      ch.textContent = `⎇ ${s.branch}`;
-      foot.appendChild(ch);
-    }
-    const commits = commitsTotal(s);
-    if (commits > 0) {
-      const ch = el("span", "chip chip--commits");
-      ch.textContent = `+${commits} commit${commits === 1 ? "" : "s"}`;
-      foot.appendChild(ch);
-    }
-    // Diff footprint since baseline — added (green) / deleted (red) / files.
-    if (s.linesAdded || s.linesDeleted) {
-      const ch = el("span", "chip chip--diff");
-      if (s.linesAdded) {
-        const a = el("span", "diff-add");
-        a.textContent = `+${s.linesAdded}`;
-        ch.appendChild(a);
-      }
-      if (s.linesDeleted) {
-        const d = el("span", "diff-del");
-        d.textContent = `−${s.linesDeleted}`;
-        ch.appendChild(d);
-      }
-      if (s.filesChanged) {
-        const f = el("span", "diff-files");
-        f.textContent = `${s.filesChanged} file${s.filesChanged === 1 ? "" : "s"}`;
-        ch.appendChild(f);
-      }
-      foot.appendChild(ch);
-    }
-    // Unpushed commits — click opens the recap lightbox (stop-propagation so
-    // it doesn't also navigate to the session via the card's click handler).
+      note.append("Finished ", agoSpan(s.doneAtMs));
+    } else note.textContent = s.lastActivity || "";
+    r.appendChild(note);
     if (s.ahead > 0) {
-      const ch = el("span", "chip chip--ahead");
-      ch.textContent = `↑${s.ahead}`;
-      ch.title = "Commits ready to push — click for recap";
-      const pid = aheadPaneId(s);
-      if (pid) {
-        ch.addEventListener("click", (ev) => {
-          ev.stopPropagation();
-          openCommitsLightbox(pid);
-        });
-      }
-      foot.appendChild(ch);
+      const a = el("span", "prow__ahead", `↑${s.ahead}`);
+      a.title = `${plural(s.ahead, "commit")} to push`;
+      r.appendChild(a);
     }
-    for (const port of s.ports ?? []) {
-      const ch = el("span", "chip");
-      ch.textContent = `:${port}`;
-      foot.appendChild(ch);
-    }
-    c.appendChild(foot);
-
-    return c;
+    return r;
   }
 
-  /** Waiting card body: a peek at the agent's ask, then either an inline
-   *  reply (simple ask) or an Open-to-reply button (complex ask). */
-  private renderWaitingBody(c: HTMLElement, s: SessionView, dot: HTMLElement) {
-    const wrap = el("div", "card__wait");
-    const ask =
-      s.notification?.text ||
-      (s.agentState === "permission" ? "Needs your permission" : "Waiting for your input");
-    const lines = ask.split("\n").map((l) => l.trim()).filter(Boolean).slice(-PEEK_MAX);
-
-    const peek = el("div", "card__peek");
-    lines.forEach((line, i, arr) => {
-      const ln = el("div", "card__peek-line" + (i === arr.length - 1 ? " card__peek-line--q" : ""));
-      ln.textContent = line;
-      peek.appendChild(ln);
-    });
-    const collapsible = lines.length > PEEK_COLLAPSED;
-    if (collapsible) peek.classList.add("card__peek--collapsed");
-    wrap.appendChild(peek);
-    if (collapsible) {
-      const more = el("button", "card__peek-more");
-      more.textContent = "Show more";
-      more.addEventListener("click", (ev) => {
-        ev.stopPropagation();
-        const col = peek.classList.toggle("card__peek--collapsed");
-        more.textContent = col ? "Show more" : "Show less";
-      });
-      wrap.appendChild(more);
-    }
-
-    const paneId = replyPaneId(s);
-    if (isComplexAsk(ask) || !paneId) {
-      // Too much to answer from a peek → only offer to open the pane.
-      const ob = el("button", "card__openbtn");
-      ob.textContent = "Open to reply →";
-      ob.addEventListener("click", (ev) => {
-        ev.stopPropagation();
-        this.navigate(s.id);
-      });
-      wrap.appendChild(ob);
-    } else {
-      const form = document.createElement("form");
-      form.className = "card__reply";
-      const inp = document.createElement("input");
-      inp.className = "card__reply-input";
-      inp.type = "text";
-      inp.placeholder = "Type your reply…";
-      inp.spellcheck = false;
-      const btn = document.createElement("button");
-      btn.className = "card__reply-send";
-      btn.type = "submit";
-      btn.setAttribute("aria-label", "Send");
-      btn.innerHTML =
-        '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 8h9M8 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-      [form, inp, btn].forEach((e) => e.addEventListener("click", (ev) => ev.stopPropagation()));
-      form.append(inp, btn);
-      form.addEventListener("submit", (ev) => {
-        ev.preventDefault();
-        ev.stopPropagation();
-        const v = inp.value.trim();
-        if (!v) return;
-        // Send the reply + Enter straight to the waiting pane.
-        send({ type: "pane.in", paneId, b64: bytesToB64(enc.encode(v + "\r")) });
-        dot.dataset.state = "working";
-        const sent = el("div", "card__note");
-        sent.textContent = "You replied · working on it…";
-        wrap.replaceChildren(sent);
-      });
-      wrap.appendChild(form);
-    }
-
-    c.appendChild(wrap);
+  private emailRow(s: SessionView): HTMLElement {
+    const r = this.row(s.id);
+    r.appendChild(mailIcon());
+    r.appendChild(el("span", "prow__title", s.title));
+    const note = el("span", "prow__note");
+    if (sessionNeedsYou(s)) { note.classList.add("prow__note--blocked"); note.textContent = "Waiting for you"; }
+    else if (s.agentState === "working") note.textContent = "Working";
+    r.appendChild(note);
+    return r;
   }
+
+  // ---- the inbox ------------------------------------------------------------
+
+  private inboxStrip(): HTMLElement | null {
+    const msg = this.inbox;
+    if (!msg?.enabled) return null;
+    const s = inboxSummary(msg);
+    const strip = el("section", "pcard pcard--inbox");
+    const head = el("button", "pcard__head pcard__head--button") as HTMLButtonElement;
+    head.type = "button";
+    head.addEventListener("click", () => { this.hide(); this.onOpenInbox(); });
+    const name = el("h2", "pcard__name");
+    name.append(mailIcon(), "Inbox");
+    head.appendChild(name);
+    const cue = el("span", "inbox-cue");
+    if (s.pending) cue.appendChild(el("span", "inbox-cue__pending", `${s.pending} pending`));
+    if (s.fresh) cue.appendChild(el("span", "inbox-cue__new", `${s.fresh} new`));
+    if (!s.fresh && !s.pending) cue.appendChild(el("span", "pcard__status", "Nothing new"));
+    head.appendChild(cue);
+    strip.appendChild(head);
+    if (s.problem) strip.appendChild(el("div", "pcard__warn",
+      s.problem === "login" ? "gcloud needs you to sign in again — the inbox has stopped syncing." : "The last sync failed — open the inbox to retry."));
+
+    const rank = (i: InboxItemView) => (i.state === "new" ? 0 : i.state === "pending" ? 1 : 2);
+    const top = msg.items.filter((i) => i.state === "new" || i.state === "pending").sort((a, b) => rank(a) - rank(b)).slice(0, 5);
+    for (const item of top) {
+      const r = el("button", "prow prow--mail") as HTMLButtonElement;
+      r.type = "button";
+      r.dataset.state = item.state;
+      r.addEventListener("click", () => {
+        if (item.sessionId && this.last.some((x) => x.id === item.sessionId)) this.navigate(item.sessionId);
+        else { this.hide(); this.onOpenInbox(); }
+      });
+      r.appendChild(el("span", "prow__mail-dot"));
+      r.appendChild(el("span", "prow__from", item.from || "(unknown sender)"));
+      r.appendChild(el("span", "prow__title", item.subject));
+      r.appendChild(el("span", "prow__note", item.state === "new" ? "New" : "Pending"));
+      strip.appendChild(r);
+    }
+    return strip;
+  }
+}
+
+function mailIcon(): SVGSVGElement {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 16 16");
+  svg.setAttribute("width", "14");
+  svg.setAttribute("height", "14");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("class", "pc-icon");
+  const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  p.setAttribute("d", "M2.5 4.5h11v7h-11zM3 5l5 3.5L13 5");
+  p.setAttribute("fill", "none");
+  p.setAttribute("stroke", "currentColor");
+  p.setAttribute("stroke-width", "1.3");
+  p.setAttribute("stroke-linejoin", "round");
+  svg.appendChild(p);
+  return svg;
 }
