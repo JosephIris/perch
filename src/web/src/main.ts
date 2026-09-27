@@ -389,6 +389,9 @@ onMessage((msg) => {
     case "team.reference.picked":
       applyReferencePicked(msg);
       break;
+    case "chat.paste.data":
+      workspace.applyChatPaste(msg);
+      break;
     case "team.paste.data":
       applyPasteResult(msg);
       break;

@@ -14,7 +14,7 @@
 // pane would float over the visible one — we tear those down on hide and let
 // them rebuild (page reload, no scrollback to lose) when the session returns.
 
-import type { PaneTreeView, SessionView, BoardNodeView, BoardLinkView, InboxMailMessage, InboxItemView, ChatEntryView, ChatMetaMessage, ThreadEventView, ThreadTaskView } from "./bridge.js";
+import type { PaneTreeView, SessionView, BoardNodeView, BoardLinkView, InboxMailMessage, InboxItemView, ChatEntryView, ChatMetaMessage, ThreadEventView, ThreadTaskView, ChatPasteDataMessage } from "./bridge.js";
 import { send } from "./bridge.js";
 import { Pane, DEFAULT_FONT_SIZE, type PaneSnapshot } from "./pane.js";
 import { openSettings } from "./settings.js";
@@ -608,6 +608,14 @@ export class Workspace {
     const pane = this.findPane(msg.paneId);
     if (pane instanceof ChatPane) pane.applyMeta(msg);
   }
+  /** A pasted picture came back: every chat checks whether it was for its box
+   *  or its open thread's. */
+  applyChatPaste(msg: ChatPasteDataMessage) {
+    for (const stage of this.stages.values())
+      for (const pane of stage.panes.values())
+        if (pane instanceof ChatPane) pane.applyPaste(msg);
+  }
+
   /** A thread's conversation: whichever chat has that thread open shows it. */
   applyThreadTranscript(id: string, events: ThreadEventView[], tasks: ThreadTaskView[]) {
     for (const stage of this.stages.values())

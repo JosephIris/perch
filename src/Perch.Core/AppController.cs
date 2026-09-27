@@ -1009,7 +1009,8 @@ internal sealed partial class AppController
         .Add<TeamReferenceBrowseMsg>("team.reference.browse", OnTeamReferenceBrowse)
         .Add<TeamRoomMsg>("team.room", m => _teamCtrl.OnRoom(m))
         .Add<TeamBotAnswerMsg>("team.bot.answer", m => _teamCtrl.OnBotAnswer(m))
-        .Add<TeamPasteMsg>("team.paste", OnTeamPaste);
+        .Add<TeamPasteMsg>("team.paste", OnTeamPaste)
+        .Add<ChatPasteMsg>("chat.paste", OnChatPaste);
 
     private void OnWebMessage(string raw)
     {
@@ -4027,6 +4028,48 @@ internal sealed partial class AppController
     }
 
     private void OnProjectAdd(ProjectAddMsg msg) => AddProject(msg.Path, msg.Name);
+
+    /// A picture pasted into a project chat's box or a thread's. As with the
+    /// room: the clipboard is read here, the PNG saved in the chat's folder
+    /// (a thread's pictures go with its chat's), and the path handed back —
+    /// with a small preview, since the page can't load a local file — for the
+    /// box to attach. The message then names the file, and Claude opens it.
+    private void OnChatPaste(ChatPasteMsg msg)
+    {
+        string? path = null, dataUrl = null, error = null;
+        try
+        {
+            var tab = _store.Sessions.FirstOrDefault(s => s.Id == msg.SessionId);
+            var lead = tab?.IsLead == true ? tab
+                : tab?.ThreadOf is Guid lid ? _store.Sessions.FirstOrDefault(s => s.Id == lid) : null;
+            var clip = lead == null ? null : _host.ReadClipboardForBoard();
+            if (lead == null) error = "This isn't a project chat.";
+            else if (clip == null) error = "Couldn't read the clipboard just then. Try again.";
+            else if (clip.Value.Png is not byte[] png) error = "No picture on the clipboard.";
+            else
+            {
+                var dir = System.IO.Path.Combine(ThreadController.DirFor(lead), "images");
+                System.IO.Directory.CreateDirectory(dir);
+                path = System.IO.Path.Combine(dir, $"paste-{DateTime.Now:yyyyMMdd-HHmmss-fff}.png");
+                AtomicFile.WriteAllBytes(path, png);
+                dataUrl = "data:image/png;base64," + Convert.ToBase64String(png);
+                Log.Info("Chat.paste", $"session={msg.SessionId:N} bytes={png.Length} path={path}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Chat.paste.clipboard", ex);
+            error = "Couldn't read the clipboard just then. Try again.";
+        }
+        try
+        {
+            _web.PostJson(JsonSerializer.Serialize(new
+            {
+                type = "chat.paste.data", sessionId = msg.SessionId.ToString("D"), path, dataUrl, error,
+            }));
+        }
+        catch (Exception ex) { Log.Error("OnChatPaste.post", ex); }
+    }
 
     /// A picture pasted into the room's composer. The clipboard is read HERE
     /// (the page can't reach it), the bitmap saved as PNG under the team's

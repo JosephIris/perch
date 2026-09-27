@@ -21,7 +21,7 @@
 //   * a wavy rule where the day changes.
 
 import { send } from "./bridge.js";
-import type { PaneTreeView, SessionView, ChatEntryView, ChatMetaMessage, ThreadEventView, ThreadTaskView } from "./bridge.js";
+import type { PaneTreeView, SessionView, ChatEntryView, ChatMetaMessage, ThreadEventView, ThreadTaskView, ChatPasteDataMessage } from "./bridge.js";
 import { renderMarkdown } from "./md.js";
 import { ChatOverview, divider } from "./chat-overview.js";
 import {
@@ -31,6 +31,7 @@ import {
 import { copyText } from "./clipboard.js";
 import { elapsedSpan } from "./elapsed.js";
 import { StickToEnd } from "./stick-to-end.js";
+import { ImageTray, withImages, userBubble } from "./image-attach.js";
 
 const EASE = "cubic-bezier(0, 0, 0, 1)";
 
@@ -63,6 +64,7 @@ export class ChatPane {
   private runningSince = 0;
   private loaded = false;
   private sessionId = "";
+  private readonly tray: ImageTray;
   private threads: SessionView[] = [];
   private meta: ChatMetaMessage | null = null;
   private readonly seen = new Set<string>();
@@ -120,7 +122,7 @@ export class ChatPane {
       if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); this.submit(); }
     });
     this.sendBtn = button("pc-composer__send", icon("enter"), () => {
-      if (this.running && this.input.value.trim() === "") send({ type: "chat.stop", paneId: this.paneId });
+      if (this.running && !this.hasDraft()) send({ type: "chat.stop", paneId: this.paneId });
       else this.submit();
     }, "Send");
     box.append(this.input, this.sendBtn);
@@ -131,7 +133,9 @@ export class ChatPane {
     setRing(this.spinEl, 0, 0);
     this.spinEl.classList.add("chat__spin");
     tools.append(this.queuedEl, this.modelEl, this.spinEl);
-    compose.append(box, tools);
+    this.tray = new ImageTray(() => this.sessionId, () => this.updateButton());
+    this.tray.listen(this.input);
+    compose.append(this.tray.element, box, tools);
     main.appendChild(compose);
 
     this.overview = new ChatOverview((text) => this.sendText(text));
@@ -320,7 +324,7 @@ export class ChatPane {
       case "user": {
         this.sealSegment();
         const row = el("div", "chat-row chat-row--user");
-        row.appendChild(el("div", "pc-bubble", e.text));
+        row.appendChild(userBubble(e.text));
         this.append({ kind: "user", el: row }, e, live);
         const turn: Turn = { user: row, marker: null, sentTo: new Set() };
         this.turns.push(turn);
@@ -709,14 +713,24 @@ export class ChatPane {
 
   private submit() {
     const text = this.input.value.trim();
-    if (!text) return;
-    this.sendText(text);
+    const images = this.tray.paths();
+    if (!text && !images.length) return;
+    this.sendText(withImages(text, images));
     this.input.value = "";
+    this.tray.clear();
     this.autosize();
   }
 
+  /** A pasted picture came back from the host: for this box or an open thread's. */
+  applyPaste(msg: ChatPasteDataMessage) {
+    this.tray.apply(msg);
+    this.overview.applyPaste(msg);
+  }
+
+  private hasDraft(): boolean { return this.input.value.trim() !== "" || this.tray.paths().length > 0; }
+
   private updateButton() {
-    const stop = this.running && this.input.value.trim() === "";
+    const stop = this.running && !this.hasDraft();
     const want = stop ? "stop" : "enter";
     if (this.sendBtn.dataset.icon !== want) {
       this.sendBtn.dataset.icon = want;
@@ -725,7 +739,7 @@ export class ChatPane {
       this.sendBtn.setAttribute("aria-label", this.sendBtn.title);
     }
     this.sendBtn.classList.toggle("pc-composer__send--stop", stop);
-    this.sendBtn.classList.toggle("pc-composer__send--ready", !stop && this.input.value.trim() !== "");
+    this.sendBtn.classList.toggle("pc-composer__send--ready", !stop && this.hasDraft());
   }
 
   private autosize() {

@@ -16,7 +16,7 @@
 // never recreated — what you type and where the caret is survive every push.
 
 import { send } from "./bridge.js";
-import type { SessionView, ThreadEventView, ThreadTaskView, ChatMetaMessage } from "./bridge.js";
+import type { SessionView, ThreadEventView, ThreadTaskView, ChatMetaMessage, ChatPasteDataMessage } from "./bridge.js";
 import { renderMarkdown } from "./md.js";
 import {
   GROUPS, groupOf, statusLine, askText, lastActiveMs, byRecent, summarizeWork,
@@ -24,6 +24,7 @@ import {
 } from "./thread-ui.js";
 import { elapsedSpan } from "./elapsed.js";
 import { StickToEnd } from "./stick-to-end.js";
+import { ImageTray, withImages, userBubble } from "./image-attach.js";
 import { queuedNote, queuedText } from "./thread-steer.js";
 
 export { groupOf, stateLabel } from "./thread-ui.js";
@@ -150,6 +151,8 @@ export class ChatOverview {
   dispose() { this.detail?.dispose(); }
   /** After the pane was moved: an open thread lands its end again. */
   refit() { this.detail?.refit(); }
+  /** A pasted picture for the open thread's box. */
+  applyPaste(msg: ChatPasteDataMessage) { this.detail?.applyPaste(msg); }
 
   // ---- views ----------------------------------------------------------------
 
@@ -457,6 +460,7 @@ class ThreadDetail {
   private readonly waitEl: HTMLElement;
   private readonly composer: HTMLElement;
   private readonly box: HTMLTextAreaElement;
+  private readonly tray: ImageTray;
   private readonly resolvedEl: HTMLElement;
   private readonly branchEl: HTMLElement;
   /** What the box sent that hasn't gone in yet, above the box. */
@@ -508,13 +512,16 @@ class ThreadDetail {
       if (ev.key === "Escape" && !this.box.value) { ev.preventDefault(); this.back(); }
     });
     this.composer.append(this.box, button("pc-composer__send", icon("enter"), () => this.submit(), "Send"));
+    // Pictures pasted into the box ride along with the next message.
+    this.tray = new ImageTray(() => this.id);
+    this.tray.listen(this.box);
     this.resolvedEl = el("div", "ovd__resolved");
     this.resolvedEl.hidden = true;
     this.branchEl = el("div", "ovd__branch");
     this.branchEl.hidden = true;
     this.queuedEl = el("div", "ovd__queued");
     this.queuedEl.hidden = true;
-    foot.append(this.waitEl, this.queuedEl, this.composer, this.resolvedEl, this.branchEl);
+    foot.append(this.waitEl, this.queuedEl, this.tray.element, this.composer, this.resolvedEl, this.branchEl);
     this.element.append(this.scroll, foot);
 
     // While it works, keep its conversation and task list current.
@@ -644,7 +651,7 @@ class ThreadDetail {
         return card;
       }
       const row = el("div", "ovd__prompt");
-      row.append(el("div", "pc-bubble", p.text), el("div", "ovd__from", "From you"));
+      row.append(userBubble(p.text), el("div", "ovd__from", "From you"));
       return row;
     }
     const row = el("div", "ovd__beat md");
@@ -707,7 +714,7 @@ class ThreadDetail {
     if (!note) { this.queuedEl.replaceChildren(); return; }
     const rows = note.lines.map((line) => {
       const row = el("div", "ovd__prompt ovd__prompt--queued");
-      row.append(el("div", "pc-bubble", queuedText(line)));
+      row.append(userBubble(queuedText(line)));
       return row;
     });
     this.queuedEl.replaceChildren(...rows, el("div", "ovd__from", note.when));
@@ -749,11 +756,15 @@ class ThreadDetail {
 
   private submit() {
     const text = this.box.value.trim();
-    if (!text) return;
-    send({ type: "thread.send", id: this.id, text });
+    const images = this.tray.paths();
+    if (!text && !images.length) return;
+    send({ type: "thread.send", id: this.id, text: withImages(text, images) });
     this.box.value = "";
+    this.tray.clear();
     this.autosize();
   }
+
+  applyPaste(msg: ChatPasteDataMessage) { this.tray.apply(msg); }
 
   private autosize() {
     this.box.style.height = "auto";

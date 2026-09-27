@@ -329,6 +329,10 @@ export type OutMessage =
   /* A picture was pasted into the composer: the host reads the clipboard,
    * saves the PNG under the team's local folder and answers team.paste.data. */
   | { type: "team.paste"; projectId: string }
+  /* A picture was pasted into a project chat's box or a thread's (sessionId
+   * is that tab): the host reads the clipboard, saves the PNG in the chat's
+   * folder and answers chat.paste.data. */
+  | { type: "chat.paste"; sessionId: string }
   /* Create a bot: an existing position by slug, or a new one whose `brief` is
    * the text the user accepted in the dialog (generated or hand-written). */
   | { type: "team.bot.create"; projectId: string; nickname: string; worktree: boolean; positionSlug?: string;
@@ -1278,6 +1282,7 @@ export type InMessage =
   | TeamReferencePickedMessage
   | TeamImageDataMessage
   | TeamPasteDataMessage
+  | ChatPasteDataMessage
   | TeamArtefactDataMessage
   | TeamArtefactIndexMessage;
 
@@ -1320,6 +1325,16 @@ export type TeamPasteDataMessage = {
   type: "team.paste.data";
   projectId: string;
   path?: string | null;
+  error?: string | null;
+};
+
+/** The host's answer to `chat.paste`: where it saved the picture, a small
+ *  preview of it, or why it couldn't. `sessionId` is the tab it was for. */
+export type ChatPasteDataMessage = {
+  type: "chat.paste.data";
+  sessionId: string;
+  path?: string | null;
+  dataUrl?: string | null;
   error?: string | null;
 };
 

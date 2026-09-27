@@ -575,6 +575,13 @@ internal sealed record TeamPasteMsg
     public required Guid ProjectId { get; init; }
 }
 
+/// A picture pasted into a project chat's box or a thread's (`chat.paste`):
+/// the tab it is for. The host reads the clipboard itself.
+internal sealed record ChatPasteMsg
+{
+    public required Guid SessionId { get; init; }
+}
+
 /// A new position, sent inline with the bot that first fills it. `brief` is
 /// the text the owner accepted (generated or hand-written).
 internal sealed record TeamPositionSpec
