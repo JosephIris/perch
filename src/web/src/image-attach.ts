@@ -7,6 +7,7 @@
 import { send } from "./bridge.js";
 import type { ChatPasteDataMessage } from "./bridge.js";
 import { showToast } from "./toast.js";
+import { splitLinks } from "./md.js";
 import { el, button, icon } from "./thread-ui.js";
 
 /** Whether a paste carries a picture and no text (a screenshot), which the
@@ -40,7 +41,16 @@ export function splitImages(text: string): { text: string; images: string[] } {
 /** Your message as a bubble: its words, and a chip per picture it sent. */
 export function userBubble(text: string): HTMLElement {
   const { text: words, images } = splitImages(text);
-  const bubble = el("div", "pc-bubble", words);
+  const bubble = el("div", "pc-bubble");
+  // Your words as typed; the addresses in them are links.
+  for (const s of splitLinks(words)) {
+    if (s.kind !== "link") { bubble.append(s.text); continue; }
+    const a = el("a", "md-link", s.text) as HTMLAnchorElement;
+    a.href = s.href;
+    a.title = s.href;
+    a.addEventListener("click", (ev) => { ev.preventDefault(); ev.stopPropagation(); send({ type: "url.open", url: s.href }); });
+    bubble.appendChild(a);
+  }
   if (images.length) {
     const chips = el("div", "pc-bubble__images");
     for (const p of images) {

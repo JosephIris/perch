@@ -9507,6 +9507,9 @@ body.show-inbox .inbox { display: flex; }
 .md-quote { margin: 0 0 var(--sp-12); padding-left: var(--sp-12); border-left: 2px solid var(--color-stroke-strong); color: var(--color-text-secondary); white-space: pre-wrap; }
 .md-link { color: var(--color-accent); text-decoration: none; }
 .md-link:hover { text-decoration: underline; }
+/* An address written in code style: still code-looking, but a link. */
+.md-link.md-code { color: var(--color-accent); cursor: pointer; }
+.pc-bubble .md-link { overflow-wrap: anywhere; }
 /* The chat's mark in the sidebar. */
 .session-item__chat { color: var(--color-accent); flex: 0 0 auto; }
 

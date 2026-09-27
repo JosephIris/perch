@@ -5,7 +5,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseBlocks, parseInline } from "../src/md.js";
+import { parseBlocks, parseInline, splitLinks } from "../src/md.js";
 
 test("blocks: paragraphs, headings, lists, fences, quotes", () => {
   const b = parseBlocks([
@@ -39,6 +39,26 @@ test("inline: code, bold, italic, links (http only)", () => {
   assert.deepEqual(s.map((x) => x.kind), ["text", "code", "text", "bold", "text", "italic", "text", "link", "text"]);
   assert.equal(s[7].kind === "link" && s[7].href, "https://x.dev/a");
   assert.ok(s[8].text.includes("[bad](javascript:alert(1))"));   // not a link
+});
+
+test("bare addresses and addresses in code style are links; sentence punctuation isn't part of them", () => {
+  const s = parseInline("Look here: http://localhost:5099/. Or `https://x.dev/a?b=1_2`, and https://x.dev/p_q_r!");
+  const links = s.filter((x) => x.kind === "link");
+  assert.deepEqual(links.map((x) => x.kind === "link" && [x.href, !!x.code]), [
+    ["http://localhost:5099/", false], ["https://x.dev/a?b=1_2", true], ["https://x.dev/p_q_r", false],
+  ]);
+  assert.equal(s[s.length - 1].text, "!");
+  // A code span that isn't just an address stays code.
+  assert.equal(parseInline("`curl https://x.dev`")[0].kind, "code");
+});
+
+test("your own text: only its addresses are picked out", () => {
+  const s = splitLinks("check *this* at http://localhost:5099/x, ok");
+  assert.deepEqual(s, [
+    { kind: "text", text: "check *this* at " },
+    { kind: "link", text: "http://localhost:5099/x", href: "http://localhost:5099/x" },
+    { kind: "text", text: ", ok" },
+  ]);
 });
 
 test("an unterminated fence runs to the end instead of vanishing", () => {

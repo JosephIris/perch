@@ -80,9 +80,28 @@ export function parseBlocks(src: string): Block[] {
 
 export type Span =
   | { kind: "text" | "code" | "bold" | "italic"; text: string }
-  | { kind: "link"; text: string; href: string };
+  | { kind: "link"; text: string; href: string; code?: boolean };
 
-const INLINE = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(\[[^\]\n]+\]\((https?:\/\/[^)\s]+)\))|(\*[^*\s\n][^*\n]*\*)|(\b_[^_\n]+_\b)/g;
+// A bare web address, up to the punctuation that ends a sentence around it.
+const BARE_URL = String.raw`https?:\/\/[^\s<>()\[\]\x60"']*[^\s<>()\[\]\x60"'.,;:!?*]`;
+const INLINE = new RegExp(String.raw`(\x60[^\x60\n]+\x60)|(\*\*[^*\n]+\*\*)|(\[[^\]\n]+\]\((https?:\/\/[^)\s]+)\))|(${BARE_URL})|(\*[^*\s\n][^*\n]*\*)|(\b_[^_\n]+_\b)`, "g");
+const WHOLE_URL = new RegExp(String.raw`^${BARE_URL}$`);
+
+/** Plain text with only its web addresses picked out — for text shown as
+ *  written (your own messages), where nothing else should be read as
+ *  formatting. Pure. */
+export function splitLinks(text: string): Span[] {
+  const rx = new RegExp(BARE_URL, "g");
+  const out: Span[] = [];
+  let at = 0;
+  for (const m of text.matchAll(rx)) {
+    if (m.index! > at) out.push({ kind: "text", text: text.slice(at, m.index) });
+    out.push({ kind: "link", text: m[0], href: m[0] });
+    at = m.index! + m[0].length;
+  }
+  if (at < text.length) out.push({ kind: "text", text: text.slice(at) });
+  return out;
+}
 
 /** Inline spans of one block's text. Pure. */
 export function parseInline(text: string): Span[] {
@@ -92,9 +111,14 @@ export function parseInline(text: string): Span[] {
   for (let m = INLINE.exec(text); m; m = INLINE.exec(text)) {
     if (m.index > at) out.push({ kind: "text", text: text.slice(at, m.index) });
     const t = m[0];
-    if (m[1]) out.push({ kind: "code", text: t.slice(1, -1) });
+    if (m[1]) {
+      // `http://localhost:5099/` — an address in code style is still a link.
+      const inner = t.slice(1, -1);
+      out.push(WHOLE_URL.test(inner) ? { kind: "link", text: inner, href: inner, code: true } : { kind: "code", text: inner });
+    }
     else if (m[2]) out.push({ kind: "bold", text: t.slice(2, -2) });
     else if (m[3]) out.push({ kind: "link", text: t.slice(1, t.indexOf("](")), href: m[4] });
+    else if (m[5]) out.push({ kind: "link", text: t, href: t });
     else out.push({ kind: "italic", text: t.slice(1, -1) });
     at = m.index + t.length;
   }
@@ -111,7 +135,7 @@ function inline(host: HTMLElement, text: string, deco?: TextDecorator) {
     if (s.kind === "text") { if (deco) deco(host, s.text); else host.append(s.text); continue; }
     if (s.kind === "link") {
       const a = document.createElement("a");
-      a.className = "md-link";
+      a.className = s.code ? "md-link md-code" : "md-link";
       a.textContent = s.text;
       a.href = s.href;
       a.title = s.href;
