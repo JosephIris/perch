@@ -1823,21 +1823,25 @@ public class TeamControllerTests : IDisposable
     public async Task PermissionRequest_IsACard_AndTheAnswerLandsWhereTheHookPolls()
     {
         var h = new Harness();
+        // Unique ids: the answer files live in the shared temp folder, and the
+        // net8.0 and net8.0-windows runs of this test go at the same time —
+        // one deleted the other's "p1" file mid-test (CI, v1.79.0).
+        var u = Guid.NewGuid().ToString("N")[..8];
         var bot = await h.CreateBot("Ada");
         var sess = h.Sessions.Single();
-        h.Ctrl.OnPermAsk(sess, sess.Root.Id, new PermAskMessage("p1", "Bash", "rm -rf build",
+        h.Ctrl.OnPermAsk(sess, sess.Root.Id, new PermAskMessage($"p1-{u}", "Bash", "rm -rf build",
             "{\"command\":\"rm -rf build\"}", new[] { "Bash(rm *)" }));
         var card = h.Ledger.Single(e => e.Event == "permission");
-        Assert.Equal("p1", card.Note);
+        Assert.Equal($"p1-{u}", card.Note);
         Assert.Equal("ada", Assert.Single(card.To!));
         Assert.Equal("Ada wants to run Bash: rm -rf build", card.Text);
         Assert.Equal("{\"command\":\"rm -rf build\"}", card.Summary);
         Assert.Contains("[waiting for your permission]", File.ReadAllText(h.Store.RosterPath));
 
-        var path = TeamPaths.PermAnswerPathFor("p1");
+        var path = TeamPaths.PermAnswerPathFor($"p1-{u}");
         try
         {
-            h.Ctrl.OnPermAnswer(new TeamPermAnswerMsg { ProjectId = h.Project.Id, Id = "p1", Decision = "allow" });
+            h.Ctrl.OnPermAnswer(new TeamPermAnswerMsg { ProjectId = h.Project.Id, Id = $"p1-{u}", Decision = "allow" });
             // Answered here means no terminal dialog will ever be dismissed:
             // the pane's "on a prompt" state must be dropped by the answer.
             Assert.Contains(sess.Root.Id, h.Cleared);
@@ -1850,9 +1854,9 @@ public class TeamControllerTests : IDisposable
             Assert.Equal("You allowed Ada", done.Text);
             Assert.DoesNotContain("waiting for your permission", File.ReadAllText(h.Store.RosterPath));
 
-            h.Ctrl.OnPermAsk(sess, sess.Root.Id, new PermAskMessage("p2", "Edit", @"C:\repo\a.ts"));
-            h.Ctrl.OnPermAnswer(new TeamPermAnswerMsg { ProjectId = h.Project.Id, Id = "p2", Decision = "deny" });
-            Assert.Equal("deny", File.ReadAllText(TeamPaths.PermAnswerPathFor("p2")).Trim());
+            h.Ctrl.OnPermAsk(sess, sess.Root.Id, new PermAskMessage($"p2-{u}", "Edit", @"C:\repo\a.ts"));
+            h.Ctrl.OnPermAnswer(new TeamPermAnswerMsg { ProjectId = h.Project.Id, Id = $"p2-{u}", Decision = "deny" });
+            Assert.Equal("deny", File.ReadAllText(TeamPaths.PermAnswerPathFor($"p2-{u}")).Trim());
             Assert.Contains(h.Ledger, e => e.Event == "permission.answered" && e.Text == "You denied Ada");
 
             h.Ctrl.OnPermDenied(sess, sess.Root.Id, new PermDeniedMessage("Bash", "curl evil", "classifier"));
@@ -1863,47 +1867,47 @@ public class TeamControllerTests : IDisposable
             // an Allow given ten seconds after the card appeared did nothing
             // and the bot waited for ever.)
             h.Raw.Clear();
-            h.Ctrl.OnPermAsk(sess, sess.Root.Id, new PermAskMessage("p5", "Bash", "git tag -l x"));
-            h.Ctrl.OnPermAnswer(new TeamPermAnswerMsg { ProjectId = h.Project.Id, Id = "p5", Decision = "allow" });
+            h.Ctrl.OnPermAsk(sess, sess.Root.Id, new PermAskMessage($"p5-{u}", "Bash", "git tag -l x"));
+            h.Ctrl.OnPermAnswer(new TeamPermAnswerMsg { ProjectId = h.Project.Id, Id = $"p5-{u}", Decision = "allow" });
             var onScreen = h.Delayed[^1];
             onScreen();
             Assert.Empty(h.Raw); // no unidentified prompt receives delayed keystrokes
             Assert.Contains(h.Ledger, e => e.Event == "permission.check");
-            File.Delete(TeamPaths.PermAnswerPathFor("p5"));
+            File.Delete(TeamPaths.PermAnswerPathFor($"p5-{u}"));
 
             // …and when the bot moves on by itself, nothing is pressed.
             h.Raw.Clear();
-            h.Ctrl.OnPermAsk(sess, sess.Root.Id, new PermAskMessage("p6", "Bash", "git tag -l y"));
-            h.Ctrl.OnPermAnswer(new TeamPermAnswerMsg { ProjectId = h.Project.Id, Id = "p6", Decision = "allow" });
+            h.Ctrl.OnPermAsk(sess, sess.Root.Id, new PermAskMessage($"p6-{u}", "Bash", "git tag -l y"));
+            h.Ctrl.OnPermAnswer(new TeamPermAnswerMsg { ProjectId = h.Project.Id, Id = $"p6-{u}", Decision = "allow" });
             var stale = h.Delayed[^1];
             h.Status(sess, "working");     // the tool call resumed: the hook's answer took
             stale();
             Assert.Empty(h.Raw);
-            File.Delete(TeamPaths.PermAnswerPathFor("p6"));
+            File.Delete(TeamPaths.PermAnswerPathFor($"p6-{u}"));
 
             // An answer that never comes: the hook gives up, Claude asks in the
             // bot's own terminal, and the room says so instead of leaving a
             // card whose Allow would now do nothing.
-            h.Ctrl.OnPermAsk(sess, sess.Root.Id, new PermAskMessage("p3", "Bash", "git push"));
+            h.Ctrl.OnPermAsk(sess, sess.Root.Id, new PermAskMessage($"p3-{u}", "Bash", "git push"));
             var timer = h.Delayed.Last();
             h.Delayed.Clear();
             timer();
             var expired = h.Ledger.Single(e => e.Event == "permission.expired");
-            Assert.Equal("p3", expired.Note);
+            Assert.Equal($"p3-{u}", expired.Note);
             Assert.Equal("ada", expired.From);
             Assert.Contains("waited ten minutes", expired.Text);
             // Answered in time, the timer says nothing.
-            h.Ctrl.OnPermAsk(sess, sess.Root.Id, new PermAskMessage("p4", "Bash", "git status"));
+            h.Ctrl.OnPermAsk(sess, sess.Root.Id, new PermAskMessage($"p4-{u}", "Bash", "git status"));
             var timer4 = h.Delayed.Last();
-            h.Ctrl.OnPermAnswer(new TeamPermAnswerMsg { ProjectId = h.Project.Id, Id = "p4", Decision = "allow" });
+            h.Ctrl.OnPermAnswer(new TeamPermAnswerMsg { ProjectId = h.Project.Id, Id = $"p4-{u}", Decision = "allow" });
             timer4();
             Assert.Single(h.Ledger, e => e.Event == "permission.expired");
-            File.Delete(TeamPaths.PermAnswerPathFor("p4"));
+            File.Delete(TeamPaths.PermAnswerPathFor($"p4-{u}"));
         }
         finally
         {
             File.Delete(path);
-            File.Delete(TeamPaths.PermAnswerPathFor("p2"));
+            File.Delete(TeamPaths.PermAnswerPathFor($"p2-{u}"));
             TeamMarkers.Clear(sess.Root.Id);
         }
         Assert.Equal("ada", bot.Slug);
