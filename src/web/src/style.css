@@ -8832,6 +8832,17 @@ body.show-inbox .inbox { display: flex; }
 }
 .mail__atts { display: flex; flex-wrap: wrap; gap: var(--sp-8); margin-top: var(--sp-12); }
 .mail__body .mail__img { display: block; margin: var(--sp-8) 0; }
+/* Links and pictures drawn from the plain body (mail-text.ts). */
+.mail__link {
+  color: var(--color-accent); text-decoration: none; overflow-wrap: anywhere;
+  border-bottom: 1px solid var(--color-accent-soft);
+  transition: border-color var(--dur-fast) var(--ease-entry);
+}
+.mail__link:hover { border-bottom-color: var(--color-accent); }
+.mail__rimg { display: inline-block; max-width: 100%; max-height: 240px; vertical-align: middle; border-radius: var(--r-input); }
+.mail__rimg--avatar { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; margin-right: var(--sp-8); }
+.mail__rimg--link { cursor: pointer; }
+.mail__alt { color: var(--color-text-tertiary); font-style: italic; }
 .mail__img { max-width: 100%; max-height: 480px; border-radius: var(--r-input); border: 1px solid var(--color-stroke); cursor: zoom-in; }
 .mail__att {
   font-size: var(--type-caption-size);

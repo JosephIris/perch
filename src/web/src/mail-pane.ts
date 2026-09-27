@@ -9,6 +9,7 @@
 import { send } from "./bridge.js";
 import type { PaneTreeView, InboxMailMessage, InboxItemView, InboxStateName } from "./bridge.js";
 import { buildPaneHeader, applyChips } from "./pane-header.js";
+import { parseMailText, isAvatarUrl } from "./mail-text.js";
 
 const STATE_ACTIONS: { state: InboxStateName; label: string }[] = [
   { state: "read", label: "Read" },
@@ -51,7 +52,43 @@ export function splitQuoted(body: string): { fresh: string; quoted: string } {
 
 /** First words of the new part of a message, for its folded line. */
 function peekOf(body: string): string {
-  return splitQuoted(body).fresh.replace(/\[image:[^\]]*\]/g, "").replace(/\s+/g, " ").trim().slice(0, 140);
+  const words = parseMailText(splitQuoted(body).fresh.replace(/\[image:[^\]]*\]/g, ""))
+    .map((s) => (s.kind === "image" ? "" : s.text)).join(" ");
+  return words.replace(/\s+/g, " ").trim().slice(0, 140);
+}
+
+/** Text with its links and pictures drawn (mail-text.ts). Links open in the
+ *  browser — never inside Perch; remote pictures load straight away (the
+ *  owner's choice), and a 1×1 tracking pixel is dropped once it loads. */
+function renderRich(text: string, host: HTMLElement) {
+  for (const s of parseMailText(text)) {
+    if (s.kind === "text") { host.append(s.text); continue; }
+    if (s.kind === "link") {
+      const a = el("a", "mail__link", s.text) as HTMLAnchorElement;
+      a.href = s.href;
+      a.title = s.href;
+      a.rel = "noopener noreferrer";
+      a.addEventListener("click", (ev) => { ev.preventDefault(); send({ type: "url.open", url: s.href }); });
+      host.appendChild(a);
+      continue;
+    }
+    const img = document.createElement("img");
+    img.className = "mail__rimg" + (isAvatarUrl(s.src) ? " mail__rimg--avatar" : "");
+    if (s.href) {
+      const href = s.href;
+      img.classList.add("mail__rimg--link");
+      img.title = href;
+      img.addEventListener("click", () => send({ type: "url.open", url: href }));
+    }
+    img.alt = s.alt;
+    img.loading = "lazy";
+    img.referrerPolicy = "no-referrer";
+    img.addEventListener("load", () => { if (img.naturalWidth <= 2 && img.naturalHeight <= 2) img.remove(); });
+    // A picture that won't load keeps its description, quietly.
+    img.addEventListener("error", () => img.replaceWith(el("span", "mail__alt", s.alt)), { once: true });
+    img.src = s.src;
+    host.appendChild(img);
+  }
 }
 
 /** The thread itself — subject, state buttons, messages — rendered into a
@@ -168,12 +205,12 @@ export class MailView {
       const rx = /\[image:[^\]]*\]/g;
       let at = 0;
       for (let hit = rx.exec(text); hit; hit = rx.exec(text)) {
-        host.append(text.slice(at, hit.index));
+        renderRich(text.slice(at, hit.index), host);
         at = hit.index + hit[0].length;
         const a = images[nextImage++];
         if (a) host.appendChild(this.image(a.name));
       }
-      host.append(text.slice(at));
+      renderRich(text.slice(at), host);
     };
 
     const { fresh, quoted } = splitQuoted(m.body);
