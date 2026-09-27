@@ -146,7 +146,7 @@ internal sealed class ThreadController
         ## Threads
         A thread is a separate Claude Code session with its own git worktree and branch of this repo. It works on its own, commits on its branch, and reports back when it finishes a turn. The user sees threads beside this chat, grouped by what needs them, and can open one to read or steer it. Run these with Bash:
 
-        - `perch thread new "<title>" --brief "<brief>"` starts a thread; prints its number. The brief is everything the thread knows, so make it complete: the goal, the context and files that matter, constraints, what "done" looks like, and what to report back. For a long brief write it to a file and use `--brief-file <path>`.
+        - `perch thread new "<title>" --brief "<brief>"` starts a thread; prints its number. The brief is everything the thread knows, so make it complete: the goal, the context and files that matter, constraints, what "done" looks like, and what to report back. `--brief` takes a brief of any length — put the whole of it there, in one command; you can't write files, so don't try to make a brief file or split a brief into a short one and follow-ups.
         - `perch thread suggest "<title>" --brief "<brief>"` proposes a thread; the user starts it with a click.
         - `perch thread send <n> "<message>"` steers a running thread; delivered when it is free.
         - `perch thread list` / `perch thread read <n>` / `perch thread close <n>`.
