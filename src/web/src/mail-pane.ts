@@ -10,6 +10,7 @@ import { send } from "./bridge.js";
 import type { PaneTreeView, InboxMailMessage, InboxItemView, InboxStateName } from "./bridge.js";
 import { buildPaneHeader, applyChips } from "./pane-header.js";
 import { parseMailText, isAvatarUrl } from "./mail-text.js";
+import { mailFrame } from "./mail-html.js";
 
 const STATE_ACTIONS: { state: InboxStateName; label: string }[] = [
   { state: "read", label: "Read" },
@@ -214,10 +215,28 @@ export class MailView {
     };
 
     const { fresh, quoted } = splitQuoted(m.body);
-    const body = el("div", "mail__body");
-    renderText(fresh, body);
-    full.appendChild(body);
-    if (quoted) {
+    if (m.html) {
+      // The email as designed, in its own frame (mail-html.ts).
+      const { frame, toggleQuote, hasQuote } = mailFrame(m.html);
+      full.appendChild(frame);
+      const toggle = el("button", "mail__quote-toggle", "···") as HTMLButtonElement;
+      toggle.type = "button";
+      toggle.title = "Show quoted text";
+      toggle.hidden = true;
+      toggle.addEventListener("click", () => {
+        toggleQuote();
+        toggle.title = toggle.title === "Show quoted text" ? "Hide quoted text" : "Show quoted text";
+      });
+      frame.addEventListener("load", () => { toggle.hidden = !hasQuote(); });
+      full.appendChild(toggle);
+      // Pasted images live in the HTML itself; nothing is placed inline here.
+      nextImage = 0;
+    } else {
+      const body = el("div", "mail__body");
+      renderText(fresh, body);
+      full.appendChild(body);
+    }
+    if (quoted && !m.html) {
       const toggle = el("button", "mail__quote-toggle", "···") as HTMLButtonElement;
       toggle.type = "button";
       toggle.title = "Show quoted text";

@@ -385,13 +385,16 @@ internal sealed class InboxController : IDisposable
             found = t != null,
             subject = t?.Subject ?? "",
             state = CurrentState(threadId),
-            messages = (t?.Messages ?? Array.Empty<InboxModel.Message>()).Select(m => new
+            messages = (t?.Messages ?? Array.Empty<InboxModel.Message>()).Select((m, i) => new
             {
                 from = m.From,
                 to = m.To,
                 cc = m.Cc,
                 date = m.Date?.ToString("O") ?? "",
                 body = m.Body,
+                // The email as designed, when the export saved it
+                // (message-N.html beside thread.md); the reader prefers it.
+                html = ReadOrNull(Path.Combine(dir, $"message-{i + 1}.html")),
                 attachments = m.Attachments.Select(a => new
                 {
                     name = a,

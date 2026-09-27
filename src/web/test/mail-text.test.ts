@@ -49,6 +49,20 @@ test("a badge's tracking link makes the picture clickable instead of printing be
   assert.deepEqual(segs, [{ kind: "image", src: "https://cdn.a.net/appStore.png", alt: "Download on the App Store", href: "https://track.a.net/t/935?m=x" }]);
 });
 
+test("a table cell's hard break mid-phrase becomes a space", () => {
+  const segs = parseMailText("Automation\nfor Jira\n\nDon't\nshow again\n[https://a.net/opt-out]");
+  assert.deepEqual(segs, [{ kind: "text", text: "Automation for Jira\n\nDon't " }, { kind: "link", text: "show again", href: "https://a.net/opt-out" }]);
+});
+
+test("words on a picture's own line stay text", () => {
+  const segs = parseMailText("Assignee : Petr &#x2192; [https://a.net/arrow-right.png]Joseph");
+  assert.deepEqual(segs, [
+    { kind: "text", text: "Assignee : Petr → " },
+    { kind: "image", src: "https://a.net/arrow-right.png", alt: "" },
+    { kind: "text", text: "Joseph" },
+  ]);
+});
+
 test("helpers", () => {
   assert.ok(isImageUrl("https://secure.gravatar.com/avatar/6005?d=x"));
   assert.ok(isImageUrl("https://x.net/a.PNG?v=2"));

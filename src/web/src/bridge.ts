@@ -1156,7 +1156,9 @@ export type InboxMailMessage = {
   found: boolean;
   subject: string;
   state: InboxStateName;
-  messages: { from: string; to: string; cc: string; date: string; body: string; attachments: InboxAttachmentView[] }[];
+  /* `html`: the email as designed, when the export saved it (null for
+   * emails exported before it did); the reader prefers it to `body`. */
+  messages: { from: string; to: string; cc: string; date: string; body: string; html?: string | null; attachments: InboxAttachmentView[] }[];
 };
 
 /* One pane being brought back in the restore-progress lightbox. */

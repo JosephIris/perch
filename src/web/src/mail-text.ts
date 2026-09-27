@@ -73,10 +73,13 @@ export function parseMailText(body: string): MailSeg[] {
     // The label is the text just before a bracketed address: the rest of its
     // line, or — when the address starts a line — the line above.
     let label = "";
+    const image = isImageUrl(href);
     if (bracketed) {
       const nl = before.lastIndexOf("\n");
       const tail = before.slice(nl + 1);
-      if (tail.trim() && tail.trim().length <= MAX_LABEL) {
+      // A picture's description is the line above it ("Jira logo"); words on
+      // its own line are the email's text ("Assignee: Petr → [arrow]").
+      if (!image && tail.trim() && tail.trim().length <= MAX_LABEL) {
         label = tail.trim();
         before = before.slice(0, nl + 1) + tail.slice(0, tail.length - tail.trimStart().length);
       } else if (!tail.trim() && nl >= 0) {
@@ -99,10 +102,20 @@ export function parseMailText(body: string): MailSeg[] {
     // A link right after a picture (an app-store badge and its target) makes
     // the picture clickable instead of printing a tracking address beside it.
     if (!before && prev?.kind === "image" && !prev.href && !isImageUrl(href) && !label) { prev.href = href; continue; }
-    if (isImageUrl(href)) out.push({ kind: "image", src: href, alt: label });
+    if (image) out.push({ kind: "image", src: href, alt: label });
     else out.push({ kind: "link", text: label || shortUrl(href), href });
   }
   pushText(src.slice(at));
+  // The designed email's table cells come through as hard line breaks in the
+  // middle of a phrase ("Automation\nfor Jira", "Don't\nshow again"): a break
+  // before a lowercase word is a space. Done after the links are found, so a
+  // link keeps the label its own line gave it.
+  out.forEach((s, i) => {
+    if (s.kind !== "text") return;
+    s.text = s.text.replace(/([^\n])\n(?=[a-z])/g, "$1 ");
+    const next = out[i + 1];
+    if (next?.kind === "link" && /^[a-z]/.test(next.text)) s.text = s.text.replace(/([^\n])\n$/, "$1 ");
+  });
   // Trim the blank edges the removed addresses leave behind.
   const first = out[0], last = out[out.length - 1];
   if (first?.kind === "text") first.text = first.text.replace(/^\s+/, "");

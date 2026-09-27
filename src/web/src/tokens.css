@@ -309,6 +309,9 @@
   --pc-new:          var(--color-agent-claude);
   /* The "new" tag's fill (the inbox's "3 new"): the same orange, faint. */
   --pc-new-faint:    rgba(217, 119, 87, 0.16);
+  /* Deliberate exception: an email drawn as designed (mail-html.ts) sits on
+   * a white page in both themes — its own colors assume one. */
+  --mail-paper:      #ffffff;
   --pc-strong-fill:  rgba(255, 255, 255, 0.92);
   --pc-strong-text:  #161616;
   --pc-ov-width:     380px;
