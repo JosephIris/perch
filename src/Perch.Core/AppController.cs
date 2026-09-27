@@ -429,6 +429,7 @@ internal sealed partial class AppController
                     s.ThreadQueued = _threadCtrl.Delivery.Pending(id).ToArray();
                     PushState();
                 },
+                SaveLong = (id, text) => _threadCtrl.SaveLongMessage(id, text),
             },
             InformChat = (lead, text, threadId) => _chatCtrl?.Inform(lead, text, threadId),
             ThreadStarted = (lead, thread) => _chatCtrl?.Card(lead, "thread", thread.Title, "thread:" + thread.Id.ToString("D")),

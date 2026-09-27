@@ -99,6 +99,20 @@ internal sealed class ThreadController
     public static string DirFor(Session lead) =>
         Path.Combine(AppPaths.DataRoot, "perch", "threads", lead.Id.ToString("N"));
 
+    /// Keep a message too long to type (LineDelivery.SaveLong) beside the
+    /// chat's prompts: the chat's folder for a thread or the chat itself,
+    /// else Perch's own messages folder. Returns the file's path.
+    public string SaveLongMessage(Guid sessionId, string text)
+    {
+        var s = _h.SessionById(sessionId);
+        var lead = s?.ThreadOf is Guid lid ? _h.SessionById(lid) : s is { IsLead: true } ? s : null;
+        var dir = lead != null ? DirFor(lead) : Path.Combine(AppPaths.DataRoot, "perch", "messages");
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, $"message-{Guid.NewGuid():N}.md");
+        AtomicFile.WriteAllText(path, text);
+        return path;
+    }
+
     public IEnumerable<Session> ThreadsOf(Session lead) =>
         _h.Sessions().Where(s => s.ThreadOf == lead.Id).OrderBy(s => s.ThreadNumber);
 
@@ -253,13 +267,8 @@ internal sealed class ThreadController
                 var text = (m.Text ?? "").Trim();
                 if (!string.IsNullOrEmpty(m.File))
                     text = (text.Length > 0 ? text + " " : "") + $"(The full message is in {m.File} — read it.)";
-                if (text.Length > LineDelivery.MaxChars)
-                {
-                    var path = Path.Combine(DirFor(lead), $"message-{Guid.NewGuid():N}.md");
-                    Directory.CreateDirectory(DirFor(lead));
-                    AtomicFile.WriteAllText(path, text);
-                    text = $"(A long message — read it in {path}.)";
-                }
+                // A message too long to type goes in a file the typed line
+                // points at — LineDelivery decides, with the prefix counted.
                 if ((m.Target ?? "").Equals("lead", StringComparison.OrdinalIgnoreCase))
                 {
                     if (!fromThread) return "error\nYou are the project chat.";

@@ -35,6 +35,9 @@ internal sealed class LineDelivery
         /// A tab's queue changed (a line added, submitted or given up on) —
         /// what the page shows as "waiting to send" under a thread.
         public Action<Guid>? Changed { get; init; }
+        /// Keep a message too long to type in a file the Claude can read:
+        /// (tab, full text) → its path, or null when it could not be written.
+        public Func<Guid, string, string?>? SaveLong { get; init; }
     }
 
     private sealed class Line
@@ -52,8 +55,18 @@ internal sealed class LineDelivery
     internal static readonly TimeSpan[] Checks = { TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(10) };
     /// Free moments a typed line may wait through before it is given up on.
     internal const int HoldLimit = 3;
-    /// Longest line typed. Longer text goes in a file the line points at.
-    internal const int MaxChars = 1500;
+    /// Longest text typed. Longer text goes in a file the line points at.
+    /// Measured on a thread (Claude Code 2.1.283, Windows): a line typed in
+    /// one write arrives as a paste, and up to ~950 characters that paste is
+    /// submitted whole. Past ~1,000 the first ~1,013 characters were LOST and
+    /// only the tail was submitted — four times out of four — so the thread
+    /// answered "your message was cut off, I only see '…t). Keep queries
+    /// cheap'" and the project chat resent, split, and resent again. 800
+    /// leaves room for the tag and a prefix under the size that always landed.
+    internal const int MaxChars = 800;
+    /// How much of a long message the typed line still carries, so the
+    /// thread's conversation reads as what was said.
+    internal const int PreviewChars = 300;
 
     private readonly Host _h;
     private readonly Dictionary<Guid, List<Line>> _queues = new();
@@ -67,9 +80,37 @@ internal sealed class LineDelivery
     /// Claude Code submits on a typed newline, so a line must be one line.
     public static string Flatten(string text)
     {
-        var s = (text ?? "").Replace("\r\n", "\n").Replace('\r', '\n');
-        s = string.Join("  ", s.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0));
+        var s = OneLine(text);
         return s.Length > MaxChars ? s[..MaxChars] + "…" : s;
+    }
+
+    private static string OneLine(string? text)
+    {
+        var s = (text ?? "").Replace("\r\n", "\n").Replace('\r', '\n');
+        return string.Join("  ", s.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0));
+    }
+
+    /// The line typed for a message too long to type: its opening words, then
+    /// where the whole of it is. Pure.
+    internal static string PointerLine(string oneLine, string path)
+    {
+        var head = oneLine.Length <= PreviewChars ? oneLine : oneLine[..PreviewChars];
+        var cut = head.LastIndexOf(' ');
+        if (oneLine.Length > PreviewChars && cut > PreviewChars / 2) head = head[..cut];
+        return $"{head.TrimEnd()}… (This message is longer than can be typed; the whole of it is in {path} — read it all before acting.)";
+    }
+
+    /// What gets typed for `text`: the text as one line, or — when that is
+    /// too long to type safely — a pointer to a file holding all of it.
+    /// Never silently cut: without a place to keep it, the cut is marked.
+    private string Typed(Guid sessionId, string text)
+    {
+        var one = OneLine(text);
+        if (one.Length <= MaxChars) return one;
+        string? path = null;
+        try { path = _h.SaveLong?.Invoke(sessionId, text); }
+        catch (Exception ex) { Log.Error("Delivery.saveLong", ex); }
+        return path != null ? PointerLine(one, path) : Flatten(text);
     }
 
     /// Queue a line for a tab and (unless `pumpNow` is false — the caller has
@@ -78,8 +119,10 @@ internal sealed class LineDelivery
     public int Enqueue(Guid sessionId, string text, bool pumpNow = true)
     {
         var seq = ++_seq;
-        var flat = Flatten(text);
-        var line = new Line { Seq = seq, Text = $"{Tag(seq)} {flat}", Shown = flat };
+        var typed = Typed(sessionId, text);
+        var one = OneLine(text);
+        var shown = one.Length > MaxChars ? one[..MaxChars] + "…" : one;
+        var line = new Line { Seq = seq, Text = $"{Tag(seq)} {typed}", Shown = shown };
         if (!_queues.TryGetValue(sessionId, out var q)) _queues[sessionId] = q = new List<Line>();
         q.Add(line);
         Log.Info("Delivery.queue", $"session={sessionId:N} seq={line.Seq} queued={q.Count}");

@@ -188,6 +188,68 @@ public class LineDeliveryTests
     }
 
     [Fact]
+    public void LongMessage_DeliveredAsPaste_NoGiveUp_NoCut_NoDuplicate()
+    {
+        // The live failure: the project chat sent ~1,200 characters, Claude
+        // Code lost the first ~1,000 of the typed line, the thread answered
+        // "your message was cut off" and the chat resent it, split, twice.
+        // Now the typed line stays short and points at the whole message.
+        var saved = new List<string>();
+        var f = new Fake();
+        f.D = new LineDelivery(new LineDelivery.Host
+        {
+            SessionById = id => id == f.Sess.Id ? f.Sess : null,
+            ClaudeUp = _ => f.Up,
+            Busy = _ => f.Busy,
+            Type = (_, t) => { f.Typed.Add(t); return true; },
+            PressEnter = _ => { f.Enters++; return true; },
+            Delay = (a, t) => f.Timers.Add((a, t)),
+            EnsureRunning = _ => { },
+            GaveUp = (_, t) => f.GaveUp.Add(t),
+            SaveLong = (_, text) => { saved.Add(text); return @"C:\perch\threads\x\message-1.md"; },
+        });
+        var body = "From the project chat: Joseph: dig into payer_score harder. " + string.Join(" ", Enumerable.Repeat("check the dictionary rule", 50))
+                   + " Report the cause and the new match count on all 41 bids. No feature code yet.";
+        Assert.True(body.Length > 1100);
+        var s = f.D.Enqueue(f.Sess.Id, body);
+
+        var typed = Assert.Single(f.Typed);
+        Assert.StartsWith($"[Perch #{s}] From the project chat: Joseph: dig into payer_score harder.", typed);
+        Assert.True(typed.Length <= LineDelivery.MaxChars, $"typed {typed.Length} chars");
+        Assert.Contains(@"C:\perch\threads\x\message-1.md", typed);
+        Assert.Equal(body, Assert.Single(saved));          // nothing of it is lost
+
+        // Claude Code submits it wrapped as a paste; that is a delivery.
+        f.D.OnPromptSubmitted(f.Sess.Id, $"\n\n<pasted_content id=\"6ffc\">\n[Perch #{s}] From the project chat: Jos");
+        for (int i = 0; i < 8; i++) { f.Tick(); f.D.OnFree(f.Sess.Id); }
+        Assert.Empty(f.GaveUp);
+        Assert.Equal(0, f.Enters);
+        Assert.Single(f.Typed);                           // never typed twice
+        Assert.Equal(0, f.D.Queued(f.Sess.Id));
+    }
+
+    [Fact]
+    public void LongMessage_NowhereToKeepIt_IsMarkedCut_NotSilentlyCut()
+    {
+        var f = new Fake();                                // no SaveLong
+        f.D.Enqueue(f.Sess.Id, new string('x', 2000));
+        var typed = Assert.Single(f.Typed);
+        Assert.EndsWith("…", typed);
+        Assert.True(typed.Length <= LineDelivery.MaxChars + 20);
+    }
+
+    [Fact]
+    public void PointerLine_KeepsTheOpeningWords_AndStaysShort()
+    {
+        var one = string.Join(" ", Enumerable.Repeat("word", 400));
+        var p = LineDelivery.PointerLine(one, @"C:\a\b.md");
+        Assert.StartsWith("word word", p);
+        Assert.Contains(@"C:\a\b.md", p);
+        Assert.True(p.Length < LineDelivery.PreviewChars + 200);
+        Assert.DoesNotContain("wor…", p);                  // cut at a word
+    }
+
+    [Fact]
     public void Flatten_OneLine_Capped()
     {
         Assert.Equal("a  b  c", LineDelivery.Flatten("a\r\n\nb\nc\n"));
