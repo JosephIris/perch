@@ -47,6 +47,16 @@ public class ThreadAskTests
         Assert.Equal("Thread 3 (Add tests) is waiting for your permission.", ThreadController.AskNotice(3, "Add tests", null));
     }
 
+    // Claude Code reports a question through the permission hook. Seen live:
+    // the reply waited behind a "permission" no one could grant.
+    [Fact]
+    public void AQuestionIsNotAPermission()
+    {
+        Assert.True(ThreadController.IsQuestion("Use AskUserQuestion"));
+        Assert.False(ThreadController.IsQuestion("Run python -m pytest"));
+        Assert.False(ThreadController.IsQuestion(null));
+    }
+
     [Fact]
     public void KickoffAsksForATaskListFirst() =>
         Assert.StartsWith("Start on the task in your brief. First write your plan as a task list", ThreadController.Kickoff);

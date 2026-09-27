@@ -695,9 +695,30 @@ internal sealed class ThreadController
     private async Task AnnouncePermissionAsync(Session thread, bool announce)
     {
         var ask = await ReadAskAsync(thread);
+        // Claude Code reports a question (AskUserQuestion) through the same
+        // permission hook as a tool it needs leave for. It is a question: the
+        // reply goes in the box (ThreadSteering dismisses it for a Waiting
+        // pane), and the card must not offer Allow/Deny for it. Seen live: the
+        // reply sat queued behind a "permission" nobody could grant.
+        var question = IsQuestion(ask);
+        if (question)
+        {
+            var moved = false;
+            foreach (var p in PaneTree.AllLeaves(thread.Root))
+                if (p.IsTerminal && p.AgentState == AgentState.Permission) { p.AgentState = AgentState.Waiting; moved = true; }
+            thread.ThreadAsk = "";
+            if (moved) _h.PushState();
+        }
         if (!announce || thread.ThreadOf is not Guid lid || _h.SessionById(lid) is not Session lead) return;
-        _h.InformChat?.Invoke(lead, AskNotice(thread.ThreadNumber, thread.Title, ask), thread.Id);
+        _h.InformChat?.Invoke(lead, question
+            ? $"Thread {thread.ThreadNumber} ({thread.Title}) is waiting for your answer."
+            : AskNotice(thread.ThreadNumber, thread.Title, ask), thread.Id);
     }
+
+    /// Whether a pending tool is a question to the user rather than a request
+    /// for permission. Pure.
+    internal static bool IsQuestion(string? ask) =>
+        ask?.Contains("AskUserQuestion", StringComparison.Ordinal) == true;
 
     /// The chat's row for one permission request. Pure.
     internal static string AskNotice(int n, string title, string? ask) =>

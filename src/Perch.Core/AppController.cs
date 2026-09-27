@@ -412,7 +412,16 @@ internal sealed partial class AppController
                 ClaudeUp = sess => ClaudePaneOf(sess) != null,
                 Busy = sess => AllLeaves(sess.Root).Any(p => p.IsTerminal &&
                     p.AgentState is AgentState.Working or AgentState.Permission or AgentState.Waiting),
-                Type = TypeToClaude,
+                Type = (sess, line) =>
+                {
+                    // A turn stopped before Claude answered puts its prompt
+                    // back in the input box; the next typed line was appended
+                    // to it and both went in as one prompt (seen live, twice)
+                    // — re-sending what you stopped. Clear the box first, once.
+                    if (ClaudePaneOf(sess) is PaneNode p && _clearAfterStop.Remove(p.Id) && _panes.Has(p.Id))
+                        _panes.Write(p.Id, new byte[] { 0x15 });   // Ctrl+U: the line before the cursor
+                    return TypeToClaude(sess, line);
+                },
                 PressEnter = PressEnterInClaude,
                 Delay = (action, delay) =>
                 {
@@ -476,7 +485,7 @@ internal sealed partial class AppController
             ClaudePane = ClaudePaneOf,
             Write = (paneId, bytes) => _panes.Write(paneId, bytes),
             PushState = PushState,
-            Escaped = paneId => _escapedAt[paneId] = System.Diagnostics.Stopwatch.GetTimestamp(),
+            Escaped = paneId => { _escapedAt[paneId] = System.Diagnostics.Stopwatch.GetTimestamp(); _clearAfterStop.Add(paneId); },
         }, _threadCtrl.Delivery);
         _chatCtrl = new ChatController(new ChatController.Host
         {
@@ -1754,6 +1763,11 @@ internal sealed partial class AppController
         {
             foreach (var pane in AllLeaves(sess.Root))
             {
+                // Only a terminal has output to fall silent. A project chat's
+                // pane (headless coordinator runs, no PTY) is "silent" from its
+                // first tick, so every coordinator turn read "done" about a
+                // second after it started; ChatController sets its state.
+                if (!pane.IsTerminal) continue;
                 var hasOutput = _panes.TryGetLastOutputTicks(pane.Id, out var last);
                 // "Bytes arrived since the previous tick" — and they aren't a
                 // resize's own redraw (see RedrawWindowTicks above).
@@ -4976,6 +4990,9 @@ internal sealed partial class AppController
     /// (Stopwatch ticks): the watchdog doesn't read its "Interrupted" repaint
     /// as the turn resuming.
     private readonly Dictionary<Guid, long> _escapedAt = new();
+    /// Thread panes Stop was pressed in: their next typed line clears the
+    /// input box first (see the delivery host's Type).
+    private readonly HashSet<Guid> _clearAfterStop = new();
     private readonly ChatController _chatCtrl;
 
     /// Wire the board controller's outbound events to the page. Called from the

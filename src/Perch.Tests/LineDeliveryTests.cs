@@ -135,6 +135,19 @@ public class LineDeliveryTests
     }
 
     [Fact]
+    public void AfterAStop_ALineGluedBehindTheStoppedPrompt_IsStillConfirmed()
+    {
+        // Claude Code puts a stopped prompt back in the box; the next typed
+        // line went in behind it as one prompt. Seen live: never confirmed,
+        // Enter pressed at it, then a false "couldn't get a message into".
+        var f = new Fake();
+        var s = f.D.Enqueue(f.Sess.Id, "reply with DONE");
+        f.D.OnPromptSubmitted(f.Sess.Id, $"[Perch #{s - 1}] Count to fifty slowly.[Perch #{s}] reply with DONE");
+        Assert.Equal(0, f.D.Queued(f.Sess.Id));
+        Assert.False(LineDelivery.Echoes("[Perch #10] x", 1), "#1 is not #10");
+    }
+
+    [Fact]
     public void NoEcho_NeverPressesEnterIntoAClaudeThatIsAsking()
     {
         // Typed, then the Claude stopped on a permission prompt before the

@@ -163,18 +163,13 @@ internal sealed class LineDelivery
     /// — `\n\n<pasted_content id="6ffc">\n[Perch #3] …` — which a plain
     /// StartsWith never matched: the line went in, was never confirmed, had
     /// Enter pressed at it for a minute and was then reported as undelivered,
-    /// while every line queued behind it waited. Pure.
-    internal static bool Echoes(string? detail, int seq)
-    {
-        var s = (detail ?? "").TrimStart();
-        if (s.StartsWith("<pasted_content", StringComparison.Ordinal))
-        {
-            var close = s.IndexOf('>');
-            if (close < 0) return false;
-            s = s[(close + 1)..].TrimStart();
-        }
-        return s.StartsWith(Tag(seq), StringComparison.Ordinal);
-    }
+    /// while every line queued behind it waited. And after a Stop, Claude Code
+    /// puts the stopped prompt back in the box, so the next line could go in
+    /// glued behind it: `[Perch #9] …[Perch #10] …` (seen live). So the tag
+    /// counts wherever it is — a tag is unique to the one line it was made
+    /// for. Pure.
+    internal static bool Echoes(string? detail, int seq) =>
+        (detail ?? "").Contains(Tag(seq), StringComparison.Ordinal);
 
     public void Pump(Guid sessionId)
     {
