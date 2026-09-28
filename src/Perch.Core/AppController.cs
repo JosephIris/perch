@@ -1523,6 +1523,7 @@ internal sealed partial class AppController
 
     private void OnReapTick()
     {
+        _threadCtrl.ResolveStale(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         if (_reaper == null) return;
         // Read the setting every tick so changing it in Settings takes effect
         // without a restart — the whole point is a net that works on a machine
@@ -2024,7 +2025,12 @@ internal sealed partial class AppController
         if (pane == null) return;
         var next = msg.Name ?? "";
         if (pane.AgentType == next) return;
+        var was = pane.AgentType;
         pane.AgentType = next;
+        // A thread's Claude that exits when Perch didn't ask it to (a sleep or
+        // a fresh start goes through ShutdownPaneAsync) has failed.
+        if (was == "claude" && next == "" && sess.ThreadOf != null && !_pendingShutdown.ContainsKey(paneId))
+            _threadCtrl.OnClaudeStopped(sess);
         PushState();
     }
 

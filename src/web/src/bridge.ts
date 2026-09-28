@@ -570,6 +570,9 @@ export type SessionView = {
   /* A thread marked done; commits on its branch not yet merged; a chat's goal. */
   threadResolved?: boolean;
   threadUnmerged?: number;
+  /* A thread that failed (its Claude stopped unasked, or an API error ended
+   * its turn): what happened. It waits on you until a Claude runs in it again. */
+  threadFailed?: string;
   /* A thread's Claude task list, summed up: done, in all, and the task in
    * progress ("" when none). Drives the Overview's "2/3" and status line. */
   threadTasksDone?: number;

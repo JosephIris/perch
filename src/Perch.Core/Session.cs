@@ -121,6 +121,10 @@ internal sealed class Session : INotifyPropertyChanged
     public string ThreadLastReply { get; set; } = "";
     public long ThreadReplyAtMs { get; set; }
 
+    /// On a thread: when it was started. With the last report's time, how
+    /// long it has been quiet (a week resolves it — ThreadController.IsStale).
+    public long ThreadStartedAtMs { get; set; }
+
     /// On a project chat: whether its Claude conversation exists yet. The
     /// first turn creates it (`--session-id`), every later one resumes it.
     public bool ChatStarted { get; set; }
@@ -181,6 +185,11 @@ internal sealed class Session : INotifyPropertyChanged
     /// On a thread stopped on a permission prompt: what it asks to do ("Run
     /// python -m pytest"), from its transcript's pending tool call. "" otherwise.
     [JsonIgnore] public string ThreadAsk { get; set; } = "";
+
+    /// On a thread that failed — its Claude stopped when nobody put it to
+    /// sleep, or its turn ended on an API error: what happened. It counts as
+    /// waiting on the user until a Claude runs in it again. "" otherwise.
+    [JsonIgnore] public string ThreadFailed { get; set; } = "";
 
     /// Lines typed for this tab's Claude that have not gone in yet (it is
     /// mid-turn or asking something), oldest first. Runtime only: the

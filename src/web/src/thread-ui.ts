@@ -28,7 +28,7 @@ const STATE_WORD: Record<AgentStateName, string> = {
  *  working; stopped with commits to merge → ready for review. */
 export function groupOf(t: SessionView): ThreadGroup {
   if (t.threadResolved) return "resolved";
-  if (!t.dormant && (t.agentState === "permission" || t.agentState === "waiting")) return "waiting";
+  if (!t.dormant && (t.agentState === "permission" || t.agentState === "waiting" || t.threadFailed)) return "waiting";
   if (!t.dormant && t.agentState === "working") return "working";
   if ((t.threadUnmerged ?? 0) > 0) return "ready";
   return "idle";
@@ -37,6 +37,7 @@ export function groupOf(t: SessionView): ThreadGroup {
 export function stateLabel(t: SessionView): string {
   if (t.threadResolved) return "Resolved";
   if (t.dormant) return "Asleep";
+  if (t.threadFailed) return "Stopped";
   const g = groupOf(t);
   if (g === "ready") return `${t.threadUnmerged} commit${t.threadUnmerged === 1 ? "" : "s"} to merge`;
   return STATE_WORD[t.agentState];
@@ -87,6 +88,7 @@ export function statusLine(t: SessionView): { text: string; blocked: boolean } {
   if (t.dormant && g !== "resolved") return { text: report || "Asleep", blocked: false };
   switch (g) {
     case "waiting":
+      if (t.threadFailed) return { text: t.threadFailed, blocked: true };
       if (t.agentState === "permission")
         return { text: askText(t), blocked: true };
       return { text: t.notification?.text || report || "Waiting for you", blocked: false };

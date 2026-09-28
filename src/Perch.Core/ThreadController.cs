@@ -417,6 +417,7 @@ internal sealed class ThreadController
         tab.ThreadOf = lead.Id;
         tab.ThreadNumber = n;
         tab.ThreadEffort = effort;
+        tab.ThreadStartedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         _h.Save();
         _h.PushState();
         _h.ThreadStarted?.Invoke(lead, tab);
@@ -664,6 +665,32 @@ internal sealed class ThreadController
         if (ShouldSleepOnResolve(thread)) _h.Sleep?.Invoke(thread);
     }
 
+    /// A thread with nothing new for this long is resolved on its own, as
+    /// Claude's project chats do — it drops out of the way and sleeps; its
+    /// branch and commits stay, and Reopen or a message brings it back.
+    internal static readonly TimeSpan StaleAfter = TimeSpan.FromDays(7);
+
+    /// Resolve every thread quiet past StaleAfter. Run on a slow timer.
+    public void ResolveStale(long nowMs)
+    {
+        foreach (var t in _h.Sessions().Where(s => IsStale(s, nowMs) && Delivery.Queued(s.Id) == 0).ToList())
+        {
+            Log.Info("Thread.stale", $"session={t.Id:N} n={t.ThreadNumber}");
+            Resolve(t, true);
+            if (_h.SessionById(t.ThreadOf!.Value) is Session lead)
+                _h.InformChat?.Invoke(lead, $"Thread {t.ThreadNumber} ({t.Title}) was resolved after a week with no activity.", t.Id);
+        }
+    }
+
+    /// Pure: a thread, not resolved, not mid-turn or asking, whose last
+    /// report (or start, when it never reported) is older than StaleAfter.
+    internal static bool IsStale(Session s, long nowMs)
+    {
+        if (s.ThreadOf == null || s.ThreadResolved || Busy(s)) return false;
+        var last = Math.Max(s.ThreadReplyAtMs, s.ThreadStartedAtMs);
+        return last > 0 && nowMs - last >= (long)StaleAfter.TotalMilliseconds;
+    }
+
     internal static bool ShouldSleepOnResolve(Session thread) =>
         thread.ThreadOf != null && thread.ThreadResolved && !thread.Dormant && !Busy(thread);
 
@@ -755,6 +782,7 @@ internal sealed class ThreadController
         switch (msg.State)
         {
             case "working":
+                sess.ThreadFailed = "";
                 _waiting.Remove(sess.Id);
                 if (!string.IsNullOrEmpty(msg.Detail)) Delivery.OnPromptSubmitted(sess.Id, msg.Detail);
                 break;
@@ -890,7 +918,33 @@ internal sealed class ThreadController
     /// mid-turn, so a thread's report is taken from the Stop hook alone.
     public void OnPaneIdle(Session sess) => Delivery.OnFree(sess.Id);
 
-    public void OnAgentUp(Session sess) => Delivery.OnAgentUp(sess.Id);
+    public void OnAgentUp(Session sess)
+    {
+        if (sess.ThreadFailed.Length > 0) { sess.ThreadFailed = ""; _h.PushState(); }
+        Delivery.OnAgentUp(sess.Id);
+    }
+
+    /// A thread's Claude exited and nobody asked it to (not a sleep, not a
+    /// fresh start, not resolved): it has failed, and only the user can see
+    /// why — say so in the chat, and group it with what waits on them.
+    public void OnClaudeStopped(Session thread)
+    {
+        if (thread.ThreadOf is not Guid lid || thread.Dormant || thread.ThreadResolved || thread.ThreadFailed.Length > 0) return;
+        Fail(thread, "Its Claude stopped.", lid);
+    }
+
+    /// An API error ends a turn with the error as its last words. Pure.
+    internal static bool IsApiError(string? reply) =>
+        (reply ?? "").TrimStart().StartsWith("API Error", StringComparison.OrdinalIgnoreCase);
+
+    private void Fail(Session thread, string why, Guid leadId)
+    {
+        thread.ThreadFailed = why;
+        _h.PushState();
+        Log.Info("Thread.failed", $"session={thread.Id:N} why={why}");
+        if (_h.SessionById(leadId) is Session lead)
+            _h.InformChat?.Invoke(lead, $"Thread {thread.ThreadNumber} ({thread.Title}) stopped: {why} Open it to see what happened.", thread.Id);
+    }
 
     /// Claude stopped on a start-up question (the trust prompt for a new
     /// folder). A thread's folder is a worktree of the user's own repo, made
@@ -920,6 +974,7 @@ internal sealed class ThreadController
         if (string.IsNullOrWhiteSpace(reply) || reply == thread.ThreadLastReply) return;
         thread.ThreadResolved = false;   // it did something new: back in play
         Record(thread, reply);
+        if (IsApiError(reply) && thread.ThreadOf is Guid failedOf) Fail(thread, FirstLine(reply, 200), failedOf);
         // Grown long: its next piece of work starts a fresh session, handed
         // its brief, this report and where the old conversation is — rather
         // than re-reading all of it every call from here on.

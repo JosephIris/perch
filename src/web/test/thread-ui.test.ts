@@ -66,6 +66,14 @@ test("the status line says what it is doing, or what it needs", () => {
   assert.deepEqual(statusLine(t({ agentState: "working", dormant: true, threadReply: "Done." })), { text: "Done.", blocked: false });
 });
 
+test("a failed thread waits on you and says what happened", () => {
+  const failed = t({ agentState: "idle", threadUnmerged: 2, threadFailed: "API Error: overloaded" });
+  assert.equal(groupOf(failed), "waiting");
+  assert.deepEqual(statusLine(failed), { text: "API Error: overloaded", blocked: true });
+  assert.equal(groupOf(t({ agentState: "idle", threadFailed: "Its Claude stopped.", threadResolved: true })), "resolved");
+  assert.equal(groupOf(t({ agentState: "idle", threadFailed: "Its Claude stopped.", dormant: true })), "idle");
+});
+
 test("day rules: today, yesterday, then the date", () => {
   const now = new Date(2026, 8, 24, 15, 0).getTime();
   assert.equal(dayLabel(new Date(2026, 8, 24, 0, 5).getTime(), now), "Today");
