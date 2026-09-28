@@ -14,7 +14,9 @@ public class ThreadFreshTests
         var prompt = ThreadController.ThreadPrompt(3, "Fix login", "Make the login form\nreject empty passwords.")
                    + ThreadController.LeftOff("Done: it rejects them.", @"C:\old.jsonl");
         Assert.Equal("Make the login form\nreject empty passwords.", ThreadController.BriefFromPrompt(prompt));
-        Assert.Equal("Make the login form\nreject empty passwords.", ThreadController.BriefFromPrompt(prompt.Replace("\n", "\r\n")));
+        // The prompt's own line breaks follow the source file's (CRLF on a
+        // Windows checkout); either way the brief comes out the same.
+        Assert.Equal("Make the login form\nreject empty passwords.", ThreadController.BriefFromPrompt(prompt.Replace("\r\n", "\n").Replace("\n", "\r\n")));
         Assert.Equal("", ThreadController.BriefFromPrompt("no brief here"));
     }
 

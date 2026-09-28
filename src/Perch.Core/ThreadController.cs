@@ -222,7 +222,7 @@ internal sealed class ThreadController
 
     internal static string BriefFromPrompt(string prompt)
     {
-        prompt = prompt.Replace("\r\n", "\n");
+        prompt = prompt.Replace("\r", "");
         var at = prompt.IndexOf("## Your brief\n", StringComparison.Ordinal);
         if (at < 0) return "";
         var brief = prompt[(at + "## Your brief\n".Length)..];
