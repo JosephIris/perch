@@ -50,6 +50,8 @@ internal sealed class LineDelivery
         public required string Text { get; init; }
         /// The line as the user wrote it: no tag, one line.
         public required string Shown { get; init; }
+        /// The text as it was queued, for saving across a restart.
+        public required string Original { get; init; }
         public bool Typed;
         public int Holds;
     }
@@ -126,7 +128,7 @@ internal sealed class LineDelivery
         var typed = Typed(sessionId, text);
         var one = OneLine(text);
         var shown = one.Length > MaxChars ? one[..MaxChars] + "…" : one;
-        var line = new Line { Seq = seq, Text = $"{Tag(seq)} {typed}", Shown = shown };
+        var line = new Line { Seq = seq, Text = $"{Tag(seq)} {typed}", Shown = shown, Original = text };
         if (!_queues.TryGetValue(sessionId, out var q)) _queues[sessionId] = q = new List<Line>();
         q.Add(line);
         Log.Info("Delivery.queue", $"session={sessionId:N} seq={line.Seq} queued={q.Count}");
@@ -140,6 +142,12 @@ internal sealed class LineDelivery
     /// The lines still waiting to go into a tab, oldest first, as written.
     public IReadOnlyList<string> Pending(Guid sessionId) =>
         _queues.TryGetValue(sessionId, out var q) ? q.Select(l => l.Shown).ToArray() : Array.Empty<string>();
+
+    /// The lines not typed yet, as queued — what is saved so a restart
+    /// doesn't lose them. A line already typed is left out: it may have gone
+    /// in unseen, and a line must never arrive twice.
+    public string[] Unsent(Guid sessionId) =>
+        _queues.TryGetValue(sessionId, out var q) ? q.Where(l => !l.Typed).Select(l => l.Original).ToArray() : Array.Empty<string>();
 
     /// The tab's Claude just came up (session-start hook): let its paint
     /// settle, then deliver.
@@ -207,6 +215,7 @@ internal sealed class LineDelivery
         {
             if (!_h.Type(sess, head.Text)) return;
             head.Typed = true;
+            _h.Changed?.Invoke(sessionId);
         }
         _checking.Add(sessionId);
         Check(sessionId, head.Seq, 0);

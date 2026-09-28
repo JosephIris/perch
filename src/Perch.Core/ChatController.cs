@@ -108,6 +108,9 @@ internal sealed class ChatController : IDisposable
         public PerchIpcServer? Ipc;
         public Process? Proc;
         public readonly List<string> Queue = new();
+        /// The prompt of the turn running now — kept on disk with the queue
+        /// until the turn ends, so a turn Perch closed on isn't lost.
+        public string? InFlight;
         public List<ChatEntry>? Entries;
         public bool Stopping;
         /// The model the coordinator's last run reported (its `init` line),
@@ -182,9 +185,75 @@ internal sealed class ChatController : IDisposable
         if (_h.ChatByPane(paneId) is not { } found) return null;
         (lead, leaf) = found;
         if (!_chats.TryGetValue(paneId, out var chat))
+        {
             _chats[paneId] = chat = new Chat { PaneId = paneId, Model = lead.ChatModel };
+            LoadQueue(chat, lead, leaf);
+        }
         EnsureIpc(chat, lead);
         return chat;
+    }
+
+    // ---- the queue on disk ---------------------------------------------------
+    // What waits for the coordinator — the user's messages, threads' reports —
+    // and the turn running now survive Perch closing: they are saved beside
+    // the chat's history and picked up again when it starts.
+
+    internal sealed record QueueFile(List<string> Queued, string? InFlight);
+
+    private static string QueuePath(Session lead) => Path.Combine(ThreadController.DirFor(lead), "queue.json");
+
+    private void SaveQueue(Chat chat, Session lead)
+    {
+        try
+        {
+            Directory.CreateDirectory(ThreadController.DirFor(lead));
+            AtomicFile.WriteAllText(QueuePath(lead), JsonSerializer.Serialize(new QueueFile(chat.Queue.ToList(), chat.InFlight)));
+        }
+        catch (Exception ex) { Log.Error("Chat.queue.save", ex); }
+    }
+
+    private void LoadQueue(Chat chat, Session lead, PaneNode leaf)
+    {
+        QueueFile? file = null;
+        try
+        {
+            var path = QueuePath(lead);
+            if (File.Exists(path)) file = JsonSerializer.Deserialize<QueueFile>(File.ReadAllText(path));
+        }
+        catch (Exception ex) { Log.Error("Chat.queue.load", ex); }
+        if (file == null) return;
+        var restored = Restored(file);
+        if (restored.Count == 0) return;
+        chat.Queue.AddRange(restored);
+        if (!string.IsNullOrWhiteSpace(file.InFlight))
+        {
+            // A cut first turn may have made its session on disk, and
+            // `--session-id` refuses one that exists; the saved turn carries
+            // its own handoff, so a new id loses nothing.
+            if (!lead.ChatStarted) { leaf.ClaudeSessionId = Guid.NewGuid().ToString(); _h.Save(); }
+            Append(chat, lead, "notice", "Perch closed while the coordinator was on a turn; it picks that up again.");
+        }
+        SaveQueue(chat, lead);
+        Log.Info("Chat.queue.restored", $"lead={lead.Id:N} queued={chat.Queue.Count} inFlight={!string.IsNullOrWhiteSpace(file.InFlight)}");
+    }
+
+    /// What a chat's saved queue becomes after a restart: a turn cut off
+    /// first — flagged, because it may have been half done (threads started,
+    /// a merge made) — then what was waiting. Pure.
+    internal static List<string> Restored(QueueFile file)
+    {
+        var list = new List<string>();
+        if (!string.IsNullOrWhiteSpace(file.InFlight))
+            list.Add("[Perch] Perch closed while you were working on the turn below, so it may be half done. Check `perch thread list` and git before redoing any of it.\n\n" + file.InFlight);
+        list.AddRange((file.Queued ?? new()).Where(q => !string.IsNullOrWhiteSpace(q)));
+        return list;
+    }
+
+    /// After a restart: start the turn a chat had waiting, if any.
+    public void ResumePending(Guid paneId)
+    {
+        var chat = Get(paneId, out var lead, out var leaf);
+        if (chat != null) Pump(chat, lead, leaf);
     }
 
     /// The chat's own pipe, so `perch thread …` from its runs reaches the
@@ -282,6 +351,8 @@ internal sealed class ChatController : IDisposable
         if (chat?.Proc == null) return;
         chat.Stopping = true;
         chat.Queue.Clear();
+        chat.InFlight = null;
+        SaveQueue(chat, lead);
         try { chat.Proc.Kill(entireProcessTree: true); } catch { }
         Append(chat, lead, "notice", "Stopped.");
     }
@@ -315,7 +386,8 @@ internal sealed class ChatController : IDisposable
 
     private void Pump(Chat chat, Session lead, PaneNode leaf)
     {
-        if (chat.Proc != null || chat.Queue.Count == 0) return;
+        // Every change to the queue ends here (or in Stop), so it is saved here.
+        if (chat.Proc != null || chat.Queue.Count == 0) { SaveQueue(chat, lead); return; }
         var prompt = string.Join("\n\n", chat.Queue);
         chat.Queue.Clear();
         // Grown too long: this turn starts a fresh conversation, handed what
@@ -391,6 +463,8 @@ internal sealed class ChatController : IDisposable
         proc.Start();
         chat.Proc = proc;
         chat.Stopping = false;
+        chat.InFlight = prompt;
+        SaveQueue(chat, lead);
         _h.SetWorking(lead, leaf, true);
         Status(chat);
         Log.Info("Chat.turn", $"lead={lead.Id:N} pid={proc.Id} resume={lead.ChatStarted} chars={prompt.Length}");
@@ -439,8 +513,12 @@ internal sealed class ChatController : IDisposable
 
     private void Finished(Chat chat, Session lead, PaneNode leaf, int code, bool sawResult, string stderr)
     {
+        // Perch closing kills the run: its turn stays saved for next time.
+        if (_disposed) return;
         chat.Proc?.Dispose();
         chat.Proc = null;
+        chat.InFlight = null;
+        SaveQueue(chat, lead);
         if (sawResult && !lead.ChatStarted) lead.ChatStarted = true;
         lead.ChatTurnEndAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         _h.Save();
@@ -665,8 +743,11 @@ internal sealed class ChatController : IDisposable
     private static string? Str(JsonElement el, string name)
         => el.ValueKind == JsonValueKind.Object && el.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 
+    private bool _disposed;
+
     public void Dispose()
     {
+        _disposed = true;
         foreach (var c in _chats.Values)
         {
             try { c.Proc?.Kill(entireProcessTree: true); } catch { }

@@ -196,6 +196,10 @@ internal sealed class Session : INotifyPropertyChanged
     /// delivery queue itself does not survive a restart.
     [JsonIgnore] public string[] ThreadQueued { get; set; } = Array.Empty<string>();
 
+    /// The same lines, whole and not yet typed (LineDelivery.Unsent): saved,
+    /// so what was waiting for a thread is queued again after a restart.
+    public string[] DeliveryUnsent { get; set; } = Array.Empty<string>();
+
     // ----- Incoming pair note (transient, like NotificationText) -----------
     // The last cross-session message that ARRIVED at this tab (or, warn level,
     // the last delivery failure by this tab). Rendered as a quiet note line on

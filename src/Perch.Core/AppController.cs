@@ -463,6 +463,8 @@ internal sealed partial class AppController
                 {
                     if (_store.Sessions.FirstOrDefault(s => s.Id == id) is not Session s) return;
                     s.ThreadQueued = _threadCtrl.Delivery.Pending(id).ToArray();
+                    var unsent = _threadCtrl.Delivery.Unsent(id);
+                    if (!unsent.SequenceEqual(s.DeliveryUnsent)) { s.DeliveryUnsent = unsent; _store.Save(); }
                     PushState();
                 },
                 SaveLong = (id, text) => _threadCtrl.SaveLongMessage(id, text),
@@ -697,6 +699,30 @@ internal sealed partial class AppController
         _threadTasksTimer = _ui.CreateTimer(TimeSpan.FromSeconds(2), OnThreadTasksTick);
         _threadTasksTimer.Start();
         _repoWatchers = new RepoWatchers(OnWorktreeChanged);
+        // What project chats had waiting when Perch closed goes out again —
+        // a beat after launch, once the page is up and panes can spawn.
+        IUiTimer restore = null!;
+        restore = _ui.CreateTimer(TimeSpan.FromSeconds(8), () => { restore.Stop(); restore.Dispose(); RestorePendingWork(); });
+        restore.Start();
+    }
+
+    /// Re-queue lines that were waiting for a thread and start any
+    /// coordinator turn that was waiting or cut off (ChatController.LoadQueue).
+    private void RestorePendingWork()
+    {
+        foreach (var s in _store.Sessions.ToList())
+        {
+            if (s.DeliveryUnsent.Length > 0)
+            {
+                var lines = s.DeliveryUnsent;
+                s.DeliveryUnsent = Array.Empty<string>();
+                Log.Info("Delivery.restored", $"session={s.Id:N} lines={lines.Length}");
+                foreach (var line in lines) _threadCtrl.Delivery.Enqueue(s.Id, line);
+            }
+            if (s.IsLead && AllLeaves(s.Root).FirstOrDefault(p => p.IsChat) is PaneNode chat)
+                _chatCtrl.ResumePending(chat.Id);
+        }
+        _store.Save();
     }
 
     /// Host's window was activated (foregrounded).

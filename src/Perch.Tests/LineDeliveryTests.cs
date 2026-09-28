@@ -184,9 +184,10 @@ public class LineDeliveryTests
         f.Busy = false;
         d.OnFree(f.Sess.Id);
         f.Tick();
+        Assert.Equal(3, changed);   // typed: no longer one to save for a restart
         d.OnPromptSubmitted(f.Sess.Id, $"[Perch #{s1}] first  line");
         Assert.Equal(new[] { "second" }, d.Pending(f.Sess.Id));
-        Assert.Equal(3, changed);
+        Assert.Equal(4, changed);
     }
 
     [Fact]
