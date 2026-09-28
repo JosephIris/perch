@@ -9480,6 +9480,9 @@ body.show-inbox .inbox { display: flex; }
 /* About. */
 .ov__label { font-size: 12px; color: var(--color-text-tertiary); margin: var(--sp-12) var(--sp-4) 0; }
 .ov__input { width: 100%; box-sizing: border-box; }
+.ov__models { display: grid; grid-template-columns: auto 1fr 1fr; gap: var(--sp-8); align-items: center; padding: 0 var(--sp-4); }
+.ov__models-head { font-size: 12px; color: var(--color-text-tertiary); }
+.ov__models-role { font-size: 13px; color: var(--color-text-secondary); padding-right: var(--sp-8); }
 .ov__save { display: flex; gap: var(--sp-12); align-items: center; justify-content: space-between; }
 .ov__save .ov__hint { padding: 0; }
 .ov__memory { margin: 0; padding-left: var(--sp-24); display: flex; flex-direction: column; gap: var(--sp-8); }

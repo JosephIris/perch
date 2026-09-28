@@ -441,6 +441,12 @@ internal sealed record ProjectChatUpdateMsg
     public string? Goal { get; init; }
     public string? Instructions { get; init; }
     public int? Forget { get; init; }
+    /// Model and effort for the coordinator and for new threads; "" is
+    /// Claude's default.
+    public string? CoordinatorModel { get; init; }
+    public string? CoordinatorEffort { get; init; }
+    public string? ThreadModel { get; init; }
+    public string? ThreadEffort { get; init; }
 }
 
 /// A thread, from the chat's Overview: read its transcript, message it,

@@ -390,12 +390,12 @@ internal sealed partial class AppController
             Sessions = () => _store.Sessions,
             SessionById = id => _store.Sessions.FirstOrDefault(s => s.Id == id),
             ProjectById = id => _projects.ById(id),
-            CreateClaudeTab = async (proj, title, promptPath, firstPrompt, worktree) =>
+            CreateClaudeTab = async (proj, title, promptPath, firstPrompt, worktree, model, effort) =>
             {
                 // In the background: starting a thread must not pull the user
                 // out of the project chat they are typing in. Nothing lays a
                 // background tab out, so its terminal is started here.
-                var tab = await CreateProjectTabAsync(proj, title, "claude", worktree, null, null, promptPath, firstPrompt, activate: false);
+                var tab = await CreateProjectTabAsync(proj, title, "claude", worktree, model, null, promptPath, firstPrompt, activate: false, effort: effort);
                 if (tab != null) EnsureSessionRunning(tab);
                 return tab;
             },
@@ -1187,10 +1187,11 @@ internal sealed partial class AppController
     /// Its worktree is its own, so nothing it does lands in the user's
     /// checkout. The allow list goes BEFORE the next flag: --allowedTools
     /// takes every word up to one, and would swallow a prompt after it.
-    internal static string ThreadFlags(string systemPromptFile)
+    internal static string ThreadFlags(string systemPromptFile, string? effort = null)
     {
         static string Q(string v) => "'" + v.Replace("'", "''") + "'";
-        return $" --allowedTools {string.Join(' ', ThreadController.ThreadAllowedTools.Select(Q))} --permission-mode auto --append-system-prompt-file {Q(systemPromptFile)}";
+        var eff = ChatController.EffortArg(effort) is { } e ? $" --effort {e}" : "";
+        return $" --allowedTools {string.Join(' ', ThreadController.ThreadAllowedTools.Select(Q))} --permission-mode auto{eff} --append-system-prompt-file {Q(systemPromptFile)}";
     }
 
     /// A thread coming back after a restart gets its flags again; anything
@@ -1199,7 +1200,7 @@ internal sealed partial class AppController
     {
         if (sess.ThreadOf is not Guid lid || SessionById(lid) is not Session lead || sess.ThreadNumber <= 0) return "";
         var prompt = Path.Combine(ThreadController.DirFor(lead), $"thread-{sess.ThreadNumber}.md");
-        return File.Exists(prompt) ? ThreadFlags(prompt) : "";
+        return File.Exists(prompt) ? ThreadFlags(prompt, sess.ThreadEffort) : "";
     }
 
     /// Whether this pane can be put back into the conversation it was in.
@@ -2877,6 +2878,10 @@ internal sealed partial class AppController
         if (SessionById(msg.SessionId) is not { IsLead: true } lead) return;
         if (msg.Goal is string g) lead.ChatGoal = g.Trim();
         if (msg.Instructions is string i) lead.ChatInstructions = i.Trim();
+        if (msg.CoordinatorModel is string cm) lead.ChatCoordinatorModel = ChatController.ModelArg(cm) ?? "";
+        if (msg.CoordinatorEffort is string ce) lead.ChatCoordinatorEffort = ChatController.EffortArg(ce) ?? "";
+        if (msg.ThreadModel is string tm) lead.ChatThreadModel = ChatController.ModelArg(tm) ?? "";
+        if (msg.ThreadEffort is string te) lead.ChatThreadEffort = ChatController.EffortArg(te) ?? "";
         if (msg.Forget is int k)
         {
             var mem = ThreadController.ReadMemory(lead);
@@ -4344,7 +4349,7 @@ internal sealed partial class AppController
     /// reason has already been toasted).
     private async Task<Session?> CreateProjectTabAsync(
         Project proj, string? rawName, string agent, bool worktree, string? model, string? pinnedPeerName,
-        string? systemPromptFile = null, string? firstPrompt = null, bool activate = true)
+        string? systemPromptFile = null, string? firstPrompt = null, bool activate = true, string? effort = null)
     {
         var name = (rawName ?? "").Trim();
         if (name.Length == 0) name = proj.Name;
@@ -4412,7 +4417,7 @@ internal sealed partial class AppController
             // sh -c, and both take a single-quoted argument verbatim.
             static string Q(string v) => "'" + v.Replace("'", "''") + "'";
             // A system prompt means a project-chat thread (ThreadFlags).
-            var extra = (systemPromptFile != null ? ThreadFlags(systemPromptFile) : "")
+            var extra = (systemPromptFile != null ? ThreadFlags(systemPromptFile, effort) : "")
                       + (firstPrompt != null ? $" {Q(firstPrompt)}" : "");
             _pendingInitialCommand[s.Root.Id] = $"claude --session-id {sid} --name {ccName}{extra}";
             // Creation-time model pick. Set on the PaneNode NOW — the PTY

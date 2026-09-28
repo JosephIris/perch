@@ -27,11 +27,22 @@ import { StickToEnd } from "./stick-to-end.js";
 import { ImageTray, withImages, userBubble } from "./image-attach.js";
 import { imageStrip } from "./chat-images.js";
 import { queuedNote, queuedText } from "./thread-steer.js";
+import { Dropdown, type DropdownOption } from "./dropdown.js";
 
 export { groupOf, stateLabel } from "./thread-ui.js";
 export type { ThreadGroup } from "./thread-ui.js";
 
 const EASE = "cubic-bezier(0, 0, 0, 1)";
+
+// What `claude --model` / `--effort` take; "" leaves it to Claude.
+const MODEL_OPTIONS: DropdownOption[] = [
+  { value: "", label: "Default" }, { value: "fable", label: "Fable" }, { value: "opus", label: "Opus" },
+  { value: "sonnet", label: "Sonnet" }, { value: "haiku", label: "Haiku" },
+];
+const EFFORT_OPTIONS: DropdownOption[] = [
+  { value: "", label: "Default" }, { value: "low", label: "Low" }, { value: "medium", label: "Medium" },
+  { value: "high", label: "High" }, { value: "xhigh", label: "Extra high" }, { value: "max", label: "Max" },
+];
 
 // What you have seen, per thread, across restarts: the report time (the
 // row's blue dot) and how many of its steps (the "New" mark). Per-viewer
@@ -67,6 +78,7 @@ export class ChatOverview {
   private tab: "threads" | "about" = "threads";
   private threads: SessionView[] = [];
   private meta: ChatMetaMessage | null = null;
+  private aboutDropdowns: Dropdown[] = [];
   private lastSig = "";
   private detail: ThreadDetail | null = null;
   private readonly seenReply = loadMap(SEEN_REPLY);
@@ -425,10 +437,36 @@ export class ChatOverview {
     instructions.placeholder = "Given to the chat and every new thread: branch to work on, how to check work, what needs your go-ahead…";
     instructions.setAttribute("aria-label", "Instructions");
     for (const c of [goal, instructions]) c.addEventListener("keydown", (e) => e.stopPropagation());
-    const save = button("pc-btn pc-btn--primary", "Save", () =>
-      send({ type: "projectchat.update", sessionId, goal: goal.value, instructions: instructions.value }));
 
-    wrap.append(el("div", "ov__label", "Goal"), goal, el("div", "ov__label", "Instructions"), instructions);
+    // Model and effort, apart for the chat and its threads — the chat routes
+    // and reads reports, so it runs light by default; threads do the work.
+    for (const d of this.aboutDropdowns) d.dispose();
+    const pick = (options: DropdownOption[], value: string | undefined) => {
+      const d = new Dropdown();
+      d.setOptions(options, value ?? "");
+      this.aboutDropdowns.push(d);
+      return d;
+    };
+    this.aboutDropdowns = [];
+    const cModel = pick(MODEL_OPTIONS, m?.coordinatorModel);
+    const cEffort = pick(EFFORT_OPTIONS, m?.coordinatorEffort);
+    const tModel = pick(MODEL_OPTIONS, m?.threadModel);
+    const tEffort = pick(EFFORT_OPTIONS, m?.threadEffort);
+    const models = el("div", "ov__models");
+    models.append(
+      el("span", "ov__models-head"), el("span", "ov__models-head", "Model"), el("span", "ov__models-head", "Effort"),
+      el("span", "ov__models-role", "This chat"), cModel.element, cEffort.element,
+      el("span", "ov__models-role", "New threads"), tModel.element, tEffort.element,
+    );
+
+    const save = button("pc-btn pc-btn--primary", "Save", () =>
+      send({
+        type: "projectchat.update", sessionId, goal: goal.value, instructions: instructions.value,
+        coordinatorModel: cModel.value, coordinatorEffort: cEffort.value, threadModel: tModel.value, threadEffort: tEffort.value,
+      }));
+
+    wrap.append(el("div", "ov__label", "Goal"), goal, el("div", "ov__label", "Instructions"), instructions,
+      el("div", "ov__label", "Models"), models);
     const row = el("div", "ov__save");
     row.append(el("span", "ov__hint", "New threads get the change; running ones keep what they started with."), save);
     wrap.appendChild(row);

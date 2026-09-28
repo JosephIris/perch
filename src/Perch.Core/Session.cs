@@ -139,6 +139,24 @@ internal sealed class Session : INotifyPropertyChanged
     /// turn starts a fresh conversation.
     public long ChatContextTokens { get; set; }
 
+    /// On a project chat: when its coordinator's last turn ended. A turn
+    /// after a long quiet starts a fresh conversation (ChatController.RotateReason).
+    public long ChatTurnEndAtMs { get; set; }
+
+    /// On a project chat: the model and effort for its coordinator and for
+    /// the threads it starts, as the Overview's About sets them. "" is
+    /// Claude's own default. Like Claude's project chats, the coordinator
+    /// defaults to low effort — it routes and reads reports; threads do the
+    /// thinking. A thread keeps what it was started with (ThreadEffort).
+    public string ChatCoordinatorModel { get; set; } = "";
+    public string ChatCoordinatorEffort { get; set; } = "low";
+    public string ChatThreadModel { get; set; } = "";
+    public string ChatThreadEffort { get; set; } = "";
+
+    /// On a thread: the effort it was started with, given again on every
+    /// resume (a resumed session keeps its conversation but not its flags).
+    public string ThreadEffort { get; set; } = "";
+
     /// On a thread: marked done (by the user, or once its work is merged);
     /// it drops to the Resolved group and stops asking for attention.
     public bool ThreadResolved { get; set; }

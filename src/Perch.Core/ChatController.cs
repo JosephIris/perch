@@ -59,7 +59,24 @@ internal sealed class ChatController : IDisposable
     /// old turns matter less and less; the fresh one gets recent messages,
     /// the threads and project memory — what Claude's own project chats say
     /// they work from — and the full history as a file it can read.
-    internal const long RotateAtTokens = 100_000;
+    internal const long RotateAtTokens = 80_000;
+
+    /// A conversation quiet for longer than the prompt cache lives (an hour
+    /// on Pro and Max) is re-read in full, uncached, by the next turn — so
+    /// past this, a fresh one with the handoff costs less than going on,
+    /// unless the old one is small enough that re-reading it is cheap.
+    internal static readonly TimeSpan RotateAfterQuiet = TimeSpan.FromHours(1);
+    internal const long RotateQuietAtTokens = 20_000;
+
+    /// Why the next turn should start a fresh conversation, or null to go on
+    /// with this one. Pure.
+    internal static string? RotateReason(bool started, long tokens, long lastTurnEndMs, long nowMs)
+    {
+        if (!started) return null;
+        if (tokens >= RotateAtTokens) return "long";
+        if (tokens >= RotateQuietAtTokens && lastTurnEndMs > 0 && nowMs - lastTurnEndMs >= (long)RotateAfterQuiet.TotalMilliseconds) return "quiet";
+        return null;
+    }
 
     /// Rows of recent conversation handed over.
     internal const int HandoffRows = 24;
@@ -213,6 +230,10 @@ internal sealed class ChatController : IDisposable
             sessionId = lead.Id.ToString("D"),
             goal = lead.ChatGoal,
             instructions = lead.ChatInstructions,
+            coordinatorModel = lead.ChatCoordinatorModel,
+            coordinatorEffort = lead.ChatCoordinatorEffort,
+            threadModel = lead.ChatThreadModel,
+            threadEffort = lead.ChatThreadEffort,
             userName = _userName.IsCompletedSuccessfully ? _userName.Result : "",
             memory = ThreadController.ReadMemory(lead).ToArray(),
             suggestions = _h.Suggestions?.Invoke(lead) ?? Array.Empty<object>(),
@@ -299,16 +320,18 @@ internal sealed class ChatController : IDisposable
         chat.Queue.Clear();
         // Grown too long: this turn starts a fresh conversation, handed what
         // it needs to carry on.
-        if (lead.ChatStarted && lead.ChatContextTokens >= RotateAtTokens)
+        if (RotateReason(lead.ChatStarted, lead.ChatContextTokens, lead.ChatTurnEndAtMs, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()) is { } why)
         {
             var previous = lead.ChatContextTokens;
-            prompt = Handoff(Entries(chat, lead), _h.ThreadList?.Invoke(lead) ?? "", LogPath(lead)) + "\n\n" + prompt;
+            prompt = Handoff(Entries(chat, lead), _h.ThreadList?.Invoke(lead) ?? "", LogPath(lead), why == "quiet") + "\n\n" + prompt;
             leaf.ClaudeSessionId = Guid.NewGuid().ToString();
             lead.ChatStarted = false;
             lead.ChatContextTokens = 0;
             _h.Save();
-            Append(chat, lead, "notice", "Started a fresh conversation for the coordinator — the old one had grown long. It carries on from the recent messages, the threads and project memory.");
-            Log.Info("Chat.rotate", $"lead={lead.Id:N} context={previous}");
+            Append(chat, lead, "notice", why == "quiet"
+                ? "Started a fresh conversation for the coordinator — the old one had been quiet over an hour, and picking it up again would re-read all of it. It carries on from the recent messages, the threads and project memory."
+                : "Started a fresh conversation for the coordinator — the old one had grown long. It carries on from the recent messages, the threads and project memory.");
+            Log.Info("Chat.rotate", $"lead={lead.Id:N} context={previous} why={why}");
         }
         try { Start(chat, lead, leaf, prompt); }
         catch (Exception ex)
@@ -333,6 +356,8 @@ internal sealed class ChatController : IDisposable
         args.AddRange(lead.ChatStarted
             ? new[] { "--resume", leaf.ClaudeSessionId! }
             : new[] { "--session-id", leaf.ClaudeSessionId! });
+        if (ModelArg(lead.ChatCoordinatorModel) is { } model) { args.Add("--model"); args.Add(model); }
+        if (EffortArg(lead.ChatCoordinatorEffort) is { } effort) { args.Add("--effort"); args.Add(effort); }
         args.Add("--append-system-prompt-file"); args.Add(promptPath);
         if (WriteGuardSettings(lead) is { } guard) { args.Add("--settings"); args.Add(guard); }
         args.Add("--allowedTools"); args.AddRange(AllowedTools);
@@ -416,7 +441,9 @@ internal sealed class ChatController : IDisposable
     {
         chat.Proc?.Dispose();
         chat.Proc = null;
-        if (sawResult && !lead.ChatStarted) { lead.ChatStarted = true; _h.Save(); }
+        if (sawResult && !lead.ChatStarted) lead.ChatStarted = true;
+        lead.ChatTurnEndAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        _h.Save();
         if (!sawResult && !chat.Stopping)
         {
             var why = stderr.Trim();
@@ -430,6 +457,14 @@ internal sealed class ChatController : IDisposable
         Status(chat);
         Pump(chat, lead, leaf);
     }
+
+    /// The models and effort levels a project chat may pick (what `claude
+    /// --model` / `--effort` take); anything else is Claude's default.
+    internal static readonly string[] Models = { "fable", "opus", "sonnet", "haiku" };
+    internal static readonly string[] Efforts = { "low", "medium", "high", "xhigh", "max" };
+
+    internal static string? ModelArg(string? v) => Models.FirstOrDefault(m => m == (v ?? "").Trim().ToLowerInvariant());
+    internal static string? EffortArg(string? v) => Efforts.FirstOrDefault(e => e == (v ?? "").Trim().ToLowerInvariant());
 
     private static int SafeExitCode(Process p) { try { return p.ExitCode; } catch { return -1; } }
 
@@ -550,7 +585,7 @@ internal sealed class ChatController : IDisposable
     /// full history is, the last rows of the conversation, and the threads.
     /// Tool rows are left out; a thread started or proposed is one line.
     /// Pure.
-    internal static string Handoff(IReadOnlyList<ChatEntry> entries, string threads, string logPath)
+    internal static string Handoff(IReadOnlyList<ChatEntry> entries, string threads, string logPath, bool quiet = false)
     {
         static string Clip(string s, int max) { s = s.Trim(); return s.Length > max ? s[..max].TrimEnd() + "…" : s; }
         var lines = new List<string>();
@@ -569,7 +604,8 @@ internal sealed class ChatController : IDisposable
             if (line != null) lines.Add(line);
         }
         var recent = lines.Skip(Math.Max(0, lines.Count - HandoffRows));
-        return "[Perch] You are continuing this project chat in a fresh conversation: the previous one grew too long to keep re-reading. "
+        return "[Perch] You are continuing this project chat in a fresh conversation: "
+            + (quiet ? "the previous one had been quiet long enough that picking it up would re-read all of it. " : "the previous one grew too long to keep re-reading. ")
             + "Your instructions, the goal and project memory are in your system prompt as before. "
             + $"The whole conversation so far is saved at `{logPath}` (one JSON object per line: Kind, Text) — read it if you need something older than what follows.\n\n"
             + "## The conversation's last messages (oldest first)\n"

@@ -30,9 +30,9 @@ internal sealed class ThreadController
         public required Func<Guid, Session?> SessionById { get; init; }
         public required Func<Guid, Project?> ProjectById { get; init; }
         /// Make a Claude tab under a project: title, system prompt file, first
-        /// prompt, own worktree or not. Null when it could not be made (the
-        /// reason has been toasted).
-        public required Func<Project, string, string, string?, bool, Task<Session?>> CreateClaudeTab { get; init; }
+        /// prompt, own worktree or not, model and effort (null: Claude's
+        /// default). Null when it could not be made (the reason has been toasted).
+        public required Func<Project, string, string, string?, bool, string?, string?, Task<Session?>> CreateClaudeTab { get; init; }
         /// The text of the tab's Claude's last finished turn, read from its
         /// transcript; null when there is none yet.
         public required Func<Session, Task<string?>> ReadLastReply { get; init; }
@@ -142,7 +142,7 @@ internal sealed class ThreadController
         {Section("The goal", goal)}{Section("The user's instructions for this project", instructions)}{MemorySection(memory)}
         ## Routing each message
         - A quick question: answer it here.
-        - New work: start a thread for it, or pass it to a thread already working in that area (`perch thread send`). Say which.
+        - New work: start a new thread for it, with a complete brief. Send work to an existing thread (`perch thread send`) only to follow up on the task it already has — steer it, answer it, fix what it reported. Never hand new work to a resolved thread, or to one that has sat idle for an hour or more: messaging it makes it re-read its whole old conversation first, which costs more than a fresh thread with a good brief. Only the user can overrule this ("reuse #3").
         - Several unrelated tasks in one message: a separate thread for each.
         - If the user wants to review threads before they run (they may say so, or it's in the memory above), propose them with `perch thread suggest` instead of starting them. Also propose rather than start when the request is large or unclear.
 
@@ -283,7 +283,8 @@ internal sealed class ThreadController
                 var t = Find(lead, m.Target);
                 if (t == null) return $"error\nNo thread {m.Target}. Run perch thread list.";
                 Delivery.Enqueue(t.Id, $"From the project chat: {text}");
-                return $"ok\nQueued for thread {t.ThreadNumber}; it goes in when that thread is free.\n";
+                return $"ok\nQueued for thread {t.ThreadNumber}; it goes in when that thread is free.\n"
+                    + (t.ThreadResolved ? $"Thread {t.ThreadNumber} was resolved: it wakes with its whole old conversation. For new work, start a fresh thread instead.\n" : "");
             }
             case "list":
                 return "ok\n" + ListText(lead);
@@ -319,12 +320,14 @@ internal sealed class ThreadController
     public string ListText(Session lead)
     {
         var sb = new StringBuilder();
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         foreach (var t in ThreadsOf(lead))
         {
             var head = FirstLine(t.ThreadLastReply, 120);
-            sb.Append($"{t.ThreadNumber}. {t.Title} — {(t.ThreadResolved ? "resolved" : StateWord(t))}");
+            sb.Append($"{t.ThreadNumber}. {t.Title} — {(t.ThreadResolved ? "resolved (start a new thread for new work)" : StateWord(t))}");
             if (t.WorktreeBranch.Length > 0) sb.Append($" — branch {t.WorktreeBranch}");
             if (t.ThreadUnmerged > 0) sb.Append($" — {t.ThreadUnmerged} commit(s) not merged");
+            if (!Busy(t) && t.ThreadReplyAtMs > 0) sb.Append($" — last report {Ago(t.ThreadReplyAtMs, now)}");
             sb.Append('\n');
             if (head.Length > 0) sb.Append($"   last report: {head}\n");
         }
@@ -346,10 +349,12 @@ internal sealed class ThreadController
         Directory.CreateDirectory(dir);
         var promptPath = Path.Combine(dir, $"thread-{n}.md");
         AtomicFile.WriteAllText(promptPath, ThreadPrompt(n, title, brief, lead.ChatInstructions, ReadMemory(lead)));
-        var tab = await _h.CreateClaudeTab(proj, title, promptPath, Kickoff, true);
+        var effort = ChatController.EffortArg(lead.ChatThreadEffort) ?? "";
+        var tab = await _h.CreateClaudeTab(proj, title, promptPath, Kickoff, true, ChatController.ModelArg(lead.ChatThreadModel), effort);
         if (tab == null) return (null, "Perch couldn't make the thread's tab (see the toast in Perch).");
         tab.ThreadOf = lead.Id;
         tab.ThreadNumber = n;
+        tab.ThreadEffort = effort;
         _h.Save();
         _h.PushState();
         _h.ThreadStarted?.Invoke(lead, tab);
@@ -645,6 +650,14 @@ internal sealed class ThreadController
         if (states.Contains(AgentState.Working)) return "working";
         if (states.Contains(AgentState.Done)) return "finished its turn";
         return "idle";
+    }
+
+    /// "just now", "25m ago", "3h ago", "2d ago" — how long a thread has been
+    /// quiet, which is what the coordinator weighs before reusing it. Pure.
+    internal static string Ago(long atMs, long nowMs)
+    {
+        var mins = Math.Max(0, (nowMs - atMs) / 60_000);
+        return mins < 1 ? "just now" : mins < 60 ? $"{mins}m ago" : mins < 48 * 60 ? $"{mins / 60}h ago" : $"{mins / (24 * 60)}d ago";
     }
 
     internal static string FirstLine(string text, int max)

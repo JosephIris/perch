@@ -210,7 +210,8 @@ export type OutMessage =
   | { type: "inbox.refresh" }
   /* A new project chat under this project: coordinator Claude + threads panel. */
   | { type: "projectchat.new"; id: string; name?: string; goal?: string; instructions?: string }
-  | { type: "projectchat.update"; sessionId: string; goal?: string; instructions?: string; forget?: number }
+  | { type: "projectchat.update"; sessionId: string; goal?: string; instructions?: string; forget?: number;
+      coordinatorModel?: string; coordinatorEffort?: string; threadModel?: string; threadEffort?: string }
   | { type: "suggestion.start"; sessionId: string; id: string }
   | { type: "suggestion.dismiss"; sessionId: string; id: string }
   | { type: "push.answer"; sessionId: string; id: string; approve: boolean }
@@ -1103,6 +1104,8 @@ export type ChatEntryView = { id: string; kind: "user" | "claude" | "tool" | "no
 export type ChatMetaMessage = {
   type: "chat.meta"; paneId: string; sessionId: string;
   goal: string; instructions: string; memory: string[];
+  /* Model and effort for the coordinator and for new threads ("" = Claude's default). */
+  coordinatorModel?: string; coordinatorEffort?: string; threadModel?: string; threadEffort?: string;
   /* Who the Overview greets ("" until the host has read it). */
   userName?: string;
   suggestions: { id: string; title: string; threadId: string | null; summary?: string; dismissed?: boolean }[];

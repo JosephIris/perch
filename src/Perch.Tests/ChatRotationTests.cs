@@ -57,6 +57,49 @@ public class ChatRotationTests
     }
 
     [Fact]
+    public void RotateReason_LongOrQuietPastTheCacheButNotSmall()
+    {
+        const long now = 10_000_000_000;
+        const long hour = 3_600_000;
+        Assert.Null(ChatController.RotateReason(false, 500_000, 0, now));                 // no conversation yet
+        Assert.Equal("long", ChatController.RotateReason(true, ChatController.RotateAtTokens, now - 1000, now));
+        Assert.Null(ChatController.RotateReason(true, 50_000, now - hour / 2, now));      // quiet, but the cache is warm
+        Assert.Equal("quiet", ChatController.RotateReason(true, 50_000, now - hour - 1, now));
+        Assert.Null(ChatController.RotateReason(true, 5_000, now - 10 * hour, now));      // small: re-reading it is cheap
+        Assert.Null(ChatController.RotateReason(true, 50_000, 0, now));                   // never timed (an older chat)
+    }
+
+    [Fact]
+    public void Handoff_SaysWhyWhenQuiet()
+    {
+        Assert.Contains("had been quiet", ChatController.Handoff(new[] { E("user", "x") }, "", "log", quiet: true));
+        Assert.Contains("grew too long", ChatController.Handoff(new[] { E("user", "x") }, "", "log"));
+    }
+
+    [Fact]
+    public void ModelAndEffort_OnlyWhatClaudeTakes()
+    {
+        Assert.Equal("opus", ChatController.ModelArg(" Opus "));
+        Assert.Null(ChatController.ModelArg("gpt-5"));
+        Assert.Null(ChatController.ModelArg(""));
+        Assert.Equal("xhigh", ChatController.EffortArg("xhigh"));
+        Assert.Null(ChatController.EffortArg("--dangerously"));
+        Assert.Contains("--effort high", AppController.ThreadFlags("p.md", "high"));
+        Assert.DoesNotContain("--effort", AppController.ThreadFlags("p.md", ""));
+        Assert.DoesNotContain("--effort", AppController.ThreadFlags("p.md", "bogus"));
+    }
+
+    [Fact]
+    public void Ago_ReadsAsHowLongAThreadHasBeenQuiet()
+    {
+        const long now = 10_000_000_000;
+        Assert.Equal("just now", ThreadController.Ago(now - 10_000, now));
+        Assert.Equal("25m ago", ThreadController.Ago(now - 25 * 60_000, now));
+        Assert.Equal("3h ago", ThreadController.Ago(now - 3 * 3_600_000, now));
+        Assert.Equal("4d ago", ThreadController.Ago(now - 4 * 86_400_000L, now));
+    }
+
+    [Fact]
     public void Handoff_ClipsAVeryLongMessage()
     {
         var text = ChatController.Handoff(new[] { E("user", new string('x', 5000)) }, "", "log");
