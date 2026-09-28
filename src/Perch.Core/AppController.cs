@@ -355,7 +355,7 @@ internal sealed partial class AppController
             ReadTranscript = (pane, sid, cwd) => _transcripts.ReadCached(new TranscriptKey(pane, sid, cwd)),
             TypeToClaude = TypeToClaude,
             PressEnter = PressEnterInClaude,
-            Wake = WakeSession,
+            Wake = s => WakeSession(s),
             CreateTab = (proj, name, worktree, model, ccName) =>
                 CreateProjectTabAsync(proj, name, "claude", worktree, model, ccName),
             CloseSession = (id, removeWorktree) =>
@@ -455,7 +455,9 @@ internal sealed partial class AppController
                     timer = _ui.CreateTimer(delay, () => { timer.Stop(); timer.Dispose(); action(); });
                     timer.Start();
                 },
-                EnsureRunning = sess => { if (sess.Dormant) WakeSession(sess); EnsureSessionRunning(sess); },
+                // A line for a sleeping tab wakes it in the background: nobody
+                // is about to look at it, so no "Resuming session" lightbox.
+                EnsureRunning = sess => { if (sess.Dormant) WakeSession(sess, background: true); EnsureSessionRunning(sess); },
                 StartFresh = StartThreadFresh,
                 GaveUp = (sess, line) => PostToast($"Perch couldn't get a message into \"{sess.Title}\"", "error", Guid.Empty),
                 // What is still waiting to go in, shown under the thread.
@@ -1767,8 +1769,10 @@ internal sealed partial class AppController
             pane.NotificationText = "";
         if (!IsAttention(prev) && IsAttention(pane.AgentState))
             FlashAttention();                                    // loud: blocked / wants feedback
-        else if (prev != AgentState.Done && pane.AgentState == AgentState.Done)
-            FlashDoneGentle();                                   // calm: turn just finished
+        // calm: turn just finished — but not a project chat's thread: its turn
+        // ends in a report to the chat, which is where the user hears of it.
+        else if (prev != AgentState.Done && pane.AgentState == AgentState.Done && sess.ThreadOf == null)
+            FlashDoneGentle();
         // Refresh the cc-session git signals (commits / diff size / unpushed)
         // on every state change. Cheap if no baseline is set; otherwise a few
         // concurrent plumbing commands off-thread.
@@ -3255,7 +3259,10 @@ internal sealed partial class AppController
     /// Bring a slept tab back. Clearing the flag re-seats it at the top of its
     /// project's active run; the PTYs respawn lazily on the page's first
     /// pane.resize, exactly as they do for any tab you haven't opened yet.
-    private void WakeSession(Session sess)
+    /// `background`: woken for a delivery (a project chat's message to its
+    /// thread), not by the user opening it — the resume runs without the
+    /// lightbox, which would otherwise pop over whatever they are doing.
+    private void WakeSession(Session sess, bool background = false)
     {
         _store.SetDormant(sess, false);
         _teamCtrl.OnSessionWoke(sess);
@@ -3272,8 +3279,9 @@ internal sealed partial class AppController
         foreach (var p in resumable) _armedResumePanes.Add(p.Id);
         // A team bot woken from the room shows its progress in the roster;
         // the lightbox is for tabs the user is about to look at.
-        if (_teamCtrl.BotOfSession(sess.Id) == null)
+        if (!background && _teamCtrl.BotOfSession(sess.Id) == null)
             BeginRestoreProgress(resumable.Select(p => p.Id).ToList());
+        else Log.Info("Session.wake.background", $"session={sess.Id:N} panes={resumable.Count}");
     }
 
     private void OnSessionSelect(SessionRef msg)

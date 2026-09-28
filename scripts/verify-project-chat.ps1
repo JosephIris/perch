@@ -475,6 +475,8 @@ perch thread new "Probe" --brief "$brief"
     Send-Json @{ verb = 'thread.send'; id = $threadD; text = 'Reply with exactly this word and nothing else: WOKEUP' }
     $woke = Wait-Until { ((State-Dump).sessions | Where-Object { $_.id -eq $threadD } | Select-Object -First 1).dormant -eq $false } 20 700
     Check "a message woke it" $woke
+    # Woken by its chat, not opened by the user: no "Resuming session" box.
+    Check "it woke in the background (no Resuming session box)" (Wait-Until { (Log-Count "Session.wake.background: session=$threadN") -ge 1 } 10 500)
     Check "the message went in once its Claude was back" (Wait-Until { Watch-Permission $threadD; (Log-Count "Delivery.submitted: session=$threadN") -gt $subBefore } 150 1500)
     $sidNow = (Pane-Of $threadD).claudeSessionId
     if (-not $sidNow) { $sidNow = $threadSid }
