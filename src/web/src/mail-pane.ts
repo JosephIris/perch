@@ -250,8 +250,11 @@ export class MailView {
       full.append(toggle, q);
     }
 
-    // Whatever wasn't placed inline: files, and images with no marker.
-    const rest = m.attachments.filter((a) => !(a.isImage && a.present) || images.indexOf(a) >= nextImage);
+    // Whatever wasn't placed inline: files, and images with no marker. A file
+    // an earlier message already carried (every reply re-attaches the
+    // signature images) is left out, so a long thread isn't a wall of logos.
+    const rest = m.attachments.filter((a) =>
+      !a.repeat && (!(a.isImage && a.present) || images.indexOf(a) >= nextImage));
     if (rest.length) {
       const atts = el("div", "mail__atts");
       for (const a of rest) {

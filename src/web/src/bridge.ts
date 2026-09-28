@@ -1160,7 +1160,9 @@ export type InboxStateMessage = {
   items: InboxItemView[];
 };
 
-export type InboxAttachmentView = { name: string; isImage: boolean; present: boolean };
+/** `repeat`: the same file already came with an earlier message in the
+ *  thread (a signature image every reply re-attaches). */
+export type InboxAttachmentView = { name: string; isImage: boolean; present: boolean; repeat?: boolean };
 
 export type InboxMailMessage = {
   type: "inbox.mail";

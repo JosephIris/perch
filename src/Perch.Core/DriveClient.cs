@@ -11,7 +11,7 @@ using System.Threading.Tasks;
 namespace Perch;
 
 /// One Drive file or folder as the inbox needs it.
-internal sealed record DriveFile(string Id, string Name, string MimeType, DateTimeOffset Modified, long Size, string[] Parents)
+internal sealed record DriveFile(string Id, string Name, string MimeType, DateTimeOffset Modified, long Size, string[] Parents, string Md5 = "")
 {
     public bool IsFolder => MimeType == "application/vnd.google-apps.folder";
 }
@@ -103,7 +103,7 @@ internal sealed class DriveClient : IDisposable
         do
         {
             var url = $"{Api}?q={Uri.EscapeDataString(q + " and trashed=false")}" +
-                      "&fields=nextPageToken,files(id,name,mimeType,modifiedTime,size,parents)" +
+                      "&fields=nextPageToken,files(id,name,mimeType,modifiedTime,size,parents,md5Checksum)" +
                       "&pageSize=1000&supportsAllDrives=true&includeItemsFromAllDrives=true" +
                       (page != null ? "&pageToken=" + Uri.EscapeDataString(page) : "");
             using var resp = await SendAsync(new HttpRequestMessage(HttpMethod.Get, url), ct);
@@ -167,7 +167,8 @@ internal sealed class DriveClient : IDisposable
             f.TryGetProperty("mimeType", out var m) ? m.GetString() ?? "" : "",
             f.TryGetProperty("modifiedTime", out var t) && DateTimeOffset.TryParse(t.GetString(), out var d) ? d : DateTimeOffset.MinValue,
             f.TryGetProperty("size", out var s) && long.TryParse(s.GetString(), out var n) ? n : 0,
-            parents);
+            parents,
+            f.TryGetProperty("md5Checksum", out var h) ? h.GetString() ?? "" : "");
     }
 
     private static string B64Url(byte[] b) => Convert.ToBase64String(b).TrimEnd('=').Replace('+', '-').Replace('/', '_');
