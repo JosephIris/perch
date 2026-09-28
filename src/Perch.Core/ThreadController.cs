@@ -59,6 +59,9 @@ internal sealed class ThreadController
         /// What a thread on a permission prompt asks to do: its transcript's
         /// last tool call, in words. Null when it can't be read.
         public Func<Session, Task<string?>>? ReadPendingTool { get; init; }
+        /// How big the thread's Claude conversation is (tokens its last call
+        /// read), from its transcript; 0 when unknown.
+        public Func<Session, Task<long>>? ReadContext { get; init; }
         /// The coordinator asked to push: a card for the user to approve.
         public Action<Session, PushRequest>? PushRequested { get; init; }
         /// A push request moved on (approved, pushed, failed, declined).
@@ -192,6 +195,64 @@ internal sealed class ThreadController
         ## Your brief
         {brief}
         """;
+
+    /// How long a thread's conversation may grow (tokens a call reads) before
+    /// its next piece of work goes to a fresh session. Claude Code compacts a
+    /// conversation near the model's limit; well before that, every call
+    /// re-reads it all, so a thread that has done a long task and gets
+    /// another starts clean — the way Claude's own project chats let a thread
+    /// "continue in a fresh session".
+    internal const long FreshAtTokens = 150_000;
+
+    private static string BriefPath(Session lead, int n) => Path.Combine(DirFor(lead), $"thread-{n}.brief.md");
+
+    /// A thread's brief as it was given: its own file, or — for a thread
+    /// started before briefs were kept apart — what follows "## Your brief"
+    /// in its prompt. Pure but for the read.
+    internal static string ReadBrief(Session lead, int n)
+    {
+        try
+        {
+            if (File.Exists(BriefPath(lead, n))) return File.ReadAllText(BriefPath(lead, n));
+            var prompt = Path.Combine(DirFor(lead), $"thread-{n}.md");
+            return File.Exists(prompt) ? BriefFromPrompt(File.ReadAllText(prompt)) : "";
+        }
+        catch { return ""; }
+    }
+
+    internal static string BriefFromPrompt(string prompt)
+    {
+        prompt = prompt.Replace("\r\n", "\n");
+        var at = prompt.IndexOf("## Your brief\n", StringComparison.Ordinal);
+        if (at < 0) return "";
+        var brief = prompt[(at + "## Your brief\n".Length)..];
+        var end = brief.IndexOf("\n## Where you left off", StringComparison.Ordinal);
+        return (end >= 0 ? brief[..end] : brief).Trim();
+    }
+
+    /// What a thread continuing in a fresh session is told, after its brief.
+    /// Pure.
+    internal static string LeftOff(string lastReport, string? oldTranscript)
+    {
+        var report = (lastReport ?? "").Trim();
+        if (report.Length > 4000) report = report[..4000].TrimEnd() + "…";
+        return "\n\n## Where you left off\n"
+            + "You are continuing this thread in a fresh session: the old one had grown long. You already worked on the brief above; your commits are on your branch (`git log`), and your task list starts empty. "
+            + (oldTranscript != null ? $"Your earlier conversation is saved at `{oldTranscript}` (one JSON object per line) — look up what you need there rather than reading all of it. " : "")
+            + "Wait for your next message, then carry on from here.\n"
+            + (report.Length > 0 ? $"\nYour last report was:\n\n{report}\n" : "");
+    }
+
+    /// Rewrite a thread's prompt for a fresh session: its brief with today's
+    /// instructions and memory, and where it left off. Returns the path.
+    public string WriteFreshPrompt(Session lead, Session thread, string? oldTranscript)
+    {
+        var brief = ReadBrief(lead, thread.ThreadNumber);
+        var path = Path.Combine(DirFor(lead), $"thread-{thread.ThreadNumber}.md");
+        AtomicFile.WriteAllText(path, ThreadPrompt(thread.ThreadNumber, thread.Title, brief, lead.ChatInstructions, ReadMemory(lead))
+            + LeftOff(thread.ThreadLastReply, oldTranscript));
+        return path;
+    }
 
     /// A thread's first prompt. The task list comes first because the user
     /// follows a thread by it (the Overview's "2/3", its checklist), and the
@@ -349,6 +410,7 @@ internal sealed class ThreadController
         Directory.CreateDirectory(dir);
         var promptPath = Path.Combine(dir, $"thread-{n}.md");
         AtomicFile.WriteAllText(promptPath, ThreadPrompt(n, title, brief, lead.ChatInstructions, ReadMemory(lead)));
+        AtomicFile.WriteAllText(BriefPath(lead, n), brief);
         var effort = ChatController.EffortArg(lead.ChatThreadEffort) ?? "";
         var tab = await _h.CreateClaudeTab(proj, title, promptPath, Kickoff, true, ChatController.ModelArg(lead.ChatThreadModel), effort);
         if (tab == null) return (null, "Perch couldn't make the thread's tab (see the toast in Perch).");
@@ -858,6 +920,18 @@ internal sealed class ThreadController
         if (string.IsNullOrWhiteSpace(reply) || reply == thread.ThreadLastReply) return;
         thread.ThreadResolved = false;   // it did something new: back in play
         Record(thread, reply);
+        // Grown long: its next piece of work starts a fresh session, handed
+        // its brief, this report and where the old conversation is — rather
+        // than re-reading all of it every call from here on.
+        long context = 0;
+        try { context = _h.ReadContext == null ? 0 : await _h.ReadContext(thread); }
+        catch (Exception ex) { Log.Error("Thread.context", ex); }
+        if (context >= FreshAtTokens && !thread.ThreadFreshNext)
+        {
+            thread.ThreadFreshNext = true;
+            _h.Save();
+            Log.Info("Thread.freshNext", $"session={thread.Id:N} context={context}");
+        }
         if (thread.ThreadOf is Guid lid && _h.SessionById(lid) is Session lead)
         {
             var shown = $"Thread {thread.ThreadNumber} ({thread.Title}) finished its turn: \"{FirstLine(reply, 160)}\"";

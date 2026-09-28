@@ -400,6 +400,13 @@ internal sealed partial class AppController
                 return tab;
             },
             ReadLastReply = ReadLastReplyAsync,
+            ReadContext = async t =>
+            {
+                var pane = AllLeaves(t.Root).FirstOrDefault(p => p.IsTerminal && !string.IsNullOrEmpty(p.ClaudeSessionId));
+                if (pane == null) return 0;
+                var data = await _transcripts.ReadAsync(new TranscriptKey(pane.Id, pane.ClaudeSessionId, ResolvePaneCwd(t, pane)));
+                return data?.Vitals?.ContextTokens ?? 0;
+            },
             CloseSession = id => OnSessionClose(new SessionCloseMsg { Id = id, RemoveWorktree = false }),
             // "Yes, I trust this folder" is the second choice: Down, then Enter.
             AcceptTrust = paneId => { if (_panes.Has(paneId)) _panes.Write(paneId, System.Text.Encoding.ASCII.GetBytes("\u001b[B\r")); },
@@ -449,6 +456,7 @@ internal sealed partial class AppController
                     timer.Start();
                 },
                 EnsureRunning = sess => { if (sess.Dormant) WakeSession(sess); EnsureSessionRunning(sess); },
+                StartFresh = StartThreadFresh,
                 GaveUp = (sess, line) => PostToast($"Perch couldn't get a message into \"{sess.Title}\"", "error", Guid.Empty),
                 // What is still waiting to go in, shown under the thread.
                 Changed = id =>
@@ -3341,6 +3349,61 @@ internal sealed partial class AppController
     /// The session's running Claude pane, or null when no Claude is up here.
     private PaneNode? ClaudePaneOf(Session sess)
         => AllLeaves(sess.Root).FirstOrDefault(p => p.IsTerminal && p.AgentType == "claude" && _panes.Has(p.Id));
+
+    /// A thread whose conversation grew long (ThreadFreshNext) gets its next
+    /// line in a fresh Claude session: the old one exits politely (or, asleep,
+    /// is simply not resumed), and a new one starts in the same pane with the
+    /// thread's prompt rewritten to say where it left off. True when that was
+    /// started — the line waits for the new Claude to come up.
+    private bool StartThreadFresh(Session sess)
+    {
+        if (!sess.ThreadFreshNext || sess.ThreadOf is not Guid lid || SessionById(lid) is not Session lead) return false;
+        if (AllLeaves(sess.Root).Any(p => p.IsTerminal && p.AgentState is AgentState.Working or AgentState.Permission or AgentState.Waiting))
+            return false;
+        var pane = AllLeaves(sess.Root).FirstOrDefault(p => p.IsTerminal && !string.IsNullOrEmpty(p.ClaudeSessionId))
+                   ?? AllLeaves(sess.Root).FirstOrDefault(p => p.IsTerminal);
+        if (pane == null) return false;
+        sess.ThreadFreshNext = false;
+
+        var cwd = ResolvePaneCwd(sess, pane);
+        string? oldTranscript = null;
+        try { oldTranscript = pane.ClaudeSessionId is { Length: > 0 } old && !string.IsNullOrEmpty(cwd) ? ClaudeTranscripts.Locate(old, cwd) : null; }
+        catch (Exception ex) { Log.Error("Thread.fresh.locate", ex); }
+        string promptPath;
+        try { promptPath = _threadCtrl.WriteFreshPrompt(lead, sess, oldTranscript); }
+        catch (Exception ex) { Log.Error("Thread.fresh.prompt", ex); _store.Save(); return false; }
+
+        var sid = Guid.NewGuid().ToString();
+        var name = string.IsNullOrEmpty(pane.PeerName) ? ClaudePeerNames.ForTitle(sess.Title) : pane.PeerName;
+        var command = $"claude --session-id {sid} --name {name}{ThreadFlags(promptPath, sess.ThreadEffort)}";
+        pane.ClaudeSessionId = sid;
+        pane.PeerName = name;
+        _transcripts.Forget(pane.Id);
+        _armedResumePanes.Remove(pane.Id);
+        if (sess.Dormant) _store.SetDormant(sess, false);
+        _store.Save();
+        PushState();
+        _chatCtrl?.Inform(lead, $"Thread {sess.ThreadNumber} ({sess.Title}) continues in a fresh session — its conversation had grown long.", sess.Id);
+        Log.Info("Thread.fresh", $"session={sess.Id:N} pane={pane.Id:N} sid={sid}");
+
+        void Spawn()
+        {
+            CancelPendingShutdown(pane.Id);
+            if (_panes.Has(pane.Id)) return;   // something else brought it up meanwhile
+            _pendingInitialCommand[pane.Id] = command;
+            SpawnPty(sess, pane);
+        }
+        // Same teardown as sleeping a tab (the polite /exit saves the old
+        // transcript), then the new launch.
+        async Task RespawnAsync()
+        {
+            try { await ShutdownPaneAsync(pane); }
+            finally { _ui.Post(Spawn); }
+        }
+        if (_panes.Has(pane.Id)) _ = RespawnAsync();
+        else Spawn();
+        return true;
+    }
 
     /// Type one line into the session's running Claude pane (the same PTY
     /// mechanism as the /model live switch). False when no running Claude.

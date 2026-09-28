@@ -157,6 +157,11 @@ internal sealed class Session : INotifyPropertyChanged
     /// resume (a resumed session keeps its conversation but not its flags).
     public string ThreadEffort { get; set; } = "";
 
+    /// On a thread: its conversation has grown long (ThreadController.
+    /// FreshAtTokens), so the next line delivered to it starts a fresh
+    /// Claude session instead of going into the old one.
+    public bool ThreadFreshNext { get; set; }
+
     /// On a thread: marked done (by the user, or once its work is merged);
     /// it drops to the Resolved group and stops asking for attention.
     public bool ThreadResolved { get; set; }

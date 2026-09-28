@@ -30,6 +30,10 @@ internal sealed class LineDelivery
         public required Action<Action, TimeSpan> Delay { get; init; }
         /// Start (or wake) the tab's terminal; its Claude reports in later.
         public required Action<Session> EnsureRunning { get; init; }
+        /// Before a line goes in: true when the tab's Claude is being started
+        /// over in a fresh session (a thread grown long); the line waits for
+        /// the new one to come up.
+        public Func<Session, bool>? StartFresh { get; init; }
         /// A line that could not be submitted after every retry.
         public Action<Session, string>? GaveUp { get; init; }
         /// A tab's queue changed (a line added, submitted or given up on) —
@@ -177,6 +181,9 @@ internal sealed class LineDelivery
         if (_checking.Contains(sessionId)) return;
         var sess = _h.SessionById(sessionId);
         if (sess == null) { _queues.Remove(sessionId); _h.Changed?.Invoke(sessionId); return; }
+        // Before waking or typing: a head line already typed is in the old
+        // session's box, so it goes on there.
+        if (!q[0].Typed && _h.StartFresh?.Invoke(sess) == true) return;
         if (!_h.ClaudeUp(sess)) { _h.EnsureRunning(sess); return; }
         if (_h.Busy(sess)) return;
 
