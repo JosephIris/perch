@@ -20,6 +20,10 @@ timing and TUI details a fake cannot have.
   [5] a thread on an AskUserQuestion dialog: thread.send dismisses it (Escape)
       and the reply lands as a clean prompt and is answered;
   [6] no Delivery.gaveup / "couldn't get a message into" anywhere in the run.
+  [7] resolving a thread puts it to sleep; a message wakes it and is answered.
+  [8] a thread marked as grown long (thread.fresh) takes its next message in
+      a new Claude session in the same pane, whose prompt says where it left
+      off — and it is not reported as failed.
 
 COSTS TOKENS: coordinator and thread are pinned to -Model (haiku by default)
 through ANTHROPIC_MODEL in the launched app's environment. About 15-20 short
@@ -476,6 +480,29 @@ perch thread new "Probe" --brief "$brief"
     if (-not $sidNow) { $sidNow = $threadSid }
     $answered = Wait-Until { @(Transcript $sidNow | Where-Object { $_.kind -eq 'say' -and $_.text -match 'WOKEUP' }).Count -ge 1 -or @(Transcript $threadSid | Where-Object { $_.kind -eq 'say' -and $_.text -match 'WOKEUP' }).Count -ge 1 } 120 2000
     Check "and was answered, in the same conversation" $answered ("- session " + $(if ($sidNow -eq $threadSid) { 'kept' } else { "resumed as $sidNow" }))
+    [void](Wait-Until { (Pane-State $threadD) -in @('done', 'idle') } 60)
+    Start-Sleep -Seconds 3
+
+    # ---- 8. a thread grown long continues in a fresh session ---------------------
+    # Past ThreadController.FreshAtTokens a thread's next message goes to a new
+    # Claude session in the same pane, whose prompt carries the brief and where
+    # it left off. `thread.fresh` marks it as if it had grown long.
+    Write-Host "`n[8] a thread grown long takes its next message in a fresh session"
+    $sidBefore = (Pane-Of $threadD).claudeSessionId
+    $freshBefore = Log-Count "Thread.fresh: session=$threadN"
+    $subBefore = Log-Count "Delivery.submitted: session=$threadN"
+    Send-Json @{ verb = 'thread.fresh'; id = $threadD }
+    Start-Sleep -Milliseconds 500
+    Send-Json @{ verb = 'thread.send'; id = $threadD; text = 'Reply with exactly this word and nothing else: FRESHONE' }
+    Check "the thread was started over in a fresh session" (Wait-Until { (Log-Count "Thread.fresh: session=$threadN") -gt $freshBefore } 20 700)
+    Check "a new Claude came up with a new session id" (Wait-Until { $p = Pane-Of $threadD; $p.claudeSessionId -and $p.claudeSessionId -ne $sidBefore -and $p.agentType -eq 'claude' } 90 1500)
+    Check "the message went in to the new one" (Wait-Until { Watch-Permission $threadD; (Log-Count "Delivery.submitted: session=$threadN") -gt $subBefore } 150 1500)
+    $sidFresh = (Pane-Of $threadD).claudeSessionId
+    $sids += $sidFresh
+    Check "and was answered there" (Wait-Answer $sidFresh 'FRESHONE' 120)
+    $promptFile = Get-ChildItem -Path (Join-Path $DataDir 'perch\threads') -Recurse -Filter 'thread-*.md' | Where-Object { $_.Name -notmatch 'brief' } | Select-Object -First 1
+    Check "its prompt says where it left off" ($promptFile -and ((Get-Content $promptFile.FullName -Raw) -match '## Where you left off'))
+    Check "the old thread was not reported as failed" ((Log-Count "Thread.failed: session=$threadN") -eq 0)
     [void](Wait-Until { (Pane-State $threadD) -in @('done', 'idle') } 60)
     Start-Sleep -Seconds 3
 

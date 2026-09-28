@@ -987,6 +987,10 @@ internal sealed partial class AppController
         .Add<ThreadActMsg>("thread.stop", OnThreadStop)
         .Add<ThreadActMsg>("thread.answer", OnThreadAnswer)
         .Add<ThreadActMsg>("thread.resolve", m => { if (SessionById(m.Id) is Session t) _threadCtrl.Resolve(t, m.Resolved ?? true); })
+        // Its next message starts a fresh session, as one grown long does
+        // (ThreadController.FreshAtTokens) — how the live check reaches it
+        // without first filling 150k tokens.
+        .Add<ThreadActMsg>("thread.fresh", m => { if (SessionById(m.Id) is { ThreadOf: not null } t) { t.ThreadFreshNext = true; _store.Save(); } })
         .Add<PaneRef>("chat.request", m => _chatCtrl.OnRequest(m.PaneId))
         .Add<ChatSendMsg>("chat.send", m => _chatCtrl.OnSend(m.PaneId, m.Text))
         .Add<PaneRef>("chat.stop", m => _chatCtrl.OnStop(m.PaneId))
@@ -1596,6 +1600,9 @@ internal sealed partial class AppController
     // completion poll below is race-free by construction.
 
     private readonly Dictionary<Guid, System.Threading.CancellationTokenSource> _pendingShutdown = new();
+    /// When Perch last began shutting each pane down (Environment.TickCount64):
+    /// a session-end arriving soon after is that shutdown's, not a crash.
+    private readonly Dictionary<Guid, long> _shutdownAt = new();
 
     private async System.Threading.Tasks.Task ShutdownPaneAsync(PaneNode pane)
     {
@@ -1617,6 +1624,7 @@ internal sealed partial class AppController
         }
         var cts = new System.Threading.CancellationTokenSource();
         _pendingShutdown[pane.Id] = cts;
+        _shutdownAt[pane.Id] = Environment.TickCount64;
         try
         {
             var esc = new byte[] { 0x1B };
@@ -2054,8 +2062,12 @@ internal sealed partial class AppController
         var was = pane.AgentType;
         pane.AgentType = next;
         // A thread's Claude that exits when Perch didn't ask it to (a sleep or
-        // a fresh start goes through ShutdownPaneAsync) has failed.
-        if (was == "claude" && next == "" && sess.ThreadOf != null && !_pendingShutdown.ContainsKey(paneId))
+        // a fresh start goes through ShutdownPaneAsync) has failed. Its
+        // session-end can land AFTER the hard kill that ends the grace (seen
+        // live: ~1s later, by which time a fresh start's new PTY is up), so
+        // an exit soon after Perch shut the pane down is Perch's own.
+        var ownExit = _shutdownAt.TryGetValue(paneId, out var at) && Environment.TickCount64 - at < 20_000;
+        if (was == "claude" && next == "" && sess.ThreadOf != null && !_pendingShutdown.ContainsKey(paneId) && !ownExit)
             _threadCtrl.OnClaudeStopped(sess);
         PushState();
     }
