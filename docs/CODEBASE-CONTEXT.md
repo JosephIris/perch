@@ -131,6 +131,7 @@ user's local harness environment, not derived from `PERCH_DATA_DIR`.
 | Pane marker files | Temp files keyed by pane ID: model, peer name, board/team context; see respective helper classes |
 | Team shared data | Main checkout `.perch/team/`: team, positions, briefs, bot memories, tasks |
 | Team machine-local data | `.perch/team/local/`: tab bindings, room JSONL, rendered prompts/roster, artifacts |
+| Project chat presets | Project repo `.perch/presets/<slug>.md` (top-level only; `Presets.cs`). Name from the first `# ` heading, summary from the first prose line. A chat's switched-on slugs are `Session.ChatPresets`; each body is read fresh into the coordinator prompt every turn and into a thread prompt when it starts or goes fresh |
 | Boards | `.perch` board folders; `board.md` has an authoritative JSON layout comment and generated prose |
 | Build outputs | `src/Perch/wwwroot`, `bin`, `obj`; generated and ignored |
 

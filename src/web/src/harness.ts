@@ -21,6 +21,8 @@ import { buildPaneHeader, applyChips, applyPorts, applyModelChip, applyAgentBadg
 import { showBrowserPrompt } from "./browser-prompt.js";
 import { showModelMenu, dismissModelMenu, setModelLimits } from "./model-menu.js";
 import { showNewTabDialog } from "./new-tab-dialog.js";
+import { showProjectChatDialog } from "./project-chat-dialog.js";
+import { ChatPane } from "./chat-pane.js";
 import { RestoreProgress } from "./restore-progress.js";
 import { openCommitsPopover, openCommitsLightbox } from "./commits-view.js";
 import { showCloudPanel, applyCloudData } from "./cloud-panel.js";
@@ -1146,6 +1148,40 @@ if (view === "newtab" || view === "newtab-browser") {
       btns.find((b) => b.textContent === "Browser")?.click();
     }, 60);
   }
+}
+
+// #pchat-presets — the new-project-chat dialog for a project whose repo has
+// presets (.perch/presets/*.md). #chat-presets — a project chat pane with its
+// Overview on the About tab, one preset switched on. The first preset is the
+// real release-review.md's heading and first line (cut at 160 like the host).
+const HARNESS_PRESETS = [
+  {
+    slug: "release-review",
+    name: "Release review",
+    summary: "Say \"review build 1.584\": collect the build's tickets, verify each one in its own thread, and post a Jira comment and status only after the user approves…",
+  },
+  { slug: "small-commits", name: "Small commits", summary: "Commit after each step that passes its tests, with a message that says what changed and why." },
+];
+if (view === "pchat-presets") {
+  showProjectChatDialog({ id: "p-pt", name: "product-tools-prod", path: "C:\\dev\\product-tools-prod", presets: HARNESS_PRESETS });
+  document.querySelector<HTMLElement>(".preset-checks .newtab-check")?.click();
+}
+if (view === "chat-presets") {
+  const stage = document.getElementById("workspace")!;
+  stage.style.cssText = "display:flex;";
+  const pane = new ChatPane("chat-pane-1");
+  pane.element.style.cssText = "flex:1 1 auto;min-width:0;";
+  stage.appendChild(pane.element);
+  pane.applyHistory([], false, 0, "claude-sonnet-4-5");
+  pane.applyMeta({
+    type: "chat.meta", paneId: "chat-pane-1", sessionId: "s-chat",
+    goal: "Review build 1.584 before Thursday", instructions: "Work on the develop branch. Ask me before posting anything to Jira.",
+    memory: ["Release notes live in the RTB Release Notes doc"],
+    presets: HARNESS_PRESETS, activePresets: ["release-review"],
+    coordinatorModel: "", coordinatorEffort: "", threadModel: "", threadEffort: "", userName: "Joseph",
+    suggestions: [],
+  });
+  setTimeout(() => pane.element.querySelector<HTMLElement>(".chat__gear")?.click(), 60);
 }
 
 if (view === "panechooser") {
