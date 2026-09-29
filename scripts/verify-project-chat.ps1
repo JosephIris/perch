@@ -9,6 +9,8 @@ timing and TUI details a fake cannot have.
       and the thread's Claude comes up and finishes its first turn;
   [2] a short steer (thread.send) is submitted (Delivery.submitted, the
       tagged prompt in the thread's transcript) and answered;
+  [2b] the board: a thread and the coordinator each put a card on it with
+      `perch thread board set`, with no permission prompt;
   [3] a long message (~1,400 chars) from the user AND from the coordinator
       reaches the thread WHOLE: it goes by file (LineDelivery.SaveLong), the
       thread reads that file (no permission prompt) and quotes the code word
@@ -314,6 +316,27 @@ perch thread new "Probe" --brief "$brief"
     $pr = @(Transcript $threadSid | Where-Object { $_.kind -eq 'prompt' -and $_.text -match 'STEERONE' })
     Check "the thread's transcript has the tagged prompt" ($pr.Count -ge 1 -and $pr[-1].text -match '^\s*(<pasted_content[^>]*>\s*)?\[Perch #\d+\] Reply with exactly') ("- " + ($(if ($pr.Count) { $pr[-1].text.Substring(0, [Math]::Min(80, $pr[-1].text.Length)) } else { '(none)' })))
     Check "the thread answered STEERONE" (Wait-Answer $threadSid 'STEERONE' 120)
+    [void](Wait-Until { (Pane-State $threadD) -in @('done', 'idle') } 60)
+    Start-Sleep -Seconds 3
+
+    # ---- 2b. the board: a thread and the coordinator put cards on it ------------
+    # `perch thread board` from both sides, with no permission prompt (it rides
+    # the `perch thread` allow rule), landing in the chat's board.json.
+    Write-Host "`n[2b] the board: a thread and the coordinator put cards on it"
+    $boardJson = Join-Path $leadDir 'board.json'
+    $threadNo = [int]((Get-Content (Join-Path $DataDir 'perch\sessions.json') -Raw | ConvertFrom-Json).Sessions | Where-Object { $_.Id -eq $threadD }).ThreadNumber
+    if (-not $threadNo) { $threadNo = 1 }   # the first thread of a fresh chat
+    Send-Json @{ verb = 'thread.send'; id = $threadD; text = 'Run exactly this command with Bash, then reply with the single word BOARDTWO: perch thread board set GATE-2 --title "Gate thread card" --verdict manual --question "Is this a test?"' }
+    $card2 = Wait-Until { Watch-Permission $threadD; (Test-Path $boardJson) -and ((Get-Content $boardJson -Raw) -match 'GATE-2') } 150 1500
+    Check "a thread put its card on the board" $card2
+    $b = if (Test-Path $boardJson) { Get-Content $boardJson -Raw | ConvertFrom-Json } else { $null }
+    $g2 = @($b.Items | Where-Object { $_.Key -eq 'GATE-2' })[0]
+    Check "the card says what the thread set, and which thread it is" ($g2 -and $g2.Verdict -eq 'manual' -and $g2.Question -eq 'Is this a test?' -and [int]$g2.Thread -eq $threadNo) "- thread $($g2.Thread) (expected $threadNo)"
+    Check "the thread answered BOARDTWO" (Wait-Answer $threadSid 'BOARDTWO' 120)
+    Check "no permission prompt for the board command" (-not $sawPermission)
+    Send-Json @{ verb = 'chat.send'; paneId = $chatPaneD; text = 'Run exactly this command, then reply with the single word NOTED: perch thread board set GATE-1 --title "Gate card" --verdict verified --status Done' }
+    $card1 = Wait-Until { (Test-Path $boardJson) -and ((Get-Content $boardJson -Raw) -match 'GATE-1') } 180 1500
+    Check "the coordinator put a card on the board" $card1
     [void](Wait-Until { (Pane-State $threadD) -in @('done', 'idle') } 60)
     Start-Sleep -Seconds 3
 
