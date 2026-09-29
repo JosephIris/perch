@@ -28,6 +28,7 @@ import { ImageTray, withImages, userBubble } from "./image-attach.js";
 import { imageStrip } from "./chat-images.js";
 import { queuedNote, queuedText } from "./thread-steer.js";
 import { Dropdown, type DropdownOption } from "./dropdown.js";
+import { presetChecks } from "./preset-checks.js";
 
 export { groupOf, stateLabel } from "./thread-ui.js";
 export type { ThreadGroup } from "./thread-ui.js";
@@ -459,14 +460,19 @@ export class ChatOverview {
       el("span", "ov__models-role", "New threads"), tModel.element, tEffort.element,
     );
 
+    // Presets: only when the project's repo has some (.perch/presets/*.md).
+    const presets = m?.presets?.length ? presetChecks(m.presets, m.activePresets ?? []) : null;
+
     const save = button("pc-btn pc-btn--primary", "Save", () =>
       send({
         type: "projectchat.update", sessionId, goal: goal.value, instructions: instructions.value,
+        ...(presets ? { presets: presets.selected() } : {}),
         coordinatorModel: cModel.value, coordinatorEffort: cEffort.value, threadModel: tModel.value, threadEffort: tEffort.value,
       }));
 
-    wrap.append(el("div", "ov__label", "Goal"), goal, el("div", "ov__label", "Instructions"), instructions,
-      el("div", "ov__label", "Models"), models);
+    wrap.append(el("div", "ov__label", "Goal"), goal, el("div", "ov__label", "Instructions"), instructions);
+    if (presets) wrap.append(el("div", "ov__label", "Presets"), presets.element);
+    wrap.append(el("div", "ov__label", "Models"), models);
     const row = el("div", "ov__save");
     row.append(el("span", "ov__hint", "New threads get the change; running ones keep what they started with."), save);
     wrap.appendChild(row);

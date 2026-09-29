@@ -209,8 +209,8 @@ export type OutMessage =
    * making it (email left, Claude right) if there isn't one yet. */
   | { type: "inbox.refresh" }
   /* A new project chat under this project: coordinator Claude + threads panel. */
-  | { type: "projectchat.new"; id: string; name?: string; goal?: string; instructions?: string }
-  | { type: "projectchat.update"; sessionId: string; goal?: string; instructions?: string; forget?: number;
+  | { type: "projectchat.new"; id: string; name?: string; goal?: string; instructions?: string; presets?: string[] }
+  | { type: "projectchat.update"; sessionId: string; goal?: string; instructions?: string; presets?: string[]; forget?: number;
       coordinatorModel?: string; coordinatorEffort?: string; threadModel?: string; threadEffort?: string }
   | { type: "suggestion.start"; sessionId: string; id: string }
   | { type: "suggestion.dismiss"; sessionId: string; id: string }
@@ -655,7 +655,13 @@ export type ProjectView = {
    * room. Bots are also ordinary rows in `sessions[]`; this is the layer that
    * says which of them are bots and what position each holds. */
   team?: TeamView;
+  /* Project chat presets in the repo (`.perch/presets/*.md`). Absent when none. */
+  presets?: PresetView[] | null;
 };
+
+/* One project chat preset: its file's slug, the title from its heading and its
+ * first line of prose. */
+export type PresetView = { slug: string; name: string; summary: string };
 
 export type StateMessage = {
   type: "state";
@@ -1110,6 +1116,9 @@ export type ChatEntryView = { id: string; kind: "user" | "claude" | "tool" | "no
 export type ChatMetaMessage = {
   type: "chat.meta"; paneId: string; sessionId: string;
   goal: string; instructions: string; memory: string[];
+  /* The presets in the project's repo (`.perch/presets/*.md`) and the slugs
+   * switched on for this chat. */
+  presets?: PresetView[]; activePresets?: string[];
   /* Model and effort for the coordinator and for new threads ("" = Claude's default). */
   coordinatorModel?: string; coordinatorEffort?: string; threadModel?: string; threadEffort?: string;
   /* Who the Overview greets ("" until the host has read it). */

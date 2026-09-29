@@ -9557,3 +9557,7 @@ body.show-inbox .inbox { display: flex; }
 .pchat-card__instructions { width: 100%; box-sizing: border-box; resize: vertical; }
 
 .pchat-card .newtab-input { font-family: var(--font-text); }
+/* Project chat presets (dialog and Overview): the new-tab dialog's check
+   cards, stacked closer since there may be several. */
+.preset-checks { display: flex; flex-direction: column; gap: var(--sp-8); }
+.preset-checks .newtab-check { margin-bottom: 0; }

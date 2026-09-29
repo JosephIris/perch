@@ -5,6 +5,7 @@
 
 import { send } from "./bridge.js";
 import type { ProjectView } from "./bridge.js";
+import { presetChecks } from "./preset-checks.js";
 
 let overlay: HTMLElement | null = null;
 
@@ -73,6 +74,22 @@ export function showProjectChatDialog(project: ProjectView) {
   card.appendChild(field("Instructions (optional)",
     "Given to the chat and to every thread it starts. You can change them later.", instructions));
 
+  // Presets: only when the project's repo has some (.perch/presets/*.md).
+  // Not a <label> like the fields above: each check is its own label.
+  const presets = project.presets?.length ? presetChecks(project.presets) : null;
+  if (presets) {
+    const group = document.createElement("div");
+    group.className = "newtab-field";
+    const t = document.createElement("span");
+    t.className = "newtab-field__label";
+    t.textContent = "Presets";
+    const hint = document.createElement("span");
+    hint.className = "newtab-field__hint";
+    hint.textContent = "Each one you tick is given in full to the chat and its threads. You can change them later.";
+    group.append(t, presets.element, hint);
+    card.appendChild(group);
+  }
+
   const actions = document.createElement("div");
   actions.className = "projects-card__actions";
   const spacer = document.createElement("div");
@@ -95,6 +112,7 @@ export function showProjectChatDialog(project: ProjectView) {
       name: name.value.trim(),
       goal: goal.value.trim(),
       instructions: instructions.value.trim(),
+      presets: presets?.selected() ?? [],
     });
     closeProjectChatDialog();
   };
