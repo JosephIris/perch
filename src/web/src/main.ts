@@ -146,7 +146,10 @@ window.addEventListener("keydown", (ev) => {
     ev.preventDefault();
     ev.stopPropagation();
   } else if (ev.key === "Escape" && inbox.isOpen()) {
-    inbox.hide();
+    if (!inbox.handleEscape()) inbox.hide();
+    ev.preventDefault();
+    ev.stopPropagation();
+  } else if (ev.key === "/" && inbox.focusSearch(ev)) {
     ev.preventDefault();
     ev.stopPropagation();
   }
@@ -363,6 +366,9 @@ onMessage((msg) => {
     case "inbox.mail":
       if (msg.paneId === READER_ID) inbox.applyMail(msg);
       else workspace.applyMail(msg);
+      break;
+    case "inbox.searchResult":
+      inbox.applySearch(msg.query, msg.ids);
       break;
     case "inbox.image":
       if (msg.paneId === READER_ID) inbox.applyImage(msg.name, msg.dataUrl);

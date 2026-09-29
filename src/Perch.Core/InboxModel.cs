@@ -123,6 +123,24 @@ internal static class InboxModel
         return s.Length > max ? s[..max].TrimEnd() + "…" : s;
     }
 
+    /// Search: every word of the query appears somewhere in the thread —
+    /// subject, senders and recipients, bodies or file names — ignoring case,
+    /// the way a mail client's search box works. A blank query matches all.
+    public static bool Matches(Thread t, string query)
+    {
+        var words = (query ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        if (words.Length == 0) return true;
+        var hay = new System.Text.StringBuilder(t.Subject).Append('\n');
+        foreach (var m in t.Messages)
+        {
+            hay.Append(m.From).Append('\n').Append(m.To).Append('\n').Append(m.Cc).Append('\n')
+               .Append(m.Subject).Append('\n').Append(m.Body).Append('\n');
+            foreach (var a in m.Attachments) hay.Append(a).Append('\n');
+        }
+        var text = hay.ToString();
+        return words.All(w => text.Contains(w, StringComparison.OrdinalIgnoreCase));
+    }
+
     public static bool IsImage(string name)
     {
         var ext = System.IO.Path.GetExtension(name ?? "").ToLowerInvariant();
@@ -172,6 +190,41 @@ internal static class InboxModel
                 if (!o.Threads.TryGetValue(id, out var cur) || e.UpdatedAt > cur.UpdatedAt)
                     o.Threads[id] = new Entry { State = e.State, UpdatedAt = e.UpdatedAt, By = e.By };
         return o;
+    }
+
+    // ---- export-status.json ---------------------------------------------
+
+    public const string ExportStatusFileName = "export-status.json";
+    /// The export runs every minute; this long without a run means it stopped.
+    public static readonly TimeSpan ExportStaleAfter = TimeSpan.FromMinutes(10);
+
+    /// What to tell you about the Gmail export, from the status file it
+    /// writes each run: an email it couldn't export (that email keeps its
+    /// `claude` label and never reaches Perch until it can), or no run for a
+    /// while. Null when all is well, or for an export too old to write one.
+    public static string? ExportProblem(string? json, DateTimeOffset now)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            if (root.TryGetProperty("errors", out var errs) && errs.ValueKind == JsonValueKind.Array && errs.GetArrayLength() > 0)
+            {
+                var first = errs[0];
+                var subject = first.TryGetProperty("subject", out var s) ? s.GetString() : null;
+                var error = first.TryGetProperty("error", out var e) ? e.GetString() : null;
+                var what = errs.GetArrayLength() == 1
+                    ? $"\"{(string.IsNullOrWhiteSpace(subject) ? "(no subject)" : subject)}\""
+                    : $"{errs.GetArrayLength()} emails";
+                return $"Gmail couldn't export {what}: {error}. It tries again every minute.";
+            }
+            if (root.TryGetProperty("lastRun", out var lr) && DateTimeOffset.TryParse(lr.GetString(), out var last)
+                && now - last > ExportStaleAfter)
+                return $"The Gmail export hasn't run since {last.ToLocalTime():MMM d, HH:mm}, so newly labelled emails aren't arriving. Check its trigger in Apps Script.";
+            return null;
+        }
+        catch (JsonException) { return null; }
     }
 
     /// The state a thread shows. A thread re-exported (re-labelled in Gmail)

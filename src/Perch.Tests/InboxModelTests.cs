@@ -139,4 +139,32 @@ public class InboxModelTests
             "The key command failed: ERROR: (gcloud.secrets.versions.access) NOT_FOUND: Secret [x] not found or has no versions."));
         Assert.False(InboxController.IsGcloudLoginExpired("Drive: 404 Not Found"));
     }
+
+    [Fact]
+    public void Matches_EveryWordAnywhereInTheThreadIgnoringCase()
+    {
+        var t = InboxModel.ParseThread(Thread);
+        Assert.True(InboxModel.Matches(t, ""));
+        Assert.True(InboxModel.Matches(t, "binance"));              // subject
+        Assert.True(InboxModel.Matches(t, "ofir@"));                // cc
+        Assert.True(InboxModel.Matches(t, "looking REPORT.pdf"));   // body + file name, both words
+        Assert.False(InboxModel.Matches(t, "binance coinbase"));    // one word missing
+    }
+
+    [Fact]
+    public void ExportProblem_NamesAStuckEmailOrAStoppedExport()
+    {
+        var now = DateTimeOffset.Parse("2026-09-29T09:00:00Z");
+        Assert.Null(InboxModel.ExportProblem(null, now));           // an export too old to write the file
+        Assert.Null(InboxModel.ExportProblem("not json", now));
+        Assert.Null(InboxModel.ExportProblem("{\"lastRun\":\"2026-09-29T08:59:00Z\",\"errors\":[]}", now));
+
+        var stuck = InboxModel.ExportProblem(
+            "{\"lastRun\":\"2026-09-29T08:59:00Z\",\"errors\":[{\"threadId\":\"t1\",\"subject\":\"Candy Crush / CDN issue\",\"error\":\"Exceeded maximum file size\"}]}", now);
+        Assert.Contains("\"Candy Crush / CDN issue\"", stuck);
+        Assert.Contains("Exceeded maximum file size", stuck);
+
+        Assert.Contains("hasn't run since",
+            InboxModel.ExportProblem("{\"lastRun\":\"2026-09-29T08:30:00Z\",\"errors\":[]}", now));
+    }
 }

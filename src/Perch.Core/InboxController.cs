@@ -52,6 +52,10 @@ internal sealed class InboxController : IDisposable
     /// `gcloud auth login` (a browser sign-in) instead of making you type it.
     private bool _needsLogin;
     private bool _loggingIn;
+    /// The Gmail export's own report (export-status.json), re-read only when
+    /// Drive says it changed.
+    private string? _exportStatusJson;
+    private string? _exportStatusStamp;
 
     /// Threads found in the last sync, id → (folder name, thread.md modified).
     private Dictionary<string, (string Folder, DateTimeOffset Modified)> _threads = new();
@@ -206,6 +210,13 @@ internal sealed class InboxController : IDisposable
         var ct = CancellationToken.None;
         var children = await client.ListChildrenAsync(folderId, ct);
         _stateFileId = children.FirstOrDefault(f => !f.IsFolder && f.Name == InboxModel.StateFileName)?.Id;
+        var status = children.FirstOrDefault(f => !f.IsFolder && f.Name == InboxModel.ExportStatusFileName);
+        if (status == null) _exportStatusJson = null;
+        else if (_exportStatusStamp != $"{status.Id} {status.Modified:O}")
+        {
+            _exportStatusJson = Encoding.UTF8.GetString(await client.DownloadAsync(status.Id, ct));
+            _exportStatusStamp = $"{status.Id} {status.Modified:O}";
+        }
 
         var folders = children.Where(f => f.IsFolder)
             .Select(f => (f, tid: InboxModel.ThreadIdFromFolder(f.Name)))
@@ -336,6 +347,17 @@ internal sealed class InboxController : IDisposable
                 catch (Exception ex) { Log.Info("Inbox.state.push", ex.Message); }
                 _ui.Post(PushView);
             });
+    }
+
+    /// The Inbox's search box, on Enter: the ids of every listed thread whose
+    /// local copy matches. Reads the thread files off disk, so it is only run
+    /// when asked, never per keystroke.
+    public void Search(string query)
+    {
+        List<string> ids;
+        lock (_gate) ids = _threads.Keys.ToList();
+        var hits = ids.Where(id => LoadThread(id) is { } t && InboxModel.Matches(t, query)).ToArray();
+        _push(new { type = "inbox.searchResult", query, ids = hits });
     }
 
     /// The first open of a new thread is its read receipt.
@@ -476,6 +498,7 @@ internal sealed class InboxController : IDisposable
             loggingIn = _loggingIn,
             lastSync = _lastSync?.ToString("O"),
             shared = _stateFileId != null,
+            exportProblem = Enabled ? InboxModel.ExportProblem(_exportStatusJson, DateTimeOffset.UtcNow) : null,
             counts,
             items,
         });

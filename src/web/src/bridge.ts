@@ -235,6 +235,9 @@ export type OutMessage =
   /* Read an email in the Inbox's panel: marks it read, answers with
    * inbox.mail addressed to the reader (the empty id). */
   | { type: "inbox.view"; id: string }
+  /* Search every email's full text (subject, people, bodies, file names).
+   * Sent on Enter, never per keystroke; answered with inbox.searchResult. */
+  | { type: "inbox.search"; query: string }
   /* From an email pane: its thread, one inline image, or open an attachment
    * with the system's default app. */
   | { type: "inbox.mail.request"; paneId: string; id: string }
@@ -1156,6 +1159,8 @@ export type InboxStateMessage = {
   lastSync?: string | null;
   /* Whether states are shared through the Drive state file. */
   shared: boolean;
+  /* The Gmail export is stuck: an email it can't export, or no run lately. */
+  exportProblem?: string | null;
   counts: Record<InboxStateName, number>;
   items: InboxItemView[];
 };
@@ -1188,6 +1193,7 @@ export type InMessage =
   | SettingsDataMessage
   | InboxStateMessage
   | InboxMailMessage
+  | { type: "inbox.searchResult"; query: string; ids: string[] }
   | { type: "chat.history"; paneId: string; entries: ChatEntryView[]; running: boolean; queued: number; model?: string }
   | { type: "chat.entry"; paneId: string; entry: ChatEntryView }
   | { type: "chat.status"; paneId: string; running: boolean; queued: number; model?: string }

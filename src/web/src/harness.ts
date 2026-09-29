@@ -24,7 +24,7 @@ import { showNewTabDialog } from "./new-tab-dialog.js";
 import { RestoreProgress } from "./restore-progress.js";
 import { openCommitsPopover, openCommitsLightbox } from "./commits-view.js";
 import { showCloudPanel, applyCloudData } from "./cloud-panel.js";
-import type { SessionView, PaneTreeView, ProjectView, StateMessage, TeamDataMessage, TeamEntryView, InboxStateMessage } from "./bridge.js";
+import type { SessionView, PaneTreeView, ProjectView, StateMessage, TeamDataMessage, TeamEntryView, InboxStateMessage, InboxStateName } from "./bridge.js";
 import { openTeamRoom, applyTeamState, onTeamRoomChange, feedTeamFixture, applyArtefact, applyArtefactIndex } from "./team-room.js";
 import { showNewBotDialog, applyBriefProgress, applyBriefResult, applyReferencePicked } from "./new-bot-dialog.js";
 import { onMessage as onHostMessage } from "./bridge.js";
@@ -1190,6 +1190,33 @@ if (view === "dashboard") {
     counts: { new: 0, read: 0, pending: 0, done: 0 } as InboxStateMessage["counts"], items: [],
   });
   inbox.show();
+} else if (view === "inbox-search") {
+  // The list with its search box, the stuck-export note, and ?q= run as a
+  // search (typed + Enter, answered as the host would).
+  const q = viewParams.get("q") ?? "";
+  const root = document.getElementById("inbox") ?? document.body.appendChild(Object.assign(document.createElement("section"), { id: "inbox", className: "inbox" }));
+  const btn = document.createElement("button"), badge = document.createElement("span");
+  const inbox = new Inbox(root, btn, badge);
+  const item = (id: string, subject: string, from: string, state: InboxStateName, snippet: string) => ({
+    id, subject, from, state, snippet, date: new Date().toISOString(), messageCount: 2, attachmentCount: 0, sessionId: null,
+  });
+  inbox.apply({
+    type: "inbox.state", enabled: true, status: "ok", shared: true, lastSync: new Date().toISOString(), message: "",
+    exportProblem: "Gmail couldn't export \"Candy Crush / CDN issue\": Exceeded maximum file size. It tries again every minute.",
+    counts: { new: 1, read: 1, pending: 0, done: 1 },
+    items: [
+      item("a", "Candy Crush / CDN issue", "Dana Levi", "new", "The CDN is serving stale creatives again since this morning."),
+      item("b", "Binance FTD numbers", "Ofir", "read", "Is the 10 real? Looking at the dashboard now."),
+      item("c", "Q4 budget", "Finance", "done", "Numbers attached, CDN costs included."),
+    ],
+  } as InboxStateMessage);
+  inbox.show();
+  if (q) {
+    const box = root.querySelector<HTMLInputElement>(".inbox__search")!;
+    box.value = q;
+    box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+    inbox.applySearch(q, ["a", "c"]);
+  }
 } else if (view === "confirm") {
   void confirmDialog({
     title: "Restore kanban refactor?",

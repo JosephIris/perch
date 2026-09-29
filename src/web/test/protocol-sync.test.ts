@@ -46,6 +46,7 @@ const EXPECTED_TYPES = [
   "inbox.mail.request",
   "inbox.open",
   "inbox.refresh",
+  "inbox.search",
   "inbox.setState",
   "inbox.view",
   "inspector.image",

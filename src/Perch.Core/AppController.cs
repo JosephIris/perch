@@ -1008,6 +1008,7 @@ internal sealed partial class AppController
         .Add("inbox.gcloudLogin", () => _ = _inbox?.GcloudLoginAsync())
         .Add("inbox.createStateFile", () => _ = _inbox?.CreateStateFileAsync())
         .Add<InboxSetStateMsg>("inbox.setState", m => _inbox?.SetState(m.Id, m.State))
+        .Add<InboxSearchMsg>("inbox.search", m => _inbox?.Search(m.Query))
         .Add<InboxRef>("inbox.open", OnInboxOpen)
         // Reading an email in the Inbox's panel: that's its read receipt. The
         // panel isn't a pane, so the reply is addressed to the empty id.

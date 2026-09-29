@@ -486,6 +486,11 @@ internal sealed record InboxRef
     public required string Id { get; init; }
 }
 
+internal sealed record InboxSearchMsg
+{
+    public required string Query { get; init; }
+}
+
 internal sealed record InboxSetStateMsg
 {
     public required string Id { get; init; }

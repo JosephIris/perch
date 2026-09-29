@@ -73,6 +73,13 @@ export class Inbox {
    *  thread → tab link outlives a closed tab; this is what says whether
    *  "Go to session" still has somewhere to go. */
   private liveSessions = new Set<string>();
+  /** Search: the box keeps what you're typing; nothing runs until Enter.
+   *  query is the search that ran, hits its answer (null while waiting). */
+  private readonly searchBox = Object.assign(document.createElement("input"), {
+    type: "search", className: "inbox__search", placeholder: "Search  /", spellcheck: false,
+  });
+  private query = "";
+  private hits: Set<string> | null = null;
 
   setLiveSessions(ids: string[]) {
     const next = new Set(ids);
@@ -92,6 +99,45 @@ export class Inbox {
     this.root = root;
     this.button = button;
     this.badge = badge;
+    this.searchBox.setAttribute("aria-label", "Search emails (press Enter)");
+    this.searchBox.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") { ev.preventDefault(); this.runSearch(this.searchBox.value); }
+    });
+  }
+
+  /** "/" anywhere while the Inbox is open jumps to the search box, as in
+   *  Gmail — unless you're already typing in the Inbox. True if it did. */
+  focusSearch(ev: KeyboardEvent): boolean {
+    if (!this.isOpen() || ev.ctrlKey || ev.metaKey || ev.altKey) return false;
+    const t = ev.target as HTMLElement | null;
+    const typing = !!t && this.root.contains(t) && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
+    if (typing) return false;
+    this.searchBox.focus();
+    this.searchBox.select();
+    return true;
+  }
+
+  /** Esc in the search box clears the search instead of closing the Inbox.
+   *  True if it was handled. */
+  handleEscape(): boolean {
+    if (document.activeElement !== this.searchBox) return false;
+    this.searchBox.value = "";
+    this.searchBox.blur();
+    if (this.query) this.runSearch("");
+    return true;
+  }
+
+  private runSearch(raw: string) {
+    this.query = raw.trim();
+    this.hits = null;
+    if (this.query) send({ type: "inbox.search", query: this.query });
+    this.render();
+  }
+
+  applySearch(query: string, ids: string[]) {
+    if (query !== this.query) return;   // an older search, overtaken
+    this.hits = new Set(ids);
+    this.render();
   }
 
   isOpen(): boolean { return document.body.classList.contains("show-inbox"); }
@@ -238,9 +284,27 @@ export class Inbox {
       frag.appendChild(note);
     }
 
+    if (msg.exportProblem) {
+      const note = el("div", "inbox__note inbox__note--error");
+      note.appendChild(el("span", "inbox__note-text", msg.exportProblem));
+      frag.appendChild(note);
+    }
+
+    // A search covers every email whatever its state, so while one is shown
+    // the state tabs give way to what was found.
+    const searching = this.query !== "";
     const tabs = el("div", "inbox__filters");
     tabs.setAttribute("role", "tablist");
-    for (const f of FILTERS) {
+    if (searching) {
+      const found = this.hits === null ? "Searching…"
+        : `${msg.items.filter((i) => this.hits!.has(i.id)).length} found for “${this.query}”`;
+      tabs.appendChild(el("span", "inbox__found", found));
+      const clear = el("button", "inbox__refresh", "Clear") as HTMLButtonElement;
+      clear.type = "button";
+      clear.addEventListener("click", () => { this.searchBox.value = ""; this.runSearch(""); });
+      tabs.appendChild(clear);
+    }
+    for (const f of searching ? [] : FILTERS) {
       const count = msg.items.filter((i) => matches(f.id, i.state)).length;
       const t = el("button", "inbox__filter") as HTMLButtonElement;
       t.type = "button";
@@ -251,15 +315,23 @@ export class Inbox {
       t.addEventListener("click", () => { this.filter = f.id; this.render(); });
       tabs.appendChild(t);
     }
+    // The box is one element moved between renders, so a sync landing while
+    // you type keeps your text; moving it drops focus, so give that back.
+    const typing = document.activeElement === this.searchBox;
+    tabs.appendChild(this.searchBox);
     frag.appendChild(tabs);
 
-    const items = msg.items.filter((i) => matches(this.filter, i.state));
+    const items = searching
+      ? msg.items.filter((i) => this.hits?.has(i.id))
+      : msg.items.filter((i) => matches(this.filter, i.state));
     if (this.selected && !msg.items.some((i) => i.id === this.selected)) this.selected = null;
     this.root.classList.toggle("inbox--reading", this.selected !== null);
     const body = el("div", "inbox__body");
     if (!items.length) {
       body.appendChild(el("div", "inbox__empty",
-        msg.items.length
+        searching
+          ? (this.hits === null ? "" : "No emails match.")
+          : msg.items.length
           ? "Nothing in this view."
           : "No emails yet. Label an email “claude” in Gmail and it shows up here within a minute or two."));
     } else {
@@ -274,6 +346,7 @@ export class Inbox {
     }
     frag.appendChild(body);
     this.root.replaceChildren(frag);
+    if (typing) this.searchBox.focus();
   }
 
   private row(item: InboxItemView): HTMLElement {

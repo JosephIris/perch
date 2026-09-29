@@ -36,6 +36,7 @@ public class ProtocolTests
     public void Inbox_Messages()
     {
         Assert.Equal("t1", Round<InboxRef>("{\"type\":\"inbox.view\",\"id\":\"t1\"}").Id);
+        Assert.Equal("cdn crush", Round<InboxSearchMsg>("{\"type\":\"inbox.search\",\"query\":\"cdn crush\"}").Query);
         var st = Round<InboxSetStateMsg>("{\"type\":\"inbox.setState\",\"id\":\"t1\",\"state\":\"done\"}");
         Assert.Equal(("t1", "done"), (st.Id, st.State));
         var img = Round<InboxMailRequestMsg>($"{{\"type\":\"inbox.image.request\",\"paneId\":\"{G1}\",\"id\":\"t1\",\"name\":\"1_1_image.png\"}}");
