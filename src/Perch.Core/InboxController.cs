@@ -235,26 +235,55 @@ internal sealed class InboxController : IDisposable
             var dir = ThreadDir(tid);
             var meta = Path.Combine(dir, ".perch-meta");
             var stamp = $"{md.Id} {md.Modified:O}";
-            if (File.Exists(Path.Combine(dir, InboxModel.ThreadFileName)) && ReadOrNull(meta) == stamp) continue;
+            if (File.Exists(Path.Combine(dir, InboxModel.ThreadFileName)) && ReadOrNull(meta) == stamp)
+            {
+                Show(tid, folder.Name, md.Modified);
+                continue;
+            }
 
             Directory.CreateDirectory(dir);
-            foreach (var f in await client.ListChildrenAsync(folder.Id, ct))
+            var files = (await client.ListChildrenAsync(folder.Id, ct)).Where(f => !f.IsFolder).ToList();
+            // thread.md first, and the row shows as soon as it lands: a long
+            // thread can carry hundreds of attachments (every reply re-attaches
+            // the signature images), and the list used to stay empty until the
+            // last of them was down.
+            foreach (var f in files.Where(f => f.Name == InboxModel.ThreadFileName))
+                File.WriteAllBytes(Path.Combine(dir, InboxModel.ThreadFileName), await client.DownloadAsync(f.Id, ct));
+            Show(tid, folder.Name, md.Modified);
+            // Every reply re-attaches the signature images, so a long thread
+            // holds the same few pictures dozens of times over. Drive's md5
+            // lets each one be fetched once and copied for the rest.
+            var byMd5 = new Dictionary<string, string>();
+            foreach (var f in files)
             {
-                if (f.IsFolder) continue;
+                if (f.Name == InboxModel.ThreadFileName) continue;
                 var local = Path.Combine(dir, SafeName(f.Name));
-                if (f.Name == InboxModel.ThreadFileName)
-                {
-                    File.WriteAllBytes(local, await client.DownloadAsync(f.Id, ct));
-                    continue;
-                }
                 if (f.Size > MaxAttachmentBytes) continue;
-                if (File.Exists(local) && new FileInfo(local).Length == f.Size) continue;
-                File.WriteAllBytes(local, await client.DownloadAsync(f.Id, ct));
+                if (!(File.Exists(local) && new FileInfo(local).Length == f.Size))
+                {
+                    if (f.Md5.Length > 0 && byMd5.TryGetValue(f.Md5, out var same) && File.Exists(same))
+                        File.Copy(same, local, overwrite: true);
+                    else
+                        File.WriteAllBytes(local, await client.DownloadAsync(f.Id, ct));
+                }
+                if (f.Md5.Length > 0) byMd5.TryAdd(f.Md5, local);
             }
             File.WriteAllText(meta, stamp);
             Log.Info("Inbox.pull", $"thread={tid}");
         }
         return found;
+    }
+
+    /// Put one pulled thread on the list before the whole sync is done. The
+    /// sync's end still replaces the list, so a thread deleted from Drive goes.
+    private void Show(string tid, string folder, DateTimeOffset modified)
+    {
+        lock (_gate)
+        {
+            if (_threads.TryGetValue(tid, out var had) && had == (folder, modified)) return;
+            _threads = new(_threads) { [tid] = (folder, modified) };
+        }
+        _ui.Post(PushView);
     }
 
     /// Merge the Drive copy of the states with ours and write the result to
@@ -399,6 +428,7 @@ internal sealed class InboxController : IDisposable
     {
         var t = LoadThread(threadId);
         var dir = ThreadDir(threadId);
+        var seen = new HashSet<string>();
         _push(new
         {
             type = "inbox.mail",
@@ -417,11 +447,18 @@ internal sealed class InboxController : IDisposable
                 // The email as designed, when the export saved it
                 // (message-N.html beside thread.md); the reader prefers it.
                 html = ReadOrNull(Path.Combine(dir, $"message-{i + 1}.html")),
-                attachments = m.Attachments.Select(a => new
+                attachments = m.Attachments.Select(a =>
                 {
-                    name = a,
-                    isImage = InboxModel.IsImage(a),
-                    present = File.Exists(Path.Combine(dir, SafeName(a))),
+                    var path = Path.Combine(dir, SafeName(a));
+                    var key = ContentKey(path);
+                    return new
+                    {
+                        name = a,
+                        isImage = InboxModel.IsImage(a),
+                        present = key != null,
+                        // Same bytes as a file an earlier message carried.
+                        repeat = key != null && !seen.Add(key),
+                    };
                 }).ToArray(),
             }).ToArray(),
         });
@@ -513,6 +550,19 @@ internal sealed class InboxController : IDisposable
         var bad = Path.GetInvalidFileNameChars().Concat(new[] { '/', '\\', ':' }).ToHashSet();
         var s = new string((name ?? "").Select(c => bad.Contains(c) ? '_' : c).ToArray()).Trim();
         return s.Length == 0 || s == "." || s == ".." ? "_" : s;
+    }
+
+    /// A file's identity by content (null when it isn't on disk), so the
+    /// reader can drop an attachment that repeats an earlier one's bytes.
+    internal static string? ContentKey(string path)
+    {
+        try
+        {
+            if (!File.Exists(path)) return null;
+            using var s = File.OpenRead(path);
+            return Convert.ToHexString(System.Security.Cryptography.MD5.HashData(s));
+        }
+        catch { return null; }
     }
 
     private static string? ReadOrNull(string path)
