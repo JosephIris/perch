@@ -431,6 +431,8 @@ internal sealed record ProjectChatNewMsg
     public string? Name { get; init; }
     public string? Goal { get; init; }
     public string? Instructions { get; init; }
+    /// Presets switched on, by slug (Presets). Null on an update: unchanged.
+    public string[]? Presets { get; init; }
 }
 
 /// Edit a project chat's goal / instructions, or forget a memory note
@@ -440,6 +442,8 @@ internal sealed record ProjectChatUpdateMsg
     public required Guid SessionId { get; init; }
     public string? Goal { get; init; }
     public string? Instructions { get; init; }
+    /// Presets switched on, by slug (Presets). Null on an update: unchanged.
+    public string[]? Presets { get; init; }
     public int? Forget { get; init; }
     /// Model and effort for the coordinator and for new threads; "" is
     /// Claude's default.

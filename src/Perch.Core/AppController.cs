@@ -2935,6 +2935,10 @@ internal sealed partial class AppController
         if (SessionById(msg.SessionId) is not { IsLead: true } lead) return;
         if (msg.Goal is string g) lead.ChatGoal = g.Trim();
         if (msg.Instructions is string i) lead.ChatInstructions = i.Trim();
+        // The coordinator's prompt is rewritten every turn, so this is in
+        // force from its next one. A running thread keeps the prompt it
+        // started with; it gets the change on a fresh session or a new thread.
+        if (msg.Presets is string[] ps) lead.ChatPresets = Presets.Clean(ps);
         if (msg.CoordinatorModel is string cm) lead.ChatCoordinatorModel = ChatController.ModelArg(cm) ?? "";
         if (msg.CoordinatorEffort is string ce) lead.ChatCoordinatorEffort = ChatController.EffortArg(ce) ?? "";
         if (msg.ThreadModel is string tm) lead.ChatThreadModel = ChatController.ModelArg(tm) ?? "";
@@ -3051,6 +3055,7 @@ internal sealed partial class AppController
         s.Cwd = proj.Path;
         s.ChatGoal = (msg.Goal ?? "").Trim();
         s.ChatInstructions = (msg.Instructions ?? "").Trim();
+        s.ChatPresets = Presets.Clean(msg.Presets);
         var chat = s.Root;
         chat.IsChat = true;
         chat.Name = "chat";

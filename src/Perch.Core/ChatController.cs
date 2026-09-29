@@ -285,6 +285,10 @@ internal sealed class ChatController : IDisposable
         PostMeta(lead);
     }
 
+    private object[] PresetsOf(Session lead) =>
+        (lead.ProjectId is Guid pid && _h.ProjectById(pid) is Project proj ? Presets.List(proj.Path) : Array.Empty<Presets.Preset>())
+            .Select(p => (object)new { slug = p.Slug, name = p.Name, summary = p.Summary }).ToArray();
+
     /// The chat's goal, instructions, memory and proposed threads: what the
     /// Overview's About tab and the suggestion cards show. Sent with the
     /// history and again whenever any of it changes.
@@ -299,6 +303,9 @@ internal sealed class ChatController : IDisposable
             sessionId = lead.Id.ToString("D"),
             goal = lead.ChatGoal,
             instructions = lead.ChatInstructions,
+            // The presets in the project's repo, and which of them are on.
+            presets = PresetsOf(lead),
+            activePresets = lead.ChatPresets,
             coordinatorModel = lead.ChatCoordinatorModel,
             coordinatorEffort = lead.ChatCoordinatorEffort,
             threadModel = lead.ChatThreadModel,

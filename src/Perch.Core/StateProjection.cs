@@ -47,6 +47,14 @@ internal static class StateProjection
         _                         => "info",
     };
 
+    /// A project's chat presets for the page, or null when it has none.
+    internal static object[]? ProjectPresets(string path)
+    {
+        var list = Presets.List(path);
+        return list.Count == 0 ? null
+            : list.Select(p => (object)new { slug = p.Slug, name = p.Name, summary = p.Summary }).ToArray();
+    }
+
     /// Most-urgent state across panes. Drives the session row indicator.
     /// Order: Permission > Waiting > Done > Working > Idle. Done outranks
     /// Working so a session with one finished pane (your move) surfaces as
@@ -123,6 +131,10 @@ internal static class StateProjection
                 // none. Bots are also ordinary rows in `sessions`; this is
                 // what lets the sidebar badge them and show the room's door.
                 team = teamOf?.Invoke(p.Id),
+                // Project chat presets in the repo (`.perch/presets/*.md`),
+                // for the new-chat dialog. Cached by file time, so a push
+                // costs a folder listing. Null when there are none.
+                presets = ProjectPresets(p.Path),
             }).ToArray(),
             sessions = store.Sessions.Select(s => ProjectSession(s, resumesOnOpen)).ToArray(),
             // Recently-closed sessions for the sidebar's restore list. Just

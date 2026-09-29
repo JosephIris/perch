@@ -134,6 +134,11 @@ internal sealed class Session : INotifyPropertyChanged
     public string ChatGoal { get; set; } = "";
     public string ChatInstructions { get; set; } = "";
 
+    /// On a project chat: the presets switched on, by slug — files at
+    /// `<project>/.perch/presets/<slug>.md` (Presets). Each goes into the
+    /// coordinator's and new threads' prompts, read fresh every time.
+    public string[] ChatPresets { get; set; } = Array.Empty<string>();
+
     /// On a project chat: the model its coordinator last ran on, shown under
     /// the composer (kept so it shows before the first turn after a restart).
     public string ChatModel { get; set; } = "";

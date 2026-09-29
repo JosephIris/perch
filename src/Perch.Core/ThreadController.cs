@@ -135,14 +135,16 @@ internal sealed class ThreadController
         var dir = DirFor(lead);
         Directory.CreateDirectory(dir);
         var path = Path.Combine(dir, "coordinator.md");
-        AtomicFile.WriteAllText(path, CoordinatorPrompt(proj, lead.ChatGoal, lead.ChatInstructions, ReadMemory(lead)));
+        AtomicFile.WriteAllText(path, CoordinatorPrompt(proj, lead.ChatGoal, lead.ChatInstructions, ReadMemory(lead),
+            Presets.Load(proj.Path, lead.ChatPresets)));
         return path;
     }
 
-    internal static string CoordinatorPrompt(Project proj, string goal = "", string instructions = "", IReadOnlyList<string>? memory = null) => $"""
+    internal static string CoordinatorPrompt(Project proj, string goal = "", string instructions = "", IReadOnlyList<string>? memory = null,
+        IReadOnlyList<Presets.Loaded>? presets = null) => $"""
         You are the coordinator of a project chat in Perch, for the project "{proj.Name}" at `{proj.Path}`.
         The user briefs you the way they would brief a chief of staff. You turn what they ask for into work, hand the work to threads, check what comes back, and put the result together for them. You see what threads report back, not every step they take.
-        {Section("The goal", goal)}{Section("The user's instructions for this project", instructions)}{MemorySection(memory)}
+        {Section("The goal", goal)}{Presets.Sections(presets, reread: true)}{Section("The user's instructions for this project", instructions)}{MemorySection(memory)}
         ## Routing each message
         - A quick question: answer it here.
         - New work: start a new thread for it, with a complete brief. Send work to an existing thread (`perch thread send`) only to follow up on the task it already has — steer it, answer it, fix what it reported. Never hand new work to a resolved thread, or to one that has sat idle for an hour or more: messaging it makes it re-read its whole old conversation first, which costs more than a fresh thread with a good brief. Only the user can overrule this ("reuse #3").
@@ -182,7 +184,8 @@ internal sealed class ThreadController
 
     // ---- a thread ----------------------------------------------------------
 
-    internal static string ThreadPrompt(int n, string title, string brief, string instructions = "", IReadOnlyList<string>? memory = null) => $"""
+    internal static string ThreadPrompt(int n, string title, string brief, string instructions = "", IReadOnlyList<string>? memory = null,
+        IReadOnlyList<Presets.Loaded>? presets = null) => $"""
         You are thread {n} of a project chat in Perch: "{title}". A coordinator Claude gave you this task and will review your result.
 
         - You work in your own git worktree on your own branch (`git branch --show-current`). Commit your work there. Don't push or merge unless the brief says to.
@@ -191,7 +194,7 @@ internal sealed class ThreadController
         - To save something every later thread should know (a decision, a pitfall), run `perch thread remember "<note>"`.
         - Messages from the coordinator or the user arrive as lines starting with `[Perch #…]`.
         - Keep a short task list with your task tools — TaskCreate for each step before you start, TaskUpdate as each one starts and completes: two to six tasks, each a few words. The user follows your progress by it. When you get new work from the coordinator or the user, add tasks for it.
-        {Section("The user's instructions for this project", instructions)}{MemorySection(memory)}
+        {Presets.Sections(presets, reread: false)}{Section("The user's instructions for this project", instructions)}{MemorySection(memory)}
         ## Your brief
         {brief}
         """;
@@ -243,13 +246,17 @@ internal sealed class ThreadController
             + (report.Length > 0 ? $"\nYour last report was:\n\n{report}\n" : "");
     }
 
+    /// The chat's switched-on presets, read now from its project's repo.
+    private IReadOnlyList<Presets.Loaded> PresetsFor(Session lead) =>
+        lead.ProjectId is Guid pid && _h.ProjectById(pid) is Project proj ? Presets.Load(proj.Path, lead.ChatPresets) : Array.Empty<Presets.Loaded>();
+
     /// Rewrite a thread's prompt for a fresh session: its brief with today's
-    /// instructions and memory, and where it left off. Returns the path.
+    /// instructions, presets and memory, and where it left off. Returns the path.
     public string WriteFreshPrompt(Session lead, Session thread, string? oldTranscript)
     {
         var brief = ReadBrief(lead, thread.ThreadNumber);
         var path = Path.Combine(DirFor(lead), $"thread-{thread.ThreadNumber}.md");
-        AtomicFile.WriteAllText(path, ThreadPrompt(thread.ThreadNumber, thread.Title, brief, lead.ChatInstructions, ReadMemory(lead))
+        AtomicFile.WriteAllText(path, ThreadPrompt(thread.ThreadNumber, thread.Title, brief, lead.ChatInstructions, ReadMemory(lead), PresetsFor(lead))
             + LeftOff(thread.ThreadLastReply, oldTranscript));
         return path;
     }
@@ -409,7 +416,7 @@ internal sealed class ThreadController
         var dir = DirFor(lead);
         Directory.CreateDirectory(dir);
         var promptPath = Path.Combine(dir, $"thread-{n}.md");
-        AtomicFile.WriteAllText(promptPath, ThreadPrompt(n, title, brief, lead.ChatInstructions, ReadMemory(lead)));
+        AtomicFile.WriteAllText(promptPath, ThreadPrompt(n, title, brief, lead.ChatInstructions, ReadMemory(lead), Presets.Load(proj.Path, lead.ChatPresets)));
         AtomicFile.WriteAllText(BriefPath(lead, n), brief);
         var effort = ChatController.EffortArg(lead.ChatThreadEffort) ?? "";
         var tab = await _h.CreateClaudeTab(proj, title, promptPath, Kickoff, true, ChatController.ModelArg(lead.ChatThreadModel), effort);
