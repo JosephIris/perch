@@ -71,9 +71,10 @@ Pop-Location
   spawn-budget and negative-proof tests; add coverage at the actual caller
   when introducing polling, not only at a cached helper.
 - Before releases, preserve the existing delivery gates in `CLAUDE.md`:
-  `scripts/verify-comms.ps1` on Windows and `node scripts/mac-e2e.mjs` on macOS.
+  `scripts/verify-project-chat.ps1` on Windows and `node scripts/mac-e2e.mjs --quick`
+  on macOS. The team room is deprecated; `verify-comms.ps1` is no longer a gate.
   They need real Claude authentication and use tokens. Unit tests do not replace
-  the cold-start/submit-acknowledgement checks.
+  the delivery/submit-acknowledgement checks.
 
 ## Isolated application runs
 

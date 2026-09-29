@@ -172,27 +172,31 @@ Then write the XAML. Keep code-behind minimal; prefer bindings and commands.
 
 ## Before every release: the delivery gate
 
-`scripts/verify-comms.ps1` (Windows) and `node scripts/mac-e2e.mjs` (macOS)
-MUST pass before a `v*.*.*` tag is pushed. No exceptions, and a red run is
-not something to explain away — it is a release that does not go out.
+`scripts/verify-project-chat.ps1` (Windows) and `node scripts/mac-e2e.mjs
+--quick` (macOS) MUST pass before a `v*.*.*` tag is pushed. No exceptions,
+and a red run is not something to explain away — it is a release that does
+not go out.
 
-The mac gate covers the same five room sections plus the two things that
-only ever broke on the mac: an app-started Claude (a project tab, a resume,
-a bot) under the Dock's bare PATH, and the codex shim writing its hooks
-profile. `--quick` runs those without the room, for a fast check after a
-host change. See docs/MAC-TESTING.md.
+The team room is deprecated (project chat replaced it, 2026-09-29), so its
+old gate `scripts/verify-comms.ps1` and the room sections of `mac-e2e.mjs`
+are no longer release gates. Do not run them for a release or block on them.
 
-It drives the real app with the real Claude Code CLI and proves the team
-room's one job: that a post reaches its bot. Warm (a running bot answers),
-cold (after a restart, a bot whose tab has no terminal is started, the post
-waits for its Claude instead of being typed into a booting shell, then lands
-and is answered), and "Send again" on a post that failed.
+The mac gate (`--quick`) covers the two things that only ever broke on the
+mac: an app-started Claude (a project tab, a resume) under the Dock's bare
+PATH, and the codex shim writing its hooks profile. See docs/MAC-TESTING.md.
+
+The Windows gate drives the real app with the real Claude Code CLI and
+proves project chat's one job: that a line reaches its thread whole and is
+answered. A steer, a long message by file (from the user and from the
+coordinator), a Stop mid-turn with a queued line behind it, a reply to a
+thread's question, a resolved thread woken by a message, and a thread started
+over in a fresh session — with no line given up on.
 
 Why it exists: every delivery bug in this feature has been a timing detail
 the unit tests cannot have — a fake host answers instantly, a real Claude
 takes ten to twenty seconds and paints a TUI over whatever was typed. Two of
 the owner's posts were lost to exactly that gap, and the gate reproduces it.
-It costs a few cents of haiku usage and about four minutes.
+It costs a few cents of haiku usage (about 15–20 short turns).
 
 Run it after `./scripts/build.ps1`, `dotnet test src/Perch.Tests` and
 `npm test`, and before `git tag`.
