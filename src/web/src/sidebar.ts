@@ -389,6 +389,14 @@ function chevronSvg(className: string): SVGSVGElement {
 const COLLAPSED_KEY = "perch.projects.collapsed";
 const CLOSED_MIN_KEY = "perch.closed.min";
 
+/** The sidebar's search: every word of the query appears in one of the tab's
+ *  texts (title, project, branch, pane names…), ignoring case. */
+export function sessionMatches(texts: string[], query: string): boolean {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const hay = texts.join("\n").toLowerCase();
+  return words.every((w) => hay.includes(w));
+}
+
 export class Sidebar {
   private readonly listEl: HTMLElement;
   private readonly newSessionBtn: HTMLElement;
@@ -495,6 +503,63 @@ export class Sidebar {
    *  wears its position and opens the bot menu instead of the pair menu.
    *  Rebuilt from `projects[].team` on every render. */
   private botBySession = new Map<string, { bot: TeamBotView; project: ProjectView }>();
+
+  /** Search: the box keeps what you type; the list changes only on Enter
+   *  (a list that reshuffles per keystroke is the thing to avoid). While a
+   *  search is shown, the list is its results — active and idle tabs alike. */
+  private searchBox: HTMLInputElement | null = null;
+  private query = "";
+
+  attachSearch(box: HTMLInputElement) {
+    this.searchBox = box;
+    box.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") { ev.preventDefault(); this.setQuery(box.value); }
+      else if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); this.clearSearch(); box.blur(); }
+    });
+    // The box's own ✕ empties it: that's a clear, not a search.
+    box.addEventListener("input", () => { if (box.value === "" && this.query) this.setQuery(""); });
+  }
+
+  /** Focus the box (the shortcut / "/"); shows the sidebar's text selected. */
+  focusSearch() {
+    this.searchBox?.focus();
+    this.searchBox?.select();
+  }
+
+  private setQuery(raw: string) {
+    this.query = raw.trim();
+    this.rerender?.();
+  }
+
+  private clearSearch() {
+    if (this.searchBox) this.searchBox.value = "";
+    if (this.query) this.setQuery("");
+  }
+
+  private renderResults(sessions: SessionView[], activeId: string, projects: ProjectView[]) {
+    const projectName = new Map(projects.map((p) => [p.id, p.name]));
+    const hits = sessions.filter((s) => sessionMatches([
+      s.title, projectName.get(s.projectId) ?? "", s.branch, s.worktreeBranch, s.chatGoal ?? "",
+      this.mailFrom.get(s.id) ?? "",
+      ...leaves(s.rootPane).flatMap((l) => [l.name, l.nameFull ?? ""]),
+    ], this.query));
+    const frag = document.createDocumentFragment();
+    frag.appendChild(this.sectionLabel(`Found for “${this.query}”`, hits.length));
+    if (!hits.length) {
+      frag.appendChild(Object.assign(document.createElement("div"), { className: "sidebar__search-empty", textContent: "No sessions match." }));
+    } else {
+      const list = document.createElement("div");
+      list.className = "session-list";
+      for (const s of hits) {
+        const row = this.renderItem(s, s.id === activeId && !isTeamRoomOpen(), false);
+        // Picking a result is where you were going: the full list comes back.
+        row.addEventListener("click", () => this.clearSearch());
+        list.appendChild(row);
+      }
+      frag.appendChild(list);
+    }
+    this.listEl.replaceChildren(frag);
+  }
 
   constructor(listEl: HTMLElement, newSessionBtn: HTMLElement, closedEl: HTMLElement) {
     this.listEl = listEl;
@@ -631,6 +696,10 @@ export class Sidebar {
     this.markRegrouped(sessions);
     const modeChanged = this.lastMode !== null && mode !== this.lastMode;
     this.lastMode = mode;
+    if (this.query) {
+      this.renderResults(sessions, activeId, projects);
+      return;
+    }
     if (mode === "projects") {
       this.listEl.replaceChildren(this.renderProjects(sessions, activeId, projects));
       this.playModeSwap(modeChanged);

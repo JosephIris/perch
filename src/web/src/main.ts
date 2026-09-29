@@ -57,6 +57,9 @@ const $ = <T extends HTMLElement>(id: string): T => {
 };
 
 const sidebar = new Sidebar($("sidebar-scroll"), $("new-session-button"), $("recently-closed"));
+const sidebarSearch = $<HTMLInputElement>("sidebar-search");
+sidebarSearch.placeholder = `Search  ${modKeyLabel}+Shift+K`;
+sidebar.attachSearch(sidebarSearch);
 const workspace = new Workspace($("workspace"));
 const dashboard = new Dashboard($("dashboard"), $("dash-badge"));
 dashboard.onOpenInbox = () => inbox.show();
@@ -152,6 +155,12 @@ window.addEventListener("keydown", (ev) => {
   } else if (ev.key === "/" && inbox.focusSearch(ev)) {
     ev.preventDefault();
     ev.stopPropagation();
+  } else if (ev.key === "/" && !dashboard.isOpen() && !inbox.isOpen() && !isTyping(ev.target)) {
+    // "/" from anywhere that isn't a text field (a terminal is one, so "/"
+    // still types there) jumps to the sidebar's search.
+    focusSidebarSearch();
+    ev.preventDefault();
+    ev.stopPropagation();
   }
 }, /* useCapture */ true);
 
@@ -161,6 +170,17 @@ window.addEventListener("keydown", (ev) => {
 // shortcut. CSS handles the visual: #app's grid column shrinks and the
 // sidebar effectively disappears.
 const appEl = $("app");
+function isTyping(t: EventTarget | null): boolean {
+  const el = t as HTMLElement | null;
+  return !!el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
+}
+
+/** Ctrl+Shift+K or "/": the sidebar's search, un-collapsing the sidebar first. */
+function focusSidebarSearch() {
+  if (appEl.classList.contains("app--sidebar-collapsed")) toggleSidebar();
+  sidebar.focusSearch();
+}
+
 function toggleSidebar() {
   appEl.classList.toggle("app--sidebar-collapsed");
   // The pane container resizes when the sidebar column changes width,
@@ -536,6 +556,12 @@ window.addEventListener("keydown", (ev) => {
       // Ctrl+Shift+I — Chromium binds that to DevTools at the browser level, so
       // preventDefault here wouldn't stop it and both would fire.
       toggleInspector();
+      ev.preventDefault(); ev.stopPropagation();
+      break;
+    case "KeyK":
+      // Search the sidebar's tabs, active and idle. (Not Ctrl+Shift+F: that
+      // searches the journal.)
+      focusSidebarSearch();
       ev.preventDefault(); ev.stopPropagation();
       break;
     case "KeyF":

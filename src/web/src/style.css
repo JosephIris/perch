@@ -146,9 +146,10 @@ html.host-photino #app {
    * sibling up a row — the scroll list loses the 1fr and the row above it
    * inherits it, stretching into a dead gap. */
   /* One entry per direct child, in order: mode toggle · new-session · dashboard ·
-   * scroll(1fr) · recently-closed · update-banner · utility-areas (cloud+local) ·
-   * footer. The 1fr MUST stay on the scroll list (4th) — see the warning above. */
-  grid-template-rows: auto auto auto 1fr auto auto auto auto;
+   * search · scroll(1fr) · recently-closed · update-banner · utility-areas
+   * (cloud+local) · footer. The 1fr MUST stay on the scroll list (5th) — see
+   * the warning above. */
+  grid-template-rows: auto auto auto auto 1fr auto auto auto auto;
   /* Explicit column is REQUIRED. Without it the single implicit column is an
    * `auto` track, which is treated as indefinite-width — so every `width:100%`
    * / `minmax(0,1fr)` / text-overflow:ellipsis inside the sidebar collapses to
@@ -8680,6 +8681,21 @@ body.show-inbox .inbox { display: flex; }
 .inbox__filter[aria-selected="true"] { background: var(--color-subtle-tertiary); color: var(--color-text-primary); }
 .inbox__filter-count { font-family: var(--font-small); font-size: 11px; color: var(--color-text-tertiary); }
 .inbox__filters { align-items: center; }
+/* Sidebar search: same box as the Inbox's, full width of the rail. */
+.sidebar__search { padding: var(--sp-4) 0; }
+.sidebar__search-input {
+  width: 100%;
+  font: inherit;
+  font-size: 13px;
+  padding: 4px var(--sp-8);
+  border-radius: var(--r-input);
+  border: 1px solid var(--color-stroke);
+  background: transparent;
+  color: var(--color-text-primary);
+}
+.sidebar__search-input::placeholder { color: var(--color-text-tertiary); }
+.sidebar__search-input:focus { outline: none; border-color: var(--color-accent); }
+.sidebar__search-empty { padding: var(--sp-8) var(--sp-12); font-size: 13px; color: var(--color-text-tertiary); }
 .inbox__found { font-size: 13px; color: var(--color-text-secondary); padding-inline: var(--sp-4); }
 /* Search: sits at the row's right end; runs on Enter, "/" jumps to it. */
 .inbox__search {

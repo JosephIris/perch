@@ -507,7 +507,15 @@ if (view === "warmth") {
     sb.render(heroSessions, "h-1", [
       { id: "c-1", title: "kanban refactor", paneCount: 3, resumableCount: 2, closedAtMs: NOW - 35 * 60_000 },
     ], heroProjects, "projects");
+  // ?q= runs a sidebar search (typed + Enter).
+  const box = document.getElementById("sidebar-search") as HTMLInputElement | null;
+  if (box) sb.attachSearch(box);
   sb.rerender();
+  const q = viewParams.get("q");
+  if (box && q) {
+    box.value = q;
+    box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+  }
 } else {
   new Sidebar(list, newBtn, closedEl).render(sessions, "s-idle", [
     { id: "c-1", title: "kanban refactor", paneCount: 3, resumableCount: 2, closedAtMs: NOW - 5 * 60_000 },
