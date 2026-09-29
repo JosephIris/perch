@@ -663,6 +663,18 @@ export type ProjectView = {
  * first line of prose. */
 export type PresetView = { slug: string; name: string; summary: string };
 
+/* A project chat's board: one card per item under review, filled by the chat
+ * and its threads. `tone` is how the verdict is drawn; `draft` is the text of
+ * the card's draft file, read by the host when it sent this. `done` set means
+ * decided ("posted", "skipped"). */
+export type BoardTone = "checking" | "ok" | "bad" | "manual" | "pending";
+export type BoardItemView = {
+  key: string; title: string; fullTitle: string; thread: number;
+  tone: BoardTone; label: string; status: string; finding: string; question: string;
+  draftPath: string; draft: string; url: string; done: string; note: string; updatedMs: number;
+};
+export type BoardView = { title: string; summary: string; items: BoardItemView[] };
+
 export type StateMessage = {
   type: "state";
   activeSessionId: string;
@@ -1119,6 +1131,8 @@ export type ChatMetaMessage = {
   /* The presets in the project's repo (`.perch/presets/*.md`) and the slugs
    * switched on for this chat. */
   presets?: PresetView[]; activePresets?: string[];
+  /* The chat's board (`perch thread board`); absent or null when it has no cards. */
+  board?: BoardView | null;
   /* Model and effort for the coordinator and for new threads ("" = Claude's default). */
   coordinatorModel?: string; coordinatorEffort?: string; threadModel?: string; threadEffort?: string;
   /* Who the Overview greets ("" until the host has read it). */

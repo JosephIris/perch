@@ -151,6 +151,8 @@ export class ChatPane {
       this.ovBtn.title = n > 0 ? `${n} thread${n === 1 ? "" : "s"} waiting on you` : "Show or hide the Overview";
     };
     this.overview.onClose = () => this.setOverview(false);
+    // The board wants the room: the conversation becomes a column beside it.
+    this.overview.onBoard = (showing) => this.element.classList.toggle("pane--chat-board", showing);
 
     const body = el("div", "chat__body");
     body.append(main, this.overview.element);
@@ -263,6 +265,8 @@ export class ChatPane {
 
   applyMeta(meta: ChatMetaMessage) {
     this.meta = meta;
+    // With a board, threads' reports show on its cards, not as rows here.
+    this.element.classList.toggle("pane--chat-hasboard", !!meta.board?.items.length);
     this.overview.setMeta(meta);
     for (const id of [...this.starting.keys()]) {
       const s = meta.suggestions.find((x) => x.id === id);
@@ -407,6 +411,7 @@ export class ChatPane {
           return;
         }
         const row = el("div", "chat-row chat-row--notice");
+        if (/^Thread \d+ \(.*?\) finished its turn/.test(e.text)) row.classList.add("chat-row--report");
         const text = el("span", "chat-notice__text");
         this.noticeText(text, e.text);
         if (this.hasUnknownThread(e.text)) this.unresolved.push({ el: text, text: e.text, notice: true });

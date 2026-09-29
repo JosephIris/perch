@@ -26,7 +26,7 @@ import { ChatPane } from "./chat-pane.js";
 import { RestoreProgress } from "./restore-progress.js";
 import { openCommitsPopover, openCommitsLightbox } from "./commits-view.js";
 import { showCloudPanel, applyCloudData } from "./cloud-panel.js";
-import type { SessionView, PaneTreeView, ProjectView, StateMessage, TeamDataMessage, TeamEntryView, InboxStateMessage, InboxStateName } from "./bridge.js";
+import type { SessionView, PaneTreeView, ProjectView, StateMessage, TeamDataMessage, TeamEntryView, InboxStateMessage, InboxStateName, BoardView } from "./bridge.js";
 import { openTeamRoom, applyTeamState, onTeamRoomChange, feedTeamFixture, applyArtefact, applyArtefactIndex } from "./team-room.js";
 import { showNewBotDialog, applyBriefProgress, applyBriefResult, applyReferencePicked } from "./new-bot-dialog.js";
 import { onMessage as onHostMessage } from "./bridge.js";
@@ -1182,6 +1182,56 @@ if (view === "chat-presets") {
     suggestions: [],
   });
   setTimeout(() => pane.element.querySelector<HTMLElement>(".chat__gear")?.click(), 60);
+}
+
+// #chat-board — a project chat with a board: the columns, and with
+// #chat-board-card a card opened beside its thread. Sample cards; a page that
+// sets window.__BOARD_FIXTURE first (design-loop, not in the repo) shows a real one.
+if (view === "chat-board" || view === "chat-board-card") {
+  const sample: BoardView = {
+    title: "Build 2.10", summary: "sample board",
+    items: [
+      { key: "APP-12", title: "Export to CSV", fullTitle: "Export any report to CSV from its menu", thread: 1, tone: "bad", label: "Not working", status: "In Progress",
+        finding: "The menu item is there, but the file comes out empty for reports over 1,000 rows.", question: "Tell the owner now, or wait for the fix?",
+        draftPath: "C:\\tmp\\review\\APP-12.md", draft: "**Not working on build 2.10**\n**Checked:** export of three reports.\n**Reproduce:**\n1. Open a report with more than 1,000 rows.\n2. Export to CSV.\n**Result:** the file has only the header row.",
+        url: "", done: "", note: "", updatedMs: 1 },
+      { key: "APP-15", title: "Faster sign-in", fullTitle: "", thread: 2, tone: "ok", label: "Verified", status: "Done",
+        finding: "Sign-in takes 0.8 s at the median, from 2.1 s before the release.", question: "",
+        draftPath: "C:\\tmp\\review\\APP-15.md", draft: "**Verified on build 2.10**\n**Result:** median sign-in 0.8 s (2.1 s before).", url: "", done: "", note: "", updatedMs: 1 },
+      { key: "APP-18", title: "Dark mode charts", fullTitle: "", thread: 3, tone: "manual", label: "Manual check", status: "no change",
+        finding: "Needs a person to switch themes; nothing to read from outside.", question: "", draftPath: "", draft: "", url: "", done: "", note: "", updatedMs: 1 },
+      { key: "APP-20", title: "Audit log", fullTitle: "", thread: 4, tone: "checking", label: "Checking", status: "",
+        finding: "", question: "", draftPath: "", draft: "", url: "", done: "", note: "", updatedMs: 1 },
+      { key: "APP-9", title: "Retry uploads", fullTitle: "", thread: 5, tone: "ok", label: "Verified", status: "Done",
+        finding: "Failed uploads retry three times.", question: "", draftPath: "", draft: "", url: "", done: "posted", note: "moved to Done", updatedMs: 1 },
+    ],
+  };
+  const board = (window as unknown as { __BOARD_FIXTURE?: BoardView }).__BOARD_FIXTURE ?? sample;
+  const stage = document.getElementById("workspace")!;
+  stage.style.cssText = "display:flex;";
+  const pane = new ChatPane("chat-pane-1");
+  pane.element.style.cssText = "flex:1 1 auto;min-width:0;";
+  stage.appendChild(pane.element);
+  const threads = board.items.filter((i) => i.thread).map((i) => ({
+    id: `t-${i.thread}`, title: `${i.key} ${i.title}`, threadNumber: i.thread, threadOf: "s-chat",
+    agentState: i.tone === "checking" ? "working" : "done", threadReply: i.finding, threadReplyAtMs: Date.now() - 600_000,
+  } as unknown as SessionView));
+  pane.setSession({ id: "s-chat", title: "Release review", chatGoal: "" } as SessionView, threads);
+  const now = Date.now();
+  pane.applyHistory([
+    { id: "h1", kind: "user", text: `review ${board.title}`, tool: "", atMs: now - 3_600_000 },
+    { id: "h2", kind: "claude", text: `${board.title} has ${board.items.length} items. I've started a thread for each; they're on the board.`, tool: "", atMs: now - 3_590_000 },
+    ...board.items.filter((i) => i.thread).map((i, n) => ({ id: `r${n}`, kind: "notice" as const, text: `Thread ${i.thread} (${i.key} ${i.title}) finished its turn: "${i.finding}"`, tool: "", atMs: now - 1_800_000 })),
+    { id: "h3", kind: "claude", text: "All the checks are back. The ones that need you are in the second column. Nothing has been posted.", tool: "", atMs: now - 1_700_000 },
+  ], false, 0, "claude-sonnet-4-5");
+  pane.applyMeta({
+    type: "chat.meta", paneId: "chat-pane-1", sessionId: "s-chat", goal: "", instructions: "", memory: [],
+    coordinatorModel: "", coordinatorEffort: "", threadModel: "", threadEffort: "", userName: "Joseph", suggestions: [], board,
+  });
+  if (view === "chat-board-card") {
+    const key = board.items.find((i) => i.tone === "bad")?.key ?? board.items[0].key;
+    setTimeout(() => [...pane.element.querySelectorAll<HTMLElement>(".rb-card")].find((c) => c.textContent?.includes(key))?.click(), 60);
+  }
 }
 
 if (view === "panechooser") {

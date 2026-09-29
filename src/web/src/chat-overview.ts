@@ -1,4 +1,7 @@
-// The Overview beside a project chat. Two views in one panel:
+// The Overview beside a project chat. Its views, in one panel:
+//
+//   * the board, when the chat keeps one (review-board.ts): the panel then
+//     takes most of the width, the conversation a narrow column beside it;
 //
 //   * the list: a greeting, then every thread grouped by what it needs from
 //     you (Waiting on you · Ready for review · Working · Idle · Resolved),
@@ -29,6 +32,7 @@ import { imageStrip } from "./chat-images.js";
 import { queuedNote, queuedText } from "./thread-steer.js";
 import { Dropdown, type DropdownOption } from "./dropdown.js";
 import { presetChecks } from "./preset-checks.js";
+import { BoardPanel, columnOf } from "./review-board.js";
 
 export { groupOf, stateLabel } from "./thread-ui.js";
 export type { ThreadGroup } from "./thread-ui.js";
@@ -76,7 +80,10 @@ export class ChatOverview {
   private readonly groups = new Map<ThreadGroup, Group>();
   private readonly rows = new Map<string, Row>();
   private readonly collapsed = new Set<ThreadGroup>(["resolved"]);
-  private tab: "threads" | "about" = "threads";
+  private tab: "board" | "threads" | "about" = "threads";
+  private readonly board: BoardPanel;
+  /** The board was shown once: after that its tab is only chosen by you. */
+  private boardShown = false;
   private threads: SessionView[] = [];
   private meta: ChatMetaMessage | null = null;
   private aboutDropdowns: Dropdown[] = [];
@@ -90,6 +97,8 @@ export class ChatOverview {
   onWaiting: (n: number) => void = () => {};
   /** The ✕: hide the panel. */
   onClose: () => void = () => {};
+  /** The board is showing (the pane gives the panel most of its width). */
+  onBoard: (showing: boolean) => void = () => {};
 
   constructor(ask: (text: string) => void) {
     this.ask = ask;
@@ -110,7 +119,10 @@ export class ChatOverview {
 
     this.aboutView = el("div", "ov__about");
     this.aboutView.hidden = true;
-    this.views.append(this.listView, this.aboutView);
+    this.board = new BoardPanel(ask);
+    this.board.onOpen = (key) => this.openCard(key);
+    this.board.element.hidden = true;
+    this.views.append(this.board.element, this.listView, this.aboutView);
     this.element.append(this.bar, this.views);
     this.renderBar();
     this.renderList(false);
@@ -125,6 +137,7 @@ export class ChatOverview {
     this.lastSig = sig;
     this.onWaiting(threads.filter((t) => groupOf(t) === "waiting").length);
     this.renderList(true);
+    this.board.setThreads(threads);
     this.detail?.update(this.threads.find((t) => t.id === this.detail?.id));
     if (this.detail) this.renderBar();
   }
@@ -133,6 +146,11 @@ export class ChatOverview {
     this.meta = meta;
     this.renderGreeting();
     if (this.tab === "about") this.renderAbout();
+    this.board.setBoard(meta.board);
+    // A board appearing opens on it, once; one going away leaves it.
+    if (this.board.hasCards && !this.boardShown && !this.detail) { this.boardShown = true; this.selectTab("board"); }
+    else if (!this.board.hasCards && this.tab === "board") this.selectTab("threads");
+    this.renderBar();
   }
 
   applyTranscript(id: string, events: ThreadEventView[], tasks: ThreadTaskView[]) {
@@ -143,6 +161,7 @@ export class ChatOverview {
   openThread(id: string) {
     if (this.detail?.id === id) { this.detail.focus(); return; }
     this.leaveDetail(false);
+    this.leaveBoard();
     this.tab = "threads";
     this.aboutView.hidden = true;
     this.markReplySeen(id);
@@ -154,6 +173,35 @@ export class ChatOverview {
     this.renderBar();
     this.enter(this.detail.element, 16);
     send({ type: "thread.transcript", id });
+  }
+
+  /** Open a card of the board: its result, and its thread beside it. */
+  private openCard(key: string) {
+    this.leaveDetail(false);
+    const it = this.board.item(key);
+    const t = it?.thread ? this.threads.find((x) => x.threadNumber === it.thread) : undefined;
+    this.board.showTicket(key);
+    if (t) {
+      this.markReplySeen(t.id);
+      this.detail = new ThreadDetail(t.id, this.seenSteps[t.id], (text) => this.ask(text), () => this.closeCard());
+      this.detail.update(t);
+      this.board.threadSlot.replaceChildren(this.detail.element);
+      send({ type: "thread.transcript", id: t.id });
+    }
+    this.renderBar();
+  }
+
+  private closeCard() {
+    this.leaveDetail(false);
+    this.board.showBoard();
+    this.renderBar();
+  }
+
+  /** Leaving the board for another tab: a card open on it closes. */
+  private leaveBoard() {
+    if (this.board.key) { this.leaveDetail(false); this.board.showBoard(); }
+    this.board.element.hidden = true;
+    this.onBoard(false);
   }
 
   /** Open the About tab (the chat header's gear). */
@@ -191,13 +239,16 @@ export class ChatOverview {
     }
   }
 
-  private selectTab(tab: "threads" | "about") {
+  private selectTab(tab: "board" | "threads" | "about") {
+    if (tab !== "board") this.leaveBoard();
     this.tab = tab;
     this.listView.hidden = tab !== "threads";
     this.aboutView.hidden = tab !== "about";
+    this.board.element.hidden = tab !== "board";
     if (tab === "about") this.renderAbout();
+    if (tab === "board") this.onBoard(true);
     this.renderBar();
-    this.enter(tab === "about" ? this.aboutView : this.listView, 0);
+    this.enter(tab === "about" ? this.aboutView : tab === "board" ? this.board.element : this.listView, 0);
   }
 
   /** A view arriving: a short slide from the side it comes from, and a fade. */
@@ -211,10 +262,24 @@ export class ChatOverview {
   private renderBar() {
     const open = this.detail ? this.threads.find((x) => x.id === this.detail?.id) : undefined;
     // Rebuilt only when what it shows changed: a push must not drop a hover.
-    const sig = this.detail ? `d|${this.detail.id}|${open?.title}|${open?.threadResolved}` : `l|${this.tab}`;
+    const card = this.board.key ? this.board.item(this.board.key) : undefined;
+    const needYou = this.board.hasCards ? this.meta?.board?.items.filter((i) => columnOf(i) === "you").length ?? 0 : -1;
+    const sig = this.board.key ? `c|${this.board.key}|${this.board.title}|${card?.title}`
+      : this.detail ? `d|${this.detail.id}|${open?.title}|${open?.threadResolved}` : `l|${this.tab}|${needYou}`;
     if (sig === this.barSig) return;
     this.barSig = sig;
     this.bar.replaceChildren();
+    if (this.board.key) {
+      const crumb = el("div", "ov__crumb");
+      crumb.append(
+        button("ov__crumb-root", this.board.title, () => this.closeCard()),
+        icon("crumb", "pc-icon ov__crumb-sep"),
+        el("span", "ov__crumb-title", card ? `${card.key} ${card.title}` : this.board.key));
+      const tools = el("div", "ov__tools");
+      tools.appendChild(button("ov__tool", icon("close"), () => this.closeCard(), "Back to the board"));
+      this.bar.append(crumb, tools);
+      return;
+    }
     if (this.detail) {
       const t = open;
       const crumb = el("div", "ov__crumb");
@@ -235,9 +300,13 @@ export class ChatOverview {
       return;
     }
     const tabs = el("div", "ov__tabs");
-    for (const [id, label] of [["threads", "Threads"], ["about", "About"]] as const) {
+    const names = [["board", "Board"], ["threads", "Threads"], ["about", "About"]] as const;
+    for (const [id, label] of names) {
+      if (id === "board" && !this.board.hasCards) continue;
       const b = button("ov__tab", label, () => { if (this.tab !== id) this.selectTab(id); });
       b.setAttribute("aria-selected", String(this.tab === id));
+      // How many cards need you, on the Board tab.
+      if (id === "board" && needYou > 0) b.appendChild(el("span", "ov__tab-n", String(needYou)));
       tabs.appendChild(b);
     }
     this.bar.appendChild(tabs);
