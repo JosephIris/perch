@@ -66,6 +66,8 @@ internal sealed class ThreadController
         public Action<Session, PushRequest>? PushRequested { get; init; }
         /// A push request moved on (approved, pushed, failed, declined).
         public Action<Session>? PushUpdated { get; init; }
+        /// A card on the chat's board was added, changed or removed.
+        public Action<Session>? BoardChanged { get; init; }
     }
 
     /// What a project chat and its threads may run without a permission
@@ -160,6 +162,13 @@ internal sealed class ThreadController
         - `perch thread list` / `perch thread read <n>` / `perch thread close <n>`.
         - `perch thread remember "<note>"` saves a note to project memory (a decision, a requirement, how the user likes to work); `perch thread forget <k>` removes one; `perch thread memory` lists them. Save the user's working preferences as they come up ("run at most two threads", "shorter updates").
 
+        ## The board
+        When a preset or the user wants items tracked (tickets to review, checks to run), keep one card per item on the board beside this chat. It shows them in columns: Checking, Needs you, Ready to approve, Done. Threads keep their own cards current; you can set any card.
+        - `perch thread board title "<title>" [--summary "<one line>"]`
+        - `perch thread board set <key> [--title "<short title>"] [--full-title "…"] [--thread <n>] [--verdict checking|verified|not-working|manual|pending] [--status "<what it moves to if approved>"] [--finding "<one line>"] [--question "<what only the user can settle>"] [--draft <file>] [--url <link>] [--done posted|skipped] [--note "…"]`. Only the flags given change; `--question ""` clears a question.
+        - `perch thread board show` / `perch thread board remove <key>` / `perch thread board clear`.
+        The user decides from the board. Its buttons send you lines like `approve <key>`, `approve <key> with this comment: …`, `skip <key>` and `<key>: <answer>`, from the user, exactly as if typed. While a board is in use, don't repeat its cards in the chat: say in a sentence or two what changed and what needs the user.
+
         When a thread finishes a turn, a message starting with `[Perch` arrives with its report. Check it, then decide: follow up with that thread, start others, or report to the user.
 
         Never wait for threads: no sleeping, no scheduling a wake-up, no checking `perch thread list` over and over. Once threads are running, tell the user briefly what is running and end your turn. Perch starts your next turn when a thread reports or asks you something. A thread waiting for the user's permission is shown to the user directly.
@@ -192,6 +201,7 @@ internal sealed class ThreadController
         - When you finish, or you are blocked, end your turn with a short report: first line, the outcome in one sentence; then what you did, what's left, and anything the coordinator has to decide. That report goes to the coordinator on its own.
         - To ask the coordinator something mid-task, run `perch thread send lead "<question>"` and carry on with what you can.
         - To save something every later thread should know (a decision, a pitfall), run `perch thread remember "<note>"`.
+        - If your brief or a preset puts your item on the board, keep its card current: `perch thread board set <key> [--title "…"] [--verdict checking|verified|not-working|manual|pending] [--status "…"] [--finding "<one line>"] [--question "<what only the user can settle>"] [--draft <file>] [--done posted|skipped] [--note "…"]`. Only the flags given change; `--question ""` clears a question.
         - Messages from the coordinator or the user arrive as lines starting with `[Perch #…]`.
         - Keep a short task list with your task tools — TaskCreate for each step before you start, TaskUpdate as each one starts and completes: two to six tasks, each a few words. The user follows your progress by it. When you get new work from the coordinator or the user, add tasks for it.
         {Presets.Sections(presets, reread: false)}{Section("The user's instructions for this project", instructions)}{MemorySection(memory)}
@@ -377,6 +387,13 @@ internal sealed class ThreadController
                 return fromThread
                     ? "error\nOnly the project chat can ask to push. Ask it: perch thread send lead \"…\""
                     : await RequestPushAsync(lead, (m.Target ?? "").Trim(), (m.Title ?? "").Trim());
+            case "board":
+            {
+                // The coordinator and its threads both fill the board.
+                var (reply, changed) = ReviewBoard.Run(lead, fromThread ? sess.ThreadNumber : 0, (m.Target ?? "").Trim(), m.Title ?? "", m.Text);
+                if (changed) _h.BoardChanged?.Invoke(lead);
+                return reply;
+            }
             default:
                 return "error\nUnknown thread command.";
         }

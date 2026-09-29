@@ -485,6 +485,7 @@ internal sealed partial class AppController
                 _chatCtrl?.PostMeta(lead);
             },
             PushUpdated = lead => _chatCtrl?.PostMeta(lead),
+            BoardChanged = lead => _chatCtrl?.PostMeta(lead),
             ReadPendingTool = t =>
             {
                 var pane = AllLeaves(t.Root).FirstOrDefault(p => p.IsTerminal && !string.IsNullOrEmpty(p.ClaudeSessionId));

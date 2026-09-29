@@ -314,6 +314,8 @@ internal sealed class ChatController : IDisposable
             memory = ThreadController.ReadMemory(lead).ToArray(),
             suggestions = _h.Suggestions?.Invoke(lead) ?? Array.Empty<object>(),
             pushes = _h.Pushes?.Invoke(lead) ?? Array.Empty<object>(),
+            // The chat's board (`perch thread board`); null when it has no cards.
+            board = ReviewBoard.View(lead),
         });
     }
 
