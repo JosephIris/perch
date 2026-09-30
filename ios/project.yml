@@ -34,9 +34,15 @@ targets:
     info:
       path: PerchRemote/Info.plist
       properties:
-        # Perch on the wifi, over plain HTTP (docs/PHONE-API.md).
+        # Perch over plain HTTP (docs/PHONE-API.md), on the wifi AND through
+        # Tailscale. NSAllowsLocalNetworking alone covers only local addresses,
+        # and a Tailscale address (100.64.0.0/10) isn't one: ATS refused it
+        # (-1022). ATS exceptions can't name IP addresses, so arbitrary loads it
+        # is; the app only talks to the paired computer, and Tailscale encrypts.
+        # Don't add NSAllowsLocalNetworking back beside it: iOS then ignores
+        # NSAllowsArbitraryLoads.
         NSAppTransportSecurity:
-          NSAllowsLocalNetworking: true
+          NSAllowsArbitraryLoads: true
         NSLocalNetworkUsageDescription: Perch connects to your computer on this wifi to show your sessions and send what you say.
         NSMicrophoneUsageDescription: Perch listens while you hold the talk button, to send what you say to a session.
         NSSpeechRecognitionUsageDescription: Your speech is turned into text on this iPhone before it is sent to your computer.

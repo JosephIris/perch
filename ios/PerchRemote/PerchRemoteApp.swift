@@ -12,6 +12,15 @@ struct PerchRemoteApp: App {
                 // A pairing code scanned with the Camera app opens here.
                 .onOpenURL { url in Task { await model.pair(url) } }
                 .onChange(of: phase, initial: true) { _, p in model.setForeground(p == .active) }
+                #if DEBUG
+                // Pair without the system's "Open in Perch?" prompt, for checks
+                // driven from the Mac: SIMCTL_CHILD_PERCH_PAIR_URL=... simctl launch.
+                .task {
+                    if let s = ProcessInfo.processInfo.environment["PERCH_PAIR_URL"], let url = URL(string: s) {
+                        await model.pair(url)
+                    }
+                }
+                #endif
         }
     }
 }
