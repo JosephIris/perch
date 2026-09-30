@@ -319,7 +319,8 @@
   --pc-ov-width:     380px;
   /* A chat's board (review-board.ts): the conversation's column beside it,
    * and each verdict's chip — the state colours, faint behind the word. */
-  --pc-board-chat-width: 360px;
+  /* A third of the pane, never cramped and never so wide the board loses its columns. */
+  --pc-board-chat-width: clamp(360px, 33%, 560px);
   --pc-board-col-fill:   rgba(255, 255, 255, 0.025);
   --pc-tone-ok-faint:     rgba(108, 203, 95, 0.14);
   --pc-tone-bad-faint:    rgba(255, 153, 164, 0.14);
