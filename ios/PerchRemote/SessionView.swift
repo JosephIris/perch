@@ -1,7 +1,8 @@
-// One session, laid out like a conversation: what you last said, where Claude
-// is, and its latest answer. The bar at the bottom is for talking: hold the
-// microphone and release to send, or tap it and it sends when you pause. A
-// text field is there for typing.
+// One session as a conversation: everything said to it and by it (its
+// prompts, its prose, and its tool calls folded into a line), and an input
+// bar like any messaging app: a field with a small mic beside it. Hold the
+// mic and let go to send; tap it and it sends after a quiet spell. While it
+// listens, the desktop's CRT scope rises above the bar in the tab's color.
 
 import SwiftUI
 
@@ -10,37 +11,31 @@ struct SessionView: View {
     @Environment(AppModel.self) private var model
     @State private var listener = Listener()
     @State private var typed = ""
+    @State private var voice: VoicePhase = .idle
+    @State private var voiceSince = Date()
     @State private var pressedAt: Date?
     @State private var tapToStop = false
     @FocusState private var typing: Bool
 
     private var session: PerchSession? { model.session(id) }
+    private var starting: Bool { session == nil && model.starting.contains(id) }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                if let s = session { conversation(s) }
+            LazyVStack(alignment: .leading, spacing: 10) {
+                conversation
+                Color.clear.frame(height: 1).id("end")
             }
-            .padding()
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
         }
+        .defaultScrollAnchor(.bottom)
         .scrollDismissesKeyboard(.interactively)
         .background(Color(.systemGroupedBackground))
-        .overlay {
-            if session == nil {
-                ContentUnavailableView("Tab closed", systemImage: "xmark.circle",
-                                       description: Text("This tab isn't open in Perch any more."))
-            } else if model.sent[id] == nil && model.replies[id] == nil {
-                ContentUnavailableView {
-                    Label("Talk to this session", systemImage: "waveform")
-                } description: {
-                    Text("Hold the microphone and say what you want. Claude's answer shows up here and is read aloud.")
-                }
-            }
-        }
+        .overlay { emptyState }
         .safeAreaInset(edge: .bottom) {
             if let s = session {
-                if s.canSend { talkBar } else { unsupportedBar }
+                if s.canSend { inputBar(s) } else { unsupportedBar }
             }
         }
         .navigationBarTitleDisplayMode(.inline)
@@ -48,25 +43,56 @@ struct SessionView: View {
             ToolbarItem(placement: .principal) { header }
             ToolbarItem(placement: .primaryAction) {
                 let on = model.isSpeakerOn(id)
-                Button {
-                    model.setSpeaker(!on, for: id)
-                } label: {
+                Button { model.setSpeaker(!on, for: id) } label: {
                     Image(systemName: on ? "speaker.wave.2.fill" : "speaker.slash")
                 }
                 .accessibilityLabel(on ? "Stop reading answers aloud" : "Read answers aloud")
             }
         }
-        .task { await model.loadReply(id) }
-        .onAppear { listener.onPause = { Task { await finishListening() } } }
+        .task { await followConversation() }
+        #if DEBUG
+        .task {
+            // Screenshots of the scope: PERCH_SCOPE_DEMO=1 runs it on a synthetic voice.
+            guard ProcessInfo.processInfo.environment["PERCH_SCOPE_DEMO"] == "1" else { return }
+            try? await Task.sleep(for: .seconds(1))
+            setVoice(.rec)
+            let t0 = Date()
+            while !Task.isCancelled {
+                listener.feed.writeDemo(at: Date().timeIntervalSince(t0))
+                try? await Task.sleep(for: .milliseconds(16))
+            }
+        }
+        #endif
+        .onAppear { listener.onDone = { Task { await finishListening() } } }
         .onDisappear { listener.cancel() }
+    }
+
+    /// Keep the conversation current while the screen is open: often while
+    /// Claude works or an answer is due, now and then otherwise.
+    private func followConversation() async {
+        await model.loadReply(id)
+        var lastState = ""
+        var quietRounds = 0
+        while !Task.isCancelled {
+            let state = session?.state ?? ""
+            let busy = state == "working" || model.isAwaiting(id) || model.starting.contains(id)
+            if busy || state != lastState || quietRounds >= 3 {
+                await model.loadHistory(id)
+                quietRounds = 0
+            } else {
+                quietRounds += 1
+            }
+            lastState = state
+            try? await Task.sleep(for: .milliseconds(2000))
+        }
     }
 
     // MARK: - header
 
     private var header: some View {
-        VStack(spacing: 1) {
-            Text(session?.title ?? "")
-                .font(.headline)
+        VStack(spacing: 0) {
+            Text(session?.title ?? (starting ? "New session" : ""))
+                .font(.subheadline.weight(.semibold))
                 .lineLimit(1)
             if let s = session {
                 HStack(spacing: 4) {
@@ -74,7 +100,7 @@ struct SessionView: View {
                     Text([StateBadge.label(s.state), s.project, model.computerLabel(of: id)]
                         .compactMap { $0 }.joined(separator: " · "))
                 }
-                .font(.caption)
+                .font(.caption2)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
             }
@@ -83,54 +109,82 @@ struct SessionView: View {
 
     // MARK: - conversation
 
-    @ViewBuilder
-    private func conversation(_ s: PerchSession) -> some View {
-        if let line = model.sent[id] {
-            HStack {
-                Spacer(minLength: 48)
-                Text(line)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .foregroundStyle(.white)
-                    .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            }
-            .accessibilityLabel("You said: \(line)")
+    private enum Block: Identifiable {
+        case user(Int, String, spoken: Bool)
+        case claude(Int, String)
+        case tools(Int, [String])
+        case notice(Int, String)
+        var id: Int {
+            switch self { case .user(let i, _, _), .claude(let i, _), .tools(let i, _), .notice(let i, _): return i }
         }
+    }
 
-        if let note = status(s) {
-            HStack(spacing: 8) {
-                if s.state == "working" || s.asleep { ProgressView().controlSize(.small) }
+    /// History as blocks: consecutive tool calls fold into one row.
+    private var blocks: [Block] {
+        var out: [Block] = []
+        for (i, item) in (model.history[id] ?? []).enumerated() {
+            switch item.kind {
+            case "user":
+                out.append(.user(i, AppModel.plain(item.text), spoken: item.text.contains("[voice input]")))
+            case "claude": out.append(.claude(i, item.text))
+            case "tool":
+                if case .tools(let j, var lines)? = out.last {
+                    lines.append(item.text)
+                    out[out.count - 1] = .tools(j, lines)
+                } else {
+                    out.append(.tools(i, [item.text]))
+                }
+            default: out.append(.notice(i, item.text))
+            }
+        }
+        return out
+    }
+
+    @ViewBuilder
+    private var conversation: some View {
+        let blocks = self.blocks
+        let lastClaude = blocks.last { if case .claude = $0 { return true } else { return false } }?.id
+        if blocks.isEmpty, let reply = model.replies[id] {
+            // A Perch too old to hand over the conversation: the latest answer alone.
+            ClaudeMessage(text: reply, isLatest: true, id: id)
+        }
+        ForEach(blocks) { block in
+            switch block {
+            case .user(_, let text, let spoken): UserBubble(text: text, spoken: spoken)
+            case .claude(let i, let text): ClaudeMessage(text: text, isLatest: i == lastClaude, id: id)
+            case .tools(_, let lines): ToolSteps(lines: lines)
+            case .notice(_, let text):
+                Text(text).font(.caption).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+            }
+        }
+        if let line = model.sent[id] {
+            UserBubble(text: line, spoken: false).opacity(0.7)
+        }
+        if let s = session, let note = status(s) {
+            HStack(spacing: 6) {
+                if s.state == "working" || s.asleep { ProgressView().controlSize(.mini) }
                 Text(note)
             }
-            .font(.subheadline)
+            .font(.caption)
             .foregroundStyle(.secondary)
+            .padding(.top, 2)
         }
+    }
 
-        if let text = model.replies[id] {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Label(s.kind == "chat" ? "Project chat" : "Claude", systemImage: "sparkle")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    if model.speaker.isSpeaking {
-                        Button("Stop", systemImage: "stop.fill") { model.speaker.stop() }
-                    } else {
-                        Button("Read aloud", systemImage: "play.fill") { model.readAloud(id) }
-                    }
-                }
-                .labelStyle(.titleAndIcon)
-                .buttonStyle(.borderless)
-                .font(.subheadline)
-
-                Text(markdown(text))
-                    .textSelection(.enabled)
-                    .accessibilityIdentifier("replyText")
-                    .frame(maxWidth: .infinity, alignment: .leading)
+    @ViewBuilder
+    private var emptyState: some View {
+        if starting {
+            BirdLoading(caption: "Starting Claude")
+        } else if session == nil {
+            ContentUnavailableView("Tab closed", systemImage: "xmark.circle",
+                                   description: Text("This tab isn't open in Perch any more."))
+        } else if (model.history[id] ?? []).isEmpty && model.replies[id] == nil && model.sent[id] == nil {
+            ContentUnavailableView {
+                Label("Nothing here yet", systemImage: "bubble.left.and.text.bubble.right")
+            } description: {
+                Text("Type below, or hold the mic and talk. The answer shows up here and is read aloud.")
             }
-            .padding(16)
-            .background(Color(.secondarySystemGroupedBackground),
-                        in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         }
     }
 
@@ -141,146 +195,297 @@ struct SessionView: View {
         case "working": return "Claude is working…"
         case "waiting": return "Claude asked you something. Answer below."
         case "permission": return "Claude wants approval for a tool. Answer it on the computer."
-        default: return model.isAwaiting(id) ? "Sent. Waiting for Claude…" : nil
+        default: return model.isAwaiting(id) ? "Waiting for Claude…" : nil
         }
     }
 
-    // MARK: - talk bar
+    // MARK: - input bar
 
-    private var talkBar: some View {
-        VStack(spacing: 12) {
-            if listener.isListening || !listener.transcript.isEmpty {
-                Text(listener.transcript.isEmpty ? "Listening…" : listener.transcript)
-                    .font(.title3)
-                    .foregroundStyle(listener.transcript.isEmpty ? .secondary : .primary)
-                    .lineLimit(5)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .animation(.default, value: listener.transcript)
-            } else if let problem = listener.problem {
-                Label(problem, systemImage: "exclamationmark.triangle.fill")
-                    .font(.callout)
-                    .foregroundStyle(.orange)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+    private func inputBar(_ s: PerchSession) -> some View {
+        VStack(spacing: 8) {
+            if voice != .idle {
+                VoiceScope(phase: voice, phaseStart: voiceSince, listener: listener, phos: PaneColor.of(s.color))
+                    .frame(height: 68)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-
-            if !typing {
-                VStack(spacing: 6) {
-                    talkButton
-                    Text(hint)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .transition(.opacity)
-            }
-
             HStack(alignment: .bottom, spacing: 8) {
-                TextField("Type a message", text: $typed, axis: .vertical)
-                    .lineLimit(1...5)
-                    .focused($typing)
-                    .submitLabel(.send)
-                    .onSubmit(sendTyped)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 9)
-                    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-                    .accessibilityIdentifier("typeField")
-                if !typed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                ZStack(alignment: .leading) {
+                    if listener.isListening {
+                        Text(listener.transcript.isEmpty ? "Listening…" : listener.transcript)
+                            .foregroundStyle(listener.transcript.isEmpty ? .secondary : .primary)
+                            .lineLimit(1...4)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        TextField("Message", text: $typed, axis: .vertical)
+                            .lineLimit(1...5)
+                            .focused($typing)
+                            .accessibilityIdentifier("typeField")
+                    }
+                }
+                .font(.body)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+
+                if !typed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !listener.isListening {
                     Button(action: sendTyped) {
-                        Image(systemName: "arrow.up.circle.fill")
-                            .font(.system(size: 34))
+                        Image(systemName: "arrow.up.circle.fill").font(.system(size: 32))
                     }
                     .accessibilityLabel("Send")
                     .accessibilityIdentifier("sendButton")
-                    .transition(.scale.combined(with: .opacity))
+                } else {
+                    micButton(s)
                 }
             }
         }
-        .padding(.horizontal)
-        .padding(.top, 12)
-        .padding(.bottom, 8)
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .padding(.bottom, 6)
         .background(.bar)
-        .animation(.easeOut(duration: 0.2), value: typing)
-        .animation(.easeOut(duration: 0.15), value: typed.isEmpty)
+        .animation(.easeOut(duration: 0.2), value: voice)
     }
 
     private var unsupportedBar: some View {
         Text("The phone can talk to Claude tabs and project chats. Codex and shell tabs aren't supported yet.")
-            .font(.callout)
+            .font(.footnote)
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding()
+            .padding(12)
             .background(.bar)
     }
 
-    private var hint: String {
-        if !listener.isListening { return "Hold to talk, or tap and pause when you're done" }
-        return listener.untilPause ? "Pause to send, or tap to send now" : "Release to send"
+    /// Small, beside the field. Hold: talk, let go to send. Tap: hands-free
+    /// until a quiet spell; tap again to send sooner.
+    private func micButton(_ s: PerchSession) -> some View {
+        let recording = listener.isListening
+        let tint = recording ? PaneColor.of(s.color) : Color.accentColor
+        return Image(systemName: recording ? "stop.fill" : "mic.fill")
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(recording ? Color(hex: 0x070D09) : .white)
+            .frame(width: 34, height: 34)
+            .background(tint, in: Circle())
+            .scaleEffect(pressedAt != nil ? 1.12 : 1)
+            .animation(.easeOut(duration: 0.12), value: pressedAt != nil)
+            .contentShape(Circle().inset(by: -6))
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in
+                        guard pressedAt == nil else { return }
+                        pressedAt = .now
+                        typing = false
+                        if listener.isListening {
+                            tapToStop = true
+                        } else {
+                            model.speaker.stop()
+                            setVoice(.rec)
+                            Task {
+                                await listener.start()
+                                if let problem = listener.problem { setVoice(.note(problem)); endNoteLater() }
+                            }
+                        }
+                    }
+                    .onEnded { _ in
+                        let held = Date().timeIntervalSince(pressedAt ?? .now)
+                        pressedAt = nil
+                        if tapToStop {
+                            tapToStop = false
+                            Task { await finishListening() }
+                        } else if held < 0.3 {
+                            listener.handsFree = true
+                        } else {
+                            Task { await finishListening() }
+                        }
+                    }
+            )
+            .sensoryFeedback(.impact(weight: .light), trigger: recording)
+            .accessibilityElement()
+            .accessibilityLabel(recording ? "Stop and send" : "Dictate")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction {
+                if listener.isListening { Task { await finishListening() } }
+                else { setVoice(.rec); Task { await listener.start(); listener.handsFree = true } }
+            }
     }
 
-    private var talkButton: some View {
-        let listening = listener.isListening
-        return ZStack {
-            Circle()
-                .fill(listening ? Color.red : Color.accentColor)
-                .frame(width: 72, height: 72)
-                .shadow(color: (listening ? Color.red : Color.accentColor).opacity(0.35), radius: 10, y: 4)
-                .scaleEffect(pressedAt != nil ? 1.08 : 1)
-                .animation(.easeOut(duration: 0.15), value: pressedAt != nil)
-            Image(systemName: listening ? "waveform" : "mic.fill")
-                .font(.system(size: 28, weight: .semibold))
-                .foregroundStyle(.white)
-                .symbolEffect(.variableColor.iterative, isActive: listening)
-        }
-        .contentShape(Circle())
-        .gesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { _ in
-                    guard pressedAt == nil else { return }
-                    pressedAt = .now
-                    if listener.isListening {
-                        // A tap while tap-to-talk is listening sends now.
-                        tapToStop = true
-                    } else {
-                        model.speaker.stop()
-                        Task { await listener.start() }
-                    }
-                }
-                .onEnded { _ in
-                    let held = Date().timeIntervalSince(pressedAt ?? .now)
-                    pressedAt = nil
-                    if tapToStop {
-                        tapToStop = false
-                        Task { await finishListening() }
-                    } else if held < 0.35 {
-                        listener.untilPause = true
-                    } else {
-                        Task { await finishListening() }
-                    }
-                }
-        )
-        .sensoryFeedback(.impact, trigger: listening)
-        .accessibilityLabel(listening ? "Stop and send" : "Talk")
-        .accessibilityAddTraits(.isButton)
-        .accessibilityAction {
-            if listener.isListening { Task { await finishListening() } }
-            else { Task { await listener.start(); listener.untilPause = true } }
+    private func setVoice(_ p: VoicePhase) {
+        voice = p
+        voiceSince = Date()
+    }
+
+    private func endNoteLater() {
+        Task {
+            try? await Task.sleep(for: .milliseconds(1600))
+            if case .note = voice { setVoice(.idle) }
         }
     }
 
     private func finishListening() async {
+        guard voice == .rec else { return }
+        setVoice(.settling)
         let text = await listener.stop()
-        guard !text.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        guard !text.trimmingCharacters(in: .whitespaces).isEmpty else {
+            setVoice(.note("HEARD NOTHING"))
+            endNoteLater()
+            return
+        }
+        setVoice(.sent)
+        Task {
+            try? await Task.sleep(for: .milliseconds(450))
+            if voice == .sent { setVoice(.idle) }
+        }
         await model.send(text, to: id, voice: true)
+        await model.loadHistory(id)
     }
 
     private func sendTyped() {
         let text = typed
         typed = ""
         typing = false
-        Task { await model.send(text, to: id, voice: false) }
+        Task {
+            await model.send(text, to: id, voice: false)
+            await model.loadHistory(id)
+        }
+    }
+}
+
+// MARK: - messages
+
+private struct UserBubble: View {
+    let text: String
+    let spoken: Bool
+
+    var body: some View {
+        HStack {
+            Spacer(minLength: 44)
+            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                if spoken { Image(systemName: "mic.fill").font(.caption2).opacity(0.8) }
+                Text(text).textSelection(.enabled)
+            }
+            .font(.callout)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .foregroundStyle(.white)
+            .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel((spoken ? "You said: " : "You wrote: ") + text)
+    }
+}
+
+private struct ClaudeMessage: View {
+    let text: String
+    let isLatest: Bool
+    let id: UUID
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            MarkdownText(text: text)
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier(isLatest ? "replyText" : "")
+            if isLatest {
+                HStack(spacing: 16) {
+                    if model.speaker.isSpeaking {
+                        Button("Stop", systemImage: "stop.fill") { model.speaker.stop() }
+                    } else {
+                        Button("Read aloud", systemImage: "play.fill") { model.readAloud(id) }
+                    }
+                    Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = text }
+                }
+                .font(.caption)
+                .buttonStyle(.borderless)
+                .labelStyle(.titleAndIcon)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+}
+
+/// Tool calls in a row, folded into one line you can open.
+private struct ToolSteps: View {
+    let lines: [String]
+    @State private var open = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button {
+                withAnimation(.easeOut(duration: 0.15)) { open.toggle() }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "wrench.and.screwdriver").font(.caption2)
+                    Text(lines.count == 1 ? lines[0] : "\(lines.count) steps · \(lines.last ?? "")")
+                        .lineLimit(1)
+                    Image(systemName: "chevron.right")
+                        .font(.caption2)
+                        .rotationEffect(.degrees(open ? 90 : 0))
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            if open {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                        Text(line).font(.caption2.monospaced()).foregroundStyle(.secondary).lineLimit(2)
+                    }
+                }
+                .padding(.leading, 18)
+            }
+        }
+        .padding(.horizontal, 4)
+    }
+}
+
+/// Claude's markdown, readable on a phone: code blocks in a box, headings in
+/// bold, the rest as inline markdown.
+struct MarkdownText: View {
+    let text: String
+
+    private enum Part: Hashable { case prose(String), code(String) }
+
+    private var parts: [Part] {
+        var out: [Part] = []
+        var prose: [String] = [], code: [String] = []
+        var inCode = false
+        for line in text.components(separatedBy: "\n") {
+            if line.trimmingCharacters(in: .whitespaces).hasPrefix("```") {
+                if inCode { out.append(.code(code.joined(separator: "\n"))); code = [] }
+                else if !prose.isEmpty { out.append(.prose(prose.joined(separator: "\n"))); prose = [] }
+                inCode.toggle()
+            } else if inCode { code.append(line) } else { prose.append(line) }
+        }
+        if inCode, !code.isEmpty { out.append(.code(code.joined(separator: "\n"))) }
+        if !prose.isEmpty { out.append(.prose(prose.joined(separator: "\n"))) }
+        return out
     }
 
-    private func markdown(_ text: String) -> AttributedString {
-        (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
-            ?? AttributedString(text)
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(parts.enumerated()), id: \.offset) { _, part in
+                switch part {
+                case .prose(let s):
+                    Text(Self.inline(s)).font(.callout).textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                case .code(let s):
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        Text(s).font(.caption.monospaced()).textSelection(.enabled).padding(8)
+                    }
+                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+            }
+        }
+    }
+
+    private static func inline(_ s: String) -> AttributedString {
+        // Headings read as bold lines.
+        let md = s.components(separatedBy: "\n").map { line -> String in
+            guard let r = line.range(of: #"^#{1,6}\s+"#, options: .regularExpression) else { return line }
+            return "**" + line[r.upperBound...] + "**"
+        }.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return (try? AttributedString(markdown: md, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+            ?? AttributedString(md)
     }
 }

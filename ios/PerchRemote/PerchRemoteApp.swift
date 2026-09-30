@@ -3,24 +3,72 @@ import SwiftUI
 @main
 struct PerchRemoteApp: App {
     @State private var model = AppModel()
+    @State private var splash = true
     @Environment(\.scenePhase) private var phase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some Scene {
         WindowGroup {
-            RootView()
-                .environment(model)
-                // A pairing code scanned with the Camera app opens here.
-                .onOpenURL { url in Task { await model.pair(url) } }
-                .onChange(of: phase, initial: true) { _, p in model.setForeground(p == .active) }
-                #if DEBUG
-                // Pair without the system's "Open in Perch?" prompt, for checks
-                // driven from the Mac: SIMCTL_CHILD_PERCH_PAIR_URL=... simctl launch.
-                .task {
-                    if let s = ProcessInfo.processInfo.environment["PERCH_PAIR_URL"], let url = URL(string: s) {
-                        await model.pair(url)
+            ZStack {
+                RootView()
+                if splash {
+                    SplashView().transition(.opacity).zIndex(1)
+                }
+            }
+            .environment(model)
+            // A pairing code scanned with the Camera app opens here.
+            .onOpenURL { url in Task { await model.pair(url) } }
+            .onChange(of: phase, initial: true) { _, p in model.setForeground(p == .active) }
+            .task {
+                // Long enough for the bird to walk in and land.
+                try? await Task.sleep(for: .milliseconds(reduceMotion ? 700 : 2300))
+                withAnimation(.easeOut(duration: 0.35)) { splash = false }
+            }
+            #if DEBUG
+            // Pair without the system's "Open in Perch?" prompt, for checks
+            // driven from the Mac: SIMCTL_CHILD_PERCH_PAIR_URL=... simctl launch.
+            .task {
+                let env = ProcessInfo.processInfo.environment
+                if let s = env["PERCH_PAIR_URL"], let url = URL(string: s) {
+                    await model.pair(url)
+                }
+                // And open the first Claude tab (for screenshots of a session).
+                if env["PERCH_OPEN_FIRST"] == "1" {
+                    for _ in 0..<20 {
+                        if let s = model.sessions.values.flatMap({ $0 }).first(where: { $0.canSend }) {
+                            model.path = [.session(s.id)]
+                            break
+                        }
+                        try? await Task.sleep(for: .milliseconds(500))
                     }
                 }
-                #endif
+            }
+            #endif
+        }
+    }
+}
+
+/// The brand tile's navy, top and bottom (the app icon's gradient).
+enum Brand {
+    static let top = Color(hex: 0x1E2D4C)
+    static let bottom = Color(hex: 0x111A2C)
+    static let ink = Color(hex: 0xE8EEF7)
+    static let accent = Color(hex: 0x76B9ED)
+    static var tile: LinearGradient { LinearGradient(colors: [top, bottom], startPoint: .top, endPoint: .bottom) }
+}
+
+struct SplashView: View {
+    var body: some View {
+        ZStack {
+            Brand.tile.ignoresSafeArea()
+            VStack(spacing: 6) {
+                BirdScene(ink: Brand.ink, accent: Brand.accent)
+                    .frame(height: 170)
+                Text("Perch")
+                    .font(.system(size: 30, weight: .medium))
+                    .foregroundStyle(Brand.ink)
+            }
+            .offset(y: -30)
         }
     }
 }
@@ -33,13 +81,137 @@ struct RootView: View {
         if model.pairings.isEmpty {
             ScannerScreen(firstRun: true)
         } else {
-            NavigationStack {
-                SessionListView()
-                    .navigationDestination(for: UUID.self) { SessionView(id: $0) }
+            NavigationStack(path: $model.path) {
+                Group {
+                    // One computer: straight to its sessions. More: pick one first.
+                    if model.pairings.count == 1, let only = model.pairings.first {
+                        SessionListView(computer: only.name, isRoot: true)
+                    } else {
+                        ComputersView()
+                    }
+                }
+                .navigationDestination(for: Route.self) { route in
+                    switch route {
+                    case .computer(let name): SessionListView(computer: name, isRoot: false)
+                    case .session(let id): SessionView(id: id)
+                    }
+                }
             }
             .sheet(isPresented: $model.showScanner) {
                 NavigationStack { ScannerScreen(firstRun: false) }
             }
+            .alert("Couldn't start a session", isPresented: Binding(
+                get: { model.createError != nil }, set: { if !$0 { model.createError = nil } })) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(model.createError ?? "")
+            }
+        }
+    }
+}
+
+/// The bird on his wire over a line about what's going on; the first row of
+/// the main lists, so it scrolls away and comes back at the top.
+struct BirdHeader: View {
+    let title: String
+    let detail: String
+
+    var body: some View {
+        ZStack(alignment: .bottomLeading) {
+            Brand.tile
+            BirdScene(ink: Brand.ink, accent: Brand.accent, perched: true)
+                .padding(.bottom, 18)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title).font(.headline)
+                Text(detail).font(.caption).opacity(0.75)
+            }
+            .foregroundStyle(Brand.ink)
+            .padding(.horizontal, 14)
+            .padding(.bottom, 10)
+        }
+        .frame(height: 132)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .listRowInsets(EdgeInsets())
+        .listRowBackground(Color.clear)
+    }
+}
+
+struct ComputersView: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        List {
+            Section {
+                BirdHeader(title: "Your computers", detail: summary)
+            }
+            Section {
+                ForEach(model.pairings, id: \.name) { p in
+                    NavigationLink(value: Route.computer(p.name)) { ComputerRow(name: p.name) }
+                        .swipeActions {
+                            Button("Forget", role: .destructive) { model.forget(p.name) }
+                        }
+                }
+            }
+        }
+        .listSectionSpacing(.compact)
+        .environment(\.defaultMinListRowHeight, 40)
+        .navigationTitle("Perch")
+        .navigationBarTitleDisplayMode(.inline)
+        .refreshable { await model.refreshAll() }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button { model.scannerMessage = nil; model.showScanner = true } label: {
+                    Image(systemName: "plus")
+                }
+                .accessibilityLabel("Add a computer")
+            }
+        }
+    }
+
+    private var summary: String {
+        let all = model.pairings.flatMap { model.sessions[$0.name] ?? [] }
+        let need = model.pairings.reduce(0) { $0 + model.needsYou(on: $1.name) }
+        return "\(all.count) session\(all.count == 1 ? "" : "s")" + (need > 0 ? " · \(need) waiting on you" : "")
+    }
+}
+
+struct ComputerRow: View {
+    let name: String
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "desktopcomputer")
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(.white)
+                .frame(width: 30, height: 30)
+                .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(name).font(.callout.weight(.medium)).lineLimit(1)
+                Text(status).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            let need = model.needsYou(on: name)
+            if need > 0 {
+                Text("\(need)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 7).padding(.vertical, 2)
+                    .background(Color.orange, in: Capsule())
+                    .accessibilityLabel("\(need) waiting on you")
+            }
+        }
+    }
+
+    private var status: String {
+        switch model.link[name] ?? .connecting {
+        case .online:
+            let n = model.sessions[name]?.count ?? 0
+            return ["Online", model.via(name), "\(n) session\(n == 1 ? "" : "s")"].compactMap { $0 }.joined(separator: " · ")
+        case .connecting: return "Connecting…"
+        case .unreachable: return "Can't reach it"
+        case .notPaired: return "Scan its code again"
+        case .slowDown: return "Wait a minute"
         }
     }
 }

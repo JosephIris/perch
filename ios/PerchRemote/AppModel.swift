@@ -8,6 +8,12 @@ enum Link: Equatable {
     case connecting, online, unreachable, notPaired, slowDown
 }
 
+/// Where the navigation stack is: a computer's sessions, or one session.
+enum Route: Hashable {
+    case computer(String)
+    case session(UUID)
+}
+
 @Observable @MainActor
 final class AppModel {
     private(set) var pairings: [Pairing] = PairingStore.load()
@@ -18,8 +24,21 @@ final class AppModel {
     private(set) var replies: [UUID: String] = [:]
     /// What happened to the last line sent to a session, in plain words.
     private(set) var sendNote: [UUID: String] = [:]
-    /// The last line sent to a session from this phone, shown above the answer.
+    /// The last line sent to a session from this phone, shown until the
+    /// conversation has it.
     private(set) var sent: [UUID: String] = [:]
+    /// Each session's conversation, oldest first, once fetched.
+    private(set) var history: [UUID: [HistoryItem]] = [:]
+    /// Computers whose Perch is too old to hand over a conversation.
+    private(set) var noHistory: Set<String> = []
+    /// Each computer's projects, for a new tab.
+    private(set) var projects: [String: [PerchProject]] = [:]
+    /// Tabs made from here that the computer hasn't listed yet.
+    private(set) var starting: Set<UUID> = []
+
+    var path: [Route] = []
+    /// Why a new session didn't open, until shown.
+    var createError: String?
 
     var showScanner = false
     var scannerMessage: String?
@@ -54,8 +73,21 @@ final class AppModel {
         return nil
     }
 
-    private func computer(of id: UUID) -> String? {
+    func computer(of id: UUID) -> String? {
         sessions.first { $0.value.contains { $0.id == id } }?.key
+    }
+
+    /// How the phone reaches a computer right now: over the wifi or through Tailscale.
+    func via(_ name: String) -> String? {
+        guard link[name] == .online, let host = clients[name]?.pairing.workingHost else { return nil }
+        let parts = host.split(separator: ".").compactMap { Int($0) }
+        let tailscale = parts.count == 4 && parts[0] == 100 && (parts[1] & 0xC0) == 64
+        return tailscale ? "Tailscale" : "Wi-Fi"
+    }
+
+    /// Sessions on a computer that are waiting on you (a question or an approval).
+    func needsYou(on name: String) -> Int {
+        (sessions[name] ?? []).filter { $0.state == "waiting" || $0.state == "permission" }.count
     }
 
     func isSpeakerOn(_ id: UUID) -> Bool { speakerChoice[id] ?? (id == lastTalkedTo) }
@@ -145,6 +177,7 @@ final class AppModel {
             guard clients[name] === client else { return }
             link[name] = .online
             sessions[name] = list
+            starting.subtract(list.map(\.id))
             for s in list { await observe(s, client: client) }
         } catch let e as PerchError {
             switch e {
@@ -216,6 +249,60 @@ final class AppModel {
     /// The computer a session is on, when more than one is paired.
     func computerLabel(of id: UUID) -> String? {
         pairings.count > 1 ? computer(of: id) : nil
+    }
+
+    /// Fetch a session's conversation. On a Perch too old for it, the screen
+    /// falls back to the latest answer alone.
+    func loadHistory(_ id: UUID) async {
+        guard let name = computer(of: id), !noHistory.contains(name), let client = clients[name] else { return }
+        do {
+            let items = try await client.history(for: id)
+            if history[id] != items { history[id] = items }
+            // The line sent from here is in the conversation now.
+            if let line = sent[id], items.contains(where: { $0.kind == "user" && Self.plain($0.text) == line }) {
+                sent[id] = nil
+            }
+        } catch PerchError.sessionGone {
+            if session(id) != nil { noHistory.insert(name) }
+        } catch {}
+    }
+
+    /// A line as the person said it: without the tag spoken lines carry, or
+    /// the "[Perch #N]" Perch puts in front of a line it types into a tab.
+    static func plain(_ text: String) -> String {
+        text.replacingOccurrences(of: "[voice input]", with: "")
+            .replacingOccurrences(of: #"^\s*\[Perch #\d+\]\s*"#, with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func loadProjects(_ name: String) async {
+        guard let client = clients[name], let list = try? await client.projects() else { return }
+        projects[name] = list
+    }
+
+    /// Open a Claude tab in a project on a computer, as "New tab" does there,
+    /// and go to it. Returns an error to show, or nil.
+    func create(on name: String, in project: UUID, named title: String, text: String, voice: Bool) async -> String? {
+        guard let client = clients[name] else { return "\(name) isn't paired." }
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        do {
+            let id = try await client.create(in: project, name: title.trimmingCharacters(in: .whitespacesAndNewlines),
+                                             text: text, voice: voice)
+            starting.insert(id)
+            if !text.isEmpty {
+                sent[id] = text
+                awaiting[id] = (nil, Date())
+                lastTalkedTo = id
+            }
+            path.append(.session(id))
+            await refresh(name)
+            return nil
+        } catch PerchError.sessionGone {
+            // A 404: the project is gone, or this Perch predates new tabs from the phone.
+            return "Couldn't open a tab there. The project may have been removed, or Perch on \(name) needs an update."
+        } catch {
+            return message(for: error, computer: name)
+        }
     }
 
     // MARK: - talking

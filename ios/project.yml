@@ -27,7 +27,6 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: Perch
-        INFOPLIST_KEY_UILaunchScreen_Generation: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
@@ -46,6 +45,9 @@ targets:
         NSLocalNetworkUsageDescription: Perch connects to your computer on this wifi to show your sessions and send what you say.
         NSMicrophoneUsageDescription: Perch listens while you hold the talk button, to send what you say to a session.
         NSSpeechRecognitionUsageDescription: Your speech is turned into text on this iPhone before it is sent to your computer.
+        # The splash starts on the brand navy, so launch shows the same.
+        UILaunchScreen:
+          UIColorName: LaunchBackground
         NSCameraUsageDescription: Scan the pairing code shown in Perch's Settings on your computer.
         # The pairing QR code is a perch:// link, so the Camera app opens it here.
         CFBundleURLTypes:

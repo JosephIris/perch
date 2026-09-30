@@ -51,10 +51,49 @@ final class PhoneLinkUITests: XCTestCase {
         shot("4-answered")
     }
 
+    /// A new session from the phone: a Claude tab opens in the project on the
+    /// computer with the phone's first message, and its answer comes back.
+    func testNewSessionFromThePhone() throws {
+        let env = ProcessInfo.processInfo.environment
+        guard let link = env["PERCH_PAIR_URL"].flatMap(URL.init(string:)) else {
+            throw XCTSkip("PERCH_PAIR_URL not set")
+        }
+        let word = "NEWTAB\(Int.random(in: 1000...9999))"
+        let app = XCUIApplication()
+        app.launchArguments = ["-PerchForgetPairings"]
+        app.launchEnvironment["PERCH_PAIR_URL"] = link.absoluteString
+        app.launch()
+
+        let new = app.buttons["New session"]
+        XCTAssertTrue(new.waitForExistence(timeout: 20))
+        XCTAssertTrue(new.waitForEnabled(timeout: 10))
+        new.tap()
+        let first = app.textFields["What should Claude do?"].firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 10))
+        first.tap()
+        first.typeText("Reply with exactly this word and nothing else: \(word)")
+        shot("5-new-session")
+        let start = app.buttons["Start"]
+        XCTAssertTrue(start.waitForEnabled(timeout: 10), "the only project is picked")
+        start.tap()
+
+        let reply = app.descendants(matching: .any)["replyText"].firstMatch
+        let got = expectation(for: NSPredicate(format: "label CONTAINS %@", word), evaluatedWith: reply)
+        wait(for: [got], timeout: 180)
+        shot("6-new-session-answered")
+    }
+
     private func shot(_ name: String) {
         let a = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         a.name = name
         a.lifetime = .keepAlways
         add(a)
+    }
+}
+
+extension XCUIElement {
+    func waitForEnabled(timeout: TimeInterval) -> Bool {
+        let done = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isEnabled == true"), object: self)
+        return XCTWaiter.wait(for: [done], timeout: timeout) == .completed
     }
 }

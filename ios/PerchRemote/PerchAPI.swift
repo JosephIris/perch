@@ -45,11 +45,25 @@ struct PerchSession: Codable, Identifiable, Equatable {
     let canSend: Bool
     let active: Bool
     let asleep: Bool
+    /// The tab's pane color tag, 0–5; nil from Perch builds before it.
+    let color: Int?
 }
 
 struct PerchReply: Codable, Equatable {
     let text: String?
     let atMs: Int64?
+}
+
+/// One line of a tab's conversation. Kind: "user", "claude", "tool" or "notice".
+struct HistoryItem: Codable, Equatable {
+    let kind: String
+    let text: String
+    let atMs: Int64?
+}
+
+struct PerchProject: Codable, Identifiable, Equatable, Hashable {
+    let id: UUID
+    let name: String
 }
 
 enum PerchError: Error, Equatable {
@@ -127,6 +141,31 @@ final class PerchClient {
 
     func reply(for id: UUID) async throws -> PerchReply {
         try await get("v1/sessions/\(id.uuidString)/reply")
+    }
+
+    /// The tab's conversation, oldest first. `.sessionGone` also comes from a
+    /// Perch too old to have this path (it answers 404 for it).
+    func history(for id: UUID) async throws -> [HistoryItem] {
+        struct List: Codable { let items: [HistoryItem] }
+        let l: List = try await get("v1/sessions/\(id.uuidString)/history")
+        return l.items
+    }
+
+    func projects() async throws -> [PerchProject] {
+        struct List: Codable { let projects: [PerchProject] }
+        let l: List = try await get("v1/projects")
+        return l.projects
+    }
+
+    /// Opens a Claude tab in a project (as "New tab" does on the computer) and
+    /// returns its id.
+    func create(in project: UUID, name: String, text: String, voice: Bool) async throws -> UUID {
+        struct Body: Codable { let projectId: UUID; let name: String; let text: String; let voice: Bool }
+        struct Result: Codable { let result: String; let id: UUID? }
+        let r: Result = try await request("POST", "v1/sessions",
+                                          body: try JSONEncoder().encode(Body(projectId: project, name: name, text: text, voice: voice)))
+        guard let id = r.id else { throw PerchError.sessionGone }
+        return id
     }
 
     // MARK: - plumbing
