@@ -43,3 +43,24 @@ targets:
         CFBundleURLTypes:
           - CFBundleURLName: com.buildwithperch.remote.pair
             CFBundleURLSchemes: [perch]
+  # End to end against a running Perch (see the test file for how to point it).
+  PerchRemoteUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - PerchRemoteUITests
+    dependencies:
+      - target: PerchRemote
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.buildwithperch.remote.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: PerchRemote
+schemes:
+  PerchRemote:
+    build:
+      targets:
+        PerchRemote: all
+    test:
+      targets:
+        - PerchRemoteUITests

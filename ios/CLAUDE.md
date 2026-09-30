@@ -74,4 +74,12 @@ Paste the `perch://pair?...` link with `xcrun simctl openurl booted '<link>'`
 instead of scanning. Then check a line you send lands in a real Claude tab and
 its answer comes back.
 
+That check is automated: `node scripts/phone-sim.mjs` starts an isolated
+Perch.Mac with the phone link on and a Claude tab, and prints the link; then
+`PhoneLinkUITests` pairs by opening it, types a line into the tab and waits
+for Claude's answer on screen (Xcode 27 ships no Simulator window to tap in):
+
+    TEST_RUNNER_PERCH_PAIR_URL='<link>' xcodebuild -project PerchRemote.xcodeproj \
+      -scheme PerchRemote -destination 'platform=iOS Simulator,name=iPhone 18 Pro' test
+
 For the device: TestFlight, or a cable plus Developer Mode on the iPhone.

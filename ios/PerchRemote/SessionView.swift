@@ -73,6 +73,7 @@ struct SessionView: View {
         if let text = model.replies[id] {
             Text(markdown(text))
                 .textSelection(.enabled)
+                .accessibilityIdentifier("replyText")
                 .frame(maxWidth: .infinity, alignment: .leading)
             if model.speaker.isSpeaking {
                 Button("Stop reading", systemImage: "stop.fill") { model.speaker.stop() }
@@ -115,6 +116,7 @@ struct SessionView: View {
                     .lineLimit(1...4)
                     .textFieldStyle(.roundedBorder)
                     .focused($typing)
+                    .accessibilityIdentifier("typeField")
                     .submitLabel(.send)
                     .onSubmit(sendTyped)
                 Button(action: sendTyped) {
@@ -122,6 +124,7 @@ struct SessionView: View {
                 }
                 .disabled(typed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .accessibilityLabel("Send")
+                .accessibilityIdentifier("sendButton")
             }
             .padding(.horizontal)
         }
@@ -188,6 +191,7 @@ struct SessionView: View {
     private func sendTyped() {
         let text = typed
         typed = ""
+        typing = false
         Task { await model.send(text, to: id, voice: false) }
     }
 
