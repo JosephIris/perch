@@ -22,6 +22,7 @@ import { createSetupOverlay, type SetupOverlay } from "./setup-overlay.js";
 import { attachTooltip } from "./tooltip.js";
 import { permissionDialogVisible, blockedDialogVisible } from "./perm-probe.js";
 import { VoiceButton } from "./voice.js";
+import { termFontStack } from "./term-font.js";
 
 // The host appends ?nowebgl=1 when it re-navigates after a render-process
 // crash, having pinned the WebGL renderer as the likely culprit. Honoring it
@@ -201,8 +202,7 @@ export class Pane {
     // these once at construction time; updating the CSS variables doesn't
     // change the canvas — bump explicitly via setOption if needed.
     this.term = new Terminal({
-      fontFamily: fontFamily ||
-        '"Geist Mono Variable", "Cascadia Code", "Cascadia Mono", Consolas, monospace',
+      fontFamily: termFontStack(fontFamily),
       fontSize: clampFontSize(fontSize),
       // Bump the variable-font weight axis. Geist Mono Variable supports
       // 100–900; 600 / 800 gives a denser, more present terminal that
@@ -429,8 +429,9 @@ export class Pane {
   }
 
   setFontFamily(family?: string) {
-    if (!family || this.term.options.fontFamily === family) return;
-    this.term.options.fontFamily = family;
+    const stack = termFontStack(family);
+    if (this.term.options.fontFamily === stack) return;
+    this.term.options.fontFamily = stack;
     this.reportResize();
   }
 
