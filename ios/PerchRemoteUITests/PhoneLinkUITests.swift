@@ -21,7 +21,9 @@ final class PhoneLinkUITests: XCTestCase {
         let word = "PONG\(Int.random(in: 1000...9999))"
 
         let app = XCUIApplication()
+        app.launchArguments = ["-PerchForgetPairings"]
         app.launch()
+        XCTAssertTrue(app.staticTexts["Connect to Perch"].waitForExistence(timeout: 5), "a first launch asks to pair")
         shot("1-first-launch")
 
         // The way a scanned code arrives: the system opens the link, asks.

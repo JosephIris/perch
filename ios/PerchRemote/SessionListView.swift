@@ -109,23 +109,28 @@ struct SessionRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
+            StateDot(state: session.state)
+            VStack(alignment: .leading, spacing: 2) {
                 Text(session.title.isEmpty ? "Untitled" : session.title)
-                    .font(.body)
+                    .font(.body.weight(.medium))
                     .lineLimit(1)
-                HStack(spacing: 6) {
+                HStack(spacing: 4) {
                     Text(kindLabel)
                     if session.asleep {
-                        Label("Asleep", systemImage: "moon.zzz.fill").labelStyle(.titleAndIcon)
+                        Text("·")
+                        Image(systemName: "moon.zzz.fill")
+                        Text("Asleep")
                     }
                 }
-                .font(.caption)
+                .font(.subheadline)
                 .foregroundStyle(.secondary)
             }
-            Spacer()
+            Spacer(minLength: 8)
             StateBadge(state: session.state)
         }
-        .opacity(session.canSend ? 1 : 0.45)
+        .padding(.vertical, 2)
+        .opacity(session.canSend ? 1 : 0.5)
+        .accessibilityElement(children: .combine)
     }
 
     private var kindLabel: String {
@@ -139,26 +144,56 @@ struct SessionRow: View {
     }
 }
 
-struct StateBadge: View {
+/// A small colored dot for where a session is; a spinner while it works.
+struct StateDot: View {
     let state: String
 
     var body: some View {
-        let (label, color) = look
-        Text(label)
-            .font(.caption.weight(.semibold))
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .foregroundStyle(color)
-            .background(color.opacity(0.15), in: Capsule())
+        if state == "working" {
+            ProgressView().controlSize(.mini).frame(width: 10, height: 10)
+        } else {
+            Circle()
+                .fill(StateBadge.color(state).opacity(state == "idle" ? 0.4 : 1))
+                .frame(width: 8, height: 8)
+                .frame(width: 10, height: 10)
+        }
+    }
+}
+
+/// The state in words, for the states that ask something of you or are news.
+/// Idle says nothing.
+struct StateBadge: View {
+    let state: String
+
+    static func label(_ state: String) -> String {
+        switch state {
+        case "working": "Working"
+        case "done": "Done"
+        case "waiting": "Waiting on you"
+        case "permission": "Needs approval"
+        default: "Idle"
+        }
     }
 
-    private var look: (String, Color) {
+    static func color(_ state: String) -> Color {
         switch state {
-        case "working": ("Working", .blue)
-        case "done": ("Done", .green)
-        case "waiting": ("Waiting on you", .orange)
-        case "permission": ("Needs approval", .red)
-        default: ("Idle", .gray)
+        case "working": .blue
+        case "done": .green
+        case "waiting": .orange
+        case "permission": .red
+        default: .gray
+        }
+    }
+
+    var body: some View {
+        if state != "idle" {
+            let color = Self.color(state)
+            Text(Self.label(state))
+                .font(.caption.weight(.semibold))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .foregroundStyle(color)
+                .background(color.opacity(0.15), in: Capsule())
         }
     }
 }

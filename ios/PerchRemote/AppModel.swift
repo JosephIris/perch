@@ -18,6 +18,8 @@ final class AppModel {
     private(set) var replies: [UUID: String] = [:]
     /// What happened to the last line sent to a session, in plain words.
     private(set) var sendNote: [UUID: String] = [:]
+    /// The last line sent to a session from this phone, shown above the answer.
+    private(set) var sent: [UUID: String] = [:]
 
     var showScanner = false
     var scannerMessage: String?
@@ -36,6 +38,11 @@ final class AppModel {
     private var lastSpoken: [UUID: String] = [:]
 
     init() {
+        // UI tests start from a first launch; the Keychain outlives a reinstall.
+        if ProcessInfo.processInfo.arguments.contains("-PerchForgetPairings") {
+            PairingStore.save([])
+            pairings = []
+        }
         for p in pairings { clients[p.name] = PerchClient(pairing: p) }
         showScanner = pairings.isEmpty
     }
@@ -200,6 +207,17 @@ final class AppModel {
         lastSpoken[id] = lastSpoken[id] ?? text
     }
 
+    func readAloud(_ id: UUID) {
+        guard let text = replies[id] else { return }
+        lastSpoken[id] = text
+        speaker.speak(SpokenText.from(markdown: text))
+    }
+
+    /// The computer a session is on, when more than one is paired.
+    func computerLabel(of id: UUID) -> String? {
+        pairings.count > 1 ? computer(of: id) : nil
+    }
+
     // MARK: - talking
 
     func send(_ text: String, to id: UUID, voice: Bool) async {
@@ -210,6 +228,8 @@ final class AppModel {
             return
         }
         lastTalkedTo = id
+        sent[id] = text
+        sendNote[id] = nil
         speaker.stop()
         let before = try? await client.reply(for: id).text
         do {
@@ -220,7 +240,7 @@ final class AppModel {
                 let asleep = session(id)?.asleep == true
                 sendNote[id] = result == "answered" ? "Sent as the answer to its question."
                     : asleep ? "Waking it up. Your message goes in once Claude is running."
-                    : "Sent."
+                    : nil
             case "unsupported": sendNote[id] = "The phone can only talk to Claude tabs and project chats."
             default: sendNote[id] = nil
             }
