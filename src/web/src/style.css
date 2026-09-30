@@ -9657,3 +9657,9 @@ body.show-inbox .inbox { display: flex; }
 @container (max-width: 760px) {
   .rb__ticket { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 2fr) minmax(0, 1fr); }
 }
+/* A card after you acted on it: locked, showing what went, until the chat changes it. */
+.rb__sent { margin: 0 0 var(--sp-16); padding: var(--sp-12); border-radius: var(--r-card); background: var(--color-accent-faint); display: flex; flex-direction: column; gap: var(--sp-8); }
+.rb__sent-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-8); font-size: 12px; color: var(--color-accent); }
+.rb__sent-text { font-size: 13px; line-height: 1.45; color: var(--color-text-primary); white-space: pre-wrap; overflow-wrap: anywhere; }
+.rb__unlock { font-size: 12px; color: var(--color-text-tertiary); }
+.rb__unlock:hover { color: var(--color-text-primary); }

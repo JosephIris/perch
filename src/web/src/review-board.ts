@@ -65,8 +65,13 @@ export function tallyLine(items: BoardItemView[]): string {
   return [`${items.length} item${items.length === 1 ? "" : "s"}`, ...parts, ...(done ? [`${done} done`] : [])].join(" · ");
 }
 
-/** What you pressed on a card, until the card changes (the chat acted). */
-type Sent = { what: string; at: number; updatedMs: number };
+/** What you sent from a card. The card stays locked, showing it, until the
+ *  chat changes the card, you unlock it, or LOCK_MS passes, so one press is
+ *  one message and a redraw can never offer it again. */
+type Sent = { shown: string; at: number; updatedMs: number };
+export const LOCK_MS = 2 * 60_000;
+/** The same line again this soon is a double press, not a second message. */
+export const REPEAT_MS = 10_000;
 
 export class BoardPanel {
   readonly element: HTMLElement;
@@ -111,7 +116,7 @@ export class BoardPanel {
     // A card the chat has acted on (it changed) is no longer "sent".
     for (const [k, s] of this.sent) {
       const it = this.item(k);
-      if (!it || it.updatedMs !== s.updatedMs || Date.now() - s.at > 10 * 60_000) this.sent.delete(k);
+      if (!it || it.updatedMs !== s.updatedMs || Date.now() - s.at > LOCK_MS) this.sent.delete(k);
     }
     this.render();
   }
@@ -210,7 +215,7 @@ export class BoardPanel {
     card.appendChild(foot);
     if (it.question && !it.done.trim()) card.appendChild(el("div", "rb-card__ask", it.question));
     const s = this.sent.get(it.key);
-    if (s) card.appendChild(el("div", "rb-card__sent", `You said “${s.what}” · waiting for the chat`));
+    if (s) card.appendChild(el("div", "rb-card__sent", "Sent · waiting for the chat"));
     card.title = it.fullTitle || it.title;
     return card;
   }
@@ -247,7 +252,15 @@ export class BoardPanel {
     body.appendChild(row);
     if (it.finding) body.appendChild(el("p", "rb__find", it.finding));
 
-    if (it.question && !decided) {
+    if (sent && !decided) {
+      // Locked: what went, and a way out if the chat never touches the card.
+      const q = el("div", "rb__sent");
+      const head = el("div", "rb__sent-head");
+      head.append(el("span", undefined, "Sent to the chat · waiting for it"),
+        button("rb__unlock", "Send something else", () => { this.sent.delete(it.key); this.boardSig = this.ticketSig = ""; this.render(); }));
+      q.append(head, el("div", "rb__sent-text", sent.shown));
+      body.appendChild(q);
+    } else if (it.question && !decided) {
       const q = el("div", "rb__ask");
       q.appendChild(el("div", "rb__ask-text", it.question));
       const box = document.createElement("textarea");
@@ -262,9 +275,10 @@ export class BoardPanel {
         if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); reply(); }
       });
       const reply = () => {
-        if (!box.value.trim()) return;
-        this.say(it, lines.answer(it.key, box.value), "your answer");
+        const text = box.value.trim();
+        if (!text) return;
         this.answerText = "";
+        this.say(it, lines.answer(it.key, text), text);
       };
       const acts = el("div", "rb__ask-acts");
       acts.appendChild(button("pc-btn pc-btn--sm", "Send answer", reply));
@@ -304,18 +318,18 @@ export class BoardPanel {
           if (!text) return;
           this.editing = false;
           this.editText = "";
-          this.say(it, lines.approveWith(it.key, text), "approve with your comment");
+          this.say(it, lines.approveWith(it.key, text), `approve ${it.key} with your comment`);
         }),
         button("pc-btn pc-btn--quiet", "Cancel", () => { this.editing = false; this.editText = ""; this.ticketSig = ""; this.render(); }));
     } else {
-      const approve = button("pc-btn pc-btn--primary", "Approve", () => this.say(it, lines.approve(it.key), "approve"));
+      const approve = button("pc-btn pc-btn--primary", "Approve", () => this.say(it, lines.approve(it.key), lines.approve(it.key)));
       const edit = button("pc-btn", "Edit comment", () => { this.editing = true; this.ticketSig = ""; this.render(); });
-      const skip = button("pc-btn pc-btn--quiet", "Skip", () => this.say(it, lines.skip(it.key), "skip"));
-      edit.disabled = !it.draft;
+      const skip = button("pc-btn pc-btn--quiet", "Skip", () => this.say(it, lines.skip(it.key), lines.skip(it.key)));
+      edit.disabled = !it.draft || !!sent;
       approve.disabled = skip.disabled = !!sent;
       acts.append(approve, edit, skip);
       acts.appendChild(el("span", "rb__hint", sent
-        ? `You said “${sent.what}”. Waiting for the chat.`
+        ? "Waiting for the chat."
         : `Sends “approve ${it.key}” to the chat${it.status ? `, to post it and move it to ${it.status}` : ""}.`));
     }
 
@@ -325,12 +339,23 @@ export class BoardPanel {
     if (!it.thread) this.threadSlot.replaceChildren(el("p", "ov__hint rb__nothread", "No thread is linked to this card."));
   }
 
-  /** Send the chat a line in your name, and show the card as waiting. */
-  private say(it: BoardItemView, line: string, what: string) {
-    this.sent.set(it.key, { what, at: Date.now(), updatedMs: it.updatedMs });
+  private last: { line: string; at: number } | null = null;
+
+  /** Send the chat a line in your name, once, and lock the card on it. */
+  private say(it: BoardItemView, line: string, shown: string) {
+    if (this.sent.has(it.key)) return;
+    const now = Date.now();
+    if (this.last && this.last.line === line && now - this.last.at < REPEAT_MS) return;
+    this.last = { line, at: now };
+    this.sent.set(it.key, { shown, at: now, updatedMs: it.updatedMs });
     this.ask(line);
     this.boardSig = this.ticketSig = "";
     this.render();
+    // The lock lifts by itself if the chat never changes the card.
+    window.setTimeout(() => {
+      const s = this.sent.get(it.key);
+      if (s && s.at === now) { this.sent.delete(it.key); this.boardSig = this.ticketSig = ""; this.render(); }
+    }, LOCK_MS + 100);
   }
 }
 
