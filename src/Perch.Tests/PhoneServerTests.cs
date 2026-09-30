@@ -25,10 +25,13 @@ public class PhoneServerTests
 
     private const string Token = "secret-token";
     private static readonly Guid Tab = Guid.NewGuid();
+    private static readonly Guid Proj = Guid.NewGuid();
+    private static readonly Guid NewTab = Guid.NewGuid();
 
     private sealed class Fixture : IDisposable
     {
         public readonly List<(Guid Id, string Text)> Sent = new();
+        public readonly List<PhoneNewTab> Created = new();
         public readonly PhoneServer Server;
         public readonly HttpClient Http = new();
 
@@ -36,7 +39,20 @@ public class PhoneServerTests
         {
             Server = new PhoneServer(new InlineUi(), new PhoneServer.Host
             {
-                Sessions = () => new[] { new PhoneSession(Tab, "fix login", "perch", "claude", "done", true, true, false) },
+                Sessions = () => new[] { new PhoneSession(Tab, "fix login", "perch", "claude", "done", true, true, false, 3) },
+                History = id => Task.FromResult<IReadOnlyList<PhoneHistoryItem>?>(id != Tab ? null : new[]
+                {
+                    new PhoneHistoryItem("user", "run the tests", 1000),
+                    new PhoneHistoryItem("tool", "Run dotnet test ×2", null),
+                    new PhoneHistoryItem("claude", "All tests pass.", 2000),
+                }),
+                Projects = () => new[] { new PhoneProject(Proj, "perch") },
+                Create = tab =>
+                {
+                    if (tab.ProjectId != Proj) return Task.FromResult<Guid?>(null);
+                    Created.Add(tab);
+                    return Task.FromResult<Guid?>(NewTab);
+                },
                 Send = (id, text) =>
                 {
                     if (id != Tab) return "missing";
@@ -106,6 +122,52 @@ public class PhoneServerTests
         Assert.Equal("claude", s.GetProperty("kind").GetString());
         Assert.Equal("done", s.GetProperty("state").GetString());
         Assert.True(s.GetProperty("canSend").GetBoolean());
+        Assert.Equal(3, s.GetProperty("color").GetInt32());
+    }
+
+    [Fact]
+    public async Task ASessionsConversationComesBackOldestFirst()
+    {
+        using var f = new Fixture();
+        var h = await Json(await f.Http.SendAsync(f.Req(HttpMethod.Get, $"v1/sessions/{Tab}/history")));
+        var items = h.GetProperty("items");
+        Assert.Equal(3, items.GetArrayLength());
+        Assert.Equal("user", items[0].GetProperty("kind").GetString());
+        Assert.Equal("run the tests", items[0].GetProperty("text").GetString());
+        Assert.Equal(1000, items[0].GetProperty("atMs").GetInt64());
+        Assert.Equal("tool", items[1].GetProperty("kind").GetString());
+        Assert.Equal(JsonValueKind.Null, items[1].GetProperty("atMs").ValueKind);
+        Assert.Equal("claude", items[2].GetProperty("kind").GetString());
+
+        var gone = await f.Http.SendAsync(f.Req(HttpMethod.Get, $"v1/sessions/{Guid.NewGuid()}/history"));
+        Assert.Equal(HttpStatusCode.NotFound, gone.StatusCode);
+    }
+
+    [Fact]
+    public async Task ANewTabOpensInAProjectWithItsFirstMessage()
+    {
+        using var f = new Fixture();
+        var projects = await Json(await f.Http.SendAsync(f.Req(HttpMethod.Get, "v1/projects")));
+        Assert.Equal(Proj, projects.GetProperty("projects")[0].GetProperty("id").GetGuid());
+        Assert.Equal("perch", projects.GetProperty("projects")[0].GetProperty("name").GetString());
+
+        var made = await f.Http.SendAsync(f.Req(HttpMethod.Post, "v1/sessions",
+            body: new { projectId = Proj, name = " login bug ", text = "look at the login page", voice = true }));
+        var r = await Json(made);
+        Assert.Equal("created", r.GetProperty("result").GetString());
+        Assert.Equal(NewTab, r.GetProperty("id").GetGuid());
+        var tab = Assert.Single(f.Created);
+        Assert.Equal("login bug", tab.Name);
+        Assert.Equal("look at the login page " + PhoneServer.VoiceTag, tab.Text);
+
+        await f.Http.SendAsync(f.Req(HttpMethod.Post, "v1/sessions", body: new { projectId = Proj }));
+        Assert.Null(f.Created[1].Text);   // no first message: Claude just starts
+
+        var unknown = await f.Http.SendAsync(f.Req(HttpMethod.Post, "v1/sessions", body: new { projectId = Guid.NewGuid() }));
+        Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
+        var bad = await f.Http.SendAsync(f.Req(HttpMethod.Post, "v1/sessions", body: new { name = "x" }));
+        Assert.Equal(HttpStatusCode.BadRequest, bad.StatusCode);
+        Assert.Equal(2, f.Created.Count);
     }
 
     [Fact]

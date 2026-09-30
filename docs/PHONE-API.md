@@ -62,7 +62,7 @@ Tailscale address without scanning again.
     { "sessions": [
         { "id": "5b0c…", "title": "fix login", "project": "perch",
           "kind": "claude", "state": "done",
-          "canSend": true, "active": true, "asleep": false } ] }
+          "canSend": true, "active": true, "asleep": false, "color": 0 } ] }
 
 - `kind`: `claude` (a Claude tab), `thread` (a project chat's thread),
   `chat` (a project chat), `codex`, `shell`.
@@ -72,6 +72,9 @@ Tailscale address without scanning again.
 - `canSend`: false for `codex` and `shell` in v1. Show them, don't offer the mic.
 - `asleep`: the tab was put to sleep for being idle. Sending to it wakes it;
   the line goes in once its Claude is up (10–20 s).
+- `color`: the tab's pane color tag, 0–5, the page's `--color-pane-tag-N`
+  (blue, green, yellow, orange, pink, purple). The phone draws its dictation
+  scope in it, as the desktop does. Absent from Perch builds before it.
 
 The phone polls this every few seconds while it is open. A tab going from
 `working` to `done` is the cue to fetch its answer.
@@ -99,6 +102,39 @@ The latest answer: Claude's last prose block after the last prompt. `text` is
 null while the turn is still on a tool call, or when there is no answer yet.
 `atMs` is set for project chats and null for Claude tabs. The phone reads this
 aloud with the system voice.
+
+### `GET /v1/sessions/{id}/history`
+
+    { "items": [
+        { "kind": "user", "text": "run the tests [voice input]", "atMs": 1790791200000 },
+        { "kind": "tool", "text": "Run dotnet test ×2", "atMs": 1790791205000 },
+        { "kind": "claude", "text": "All 42 tests pass.", "atMs": 1790791219178 } ] }
+
+The tab's conversation, oldest first, at most the last 200 lines: a Claude
+tab's prompts, prose and one line per tool call from its transcript (the
+events the project chat's Overview draws for a thread), or a project chat's
+own log (which also has `notice` lines). Empty for codex and shell tabs; `404`
+with `missing` when the tab is gone. Perch builds before it answer `404` for
+the path, so the phone falls back to `reply`.
+
+### `GET /v1/projects`
+
+    { "projects": [ { "id": "8e1f…", "name": "perch" } ] }
+
+The projects a new tab can be opened in (hidden ones and ones whose folder is
+gone are left out).
+
+### `POST /v1/sessions`
+
+    { "projectId": "8e1f…", "name": "login bug", "text": "look at the login page", "voice": true }
+
+→ `{ "result": "created", "id": "<the new tab's id>" }`
+
+Opens a Claude tab in the project exactly as "New tab" does on the computer
+(no worktree), selected there, so it shows on both. `name` is optional (the
+project's name otherwise); `text` becomes Claude's first prompt, tagged when
+`voice` is true, and without it Claude just starts. `404` with `missing` for
+an unknown project, `400` without a `projectId`.
 
 ## Not in v1
 

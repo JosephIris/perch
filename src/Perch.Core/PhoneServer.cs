@@ -53,6 +53,13 @@ internal sealed class PhoneServer : IDisposable
         /// The current pairing token; read per request so "New code" needs no restart.
         public required Func<string> Token { get; init; }
         public required Func<string> Name { get; init; }
+        /// A tab's conversation, oldest first; null when the tab is gone.
+        public required Func<Guid, Task<IReadOnlyList<PhoneHistoryItem>?>> History { get; init; }
+        /// The projects a new tab can be opened in.
+        public required Func<IReadOnlyList<PhoneProject>> Projects { get; init; }
+        /// Open a Claude tab in a project, optionally with a first message.
+        /// Null when the project is unknown.
+        public required Func<PhoneNewTab, Task<Guid?>> Create { get; init; }
     }
 
     private readonly IUiThread _ui;
@@ -204,6 +211,24 @@ internal sealed class PhoneServer : IDisposable
         // GET /v1/sessions
         if (req.Method == "GET" && parts is ["v1", "sessions"])
             return (200, new { sessions = await OnUi(() => _h.Sessions()) });
+        // GET /v1/projects
+        if (req.Method == "GET" && parts is ["v1", "projects"])
+            return (200, new { projects = await OnUi(() => _h.Projects()) });
+        // POST /v1/sessions  {"projectId": "...", "name": "...", "text": "...", "voice": true}
+        if (req.Method == "POST" && parts is ["v1", "sessions"])
+        {
+            NewTabBody? b;
+            try { b = JsonSerializer.Deserialize<NewTabBody>(req.Body, Json); }
+            catch (JsonException) { b = null; }
+            if (b?.ProjectId is not Guid pid) return (400, new { error = "body must be {\"projectId\": \"...\"}" });
+            var text = (b.Text ?? "").Trim();
+            if (b.Voice == true && text.Length > 0) text += " " + VoiceTag;
+            var tab = new PhoneNewTab(pid, (b.Name ?? "").Trim(), text.Length > 0 ? text : null);
+            var created = await OnUiAsync(() => _h.Create(tab)).ConfigureAwait(false);
+            return created is Guid newId
+                ? (200, new { result = "created", id = newId })
+                : (404, new { result = "missing" });
+        }
         if (parts is ["v1", "sessions", var idText, var verb] && Guid.TryParse(idText, out var id))
         {
             // POST /v1/sessions/{id}/send  {"text": "...", "voice": true}
@@ -220,14 +245,14 @@ internal sealed class PhoneServer : IDisposable
             // GET /v1/sessions/{id}/reply
             if (req.Method == "GET" && verb == "reply")
             {
-                var tcs = new TaskCompletionSource<PhoneReply?>(TaskCreationOptions.RunContinuationsAsynchronously);
-                _ui.Post(async () =>
-                {
-                    try { tcs.SetResult(await _h.Reply(id)); }
-                    catch (Exception ex) { tcs.SetException(ex); }
-                });
-                var r = await tcs.Task.ConfigureAwait(false);
+                var r = await OnUiAsync(() => _h.Reply(id)).ConfigureAwait(false);
                 return (200, new { text = r?.Text, atMs = r?.AtMs });
+            }
+            // GET /v1/sessions/{id}/history
+            if (req.Method == "GET" && verb == "history")
+            {
+                var items = await OnUiAsync(() => _h.History(id)).ConfigureAwait(false);
+                return items == null ? (404, new { result = "missing" }) : (200, new { items });
             }
         }
         return (404, new { error = "no such endpoint" });
@@ -238,6 +263,19 @@ internal sealed class PhoneServer : IDisposable
     public const string VoiceTag = "[voice input]";
 
     private sealed record SendBody(string? Text, bool? Voice);
+    private sealed record NewTabBody(Guid? ProjectId, string? Name, string? Text, bool? Voice);
+
+    /// Run an async host call on the UI thread and wait for its result.
+    private Task<T> OnUiAsync<T>(Func<Task<T>> f)
+    {
+        var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _ui.Post(async () =>
+        {
+            try { tcs.SetResult(await f()); }
+            catch (Exception ex) { tcs.SetException(ex); }
+        });
+        return tcs.Task;
+    }
 
     private bool Authorized(Request req)
     {
@@ -329,8 +367,18 @@ internal sealed class PhoneServer : IDisposable
 /// One tab as the phone sees it. Kind: "claude", "thread" (a project chat's
 /// thread), "chat" (a project chat), "codex" or "shell". CanSend is false for
 /// the last two in API v1.
+/// Color is the tab's pane color tag (0..5, the page's --color-pane-tag-N).
 internal sealed record PhoneSession(
     Guid Id, string Title, string? Project, string Kind, string State,
-    bool CanSend, bool Active, bool Asleep);
+    bool CanSend, bool Active, bool Asleep, int Color);
 
 internal sealed record PhoneReply(string Text, long? AtMs);
+
+/// One line of a tab's conversation. Kind: "user" (a prompt), "claude" (its
+/// prose), "tool" (one line per tool call, e.g. "Read Program.cs ×3") or
+/// "notice" (a project chat's own notes). AtMs is null when unknown.
+internal sealed record PhoneHistoryItem(string Kind, string Text, long? AtMs);
+
+internal sealed record PhoneProject(Guid Id, string Name);
+
+internal sealed record PhoneNewTab(Guid ProjectId, string Name, string? Text);

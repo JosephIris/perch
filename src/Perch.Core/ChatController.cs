@@ -364,6 +364,13 @@ internal sealed class ChatController : IDisposable
         return e == null ? null : (e.Text.Trim(), e.AtMs);
     }
 
+    /// The chat's conversation (its last `max` entries, oldest first), for the phone.
+    public IReadOnlyList<ChatEntry> History(Guid paneId, int max = 200)
+    {
+        var chat = Get(paneId, out var lead, out _);
+        return chat == null ? Array.Empty<ChatEntry>() : Entries(chat, lead).TakeLast(max).ToList();
+    }
+
     public void OnStop(Guid paneId)
     {
         var chat = Get(paneId, out var lead, out _);
