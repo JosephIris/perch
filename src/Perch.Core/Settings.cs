@@ -151,6 +151,17 @@ public sealed class Settings
     /// starts in the inbox's own folder.
     public string InboxProjectId { get; set; } = "";
 
+    /// The phone link (PhoneServer): the Perch iPhone app on the same wifi
+    /// lists the sessions, talks into them and reads their answers. Off by
+    /// default: it opens a port on the local network.
+    public bool PhoneEnabled { get; set; } = false;
+
+    public int PhonePort { get; set; } = PhoneServer.DefaultPort;
+
+    /// The pairing secret the phone gets from the QR code. Made when the link
+    /// is first turned on; "New code" replaces it, which unpairs every phone.
+    public string PhoneToken { get; set; } = "";
+
     public string ResolveDefaultCwd()
     {
         if (!string.IsNullOrWhiteSpace(DefaultCwd) && Directory.Exists(DefaultCwd))

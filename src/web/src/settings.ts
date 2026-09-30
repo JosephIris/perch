@@ -13,7 +13,8 @@
 // only (lazy spawn reads them) — the dialog says so inline.
 
 import { modKeyLabel, send } from "./bridge.js";
-import type { SettingsDataMessage, InMessage, NewTabPosition } from "./bridge.js";
+import type { SettingsDataMessage, InMessage, NewTabPosition, PhoneInfoMessage } from "./bridge.js";
+import { renderPhonePair } from "./phone.js";
 import { MIN_FONT_SIZE, MAX_FONT_SIZE, DEFAULT_FONT_SIZE } from "./pane.js";
 import { Dropdown } from "./dropdown.js";
 import { showOnboarding } from "./onboarding.js";
@@ -48,6 +49,8 @@ let inboxToggle: HTMLButtonElement | null = null;
 let inboxFolderInput: HTMLInputElement | null = null;
 let inboxKeyInput: HTMLInputElement | null = null;
 let inboxProjectDropdown: Dropdown | null = null;
+let phoneToggle: HTMLButtonElement | null = null;
+let phonePairEl: HTMLElement | null = null;
 let newTabDropdown: Dropdown | null = null;
 let sleepIdleDropdown: Dropdown | null = null;
 let updateCheckBtn: HTMLButtonElement | null = null;
@@ -62,6 +65,7 @@ export function openSettings(): void {
   if (overlay) return; // already open
   buildSkeleton();
   send({ type: "settings.request" });
+  send({ type: "phone.info.request" });
 }
 
 export function closeSettings(): void {
@@ -81,6 +85,8 @@ export function closeSettings(): void {
   facesToggle = null;
   roomsToggle = null;
   inboxToggle = null;
+  phoneToggle = null;
+  phonePairEl = null;
   inboxFolderInput = null;
   inboxKeyInput = null;
   inboxProjectDropdown?.dispose();
@@ -96,6 +102,13 @@ export function closeSettings(): void {
   el.addEventListener("animationend", () => el.remove(), { once: true });
   // Fallback in case animationend doesn't fire (reduced motion etc.).
   window.setTimeout(() => el.remove(), 260);
+}
+
+/** Settings → Phone's pairing area. No-op when the page is closed. */
+export function applyPhoneInfo(msg: PhoneInfoMessage): void {
+  if (!phonePairEl) return;
+  if (phoneToggle) setToggle(phoneToggle, msg.enabled);
+  renderPhonePair(phonePairEl, msg, () => send({ type: "phone.newCode" }));
 }
 
 /** Fill the open dialog with host data. No-op if the dialog was closed
@@ -134,6 +147,7 @@ export function applySettingsData(msg: SettingsDataMessage): void {
   if (facesToggle) setToggle(facesToggle, msg.teamFacesColor ?? false);
   if (roomsToggle) setToggle(roomsToggle, msg.showTeamRooms ?? false);
   if (inboxToggle) setToggle(inboxToggle, msg.inboxEnabled ?? false);
+  if (phoneToggle) setToggle(phoneToggle, msg.phoneEnabled ?? false);
   if (inboxFolderInput) inboxFolderInput.value = msg.inboxDriveFolderId ?? "";
   if (inboxKeyInput) inboxKeyInput.value = msg.inboxKeyCommand ?? "";
   // A project that has since been unregistered falls back to "none" rather
@@ -353,6 +367,7 @@ function save(): void {
     inboxDriveFolderId: inboxFolderInput ? inboxFolderInput.value.trim() : undefined,
     inboxKeyCommand: inboxKeyInput ? inboxKeyInput.value.trim() : undefined,
     inboxProjectId: inboxProjectDropdown ? inboxProjectDropdown.value : undefined,
+    phoneEnabled: phoneToggle ? getToggle(phoneToggle) : undefined,
   });
   closeSettings();
 }
@@ -373,7 +388,7 @@ function save(): void {
  * used by confirm.ts, which is exactly the kind of short, interrupting thing a
  * dialog IS right for.
  */
-type PaneId = "general" | "projects" | "worktrees" | "sessions" | "inbox" | "about";
+type PaneId = "general" | "projects" | "worktrees" | "sessions" | "inbox" | "phone" | "about";
 
 const PANES: { id: PaneId; label: string }[] = [
   { id: "general", label: "General" },
@@ -381,6 +396,7 @@ const PANES: { id: PaneId; label: string }[] = [
   { id: "worktrees", label: "Worktrees" },
   { id: "sessions", label: "Sessions" },
   { id: "inbox", label: "Inbox" },
+  { id: "phone", label: "Phone" },
   { id: "about", label: "About" },
 ];
 
@@ -469,6 +485,7 @@ function buildSkeleton(): void {
   const worktrees = panes.get("worktrees")!;
   const sessions = panes.get("sessions")!;
   const inboxPane = panes.get("inbox")!;
+  const phonePane = panes.get("phone")!;
   const about = panes.get("about")!;
 
   // ── General ─────────────────────────────────────────────────────────────
@@ -700,6 +717,28 @@ function buildSkeleton(): void {
   inboxPane.appendChild(makeRow("Project",
     "Email sessions are filed under this project: Claude starts in its folder, and each session gets a colour like the project's other tabs.",
     inboxProjectDropdown.element));
+
+  // ── Phone ───────────────────────────────────────────────────────────────
+  // Opt-in: it opens a port on the local network. The switch applies at
+  // once (not on Save) so the QR code can appear while the page is open.
+  const phoneBlurb = document.createElement("p");
+  phoneBlurb.className = "settings-pane__blurb";
+  phoneBlurb.textContent =
+    "The Perch app on your iPhone, on the same wifi, lists your sessions, lets you talk " +
+    "into any of them, and reads Claude's answers back to you.";
+  phonePane.appendChild(phoneBlurb);
+
+  phoneToggle = makeToggle("Let your phone connect");
+  phoneToggle.addEventListener("click", () => {
+    if (phoneToggle) send({ type: "settings.save", phoneEnabled: getToggle(phoneToggle) });
+  });
+  phonePane.appendChild(makeRow("Let your phone connect",
+    "Only on a network you trust, like home or office wifi: the pairing code crosses it unencrypted.",
+    phoneToggle));
+
+  phonePairEl = document.createElement("div");
+  phonePairEl.className = "phone-pair";
+  phonePane.appendChild(phonePairEl);
 
   // ── About ───────────────────────────────────────────────────────────────
   const welcomeBtn = document.createElement("button");

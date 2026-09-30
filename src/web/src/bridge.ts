@@ -209,7 +209,12 @@ export type OutMessage =
       inboxDriveFolderId?: string;
       inboxKeyCommand?: string;
       inboxProjectId?: string;
+      phoneEnabled?: boolean;
     }
+  /* The phone link: ask for the pairing info, or replace the pairing code
+   * (every paired phone has to scan again). */
+  | { type: "phone.info.request" }
+  | { type: "phone.newCode" }
   /* Email inbox. refresh = sync with Drive now; open = go to the email's tab,
    * making it (email left, Claude right) if there isn't one yet. */
   | { type: "inbox.refresh" }
@@ -1120,6 +1125,7 @@ export type SettingsDataMessage = {
   inboxDriveFolderId?: string;
   inboxKeyCommand?: string;
   inboxProjectId?: string;
+  phoneEnabled?: boolean;
 };
 
 export type InboxStateName = "new" | "read" | "pending" | "done";
@@ -1218,6 +1224,20 @@ export type VoiceModelMessage = {
   error?: string;
 };
 
+/* The phone link (Settings → Phone): whether it is listening, and what the
+ * pairing QR code carries — this machine's LAN addresses, the port and the
+ * pairing token. */
+export type PhoneInfoMessage = {
+  type: "phone.info";
+  enabled: boolean;
+  listening: boolean;
+  error?: string | null;
+  port: number;
+  token: string;
+  hosts: string[];
+  name: string;
+};
+
 /* One pane being brought back in the restore-progress lightbox. */
 export type RestorePaneView = { paneId: string; name: string; sessionTitle: string };
 
@@ -1242,6 +1262,7 @@ export type InMessage =
   | CommitsDataMessage
   | { type: "pane.ready"; paneId: string }
   | VoiceModelMessage
+  | PhoneInfoMessage
   | { type: "voice.result"; reqId: string; text: string; error?: string }
   | { type: "pane.in.ack"; paneId: string; sequence: number; inputId?: string; error?: string | null }
   | InspectorDataMessage

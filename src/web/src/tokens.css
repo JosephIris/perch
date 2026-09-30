@@ -324,6 +324,12 @@
   /* Deliberate exception: an email drawn as designed (mail-html.ts) sits on
    * a white page in both themes — its own colors assume one. */
   --mail-paper:      #ffffff;
+  /* Deliberate exception: the phone pairing QR code (Settings → Phone) is
+   * black on white in both themes — phone cameras read that most reliably,
+   * and a light-on-dark code fails on some scanners. */
+  --qr-ink:          #000000;
+  --qr-paper:        #ffffff;
+  --qr-size:         192px;
   --pc-strong-fill:  rgba(255, 255, 255, 0.92);
   --pc-strong-text:  #161616;
   --pc-ov-width:     380px;

@@ -72,6 +72,8 @@ const EXPECTED_TYPES = [
   "pane.resize",
   "pane.resizeSplit",
   "pane.split",
+  "phone.info.request",
+  "phone.newCode",
   "prefs.set",
   "project.add",
   "project.browse",

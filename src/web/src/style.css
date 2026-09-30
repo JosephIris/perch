@@ -9745,3 +9745,43 @@ body.show-inbox .inbox { display: flex; }
 }
 .voice__label { top: var(--sp-4); left: var(--sp-12); }
 .voice__hint { bottom: var(--sp-4); right: var(--sp-12); opacity: 0.6; }
+
+/* Settings → Phone: the pairing QR code (phone.ts) with its caption beside it. */
+.phone-pair {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-24);
+  margin-top: var(--sp-16);
+}
+.phone-pair:empty { display: none; }
+.phone-pair__qr {
+  width: var(--qr-size);
+  height: var(--qr-size);
+  flex: none;
+  border-radius: var(--r-card);
+}
+.phone-pair__qr-paper { fill: var(--qr-paper); }
+.phone-pair__qr-ink { fill: var(--qr-ink); }
+.phone-pair__text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-8);
+}
+.phone-pair__how {
+  margin: 0;
+  font-size: var(--type-body-size);
+  line-height: 1.4;
+  color: var(--color-text-primary);
+}
+.phone-pair__where {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--type-caption-size);
+  color: var(--color-text-tertiary);
+}
+.phone-pair__error {
+  margin: 0;
+  font-size: var(--type-body-size);
+  color: var(--color-error);
+}

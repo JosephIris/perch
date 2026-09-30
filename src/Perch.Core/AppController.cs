@@ -697,6 +697,8 @@ internal sealed partial class AppController
             _control = new ControlIpcServer(_ui, OnControlVerb);
             _control.Start();
         }
+        // The phone link. Inert unless switched on in Settings → Phone.
+        ApplyPhone();
         // Idle watchdog: 1Hz sweep that demotes output-silent Working panes
         // to Done (and re-promotes its own guesses when output resumes), so
         // a missed Stop hook can't pin a pane on "working" forever.
@@ -778,6 +780,7 @@ internal sealed partial class AppController
         _usageTimer?.Stop();
         _usage?.Dispose();
         _control?.Dispose();
+        _phone?.Dispose();
         _outputBatcher?.Dispose();
         _transcripts.Clear();
         _panes.Dispose();
@@ -977,6 +980,8 @@ internal sealed partial class AppController
         .Add<InspectorImageMsg>("inspector.image", OnInspectorImage)
         .Add("settings.request", OnSettingsRequest)
         .Add<SettingsSaveMsg>("settings.save", OnSettingsSave)
+        .Add("phone.info.request", PostPhoneInfo)
+        .Add("phone.newCode", OnPhoneNewCode)
         .Add("onboarding.seen", OnOnboardingSeen)
         .Add<UiModeMsg>("ui.mode", OnUiMode)
         .Add("projects.scan", OnProjectsScan)
@@ -4663,6 +4668,7 @@ internal sealed partial class AppController
                 inboxDriveFolderId = _settings.InboxDriveFolderId,
                 inboxKeyCommand = _settings.InboxKeyCommand,
                 inboxProjectId = _settings.InboxProjectId,
+                phoneEnabled = _settings.PhoneEnabled,
                 appVersion = _updates?.CurrentVersion,
                 updatable = _updates?.IsUpdatable ?? false,
             };
@@ -4773,6 +4779,13 @@ internal sealed partial class AppController
         if (msg.InboxKeyCommand is string kc && _settings.InboxKeyCommand != kc.Trim()) { _settings.InboxKeyCommand = kc.Trim(); inboxDirty = true; }
         if (msg.InboxProjectId is string ip && _settings.InboxProjectId != ip.Trim()) { _settings.InboxProjectId = ip.Trim(); dirty = true; }
         if (inboxDirty) { dirty = true; _inbox?.OnSettingsChanged(); }
+        if (msg.PhoneEnabled is bool pe && _settings.PhoneEnabled != pe)
+        {
+            _settings.PhoneEnabled = pe;
+            dirty = true;
+            ApplyPhone();
+            PostPhoneInfo();
+        }
         if (dirty) _settings.Save();
         // Re-push so the font size propagates to live panes (no-op for
         // shell/cwd, which only matter at next spawn — but cheap).

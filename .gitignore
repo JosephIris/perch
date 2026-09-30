@@ -57,3 +57,8 @@ packaging/*.cer
 packaging/mac-publish/
 packaging/mac-releases/
 packaging/mac-bundle/
+
+# The iPhone app: the Xcode project is generated from ios/project.yml.
+ios/*.xcodeproj/
+ios/**/xcuserdata/
+ios/build/

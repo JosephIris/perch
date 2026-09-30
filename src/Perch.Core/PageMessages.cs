@@ -429,6 +429,8 @@ internal sealed record SettingsSaveMsg
     public string? InboxDriveFolderId { get; init; }
     public string? InboxKeyCommand { get; init; }
     public string? InboxProjectId { get; init; }
+    /// The phone link (see Settings.PhoneEnabled).
+    public bool? PhoneEnabled { get; init; }
 }
 
 /// "New project chat": the project, and optionally a name, a one-line goal

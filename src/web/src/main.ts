@@ -25,7 +25,7 @@ import { Inbox, READER_ID } from "./inbox.js";
 import { applyChatImage } from "./chat-images.js";
 import { installShortcutHint } from "./shortcut-hint.js";
 import { Toast } from "./toast.js";
-import { openSettings, applySettingsData, applyUpdateStatus } from "./settings.js";
+import { openSettings, applySettingsData, applyUpdateStatus, applyPhoneInfo } from "./settings.js";
 import { showProjectsDialog } from "./projects-dialog.js";
 import { showOnboarding } from "./onboarding.js";
 import { startElapsedTicker } from "./elapsed.js";
@@ -306,6 +306,9 @@ onMessage((msg) => {
       break;
     case "settings.data":
       applySettingsData(msg);
+      break;
+    case "phone.info":
+      applyPhoneInfo(msg);
       break;
     case "host.error":
       setStatus(`error: ${msg.message}`);

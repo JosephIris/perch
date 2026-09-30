@@ -1,0 +1,45 @@
+# XcodeGen spec for the Perch iPhone app. The .xcodeproj is generated from
+# this file (`xcodegen generate` in ios/) and not committed, so the project is
+# plain text an agent can edit and review.
+#
+# Fill DEVELOPMENT_TEAM with the Apple Team ID (developer.apple.com →
+# Membership) before building for a device.
+name: PerchRemote
+options:
+  bundleIdPrefix: com.buildwithperch
+  deploymentTarget:
+    iOS: "17.0"
+settings:
+  base:
+    DEVELOPMENT_TEAM: ""
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.10"
+targets:
+  PerchRemote:
+    type: application
+    platform: iOS
+    sources:
+      - PerchRemote
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.buildwithperch.remote
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Perch
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+    info:
+      path: PerchRemote/Info.plist
+      properties:
+        # Perch on the wifi, over plain HTTP (docs/PHONE-API.md).
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        NSLocalNetworkUsageDescription: Perch connects to your computer on this wifi to show your sessions and send what you say.
+        NSMicrophoneUsageDescription: Perch listens while you hold the talk button, to send what you say to a session.
+        NSSpeechRecognitionUsageDescription: Your speech is turned into text on this iPhone before it is sent to your computer.
+        NSCameraUsageDescription: Scan the pairing code shown in Perch's Settings on your computer.
+        # The pairing QR code is a perch:// link, so the Camera app opens it here.
+        CFBundleURLTypes:
+          - CFBundleURLName: com.buildwithperch.remote.pair
+            CFBundleURLSchemes: [perch]

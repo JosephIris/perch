@@ -354,6 +354,16 @@ internal sealed class ChatController : IDisposable
         Pump(chat, lead, leaf);
     }
 
+    /// The chat's latest answer and when it came, for the phone to show and
+    /// read aloud. Null before the chat has said anything.
+    public (string Text, long AtMs)? LastReply(Guid paneId)
+    {
+        var chat = Get(paneId, out var lead, out _);
+        if (chat == null) return null;
+        var e = Entries(chat, lead).LastOrDefault(x => x.Kind == "claude" && x.Text.Trim().Length > 0);
+        return e == null ? null : (e.Text.Trim(), e.AtMs);
+    }
+
     public void OnStop(Guid paneId)
     {
         var chat = Get(paneId, out var lead, out _);
