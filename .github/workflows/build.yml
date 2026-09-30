@@ -211,9 +211,9 @@ jobs:
   # The macOS host. Same Core, same web bundle, a different thin shell — and
   # the only build that can tell when a change reached for WPF from Core or
   # left a `.cmd` assumption in perch-cli. Read-only token (the job-level
-  # default above); nothing here publishes. Packaging (`packaging/pack-mac.sh`)
-  # and the real-Claude gate (`scripts/mac-e2e.mjs`) stay local for now: the
-  # gate needs a logged-in Claude Code and spends tokens.
+  # default above); nothing here publishes (mac-release, below, packs and
+  # publishes on tags). The real-Claude gate (`scripts/mac-e2e.mjs`) stays
+  # local: it needs a logged-in Claude Code and spends tokens.
   mac:
     runs-on: macos-latest
     steps:
@@ -251,3 +251,63 @@ jobs:
       # Win32 job-object fixture.
       - name: Host tests (net8.0)
         run: dotnet test src/Perch.Tests/Perch.Tests.csproj -f net8.0 -c Release --nologo -p:SkipWebBundle=true
+
+  # The mac release. Runs after the Windows job has created the tag's release
+  # and adds the osx channel to it (`--merge`): Perch-<v>-osx-full/delta
+  # .nupkg, releases.osx.json, Perch-osx-Setup.pkg and the portable zip.
+  # MacUpdateService reads releases.osx.json; before this job existed only
+  # v1.69.0 had one, so every mac install stayed on 1.69.0 with no update pill.
+  # Unsigned (ad-hoc), as pack-mac.sh says.
+  mac-release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: macos-latest
+    permissions:
+      contents: write      # upload the osx assets to the tag's release
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Setup Node 20
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '20'
+
+      # Pinned to the Velopack package the app references, so the feed vpk
+      # writes is the one UpdateMac reads.
+      - name: Install Velopack CLI (vpk)
+        run: dotnet tool install -g vpk --version 1.2.0
+
+      # The previous osx release, so pack makes a delta. Best-effort, as on
+      # Windows: no prior osx feed just means a full package.
+      - name: Download previous osx release (for deltas)
+        continue-on-error: true
+        run: vpk download github --repoUrl https://github.com/JosephIris/perch --channel osx --token ${{ secrets.GITHUB_TOKEN }} -o packaging/mac-releases
+
+      - name: Pack mac app
+        run: bash packaging/pack-mac.sh "${GITHUB_REF_NAME#v}"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: |
+            packaging/mac-releases/*Setup.pkg
+            packaging/mac-releases/*-osx-*.nupkg
+
+      - name: Publish osx assets to the release (Velopack)
+        run: |
+          vpk upload github \
+            --repoUrl https://github.com/JosephIris/perch \
+            --token ${{ secrets.GITHUB_TOKEN }} \
+            --channel osx \
+            -o packaging/mac-releases \
+            --merge true \
+            --publish true \
+            --releaseName "Perch $GITHUB_REF_NAME" \
+            --tag $GITHUB_REF_NAME
