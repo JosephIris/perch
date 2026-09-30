@@ -36,6 +36,7 @@ import { initCloud } from "./cloud-panel.js";
 import { initLocal } from "./local-panel.js";
 import { initUtilityMini } from "./mini-mode.js";
 import { initInspector, toggleInspector, openInspectorSearch } from "./inspector.js";
+import { refreshBoardMode } from "./board-mode.js";
 import { setModelLimits, setCodexModels } from "./model-menu.js";
 import { initWebPaneSuppression } from "./webpane-suppress.js";
 import { applyTeamState, toggleTeamRoom, closeTeamRoom, onTeamRoomChange, applyPasteResult, applyArtefact, applyArtefactIndex, setTeamRoomsVisible } from "./team-room.js";
@@ -267,6 +268,8 @@ onMessage((msg) => {
       // per session alive across switches (preserving terminal scrollback)
       // and disposes a stage only when its session drops out of this list.
       workspace.render(msg.sessions, msg.activeSessionId || null, msg.activePaneId || null);
+      // A tab switch can show or hide a chat's board: the journal rail follows.
+      refreshBoardMode();
       dashboard.setProjects(msg.projects ?? []);
       dashboard.render(msg.sessions);
       inbox.setLiveSessions(msg.sessions.map((s) => s.id));

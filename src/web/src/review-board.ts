@@ -165,8 +165,11 @@ export class BoardPanel {
     this.boardSig = sig;
 
     const head = el("div", "rb__head");
-    head.append(el("div", "rb__title", b?.title || "Board"),
-      el("div", "rb__meta", [b?.summary, items.length ? tallyLine(items) : ""].filter(Boolean).join(" · ")));
+    // The live tally, not the chat's summary: a summary written once goes
+    // stale as cards move, and it tends to repeat the counts.
+    const meta = el("div", "rb__meta", items.length ? tallyLine(items) : "");
+    if (b?.summary) meta.title = b.summary;
+    head.append(el("div", "rb__title", b?.title || "Board"), meta);
     const cols = el("div", "rb__cols");
     for (const c of COLUMNS) {
       const of = items.filter((i) => columnOf(i) === c.id);

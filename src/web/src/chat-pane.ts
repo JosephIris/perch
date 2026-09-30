@@ -33,6 +33,7 @@ import { elapsedSpan } from "./elapsed.js";
 import { StickToEnd } from "./stick-to-end.js";
 import { ImageTray, withImages, userBubble } from "./image-attach.js";
 import { imageStrip } from "./chat-images.js";
+import { refreshBoardMode } from "./board-mode.js";
 
 /** The pictures a message names, under it. */
 function appendShots(host: HTMLElement, text: string) {
@@ -152,7 +153,7 @@ export class ChatPane {
     };
     this.overview.onClose = () => this.setOverview(false);
     // The board wants the room: the conversation becomes a column beside it.
-    this.overview.onBoard = (showing) => this.element.classList.toggle("pane--chat-board", showing);
+    this.overview.onBoard = (showing) => { this.element.classList.toggle("pane--chat-board", showing); refreshBoardMode(); };
 
     const body = el("div", "chat__body");
     body.append(main, this.overview.element);
@@ -523,6 +524,7 @@ export class ChatPane {
   private setOverview(open: boolean) {
     this.element.classList.toggle("pane--chat-noov", !open);
     this.ovBtn.setAttribute("aria-pressed", String(open));
+    refreshBoardMode();
   }
 
   /** A started thread: dot, title and what it is doing, kept live. */
