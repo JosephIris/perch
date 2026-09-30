@@ -140,6 +140,21 @@ public class PhoneServerTests
     }
 
     [Fact]
+    public void WifiAddressesComeFirstThenTailscaleAndOtherTunnelsAreLeftOut()
+    {
+        int? R(string ip, bool gw = true, bool tunnel = false) => PhoneServer.Rank(IPAddress.Parse(ip), gw, tunnel);
+        Assert.True(R("192.168.1.5") < R("100.101.102.103", gw: false, tunnel: true));
+        Assert.True(R("10.0.0.7") < R("100.64.0.1"));
+        Assert.Equal(10, R("100.127.255.254", gw: false, tunnel: true));
+        Assert.Null(R("10.8.0.2", tunnel: true));    // a work VPN
+        Assert.Null(R("169.254.3.4"));               // no DHCP
+        Assert.Null(R("127.0.0.1"));
+        Assert.Null(R("fe80::1"));
+        Assert.False(PhoneServer.IsTailscale(IPAddress.Parse("100.128.0.1")));
+        Assert.False(PhoneServer.IsTailscale(IPAddress.Parse("100.63.255.255")));
+    }
+
+    [Fact]
     public void TokensAreLongAndUrlSafe()
     {
         var a = PhoneServer.NewToken();

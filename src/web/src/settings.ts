@@ -724,8 +724,9 @@ function buildSkeleton(): void {
   const phoneBlurb = document.createElement("p");
   phoneBlurb.className = "settings-pane__blurb";
   phoneBlurb.textContent =
-    "The Perch app on your iPhone, on the same wifi, lists your sessions, lets you talk " +
-    "into any of them, and reads Claude's answers back to you.";
+    "The Perch app on your iPhone lists your sessions, lets you talk into any of them, " +
+    "and reads Claude's answers back to you. It works on the same wifi, and anywhere " +
+    "if this computer and your phone are both on Tailscale.";
   phonePane.appendChild(phoneBlurb);
 
   phoneToggle = makeToggle("Let your phone connect");
@@ -733,7 +734,7 @@ function buildSkeleton(): void {
     if (phoneToggle) send({ type: "settings.save", phoneEnabled: getToggle(phoneToggle) });
   });
   phonePane.appendChild(makeRow("Let your phone connect",
-    "Only on a network you trust, like home or office wifi: the pairing code crosses it unencrypted.",
+    "Over wifi, only on a network you trust, like home or office: the pairing code crosses it unencrypted. Through Tailscale it is encrypted.",
     phoneToggle));
 
   phonePairEl = document.createElement("div");

@@ -198,7 +198,9 @@ internal sealed class PhoneServer : IDisposable
         var parts = req.Path.Trim('/').Split('/');
         // GET /v1/hello
         if (req.Method == "GET" && parts is ["v1", "hello"])
-            return (200, new { app = "perch", api = ApiVersion, name = await OnUi(() => _h.Name()) });
+            // hosts: the addresses as they are NOW, so a phone paired before
+            // Tailscale was installed learns its address without rescanning.
+            return (200, new { app = "perch", api = ApiVersion, name = await OnUi(() => _h.Name()), hosts = LocalAddresses() });
         // GET /v1/sessions
         if (req.Method == "GET" && parts is ["v1", "sessions"])
             return (200, new { sessions = await OnUi(() => _h.Sessions()) });
@@ -262,8 +264,10 @@ internal sealed class PhoneServer : IDisposable
     public static string NewToken() =>
         Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
 
-    /// This machine's LAN addresses the phone can try, private IPv4 first.
-    /// Virtual adapters (WSL, Hyper-V, Docker) are skipped where they say so.
+    /// This machine's addresses the phone can try, best first: the wifi/LAN
+    /// ones, then Tailscale's (so a phone away from home still reaches it
+    /// when both are on the owner's tailnet). Virtual adapters (WSL, Hyper-V,
+    /// Docker) are skipped where they say so.
     public static List<string> LocalAddresses()
     {
         var list = new List<(string Addr, int Rank)>();
@@ -272,26 +276,42 @@ internal sealed class PhoneServer : IDisposable
             foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
             {
                 if (ni.OperationalStatus != OperationalStatus.Up) continue;
-                if (ni.NetworkInterfaceType is NetworkInterfaceType.Loopback or NetworkInterfaceType.Tunnel) continue;
+                if (ni.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
                 var label = (ni.Name + " " + ni.Description).ToLowerInvariant();
                 if (label.Contains("vethernet") || label.Contains("hyper-v") || label.Contains("wsl")
                     || label.Contains("docker") || label.Contains("virtualbox") || label.Contains("vmware")) continue;
                 var props = ni.GetIPProperties();
                 // An adapter with a default gateway is the one on a real network.
                 var hasGateway = props.GatewayAddresses.Any(g => !g.Address.Equals(IPAddress.Any) && !g.Address.Equals(IPAddress.IPv6Any));
+                var tunnel = ni.NetworkInterfaceType == NetworkInterfaceType.Tunnel;
                 foreach (var ua in props.UnicastAddresses)
-                {
-                    var a = ua.Address;
-                    if (a.AddressFamily != AddressFamily.InterNetwork || IPAddress.IsLoopback(a)) continue;
-                    var b = a.GetAddressBytes();
-                    if (b[0] == 169 && b[1] == 254) continue;   // link-local: no DHCP
-                    var isPrivate = b[0] == 10 || (b[0] == 172 && b[1] >= 16 && b[1] <= 31) || (b[0] == 192 && b[1] == 168);
-                    list.Add((a.ToString(), (hasGateway ? 0 : 2) + (isPrivate ? 0 : 1)));
-                }
+                    if (Rank(ua.Address, hasGateway, tunnel) is int rank) list.Add((ua.Address.ToString(), rank));
             }
         }
         catch (Exception ex) { Log.Error("Phone.addresses", ex); }
         return list.OrderBy(x => x.Rank).Select(x => x.Addr).Distinct().ToList();
+    }
+
+    /// Where an address goes in the list the phone tries, or null to leave it
+    /// out. Pure. Lower is tried first.
+    internal static int? Rank(IPAddress a, bool hasGateway, bool tunnel)
+    {
+        if (a.AddressFamily != AddressFamily.InterNetwork || IPAddress.IsLoopback(a)) return null;
+        var b = a.GetAddressBytes();
+        if (b[0] == 169 && b[1] == 254) return null;   // link-local: no DHCP
+        // Tailscale hands out 100.64.0.0/10. After the LAN: at home the wifi
+        // is the shorter way; away, it is the only way.
+        if (IsTailscale(a)) return 10;
+        // Any other tunnel (a work VPN) is not somewhere the phone can reach.
+        if (tunnel) return null;
+        var isPrivate = b[0] == 10 || (b[0] == 172 && b[1] >= 16 && b[1] <= 31) || (b[0] == 192 && b[1] == 168);
+        return (hasGateway ? 0 : 2) + (isPrivate ? 0 : 1);
+    }
+
+    internal static bool IsTailscale(IPAddress a)
+    {
+        var b = a.GetAddressBytes();
+        return a.AddressFamily == AddressFamily.InterNetwork && b[0] == 100 && (b[1] & 0xC0) == 64;
     }
 
     public void Dispose()

@@ -76,29 +76,38 @@ final class PerchClient {
         session = URLSession(configuration: cfg)
     }
 
-    struct Hello: Codable { let app: String; let api: Int; let name: String }
+    struct Hello: Codable { let app: String; let api: Int; let name: String; let hosts: [String]? }
 
-    /// Find an address that answers, the last good one first. Call on launch,
-    /// on returning to the foreground, and after `.unreachable`.
+    /// Find an address that answers. Every address is tried at once: at home
+    /// the wifi one wins, away the Tailscale one does, and nobody waits out a
+    /// timeout on an address that can't answer. Call on launch, on returning
+    /// to the foreground, and after `.unreachable`. Save `pairing` afterwards:
+    /// it takes the address list Perch reports now (a Tailscale address added
+    /// after pairing shows up here).
     @discardableResult
     func connect() async throws -> Hello {
-        var order = pairing.hosts
-        if let h = pairing.workingHost, let i = order.firstIndex(of: h) { order.remove(at: i); order.insert(h, at: 0) }
-        var lastError: Error = PerchError.unreachable
-        for host in order {
-            do {
-                let hello: Hello = try await get("v1/hello", host: host)
-                pairing.workingHost = host
-                return hello
-            } catch PerchError.notPaired {
-                throw PerchError.notPaired
-            } catch PerchError.slowDown {
-                throw PerchError.slowDown
-            } catch {
-                lastError = error
+        let hosts = pairing.hosts
+        let winner: (String, Hello)? = try await withThrowingTaskGroup(of: (String, Hello)?.self) { group in
+            for host in hosts {
+                group.addTask { [self] in
+                    do { return (host, try await get("v1/hello", host: host) as Hello) }
+                    catch PerchError.notPaired { throw PerchError.notPaired }
+                    catch PerchError.slowDown { throw PerchError.slowDown }
+                    catch { return nil }
+                }
             }
+            for try await result in group {
+                if let result { group.cancelAll(); return result }
+            }
+            return nil
         }
-        throw (lastError as? PerchError) ?? PerchError.unreachable
+        guard let (host, hello) = winner else { throw PerchError.unreachable }
+        pairing.workingHost = host
+        if let fresh = hello.hosts, !fresh.isEmpty {
+            // Keep the address that just worked even if Perch no longer lists it.
+            pairing.hosts = fresh.contains(host) ? fresh : fresh + [host]
+        }
+        return hello
     }
 
     func sessions() async throws -> [PerchSession] {

@@ -18,8 +18,11 @@ The QR code carries a link:
 
     perch://pair?v=1&name=DESK-PC&port=47800&token=<token>&hosts=192.168.1.5,10.0.0.7
 
-- `hosts` is this computer's LAN addresses, best first. The phone tries them in
-  order with `GET /v1/hello` and keeps the first that answers.
+- `hosts` is this computer's addresses, best first: its wifi/LAN addresses,
+  then its Tailscale address (100.64.0.0/10) when Tailscale is running. The
+  phone tries them with `GET /v1/hello` and keeps the first that answers; try
+  them at the same time rather than one after another, or a phone away from
+  home waits out a timeout on the wifi address before trying Tailscale.
 - `token` is the secret. The phone stores it (Keychain) and sends it on every
   request. "New code" in Settings replaces it, which unpairs every phone.
 - `v` is the link format version.
@@ -37,15 +40,22 @@ Without it (or with a wrong one) the answer is `401`. Ten wrong tokens from one
 address within a minute and that address gets `429` for a minute, even with the
 right token.
 
-The token crosses the wifi unencrypted. That is acceptable on a home or office
-network and not on public wifi; Settings says so. (TLS with a pinned
-self-signed certificate is the upgrade path if this needs to go further.)
+Over wifi the token crosses the network unencrypted. That is acceptable on a
+home or office network and not on public wifi; Settings says so. Through
+Tailscale the whole connection is encrypted (WireGuard), which is also the
+way to use the phone away from home: install Tailscale on the computer and
+the phone, same account, nothing to open on the router. (TLS with a pinned
+self-signed certificate is the upgrade path if plain wifi ever needs to go
+further.)
 
 ### `GET /v1/hello`
 
-    { "app": "perch", "api": 1, "name": "DESK-PC" }
+    { "app": "perch", "api": 1, "name": "DESK-PC", "hosts": ["192.168.1.5", "100.101.102.103"] }
 
 Use it to pick a working address and to check the pairing still holds.
+`hosts` is the address list as it is now; store it in place of the one from
+the QR code, so a phone paired before Tailscale was installed learns the
+Tailscale address without scanning again.
 
 ### `GET /v1/sessions`
 
@@ -92,7 +102,7 @@ aloud with the system voice.
 
 ## Not in v1
 
-- Anything when the phone is away from the wifi (needs a relay).
+- Away from the wifi without Tailscale (would need our own relay server).
 - Push notifications while the app is closed (needs a relay and APNs).
 - Answering permission prompts, stopping a turn, codex and shell tabs.
 - The live terminal.

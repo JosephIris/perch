@@ -1,9 +1,10 @@
 # Perch for iPhone (ios/)
 
-A companion app: on the same wifi as a computer running Perch, it lists that
-Perch's sessions, lets the owner talk into any of them, and reads Claude's
-answers aloud. Perch's side already exists and is tested; this folder is the
-phone's side.
+A companion app: on the same wifi as a computer running Perch (or anywhere,
+when the computer and the phone are both on Tailscale), it lists that Perch's
+sessions, lets the owner talk into any of them, and reads Claude's answers
+aloud. Perch's side already exists and is tested; this folder is the phone's
+side.
 
 - Protocol: `docs/PHONE-API.md`. Perch's side: `src/Perch.Core/PhoneServer.cs`
   and `AppController.Phone.cs`. If the app needs something the API lacks, add
@@ -49,11 +50,20 @@ and "build both hosts" rules still apply to any change under `src/`.
 4. **Hear**: when a session you sent to goes `working` → `done`, fetch
    `reply(for:)` and read it aloud (a per-session speaker toggle, default on for
    the session you just talked to). Show the reply text on screen as well.
-5. **Errors** in plain words: not on the same wifi / phone link off in Perch
+5. **Errors** in plain words: can't reach the computer (not on the same wifi,
+   and Tailscale off on the phone or the computer) / phone link off in Perch
    Settings / pairing replaced, scan again / wait a minute.
+6. **More than one computer**: the owner has a Windows PC and a Mac, both
+   running Perch. Store a list of pairings (scanning a second code adds, it
+   doesn't replace) and let the session list switch between computers or
+   show both.
 
-Not in v1: working away from home wifi, push notifications, approving
-permission prompts, a live terminal view.
+Away from home works through Tailscale with no extra code: Perch lists its
+Tailscale address in the pairing and `connect()` tries every address at once.
+Save the pairing after `connect()`, since it picks up the current address list.
+
+Not in v1: push notifications, approving permission prompts, a live terminal
+view.
 
 ## Testing without the phone
 
