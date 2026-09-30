@@ -64,5 +64,8 @@
 
   <Capabilities>
     <rescap:Capability Name="runFullTrust" />
+    <!-- Dictation. Without it a packaged Perch gets no microphone and Windows
+         never asks; with it the Settings > Privacy > Microphone list shows Perch. -->
+    <DeviceCapability Name="microphone" />
   </Capabilities>
 </Package>

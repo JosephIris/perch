@@ -55,11 +55,36 @@ if [ ! -d "$PUB/tools" ]; then
   cp -R "$ROOT/src/Perch.Mac/bin/Release/net8.0/osx-arm64/tools" "$PUB/tools"
 fi
 
+# ---- bundle, then the keys vpk's generic Info.plist lacks ------------------
+# Dictation needs NSMicrophoneUsageDescription: without it macOS never shows
+# the microphone prompt and getUserMedia fails (or the app is killed). vpk
+# bundles first so its own Info.plist (bundle id, icon, version) stays as is;
+# we only add keys, then pack the finished .app.
+BUNDLE_OUT="$ROOT/packaging/mac-bundle"
+rm -rf "$BUNDLE_OUT"
+vpk bundle \
+  --packId Perch \
+  --packVersion "$VERSION" \
+  --packDir "$PUB" \
+  --mainExe Perch \
+  --packTitle perch \
+  --packAuthors "Joseph Iris" \
+  --icon "$ICNS" \
+  --outputDir "$BUNDLE_OUT"
+APP="$(find "$BUNDLE_OUT" -maxdepth 1 -name '*.app' | head -1)"
+if [ -z "$APP" ]; then
+  echo "pack-mac: vpk bundle made no .app in $BUNDLE_OUT" >&2
+  exit 1
+fi
+plutil -replace NSMicrophoneUsageDescription \
+  -string "Perch listens only while you hold or tap the mic button, to turn your speech into text on this Mac." \
+  "$APP/Contents/Info.plist"
+
 # ---- pack ----------------------------------------------------------------
 vpk pack \
   --packId Perch \
   --packVersion "$VERSION" \
-  --packDir "$PUB" \
+  --packDir "$APP" \
   --mainExe Perch \
   --packTitle perch \
   --packAuthors "Joseph Iris" \

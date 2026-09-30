@@ -56,3 +56,4 @@ packaging/*.pfx
 packaging/*.cer
 packaging/mac-publish/
 packaging/mac-releases/
+packaging/mac-bundle/
