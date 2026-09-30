@@ -145,6 +145,16 @@ internal partial class MainWindow : FluentWindow, IWebViewHost, IWindowHost
             // on a grey screen. Subscribed BEFORE navigation so even an early
             // crash is caught.
             core.ProcessFailed += OnCoreProcessFailed;
+            // Dictation: the page asks for the microphone. Only our own page
+            // gets it, and without WebView2's prompt — pressing the mic button
+            // is the ask. Windows' own "desktop apps may use the microphone"
+            // privacy switch still applies.
+            core.PermissionRequested += (_, e) =>
+            {
+                if (e.PermissionKind == CoreWebView2PermissionKind.Microphone &&
+                    Uri.TryCreate(e.Uri, UriKind.Absolute, out var u) && u.Host == VirtualHost)
+                    e.State = CoreWebView2PermissionState.Allow;
+            };
 
             return true;
         }

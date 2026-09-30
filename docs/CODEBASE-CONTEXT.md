@@ -42,6 +42,7 @@ parity table fully captures this scope.
 | Teams | `TeamController.cs` orchestration; `TeamStore.cs`, `Team.cs`, `TeamTasks.cs`, `RoomLedger.cs`, `TeamRender.cs`, `TeamMarkers.cs` |
 | Project chat | `ChatController.cs` (the conversation: one headless `claude -p --resume` run per turn, streamed), `ThreadController.cs` (threads, `perch thread` verbs), `LineDelivery.cs` (typed lines into thread terminals, confirmed by the prompt-submit echo); web `chat-pane.ts`, `threads-pane.ts`, `md.ts` |
 | Boards | `BoardController.cs`, `BoardStore.cs`, `BoardPaths.cs`; separate from team task cards |
+| Dictation | Core `VoiceController.cs` (Whisper.net, local `ggml-base.en` model fetched once into `<data>/perch/voice`); web `voice.ts` owns the mic, the CRT scope and delivery (agent/chat: pasted + Enter + `[voice input]`; plain shell: draft only). Mic permission: WebView2 `PermissionRequested` for perch.local; Photino `SetGrantBrowserPermissions`. A packaged mac `.app` also needs `NSMicrophoneUsageDescription` |
 | Resource panels | `LocalController/LocalPoller/LocalLedger`; `CloudController/CloudPoller/CloudLedger/CloudPriceCatalog` |
 | Web composition | `src/web/src/main.ts` wires modules; `bridge.ts` defines transport and DTOs |
 | Terminal UI | `workspace.ts` owns per-session stages; `pane.ts` owns xterm; `sync-output.ts` batches synchronized frames |

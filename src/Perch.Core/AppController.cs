@@ -341,6 +341,9 @@ internal sealed partial class AppController
         _panes = new PaneManager(_ui, ptyFactory);
         // Before BuildRouter: the router registers a handler that reads it.
         _boardCtrl = new BoardController(OwningSession, a => _ui.Post(a));
+        // Dictation finishes on a worker thread; its messages go to the page
+        // from the UI thread like everything else.
+        _voice = new VoiceController(payload => _ui.Post(() => _web.PostJson(JsonSerializer.Serialize(payload))));
         // Host-agnostic on purpose: every native need (posting to the page,
         // a UI-thread delay) goes through IWebViewHost / IUiThread so the
         // same controller drives the room on Windows (WPF) and macOS
@@ -765,6 +768,7 @@ internal sealed partial class AppController
         _local?.Dispose();
         _inbox?.Dispose();
         _chatCtrl.Dispose();
+        _voice.Dispose();
         _cloud?.Dispose();
         _idleWatchdog?.Stop();
         _threadTasksTimer?.Stop();
@@ -939,6 +943,8 @@ internal sealed partial class AppController
         .Add<PaneCwdMsg>("pane.cwd", OnPaneCwd)
         .Add<PaneModelMsg>("pane.model", OnPaneModel)
         .Add<PaneProbeMsg>("pane.probe", OnPaneProbe)
+        .Add("voice.prepare", () => _voice.Prepare())
+        .Add<VoiceTranscribeMsg>("voice.transcribe", m => _voice.Transcribe(m.ReqId, m.B64))
         .Add<UrlPaneLayoutMsg>("urlpane.layout", m => _urlPanes?.OnLayout(m))
         .Add<PaneRef>("urlpane.dispose", m => _urlPanes?.OnDispose(m))
         .Add<PaneRef>("board.request", m => _boardCtrl.OnRequest(m))
@@ -5207,6 +5213,7 @@ internal sealed partial class AppController
     private readonly BoardController _boardCtrl;
     private readonly TeamController _teamCtrl;
     private readonly ThreadController _threadCtrl;
+    private readonly VoiceController _voice;
     private readonly ThreadSteering _threadSteer;
     /// When a thread's pane was last sent Escape from the Overview's Stop
     /// (Stopwatch ticks): the watchdog doesn't read its "Interrupted" repaint

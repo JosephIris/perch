@@ -40,4 +40,12 @@
     <Compile Include="..\..\tools\perch-cli\CodexAutoReview.cs" Link="CodexAutoReview.cs" />
   </ItemGroup>
 
+  <!-- Dictation (VoiceController): whisper.cpp through Whisper.net, CPU
+       runtime with win-x64 and osx natives. The model is not bundled; it
+       downloads once, on first use, into <data>/perch/voice. -->
+  <ItemGroup>
+    <PackageReference Include="Whisper.net" Version="1.9.1" />
+    <PackageReference Include="Whisper.net.Runtime" Version="1.9.1" />
+  </ItemGroup>
+
 </Project>

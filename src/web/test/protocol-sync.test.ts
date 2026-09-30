@@ -141,6 +141,8 @@ const EXPECTED_TYPES = [
   "urlpane.dispose",
   "urlpane.layout",
   "urlpane.visible",
+  "voice.prepare",
+  "voice.transcribe",
 ];
 
 function outMessageTypesFromSource(): string[] {

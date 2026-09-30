@@ -34,6 +34,7 @@ import { StickToEnd } from "./stick-to-end.js";
 import { ImageTray, withImages, userBubble } from "./image-attach.js";
 import { imageStrip } from "./chat-images.js";
 import { refreshBoardMode } from "./board-mode.js";
+import { VoiceButton } from "./voice.js";
 
 /** The pictures a message names, under it. */
 function appendShots(host: HTMLElement, text: string) {
@@ -63,6 +64,7 @@ export class ChatPane {
   private readonly log: HTMLElement;
   private readonly busyEl: HTMLElement;
   private readonly input: HTMLTextAreaElement;
+  private voice!: VoiceButton;
   private readonly sendBtn: HTMLButtonElement;
   private readonly modelEl: HTMLElement;
   private readonly spinEl: SVGSVGElement;
@@ -145,6 +147,12 @@ export class ChatPane {
     this.tray.listen(this.input);
     compose.append(this.tray.element, box, tools);
     main.appendChild(compose);
+    // Dictation floats just above the composer; the chat is Claude, so the
+    // words are sent (tagged) unless kept as a draft.
+    this.voice = new VoiceButton(compose, {
+      kind: () => "chat",
+      deliver: (text, submit) => this.dictate(text, submit),
+    });
 
     this.overview = new ChatOverview((text) => this.sendText(text));
     this.overview.onWaiting = (n) => {
@@ -169,7 +177,7 @@ export class ChatPane {
     this.autosize();
     if (!this.loaded) send({ type: "chat.request", paneId: this.paneId });
   }
-  dispose() { hidePop(true); this.stick.dispose(); this.overview.dispose(); this.element.remove(); }
+  dispose() { this.voice.dispose(); hidePop(true); this.stick.dispose(); this.overview.dispose(); this.element.remove(); }
   setName(_name: string) { /* the chat is titled by its tab */ }
   setActive(active: boolean) { this.element.classList.toggle("pane--active", active); }
   focus() { this.input.focus(); }
@@ -726,6 +734,17 @@ export class ChatPane {
 
   private sendText(text: string) {
     send({ type: "chat.send", paneId: this.paneId, text });
+  }
+
+  /** Dictated words: into the composer after whatever is already typed, and
+   *  sent unless they were kept as a draft. */
+  private dictate(text: string, submitNow: boolean) {
+    const had = this.input.value.trimEnd();
+    this.input.value = had ? `${had} ${text}` : text;
+    this.autosize();
+    this.updateButton();
+    if (submitNow) this.submit();
+    else this.input.focus();
   }
 
   private submit() {

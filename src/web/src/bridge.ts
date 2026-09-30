@@ -104,6 +104,11 @@ export type OutMessage =
    * promotes to "waiting" if that done was itself inferred. blockedVisible=
    * false — the dialog behind an INFERRED waiting left; host unwinds it. */
   | { type: "pane.probe"; paneId: string; permissionVisible?: boolean; blockedVisible?: boolean }
+  /* Dictation (voice.ts). `voice.prepare`: the mic was pressed — report the
+   * speech model and fetch it if missing. `voice.transcribe`: one recorded
+   * clip, 16 kHz mono PCM16, answered by `voice.result` with the same id. */
+  | { type: "voice.prepare" }
+  | { type: "voice.transcribe"; reqId: string; b64: string }
   /* URL pane layout — page reports a rect for the placeholder; host
    * sizes a real WebView2 control to match. First layout creates the
    * WebView2; subsequent layouts reposition/resize. */
@@ -1204,6 +1209,15 @@ export type InboxMailMessage = {
   messages: { from: string; to: string; cc: string; date: string; body: string; html?: string | null; attachments: InboxAttachmentView[] }[];
 };
 
+/* Where the dictation model stands: not fetched yet, downloading (pct 0–100),
+ * on disk, or the download failed. */
+export type VoiceModelMessage = {
+  type: "voice.model";
+  state: "downloading" | "ready" | "error";
+  pct?: number;
+  error?: string;
+};
+
 /* One pane being brought back in the restore-progress lightbox. */
 export type RestorePaneView = { paneId: string; name: string; sessionTitle: string };
 
@@ -1227,6 +1241,8 @@ export type InMessage =
   | { type: "inbox.image"; paneId: string; name: string; dataUrl: string }
   | CommitsDataMessage
   | { type: "pane.ready"; paneId: string }
+  | VoiceModelMessage
+  | { type: "voice.result"; reqId: string; text: string; error?: string }
   | { type: "pane.in.ack"; paneId: string; sequence: number; inputId?: string; error?: string | null }
   | InspectorDataMessage
   | InspectorImageDataMessage

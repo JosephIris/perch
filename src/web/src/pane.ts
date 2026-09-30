@@ -21,6 +21,7 @@ import { buildPaneFooter, applyPaneFooter, type PaneFooter } from "./pane-footer
 import { createSetupOverlay, type SetupOverlay } from "./setup-overlay.js";
 import { attachTooltip } from "./tooltip.js";
 import { permissionDialogVisible, blockedDialogVisible } from "./perm-probe.js";
+import { VoiceButton } from "./voice.js";
 
 // The host appends ?nowebgl=1 when it re-navigates after a render-process
 // crash, having pinned the WebGL renderer as the likely culprit. Honoring it
@@ -35,6 +36,8 @@ const WEBGL_DISABLED = new URLSearchParams(location.search).has("nowebgl");
 // so it also surfaces local HTML files, not just web URLs.
 
 const utf8 = new TextEncoder();
+/** The byte a dictated line is submitted with (Enter). */
+const ENTER = new Uint8Array([13]);
 
 // Cursor show/hide accounting, across every pane. `churn` counts what the apps
 // asked for; `hidden`/`shown` count what actually reached the screen after
@@ -95,6 +98,7 @@ export class Pane {
   private readonly footer: PaneFooter;
   // Boot cover shown while a Claude Code pane starts up (driven by pane.setup).
   private readonly setup: SetupOverlay;
+  private readonly voice: VoiceButton;
   private setupActive = false;
   private readonly termHost: HTMLElement;
   /** "Latest" pill, shown while the view is scrolled off the bottom of a
@@ -179,6 +183,16 @@ export class Pane {
     // stacking context. Hidden until the host sends pane.setup {show:true}.
     this.setup = createSetupOverlay();
     this.element.appendChild(this.setup.el);
+
+    // Dictation: the mic in the corner. An agent pane gets the words
+    // submitted; a plain shell only ever a draft.
+    this.voice = new VoiceButton(this.element, {
+      kind: () => {
+        const agent = this.lastLeaf?.agentType;
+        return agent === "claude" || agent === "codex" ? "agent" : "shell";
+      },
+      deliver: (text, submit) => this.dictate(text, submit),
+    });
 
     // Terminal theme. Background is --color-terminal-bg (#1f1f1f), one
     // step LIGHTER than --color-sidebar-surface (#181818) so the pane
@@ -420,8 +434,23 @@ export class Pane {
     this.reportResize();
   }
 
+  /** Dictated words, as if pasted — bracketed when the app asked for it, so
+   *  a TUI treats them as text. Enter goes in a beat later as its own write:
+   *  in the same write as a paste, Claude Code reads it as a newline, not a
+   *  submit (the gap LineDelivery / TypeToClaude use too). */
+  private dictate(text: string, submit: boolean) {
+    this.term.paste(text);
+    if (submit) setTimeout(() => {
+      if (this.disposed) return;
+      this.sync.noteInput();
+      this.input.enqueue(ENTER);
+    }, 400);
+    this.term.focus();
+  }
+
   dispose() {
     this.disposed = true;
+    this.voice.dispose();
     const index = liveTerms.indexOf(this.term);
     if (index >= 0) liveTerms.splice(index, 1);
     this.stopProbe();

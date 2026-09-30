@@ -39,6 +39,14 @@ internal sealed record PaneInMsg
     public string? InputId { get; init; }
 }
 
+/// A dictated clip: 16 kHz mono PCM16, base64. Answered by `voice.result`
+/// with the same request id.
+internal sealed record VoiceTranscribeMsg
+{
+    public required string ReqId { get; init; }
+    public required string B64 { get; init; }
+}
+
 internal sealed record PaneAckMsg
 {
     public required Guid PaneId { get; init; }

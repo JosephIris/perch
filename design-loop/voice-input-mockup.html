@@ -1,0 +1,567 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Voice Input Styles</title>
+<style>
+  :root {
+    --bg: #141414; --panel: #1c1c1c; --line: #2e2e2e; --text: #e8e8e8;
+    --muted: #9a9a9a; --dim: #6a6a6a;
+    --mono: "Cascadia Mono", "Cascadia Code", Consolas, "Segoe UI Symbol", monospace;
+    --ui: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    --accent: #888; --phos: #ffb000;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 var(--ui); }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 32px 24px 48px; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .styles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+  @media (max-width: 760px) { .styles { grid-template-columns: repeat(2, 1fr); } }
+  .opt { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 16px;
+         text-align: left; color: var(--text); cursor: pointer; font: inherit; }
+  .opt b { display: block; font-weight: 600; margin-bottom: 2px; }
+  .opt span { color: var(--muted); font-size: 12px; }
+  .opt[aria-pressed="true"] { border-color: #9a9a9a; background: #262626; }
+  .bar { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; margin-bottom: 12px; color: var(--muted); font-size: 12px; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .seg button { background: transparent; color: var(--muted); border: 0; padding: 6px 12px; font: 12px var(--ui); cursor: pointer; }
+  .seg button[aria-pressed="true"] { background: #2a2a2a; color: var(--text); }
+  .sw { width: 20px; height: 20px; border-radius: 4px; border: 2px solid transparent; cursor: pointer; padding: 0; }
+  .sw[aria-pressed="true"] { border-color: #fff; }
+  kbd { font: 11px var(--mono); border: 1px solid #3a3a3a; border-radius: 4px; padding: 1px 5px; color: var(--text); }
+
+  /* ---- fake Perch pane ---- */
+  .pane { position: relative; height: 440px; background: #0c0c0c; border: 1px solid var(--line); border-radius: 8px;
+          overflow: hidden; font: 13px/1.5 var(--mono); transition: border-color .15s; }
+  .pane.listening { border-color: var(--accent); }
+  .pane-head { height: 32px; display: flex; align-items: center; padding: 0 12px; border-bottom: 1px solid #222;
+               color: var(--muted); font: 12px var(--ui); }
+  .pane-body { padding: 12px 16px 12px; height: calc(100% - 32px); display: flex; flex-direction: column; }
+  .log { flex: 1; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; gap: 4px; white-space: pre-wrap; }
+  .log .u { color: #fff; }
+  .log .a { color: #d4d4d4; }
+  .log .o { color: #d97757; }
+  .log .dim, .dim { color: var(--dim); }
+  .log .ps { color: #6cb6ff; }
+  .tag { color: var(--dim); }
+  .promptbox { border: 1px solid #3a3a3a; border-radius: 6px; padding: 6px 10px; margin-top: 12px; min-height: 34px; color: #fff; }
+  .cursor { animation: blink 1s steps(1) infinite; color: #bbb; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .scr { color: var(--accent); }
+  .chip { position: absolute; left: 16px; bottom: 64px; font: 12px var(--ui); color: var(--text); background: #262626;
+          border: 1px solid #3a3a3a; border-radius: 6px; padding: 4px 10px; opacity: 0; transform: translateY(4px);
+          transition: opacity .15s, transform .15s cubic-bezier(0,0,0,1); pointer-events: none; }
+  .chip.show { opacity: 1; transform: none; }
+
+  /* ---- the voice pill ---- */
+  .vox { position: absolute; right: 16px; bottom: 64px; display: flex; align-items: center; gap: 8px; z-index: 2; }
+  .vox-body { max-width: 0; opacity: 0; overflow: hidden; transition: max-width .2s cubic-bezier(0,0,0,1), opacity .15s; }
+  .vox:not([data-phase="idle"]) .vox-body { max-width: 520px; opacity: 1; }
+  .vox-btn { width: 40px; height: 40px; display: grid; place-items: center; cursor: pointer; opacity: .5; transition: opacity .15s; padding: 0; }
+  .vox:hover .vox-btn, .vox:not([data-phase="idle"]) .vox-btn { opacity: 1; }
+  .vox-btn svg { width: 20px; height: 20px; }
+  .vox-body pre { margin: 0; white-space: pre; }
+
+  /* A — DOS */
+  .dos .vox-btn { background: #0000aa; border: 3px double #55ffff; border-radius: 0; }
+  .dos pre { padding: 4px 6px; background: #0000aa; color: #fff; font: 13px/1.12 var(--mono); }
+  .dos .b { color: #55ffff; } .dos .r, .dos .r0 { color: #ff5555; } .dos .r1 { color: #ffff55; } .dos .r2 { color: #55ff55; }
+  .dos .c { color: #55ffff; } .dos .g { color: #55ff55; } .dos .w { color: #aaaaaa; }
+
+  /* B — 8-bit */
+  .pixel .vox-btn { background: #1d2b53; border: 3px solid #fff1e8; border-radius: 0; }
+  .pixel .vox-body canvas { display: block; width: 256px; height: 80px; image-rendering: pixelated; border: 3px solid #fff1e8; }
+
+  /* C — CRT */
+  .crt .vox-btn { background: #070d09; border: 1px solid color-mix(in srgb, var(--phos) 40%, #000); border-radius: 50%; color: var(--phos); }
+  .crtbox { position: relative; width: 300px; height: 68px; border-radius: 12px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--phos) 30%, #000);
+            background-color: #070d09;
+            background-image: linear-gradient(color-mix(in srgb, var(--phos) 8%, transparent) 1px, transparent 1px), linear-gradient(90deg, color-mix(in srgb, var(--phos) 8%, transparent) 1px, transparent 1px);
+            background-size: 20px 17px; }
+  .crtbox canvas { position: absolute; inset: 0; width: 300px; height: 68px; }
+  .crtbox::after { content: ""; position: absolute; inset: 0; pointer-events: none;
+                   background: repeating-linear-gradient(transparent 0 2px, rgba(0,0,0,.35) 2px 3px);
+                   box-shadow: inset 0 0 22px rgba(0,0,0,.95); }
+  .crtbox .lab, .crtbox .hint { position: absolute; z-index: 1; font: 10px var(--mono); color: var(--phos); letter-spacing: .5px; }
+  .crtbox .lab { top: 4px; left: 10px; } .crtbox .hint { bottom: 4px; right: 10px; opacity: .6; }
+
+  /* D — Braille rainbow */
+  .braille .vox-btn { background: #0a0a0a; border: 1px solid #3a3a3a; border-radius: 8px; }
+  .braille pre { padding: 6px 10px; background: #0a0a0a; border: 1px solid #3a3a3a; border-radius: 8px; font: 13px/1.25 var(--mono); color: #eee; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Voice input: pick a look</h1>
+  <p class="sub">The waveform is your real microphone. It stays in this page. The words are made up; the real build uses Whisper on your computer.</p>
+
+  <div class="styles" id="styles"></div>
+
+  <div class="bar">
+    <span>Pane</span>
+    <div class="seg" id="paneSeg">
+      <button data-pane="claude" aria-pressed="true">Claude session</button>
+      <button data-pane="term" aria-pressed="false">Plain terminal</button>
+    </div>
+    <span>Pane color</span>
+    <div id="swatches" style="display:flex;gap:6px"></div>
+    <span>Hold the mic (or <kbd>Space</kbd>), talk, let go to send &middot; tap it for hands-free: stops after 2.5s of quiet &middot; <kbd>Esc</kbd> while talking = keep as draft &middot; <kbd>1</kbd>–<kbd>4</kbd> switch look</span>
+    <span id="micnote"></span>
+  </div>
+
+  <div class="pane" id="pane">
+    <div class="pane-head" id="paneHead"></div>
+    <div class="pane-body">
+      <div class="log" id="log"></div>
+      <div class="promptbox" id="promptbox"><span class="dim">&gt;</span> <span id="ptextClaude"></span><span class="cursor">▌</span></div>
+    </div>
+    <div class="chip" id="chip"></div>
+    <div class="vox" id="vox" data-phase="idle">
+      <div class="vox-body" id="voxBody"></div>
+      <button class="vox-btn" id="voxBtn" aria-label="Dictate"></button>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => s.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+const fmt = s => `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+const TAG = ' <span class="tag">[voice input]</span>';
+
+let styleKey = "dos", paneType = "claude";
+let phase = "idle", phaseStart = 0, recStart = 0, draft = false, holdKey = false;
+let ptext = null, pendingDraft = null;
+let latched = false, holdPtr = false, quietSince = 0;
+const TAP_MS = 300, QUIET_MS = 2500, SHOW_MS = 1000, QUIET_LEVEL = 0.15;
+const hist = new Array(160).fill(0);
+let lastPush = 0;
+
+/* ---------------- audio ---------------- */
+let analyser = null, timeData = null, freq = null, micTried = false;
+const synthWave = new Float32Array(512);
+let level = 0, bands = new Array(16).fill(0), wave = synthWave, waveGain = 1;
+
+async function ensureMic() {
+  if (micTried) return; micTried = true;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const ac = new AudioContext();
+    analyser = ac.createAnalyser(); analyser.fftSize = 1024; analyser.smoothingTimeConstant = 0.55;
+    ac.createMediaStreamSource(stream).connect(analyser);
+    timeData = new Float32Array(analyser.fftSize); freq = new Uint8Array(analyser.frequencyBinCount);
+    $("#micnote").textContent = "";
+  } catch { $("#micnote").textContent = "No mic access: showing a pretend voice."; }
+}
+
+function sample(now) {
+  if (phase !== "rec") {
+    level *= 0.85; bands = bands.map(v => v * 0.85); return;
+  }
+  if (analyser) {
+    analyser.getFloatTimeDomainData(timeData); analyser.getByteFrequencyData(freq);
+    let s = 0, peak = 0;
+    for (const v of timeData) { s += v * v; peak = Math.max(peak, Math.abs(v)); }
+    level = Math.min(1, Math.pow(Math.sqrt(s / timeData.length) * 7, 0.75));
+    for (let b = 0; b < 16; b++) {
+      const lo = Math.floor(2 * Math.pow(90, b / 16)), hi = Math.max(lo + 1, Math.floor(2 * Math.pow(90, (b + 1) / 16)));
+      let m = 0; for (let k = lo; k < hi; k++) m = Math.max(m, freq[k]);
+      bands[b] = Math.max(0, Math.min(1, (m - 70) / 150));
+    }
+    wave = timeData;
+    waveGain += (Math.min(12, Math.max(1, 0.8 / Math.max(peak, 1e-4))) - waveGain) * 0.1;
+  } else {
+    const tt = now / 1000;
+    const word = 0.5 + 0.5 * Math.sin(tt * 2.1);
+    const syl = Math.max(0, Math.sin(tt * 11 + Math.sin(tt * 3) * 2));
+    level = Math.min(1, (syl * 0.8 + Math.random() * 0.15) * (0.3 + 0.7 * word));
+    for (let b = 0; b < 16; b++)
+      bands[b] = Math.min(1, level * (0.4 + 0.6 * Math.abs(Math.sin(b * 0.7 + tt * 6))) * (1 - b / 22) + Math.random() * 0.08);
+    for (let i = 0; i < 512; i++)
+      synthWave[i] = level * 0.8 * (Math.sin(i * 0.09 + tt * 40) * 0.6 + Math.sin(i * 0.23 + tt * 25) * 0.3 + (Math.random() - 0.5) * 0.2);
+    wave = synthWave; waveGain = 1;
+  }
+}
+
+/* ---------------- tiny 3x5 pixel font ---------------- */
+const FONT = {
+  "0":"111101101101111","1":"010110010010111","2":"111001111100111","3":"111001111001111","4":"101101111001001",
+  "5":"111100111001111","6":"111100111101111","7":"111001001001001","8":"111101111101111","9":"111101111001111",
+  ":":"000010000010000",".":"000000000000010"," ":"000000000000000",
+  R:"110101110101101",E:"111100110100111",C:"111100100100111",S:"111100111001111",N:"110101101101101",
+  T:"111010010010010",D:"110101101101110",A:"010101111101101",F:"111100110100100",O:"111101101101111",
+  I:"111010010010111",G:"111100101101111"
+};
+function pxText(x, str, x0, y0, col) {
+  x.fillStyle = col;
+  [...str].forEach((ch, n) => {
+    const g = FONT[ch] || FONT[" "];
+    for (let i = 0; i < 15; i++) if (g[i] === "1") x.fillRect(x0 + n * 4 + (i % 3), y0 + Math.floor(i / 3), 1, 1);
+  });
+}
+
+/* ---------------- the four looks ---------------- */
+const BLK = " ▁▂▃▄▅▆▇█";
+const PICO = ["#ff004d", "#ffa300", "#ffec27", "#00e436", "#29adff", "#83769c", "#ff77a8"];
+const RAINBOW = ["#ff5555", "#ffaa00", "#ffff55", "#55ff55", "#55ffff", "#5599ff", "#ff55ff"];
+const BRAILLE_BIT = [[0x1, 0x2, 0x4, 0x40], [0x8, 0x10, 0x20, 0x80]];
+
+const STYLES = {
+  dos: {
+    name: "DOS box", desc: "Norton-blue window, block-character meter, box-drawing frame",
+    accent: "#55ffff", icon: "#ffff55",
+    mount(b) { this.pre = document.createElement("pre"); b.append(this.pre); },
+    draw(now, e) {
+      const W = 34, R = 3, L = [];
+      let label, cls, foot;
+      if (phase === "rec") { label = `${now % 1000 < 600 ? "●" : " "} REC ${fmt((now - recStart) / 1000)}`; cls = "r"; foot = " release: send · esc: draft "; }
+      else if (phase === "transcribing") { label = `${"|/-\\"[Math.floor(now / 90) % 4]} TRANSCRIBING`; cls = "c"; foot = " whisper · on this pc "; }
+      else { label = draft ? "◄ DRAFT" : "► SENT"; cls = "g"; foot = draft ? " enter to send " : " + [voice input] "; }
+      L.push(`<span class="b">╔══</span><span class="${cls}">${label}</span><span class="b">${"═".repeat(W - 2 - label.length)}╗</span>`);
+      const k = phase === "sending" ? Math.max(0, 1 - e / 350) : 1;
+      for (let r = 0; r < R; r++) {
+        let s = "";
+        for (let c = 0; c < W; c++) {
+          if (phase === "transcribing") {
+            const v = Math.sin(c * 0.55 - now / 110 + r * 0.9) * 0.5 + 0.5;
+            s += Math.random() < 0.25 ? " " : "░▒▓█"[Math.floor(v * 3.99)];
+          } else {
+            const h = hist[hist.length - W + c] * k * R * 8;
+            s += BLK[Math.max(0, Math.min(8, Math.round(h - (R - 1 - r) * 8)))];
+          }
+        }
+        L.push(`<span class="b">║</span><span class="${phase === "transcribing" ? "c" : "r" + r}">${s}</span><span class="b">║</span>`);
+      }
+      L.push(`<span class="b">╚══</span><span class="w">${foot}</span><span class="b">${"═".repeat(W - 2 - foot.length)}╝</span>`);
+      this.pre.innerHTML = L.join("\n");
+    }
+  },
+
+  pixel: {
+    name: "8-bit meter", desc: "Chunky pixel equalizer with falling peaks, arcade palette",
+    accent: "#ff004d", icon: "#ff004d",
+    mount(b) {
+      const c = document.createElement("canvas"); c.width = 64; c.height = 20;
+      this.x = c.getContext("2d"); this.peaks = new Array(16).fill(0); this.snap = new Array(16).fill(0); b.append(c);
+    },
+    draw(now, e) {
+      const x = this.x;
+      x.globalAlpha = 1; x.fillStyle = "#1d2b53"; x.fillRect(0, 0, 64, 20);
+      x.fillStyle = "#16213f";
+      for (let yy = 7; yy < 20; yy++) for (let xx = yy & 1; xx < 64; xx += 2) x.fillRect(xx, yy, 1, 1);
+      if (phase === "rec") {
+        if (now % 1000 < 600) { x.fillStyle = "#ff004d"; x.fillRect(1, 2, 3, 3); }
+        pxText(x, "REC " + fmt((now - recStart) / 1000), 6, 1, "#fff1e8");
+        for (let b = 0; b < 16; b++) {
+          const n = Math.round(bands[b] * 12);
+          this.peaks[b] = n >= this.peaks[b] ? n : Math.max(0, this.peaks[b] - 0.25);
+          this.snap[b] = n;
+          for (let i = 0; i < n; i++) { x.fillStyle = i < 6 ? "#00e436" : i < 9 ? "#ffec27" : "#ff004d"; x.fillRect(b * 4, 19 - i, 3, 1); }
+          if (this.peaks[b] >= 1) { x.fillStyle = "#fff1e8"; x.fillRect(b * 4, 19 - Math.floor(this.peaks[b]), 3, 1); }
+        }
+      } else if (phase === "transcribing") {
+        pxText(x, "DECODING" + ".".repeat(Math.floor(now / 200) % 4), 1, 1, "#29adff");
+        for (let xx = 0; xx < 64; xx++) {
+          const yy = Math.round(13 + 5 * Math.sin(xx * 0.25 - now / 80));
+          x.fillStyle = PICO[((xx >> 2) + Math.floor(now / 90)) % 7]; x.fillRect(xx, yy, 1, 2);
+          if (Math.random() < 0.05) { x.fillStyle = "#fff1e8"; x.fillRect(xx, 8 + Math.floor(Math.random() * 12), 1, 1); }
+        }
+      } else {
+        pxText(x, draft ? "DRAFT" : "SENT", 1, 1, "#00e436");
+        const p = Math.min(1, e / 400), off = Math.floor(p * p * 14);
+        for (let b = 0; b < 16; b++) for (let i = 0; i < this.snap[b]; i++) {
+          if (Math.random() < p) continue;
+          x.fillStyle = i < 6 ? "#00e436" : i < 9 ? "#ffec27" : "#ff004d"; x.fillRect(b * 4, 19 - i - off, 3, 1);
+        }
+      }
+    }
+  },
+
+  crt: {
+    name: "CRT scope", desc: "Amber oscilloscope with glow, scanlines and a TV power-off on send",
+    get accent() { return phos(); }, get icon() { return phos(); },
+    mount(b) {
+      const box = document.createElement("div"); box.className = "crtbox";
+      box.innerHTML = '<canvas></canvas><span class="lab"></span><span class="hint"></span>';
+      const c = box.querySelector("canvas"), dpr = devicePixelRatio || 1;
+      c.width = 300 * dpr; c.height = 68 * dpr;
+      this.x = c.getContext("2d"); this.x.scale(dpr, dpr);
+      this.lab = box.querySelector(".lab"); this.hint = box.querySelector(".hint"); b.append(box);
+    },
+    draw(now, e) {
+      const x = this.x, W = 300, H = 68, mid = H / 2 + 3, amp = H / 2 - 12;
+      x.globalCompositeOperation = "destination-out"; x.fillStyle = "rgba(0,0,0,0.32)"; x.fillRect(0, 0, W, H);
+      x.globalCompositeOperation = "source-over";
+      const ph = phos(); x.strokeStyle = ph; x.fillStyle = tint(ph, 0.6); x.shadowColor = ph; x.shadowBlur = 8; x.lineWidth = 1.6;
+      const trace = k => {
+        x.beginPath();
+        for (let i = 0; i < W; i++) {
+          const v = Math.max(-1, Math.min(1, wave[Math.floor(i * wave.length / W)] * waveGain)) * k;
+          i ? x.lineTo(i, mid - v * amp) : x.moveTo(i, mid - v * amp);
+        }
+        x.stroke();
+      };
+      if (phase === "rec") {
+        trace(1);
+        const quiet = latched ? now - quietSince : 0;
+        const left = QUIET_MS - quiet;
+        this.lab.textContent = `${now % 1000 < 600 ? "●" : " "} ${latched ? "HANDS-FREE" : "REC"} ${fmt((now - recStart) / 1000)}`
+          + (latched && quiet > SHOW_MS ? `  · sending in ${(left / 1000).toFixed(1)}s` : "");
+        this.hint.textContent = latched ? "click: send · talk: keep going · esc: draft" : "release: send · esc: draft";
+        if (latched && quiet > SHOW_MS) {
+          const k = left / (QUIET_MS - SHOW_MS);
+          x.fillStyle = ph; x.fillRect(W / 2 - (W / 2 - 10) * k, H - 3, (W - 20) * k, 1.5);
+        }
+      } else if (phase === "transcribing") {
+        x.globalAlpha = 0.35; x.beginPath(); x.moveTo(0, mid); x.lineTo(W, mid); x.stroke(); x.globalAlpha = 1;
+        x.beginPath(); x.arc((e / 1.6) % W, mid, 2.5, 0, 7); x.fill();
+        this.lab.textContent = "DECODING" + ".".repeat(Math.floor(now / 200) % 4); this.hint.textContent = "whisper · on this pc";
+      } else {
+        const p = Math.min(1, e / 420);
+        if (p < 0.3) trace(1 - p / 0.3);
+        else if (p < 0.8) {
+          const half = W / 2 * (1 - (p - 0.3) / 0.5);
+          x.strokeStyle = tint(ph, 0.75); x.lineWidth = 2.2; x.beginPath(); x.moveTo(W / 2 - half, mid); x.lineTo(W / 2 + half, mid); x.stroke();
+        } else { x.beginPath(); x.arc(W / 2, mid, 3 * (1 - (p - 0.8) / 0.2), 0, 7); x.fill(); }
+        this.lab.textContent = draft ? "DRAFT" : "SENT"; this.hint.textContent = "";
+      }
+      x.shadowBlur = 0;
+    }
+  },
+
+  braille: {
+    name: "Braille rainbow", desc: "Hi-res dot waveform in scrolling 16-color terminal rainbow",
+    accent: "#ff55ff", icon: "#ff55ff",
+    mount(b) { this.pre = document.createElement("pre"); b.append(this.pre); },
+    draw(now, e) {
+      const C = 36, L = [], shift = Math.floor(now / 70);
+      const rainbow = str => [...str].map((ch, i) => `<span style="color:${RAINBOW[(i + shift) % 7]}">${ch}</span>`).join("");
+      if (phase === "rec") L.push(`<span style="color:#ff5555">${now % 1000 < 600 ? "⣿" : "⠀"}</span> REC ${fmt((now - recStart) / 1000)}   <span class="dim">release: send · esc: draft</span>`);
+      else if (phase === "transcribing") L.push(`${"⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"[Math.floor(now / 80) % 10]} ${rainbow("transcribing…")}  <span class="dim">whisper · on this pc</span>`);
+      else L.push(draft ? `⠿ draft  <span class="dim">enter to send</span>` : `⠿ ${rainbow("sent")}  <span class="dim">+ [voice input]</span>`);
+      const off = phase === "sending" ? Math.floor(Math.min(1, e / 400) * C) : 0;
+      for (let r = 0; r < 2; r++) {
+        let s = "";
+        for (let c = 0; c < C; c++) {
+          const src = c + off;
+          let bits = 0;
+          if (src < C) {
+            for (let dx = 0; dx < 2; dx++) {
+              const v = phase === "transcribing" ? 0 : hist[hist.length - C * 2 + src * 2 + dx];
+              const a = v * 4.2;
+              for (let dy = 0; dy < 4; dy++) if (Math.abs(r * 4 + dy - 3.5) <= Math.max(0.5, a)) bits |= BRAILLE_BIT[dx][dy];
+            }
+            if (phase === "transcribing" && (c + Math.floor(now / 40)) % 12 < 4) bits = Math.random() * 256 | 0;
+          }
+          s += `<span style="color:${RAINBOW[(c + shift) % 7]}">${String.fromCharCode(0x2800 + bits)}</span>`;
+        }
+        L.push(s);
+      }
+      this.pre.innerHTML = L.join("\n");
+    }
+  }
+};
+
+/* ---------------- mic icon ---------------- */
+const MIC_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="8.5" y="3" width="7" height="11.5" rx="3.5"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M9 21h6"/></svg>';
+const STOP_SVG = '<svg viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2" fill="#ff5555"/></svg>';
+function drawIcon() {
+  const b = $("#voxBtn");
+  b.innerHTML = phase === "rec" ? STOP_SVG : MIC_SVG;
+  b.style.color = STYLES[styleKey].icon;
+}
+
+/* ---- pane color: Perch's --color-pane-tag-0..5; no tag = amber ---- */
+const TAGS = [null, "#76B9ED", "#6CCB5F", "#FCE100", "#FF9E5E", "#FF99A4", "#C792EA"];
+let tagIdx = 0;
+const phos = () => TAGS[tagIdx] || "#ffb000";
+function tint(hex, k) {
+  const n = parseInt(hex.slice(1), 16), m = c => Math.round(c + (255 - c) * k);
+  return `rgb(${m(n >> 16)},${m((n >> 8) & 255)},${m(n & 255)})`;
+}
+function pickTag(i) {
+  tagIdx = i;
+  document.querySelectorAll(".sw").forEach((b, j) => b.setAttribute("aria-pressed", j === i));
+  document.documentElement.style.setProperty("--phos", phos());
+  $("#paneHead").style.color = TAGS[i] || "";
+  pickStyle(styleKey);
+}
+TAGS.forEach((c, i) => {
+  const b = document.createElement("button"); b.className = "sw"; b.title = c ? `Pane color ${i - 1}` : "No color (amber)";
+  b.style.background = c || "repeating-linear-gradient(45deg,#ffb000 0 4px,#3a2a00 4px 8px)";
+  b.onclick = () => { pickTag(i); b.blur(); };
+  $("#swatches").append(b);
+});
+
+/* ---------------- fake pane ---------------- */
+const PHRASES = {
+  claude: [
+    "make the board cards a bit taller and let the title wrap to two lines",
+    "can you check why the resume button did nothing on the mac build",
+    "ok looks good, commit it but don't push yet",
+    "move the mic button a little higher so it doesn't cover the prompt"
+  ],
+  term: ["git status", "npm run build", "dotnet test src/Perch.Tests"]
+};
+const REPLIES = [
+  "On it. Reading the card styles first.",
+  "Looking at the resume path in MacHost now.",
+  "Committed locally. Nothing pushed.",
+  "Moving it up 16px and checking it clears the prompt box."
+];
+const PS = '<span class="ps">PS C:\\Users\\josep\\dev-projects\\cmux-win&gt;</span> ';
+
+function addLog(html, cls = "") {
+  const d = document.createElement("div"); d.className = cls; d.innerHTML = html; $("#log").append(d); return d;
+}
+function addPromptLine() {
+  const d = addLog(PS + '<span class="ptext"></span><span class="cursor">▌</span>');
+  ptext = d.querySelector(".ptext");
+}
+function renderPane() {
+  pendingDraft = null; hideChip(); $("#log").innerHTML = "";
+  if (paneType === "claude") {
+    $("#paneHead").textContent = "claude — cmux-win";
+    addLog('<span class="o">✻</span> Welcome back to Claude Code', "a");
+    addLog("");
+    addLog('<span class="dim">&gt;</span> make the board columns scroll on their own', "u");
+    addLog('<span class="o">●</span> Done. Each column scrolls by itself now and the header stays pinned.', "a");
+    $("#promptbox").style.display = "";
+    ptext = $("#ptextClaude"); ptext.innerHTML = "";
+  } else {
+    $("#paneHead").textContent = "pwsh — cmux-win";
+    addLog("PowerShell 7.4.6", "dim");
+    addLog(PS + "git log --oneline -3");
+    addLog("bc43b59 fix(project-chat): a board card sends once and locks", "dim");
+    addLog("83e9721 fix(project-chat): the chat beside a board takes a third", "dim");
+    addLog("3ef5c06 feat(project-chat): the journal rail steps aside", "dim");
+    addPromptLine();
+    $("#promptbox").style.display = "none";
+  }
+}
+let chipTimer = 0;
+function showChip(msg) { const c = $("#chip"); c.textContent = msg; c.classList.add("show"); }
+function hideChip() { $("#chip").classList.remove("show"); }
+
+function typeInto(el, text, tagHtml, done) {
+  const scr = { dos: "░▒▓█", braille: "⠁⠃⠇⡇⣇⣧⣷⣿", pixel: "▪■▫", crt: "" }[styleKey];
+  let i = 0;
+  const step = () => {
+    i = Math.min(text.length, i + 2);
+    let tail = "";
+    if (scr && i < text.length) for (let n = 0; n < Math.min(3, text.length - i); n++) tail += scr[Math.random() * scr.length | 0];
+    el.innerHTML = esc(text.slice(0, i)) + `<span class="scr">${tail}</span>`;
+    if (i < text.length) setTimeout(step, 16); else { el.innerHTML = esc(text) + tagHtml; done && done(); }
+  };
+  step();
+}
+
+function sendToClaude(text) {
+  addLog(`<span class="dim">&gt;</span> ${esc(text)}${TAG}`, "u");
+  ptext.innerHTML = "";
+  const t = addLog('<span class="o">✻</span> Thinking…', "a");
+  setTimeout(() => { t.innerHTML = `<span class="o">●</span> ${REPLIES[Math.random() * REPLIES.length | 0]}`; }, 1400);
+}
+function runInTerminal(text) {
+  const line = ptext.parentElement; line.querySelector(".cursor")?.remove();
+  addLog("(mockup: nothing actually ran)", "dim");
+  addPromptLine();
+}
+
+function deliver(text) {
+  if (paneType === "claude" && !draft) {
+    typeInto(ptext, text, TAG, () => setTimeout(() => sendToClaude(text), 250));
+  } else {
+    typeInto(ptext, text, paneType === "claude" ? TAG : "", () => {
+      pendingDraft = text;
+      showChip(paneType === "term" ? "Plain terminal: not run. Press Enter to run it." : "Kept as a draft. Press Enter to send.");
+    });
+  }
+}
+
+/* ---------------- flow ---------------- */
+function setPhase(p) {
+  phase = p; phaseStart = performance.now(); $("#vox").dataset.phase = p;
+  $("#pane").classList.toggle("listening", p !== "idle");
+  drawIcon();
+}
+function start() {
+  if (phase !== "idle") return;
+  hideChip(); pendingDraft = null; draft = false;
+  latched = false; ensureMic(); setPhase("rec"); recStart = phaseStart; quietSince = recStart;
+}
+function stop(asDraft) {
+  if (phase !== "rec") return;
+  if (performance.now() - recStart < 250) { setPhase("idle"); return; }
+  draft = asDraft || paneType === "term";
+  setPhase("transcribing");
+  const list = PHRASES[paneType], text = list[Math.random() * list.length | 0];
+  setTimeout(() => { setPhase("sending"); deliver(text); setTimeout(() => setPhase("idle"), 450); }, 750);
+}
+
+const btn = $("#voxBtn");
+btn.addEventListener("pointerdown", ev => {
+  if (ev.button !== 0) return;
+  if (phase === "idle") { btn.setPointerCapture(ev.pointerId); holdPtr = true; holdKey = false; start(); }
+  else if (phase === "rec" && latched) stop(false);
+});
+btn.addEventListener("pointerup", () => {
+  if (!holdPtr) return; holdPtr = false;
+  if (phase !== "rec") return;
+  if (performance.now() - recStart < TAP_MS) { latched = true; quietSince = performance.now(); } else stop(false);
+});
+addEventListener("keydown", ev => {
+  if (ev.code === "Space" && !ev.repeat && phase === "idle") { ev.preventDefault(); holdKey = true; start(); }
+  else if (ev.code === "Space" && !ev.repeat && phase === "rec" && latched) { ev.preventDefault(); stop(false); }
+  else if (ev.code === "Space") ev.preventDefault();
+  else if (ev.key === "Escape" && phase === "rec") { holdKey = false; holdPtr = false; stop(true); }
+  else if (ev.key === "Enter" && pendingDraft && phase === "idle") {
+    hideChip(); const t = pendingDraft; pendingDraft = null;
+    paneType === "claude" ? sendToClaude(t) : runInTerminal(t);
+  }
+  else if (/^[1-4]$/.test(ev.key)) pickStyle(Object.keys(STYLES)[+ev.key - 1]);
+});
+addEventListener("keyup", ev => {
+  if (ev.code !== "Space" || !holdKey) return; holdKey = false;
+  if (phase !== "rec") return;
+  if (performance.now() - recStart < TAP_MS) { latched = true; quietSince = performance.now(); } else stop(false);
+});
+
+/* ---------------- pickers ---------------- */
+function pickStyle(k) {
+  styleKey = k;
+  document.querySelectorAll(".opt").forEach(b => b.setAttribute("aria-pressed", b.dataset.k === k));
+  $("#vox").className = "vox " + k;
+  $("#voxBody").innerHTML = ""; STYLES[k].mount($("#voxBody"));
+  $("#pane").style.setProperty("--accent", STYLES[k].accent);
+  drawIcon();
+}
+Object.entries(STYLES).forEach(([k, s], i) => {
+  const b = document.createElement("button"); b.className = "opt"; b.dataset.k = k;
+  b.innerHTML = `<b>${i + 1}. ${s.name}</b><span>${s.desc}</span>`;
+  b.onclick = () => { pickStyle(k); b.blur(); };
+  $("#styles").append(b);
+});
+document.querySelectorAll("#paneSeg button").forEach(b => b.onclick = () => {
+  paneType = b.dataset.pane; b.blur();
+  document.querySelectorAll("#paneSeg button").forEach(o => o.setAttribute("aria-pressed", o === b));
+  renderPane();
+});
+
+/* ---------------- loop ---------------- */
+function loop(now) {
+  sample(now);
+  if (now - lastPush > 40) { hist.push(level); hist.shift(); lastPush = now; }
+  if (phase === "rec" && latched) {
+    if (level > QUIET_LEVEL) quietSince = now;
+    else if (now - quietSince > QUIET_MS) stop(false);
+  }
+  if (phase !== "idle") STYLES[styleKey].draw(now, now - phaseStart);
+  requestAnimationFrame(loop);
+}
+pickStyle("crt"); renderPane(); pickTag(0); requestAnimationFrame(loop);
+</script>
+</body>
+</html>

@@ -264,6 +264,16 @@
   --color-pane-tag-4:       #FF99A4;   /* pink/red */
   --color-pane-tag-5:       #C792EA;   /* purple */
 
+  /* Dictation scope (voice.ts). A deliberate, owner-requested exception to
+   * the calm Fluent chrome: a CRT oscilloscope with phosphor glow and
+   * scanlines, confined to the mic pill. Its trace takes the pane's color
+   * tag; the phosphor below is only for a surface with no tag. */
+  --voice-phosphor:         #FFB000;   /* amber CRT */
+  --voice-scope-bg:         #070D09;
+  --voice-scope-w:          300px;
+  --voice-scope-h:          68px;
+  --voice-btn-size:         32px;
+
   /* Terminal cell background. One step LIGHTER than the sidebar surface
    * so the pane reads as the "lifted" surface and the sidebar reads as
    * "recessed" navigation — same staircase Claude desktop / VS Code use.
