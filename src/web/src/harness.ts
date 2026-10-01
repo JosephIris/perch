@@ -8,6 +8,7 @@
 // css}), then open design-loop/harness.html in a browser. The view is chosen by
 // location.hash (#sidebar | #dashboard | #confirm).
 
+import { refreshBoardMode } from "./board-mode.js";
 import "./style.css";
 import { startElapsedTicker } from "./elapsed.js";
 import { startSpinnerTicker } from "./spinner.js";
@@ -1229,6 +1230,8 @@ if (view === "chat-board" || view === "chat-board-card" || view === "chat-thread
     type: "chat.meta", paneId: "chat-pane-1", sessionId: "s-chat", goal: "", instructions: "", memory: [],
     coordinatorModel: "", coordinatorEffort: "", threadModel: "", threadEffort: "", userName: "Joseph", suggestions: [], board: view === "chat-threads" ? undefined : board,
   });
+  // The app calls this after each tab switch (main.ts); the harness has none.
+  refreshBoardMode();
   if (view === "chat-board-card") {
     const key = board.items.find((i) => i.tone === "bad")?.key ?? board.items[0].key;
     setTimeout(() => [...pane.element.querySelectorAll<HTMLElement>(".rb-card")].find((c) => c.textContent?.includes(key))?.click(), 60);
