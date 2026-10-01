@@ -2087,6 +2087,11 @@ internal sealed partial class AppController
         if (pane == null) return;
         var next = msg.Name ?? "";
         if (pane.AgentType == next) return;
+        if (!AgentPresence.EndsAgent(next, msg.Session, msg.Reason, pane.ClaudeSessionId))
+        {
+            Log.Info("Agent.keep", $"pane={paneId:N} session-end for {msg.Session} ({msg.Reason}) — a newer session runs");
+            return;
+        }
         var was = pane.AgentType;
         pane.AgentType = next;
         // A thread's Claude that exits when Perch didn't ask it to (a sleep or

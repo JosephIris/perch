@@ -60,9 +60,10 @@ internal static class Program
         {
             if (Directory.Exists(toolsDir))
             {
+                // Moved to the FRONT even when present: a relaunch inherits
+                // it, and the merge above put the login PATH ahead of it.
                 var path = Environment.GetEnvironmentVariable("PATH") ?? "";
-                if (!path.Split(':').Contains(toolsDir))
-                    Environment.SetEnvironmentVariable("PATH", toolsDir + ":" + path);
+                Environment.SetEnvironmentVariable("PATH", ToolsPath.Front(path, toolsDir, ':'));
             }
         }
         catch (Exception ex) { Log.Error("Startup.path", ex); }

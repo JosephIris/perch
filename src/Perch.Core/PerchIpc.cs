@@ -347,7 +347,11 @@ internal sealed record NameResetMessage(
 /// cleared on session-end (name = ""). Tells the host which agent runs in the
 /// pane so the header can show a "CC" badge. A plain shell never sends this.
 internal sealed record AgentMessage(
-    [property: JsonPropertyName("name")] string? Name);
+    [property: JsonPropertyName("name")] string? Name,
+    // On session-end: the session that ended and Claude's reason ("clear",
+    // "logout", "prompt_input_exit", "other").
+    [property: JsonPropertyName("session")] string? Session = null,
+    [property: JsonPropertyName("reason")] string? Reason = null);
 
 /// Sent by the cc HookHandler on Claude's session-start, carrying Claude's
 /// own session id (the SessionStart payload's `session_id`). The host persists

@@ -159,7 +159,16 @@ internal static class HookHandler
                 // the cc session ends.
                 Send(pipeName, new { type = "git.baseline", sha = "" });
                 // Drop the agent badge — the pane is back to a plain shell.
-                Send(pipeName, new { type = "agent", name = "" });
+                // Which session ended, and why: a /clear ends one and starts
+                // the next at once, and this hook (1 s, last to run) can land
+                // after the new one's session-start; the host keeps the badge
+                // then (AgentPresence).
+                Send(pipeName, new
+                {
+                    type = "agent", name = "",
+                    session = StringFrom(root, "session_id"),
+                    reason = StringFrom(root, "reason"),
+                });
                 break;
 
             case "prompt-submit":
