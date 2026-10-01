@@ -29,8 +29,10 @@ final class AppModel {
     private(set) var sent: [UUID: String] = [:]
     /// Each session's conversation, oldest first, once fetched.
     private(set) var history: [UUID: [HistoryItem]] = [:]
-    /// Computers whose Perch is too old to hand over a conversation.
-    private(set) var noHistory: Set<String> = []
+    /// Computers whose Perch was too old to hand over a conversation, and
+    /// when that was found. Asked again after a minute, or on reconnecting:
+    /// Perch may have updated meanwhile.
+    private var noHistory: [String: Date] = [:]
     /// Each computer's projects, for a new tab.
     private(set) var projects: [String: [PerchProject]] = [:]
     /// The permission prompt each waiting session shows.
@@ -185,6 +187,9 @@ final class AppModel {
             if link[name] != .online {
                 try await client.connect()
                 savePairing(client.pairing)
+                // Reconnected: maybe to a Perch that was updated meanwhile
+                // (it restarts to update), so ask for conversations again.
+                noHistory[name] = nil
             }
             let list = try await client.sessions()
             guard clients[name] === client else { return }
@@ -293,7 +298,8 @@ final class AppModel {
     /// Fetch a session's conversation. On a Perch too old for it, the screen
     /// falls back to the latest answer alone.
     func loadHistory(_ id: UUID) async {
-        guard let name = computer(of: id), !noHistory.contains(name), let client = clients[name] else { return }
+        guard let name = computer(of: id), let client = clients[name] else { return }
+        if let since = noHistory[name], Date().timeIntervalSince(since) < 60 { return }
         do {
             let items = try await client.history(for: id)
             if history[id] != items { history[id] = items }
@@ -302,7 +308,7 @@ final class AppModel {
                 sent[id] = nil
             }
         } catch PerchError.sessionGone {
-            if session(id) != nil { noHistory.insert(name) }
+            if session(id) != nil { noHistory[name] = Date() }
         } catch {}
     }
 
