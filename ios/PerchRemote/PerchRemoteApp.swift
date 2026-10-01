@@ -144,6 +144,8 @@ struct RootView: View {
 struct BirdHeader: View {
     let title: String
     let detail: String
+    /// The computer's kind, beside its name (a Mac's laptop, a PC).
+    var symbol: String? = nil
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
@@ -151,7 +153,10 @@ struct BirdHeader: View {
             BirdScene(ink: Brand.ink, accent: Brand.accent, perched: true)
                 .padding(.bottom, 18)
             VStack(alignment: .leading, spacing: 1) {
-                Text(title).font(.headline)
+                HStack(spacing: 6) {
+                    if let symbol { Image(systemName: symbol).font(.subheadline.weight(.semibold)) }
+                    Text(title).font(.headline)
+                }
                 Text(detail).font(.caption).opacity(0.75)
             }
             .foregroundStyle(Brand.ink)
@@ -238,13 +243,7 @@ struct ComputerRow: View {
     }
 
     /// A Mac and a PC tell apart at a glance: their own symbol and tile.
-    private var icon: String {
-        switch model.os[name] {
-        case "mac": return "laptopcomputer"
-        case "windows": return "pc"
-        default: return "desktopcomputer"
-        }
-    }
+    private var icon: String { Computer.symbol(model.os[name]) }
 
     private var tile: Color {
         switch model.os[name] {
@@ -254,13 +253,7 @@ struct ComputerRow: View {
         }
     }
 
-    private var kind: String? {
-        switch model.os[name] {
-        case "mac": return "Mac"
-        case "windows": return "Windows PC"
-        default: return nil
-        }
-    }
+    private var kind: String? { Computer.kind(model.os[name]) }
 
     private var status: String {
         switch model.link[name] ?? .connecting {
@@ -309,3 +302,22 @@ enum MarkdownSample {
     """
 }
 #endif
+
+/// How a computer is named and drawn by its OS (from its hello).
+enum Computer {
+    static func symbol(_ os: String?) -> String {
+        switch os {
+        case "mac": return "laptopcomputer"
+        case "windows": return "pc"
+        default: return "desktopcomputer"
+        }
+    }
+
+    static func kind(_ os: String?) -> String? {
+        switch os {
+        case "mac": return "Mac"
+        case "windows": return "Windows PC"
+        default: return nil
+        }
+    }
+}

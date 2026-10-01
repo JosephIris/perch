@@ -19,7 +19,10 @@ struct SessionListView: View {
     var body: some View {
         List {
             if isRoot {
-                Section { BirdHeader(title: computer, detail: summary) }
+                Section {
+                    BirdHeader(title: computer, detail: summary,
+                               symbol: model.os[computer].map { Computer.symbol($0) })
+                }
             }
             content
         }
@@ -63,7 +66,7 @@ struct SessionListView: View {
     private var summary: String {
         let awake = list.count - sleepingCount
         let need = model.needsYou(on: computer)
-        var parts = ["\(awake) session\(awake == 1 ? "" : "s")"]
+        var parts = [Computer.kind(model.os[computer]), "\(awake) session\(awake == 1 ? "" : "s")"].compactMap { $0 }
         if need > 0 { parts.append("\(need) waiting on you") }
         if let via = model.via(computer) { parts.append(via) }
         return parts.joined(separator: " · ")
