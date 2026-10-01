@@ -117,7 +117,7 @@ struct SessionView: View {
     private enum Block: Identifiable {
         case user(Int, String, spoken: Bool)
         case claude(Int, String)
-        case tools(Int, [String])
+        case tools(Int, [HistoryItem])
         case notice(Int, String)
         var id: Int {
             switch self { case .user(let i, _, _), .claude(let i, _), .tools(let i, _), .notice(let i, _): return i }
@@ -133,11 +133,11 @@ struct SessionView: View {
                 out.append(.user(i, AppModel.plain(item.text), spoken: item.text.contains("[voice input]")))
             case "claude": out.append(.claude(i, item.text))
             case "tool":
-                if case .tools(let j, var lines)? = out.last {
-                    lines.append(item.text)
-                    out[out.count - 1] = .tools(j, lines)
+                if case .tools(let j, var steps)? = out.last {
+                    steps.append(item)
+                    out[out.count - 1] = .tools(j, steps)
                 } else {
-                    out.append(.tools(i, [item.text]))
+                    out.append(.tools(i, [item]))
                 }
             default: out.append(.notice(i, item.text))
             }
@@ -161,7 +161,7 @@ struct SessionView: View {
             switch block {
             case .user(_, let text, let spoken): UserBubble(text: text, spoken: spoken)
             case .claude(let i, let text): ClaudeMessage(text: text, isLatest: i == lastClaude, id: id)
-            case .tools(_, let lines): ToolSteps(lines: lines)
+            case .tools(_, let steps): ToolSteps(items: steps)
             case .notice(_, let text):
                 Text(text).font(.caption).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity)
@@ -422,88 +422,87 @@ private struct ClaudeMessage: View {
     }
 }
 
-/// Tool calls in a row, folded into one line you can open.
+/// Tool calls in a row, drawn like the desktop's journey rail: one quiet line
+/// each, the time, the verb and what it worked on, ×N for a run of the same
+/// call. A long run shows its last few with the rest a tap away.
 private struct ToolSteps: View {
-    let lines: [String]
-    @State private var open = false
+    let items: [HistoryItem]
+    @State private var showAll = false
+    private static let shown = 6
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Button {
-                withAnimation(.easeOut(duration: 0.15)) { open.toggle() }
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "wrench.and.screwdriver").font(.caption2)
-                    Text(lines.count == 1 ? lines[0] : "\(lines.count) steps · \(lines.last ?? "")")
-                        .lineLimit(1)
-                    Image(systemName: "chevron.right")
-                        .font(.caption2)
-                        .rotationEffect(.degrees(open ? 90 : 0))
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-            if open {
-                VStack(alignment: .leading, spacing: 2) {
-                    ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                        Text(line).font(.caption2.monospaced()).foregroundStyle(.secondary).lineLimit(2)
-                    }
-                }
-                .padding(.leading, 18)
-            }
-        }
-        .padding(.horizontal, 4)
+    /// Bookkeeping tools the desktop's chat leaves out too.
+    private static let quiet: Set<String> = ["TaskCreate", "TaskUpdate", "TaskList", "TaskGet", "TodoWrite", "ToolSearch"]
+
+    private struct Step: Identifiable {
+        let id: Int
+        let time: String
+        let verb: String
+        let target: String
+        let repeatCount: Int
     }
-}
 
-/// Claude's markdown, readable on a phone: code blocks in a box, headings in
-/// bold, the rest as inline markdown.
-struct MarkdownText: View {
-    let text: String
-
-    private enum Part: Hashable { case prose(String), code(String) }
-
-    private var parts: [Part] {
-        var out: [Part] = []
-        var prose: [String] = [], code: [String] = []
-        var inCode = false
-        for line in text.components(separatedBy: "\n") {
-            if line.trimmingCharacters(in: .whitespaces).hasPrefix("```") {
-                if inCode { out.append(.code(code.joined(separator: "\n"))); code = [] }
-                else if !prose.isEmpty { out.append(.prose(prose.joined(separator: "\n"))); prose = [] }
-                inCode.toggle()
-            } else if inCode { code.append(line) } else { prose.append(line) }
+    private var steps: [Step] {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "HH:mm"
+        return items.enumerated().compactMap { i, item in
+            // "Verb target ×N", as Perch's transcript reader writes a work line.
+            var text = item.text
+            var repeatCount = 1
+            if let r = text.range(of: #"\s×(\d+)$"#, options: .regularExpression) {
+                repeatCount = Int(text[r].dropFirst(2)) ?? 1
+                text.removeSubrange(r)
+            }
+            let parts = text.split(separator: " ", maxSplits: 1).map(String.init)
+            let verb = parts.first ?? ""
+            guard !Self.quiet.contains(verb) else { return nil }
+            let time = item.atMs.map { fmt.string(from: Date(timeIntervalSince1970: Double($0) / 1000)) } ?? ""
+            return Step(id: i, time: time, verb: Self.verbName(verb), target: parts.count > 1 ? parts[1] : "", repeatCount: repeatCount)
         }
-        if inCode, !code.isEmpty { out.append(.code(code.joined(separator: "\n"))) }
-        if !prose.isEmpty { out.append(.prose(prose.joined(separator: "\n"))) }
-        return out
+    }
+
+    /// MCP tools read as "server · tool", not "mcp__claude_ai_Gmail__send_message".
+    private static func verbName(_ verb: String) -> String {
+        guard verb.hasPrefix("mcp__") else { return verb }
+        let parts = verb.dropFirst(5).components(separatedBy: "__")
+        let server = (parts.first ?? "").replacingOccurrences(of: "claude_ai_", with: "")
+        return parts.count > 1 ? "\(server) · \(parts[1])" : server
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(parts.enumerated()), id: \.offset) { _, part in
-                switch part {
-                case .prose(let s):
-                    Text(Self.inline(s)).font(.callout).textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                case .code(let s):
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        Text(s).font(.caption.monospaced()).textSelection(.enabled).padding(8)
+        let all = steps
+        let hidden = showAll ? 0 : max(0, all.count - Self.shown)
+        if !all.isEmpty {
+            VStack(alignment: .leading, spacing: 3) {
+                if hidden > 0 {
+                    Button("\(hidden) earlier step\(hidden == 1 ? "" : "s")") {
+                        withAnimation(.easeOut(duration: 0.15)) { showAll = true }
                     }
-                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .font(.caption)
+                    .padding(.leading, 44)
+                }
+                ForEach(all.suffix(all.count - hidden)) { s in
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(s.time)
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.tertiary)
+                            .frame(width: 34, alignment: .trailing)
+                        Text("│").font(.caption2).foregroundStyle(.quaternary)
+                        Text(s.verb)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Text(s.target)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        if s.repeatCount > 1 {
+                            Text("×\(s.repeatCount)").font(.caption2.monospacedDigit()).foregroundStyle(.tertiary)
+                        }
+                    }
+                    .accessibilityElement(children: .combine)
                 }
             }
+            .padding(.vertical, 2)
         }
-    }
-
-    private static func inline(_ s: String) -> AttributedString {
-        // Headings read as bold lines.
-        let md = s.components(separatedBy: "\n").map { line -> String in
-            guard let r = line.range(of: #"^#{1,6}\s+"#, options: .regularExpression) else { return line }
-            return "**" + line[r.upperBound...] + "**"
-        }.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-        return (try? AttributedString(markdown: md, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
-            ?? AttributedString(md)
     }
 }

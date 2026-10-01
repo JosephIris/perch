@@ -13,6 +13,16 @@ struct PerchRemoteApp: App {
         WindowGroup {
             ZStack {
                 RootView()
+                #if DEBUG
+                // PERCH_MD_SAMPLE=1: a sample answer, to check how markdown draws.
+                if ProcessInfo.processInfo.environment["PERCH_MD_SAMPLE"] == "1" {
+                    ScrollView {
+                        MarkdownText(text: MarkdownSample.text).padding()
+                    }
+                    .background(Color(.systemGroupedBackground))
+                    .zIndex(2)
+                }
+                #endif
                 if !splashGone {
                     // Faded by its own opacity rather than a removal transition,
                     // which didn't reliably animate on launch.
@@ -42,8 +52,11 @@ struct PerchRemoteApp: App {
                 if let s = env["PERCH_PAIR_URL"], let url = URL(string: s) {
                     await model.pair(url)
                 }
-                // And open the first Claude tab (for screenshots of a session).
-                if env["PERCH_OPEN_FIRST"] == "1" {
+                // And open a session (for screenshots): PERCH_OPEN_SESSION=<id>,
+                // or the first Claude tab with PERCH_OPEN_FIRST=1.
+                if let s = env["PERCH_OPEN_SESSION"], let id = UUID(uuidString: s) {
+                    model.path = [.session(id)]
+                } else if env["PERCH_OPEN_FIRST"] == "1" {
                     for _ in 0..<20 {
                         if let s = model.sessions.values.flatMap({ $0 }).first(where: { $0.canSend }) {
                             model.path = [.session(s.id)]
@@ -230,3 +243,38 @@ struct ComputerRow: View {
         }
     }
 }
+
+#if DEBUG
+enum MarkdownSample {
+    static let text = """
+    ## What changed
+
+    Perch **v1.87.0** is out, with *three* fixes and `LaunchUnsent`. See [the release](https://github.com).
+
+    - **Approvals:** from the phone
+      - Allow, deny, *always*
+      - Deny with a note
+    - Conversations, in full
+    1. Pull
+    2. Build with `./scripts/build.ps1`
+
+    > The Windows gate hasn't run yet.
+
+    | Check | Result |
+    |---|---|
+    | Mac gate | 22/22 |
+    | .NET tests | 780 |
+
+    ```swift
+    func deny(_ t: Session, text: String?) -> Bool {
+        guard let p = pane(t) else { return false }  // a long comment that runs well past the edge of the phone
+        return true
+    }
+    ```
+
+    ---
+
+    Done.
+    """
+}
+#endif
