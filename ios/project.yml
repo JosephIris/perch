@@ -12,7 +12,7 @@ options:
 settings:
   base:
     DEVELOPMENT_TEAM: "7TC253243T"
-    MARKETING_VERSION: "0.1.0"
+    MARKETING_VERSION: "1.0.0"
     CURRENT_PROJECT_VERSION: "1"
     SWIFT_VERSION: "5.0"
 targets:
@@ -48,6 +48,9 @@ targets:
         # The splash starts on the brand navy, so launch shows the same.
         UILaunchScreen:
           UIColorName: LaunchBackground
+        # Only the system's own encryption (Tailscale's WireGuard is Tailscale's,
+        # not ours): TestFlight then skips the export-compliance question.
+        ITSAppUsesNonExemptEncryption: false
         NSCameraUsageDescription: Scan the pairing code shown in Perch's Settings on your computer.
         # The pairing QR code is a perch:// link, so the Camera app opens it here.
         CFBundleURLTypes:

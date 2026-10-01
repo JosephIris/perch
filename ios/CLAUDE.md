@@ -83,3 +83,11 @@ for Claude's answer on screen (Xcode 27 ships no Simulator window to tap in):
       -scheme PerchRemote -destination 'platform=iOS Simulator,name=iPhone 18 Pro' test
 
 For the device: TestFlight, or a cable plus Developer Mode on the iPhone.
+
+## TestFlight
+
+`ios/scripts/testflight.sh` archives a Release build and uploads it to App
+Store Connect (app record "com.buildwithperch.remote", team in project.yml;
+the build number is assigned on upload). Internal testers get it after
+Apple's processing, with no review. Debug-only switches (`#if DEBUG`: the
+PERCH_* launch variables, the scope and markdown demos) are not in it.
