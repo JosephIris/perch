@@ -49,6 +49,14 @@ struct PerchSession: Codable, Identifiable, Equatable {
     let color: Int?
     /// While it waits for approval: "Tool: what" ("" when Perch doesn't know what).
     let asking: String?
+    /// What the desktop sidebar's row shows (nil from older Perch): when the
+    /// turn came back, when the running one began, the agent's ask while it
+    /// waits, the project chat a thread belongs to, and "claude" / "codex".
+    let doneAtMs: Int64?
+    let turnStartMs: Int64?
+    let note: String?
+    let parent: UUID?
+    let agent: String?
 }
 
 /// A tab's permission prompt: the tool, its one line (the command, the file),
@@ -103,7 +111,7 @@ final class PerchClient {
         session = URLSession(configuration: cfg)
     }
 
-    struct Hello: Codable { let app: String; let api: Int; let name: String; let hosts: [String]? }
+    struct Hello: Codable { let app: String; let api: Int; let name: String; let hosts: [String]?; let os: String? }
 
     /// Find an address that answers. Every address is tried at once: at home
     /// the wifi one wins, away the Tailscale one does, and nobody waits out a
@@ -176,6 +184,12 @@ final class PerchClient {
         let r: Result = try await request("POST", "v1/sessions/\(id.uuidString)/permission",
                                           body: try JSONEncoder().encode(Body(answer: answer, text: text)))
         return r.result
+    }
+
+    /// Wake a sleeping tab; its Claude resumes on the computer.
+    func wake(_ id: UUID) async throws {
+        struct Result: Codable { let result: String }
+        let _: Result = try await request("POST", "v1/sessions/\(id.uuidString)/wake", body: Data("{}".utf8))
     }
 
     func projects() async throws -> [PerchProject] {

@@ -66,6 +66,9 @@ internal sealed class PhoneServer : IDisposable
         /// an optional word for Claude after a deny. Returns "answered",
         /// "not-asking" or "missing".
         public required Func<Guid, string, string?, string> Answer { get; init; }
+        /// Wake a sleeping tab (its Claude resumes in the background).
+        /// Returns "awake", "not-asleep" or "missing".
+        public required Func<Guid, string> Wake { get; init; }
     }
 
     private readonly IUiThread _ui;
@@ -213,7 +216,12 @@ internal sealed class PhoneServer : IDisposable
         if (req.Method == "GET" && parts is ["v1", "hello"])
             // hosts: the addresses as they are NOW, so a phone paired before
             // Tailscale was installed learns its address without rescanning.
-            return (200, new { app = "perch", api = ApiVersion, name = await OnUi(() => _h.Name()), hosts = LocalAddresses() });
+            return (200, new
+            {
+                app = "perch", api = ApiVersion, name = await OnUi(() => _h.Name()), hosts = LocalAddresses(),
+                // Which kind of computer, for the phone's list of them.
+                os = OperatingSystem.IsMacOS() ? "mac" : OperatingSystem.IsWindows() ? "windows" : "linux",
+            });
         // GET /v1/sessions
         if (req.Method == "GET" && parts is ["v1", "sessions"])
             return (200, new { sessions = await OnUi(() => _h.Sessions()) });
@@ -253,6 +261,12 @@ internal sealed class PhoneServer : IDisposable
             {
                 var r = await OnUiAsync(() => _h.Reply(id)).ConfigureAwait(false);
                 return (200, new { text = r?.Text, atMs = r?.AtMs });
+            }
+            // POST /v1/sessions/{id}/wake
+            if (req.Method == "POST" && verb == "wake")
+            {
+                var woke = await OnUi(() => _h.Wake(id)).ConfigureAwait(false);
+                return (woke == "missing" ? 404 : 200, new { result = woke });
             }
             // GET /v1/sessions/{id}/permission
             if (req.Method == "GET" && verb == "permission")
@@ -395,9 +409,14 @@ internal sealed class PhoneServer : IDisposable
 /// thread), "chat" (a project chat), "codex" or "shell". CanSend is false for
 /// the last two in API v1.
 /// Color is the tab's pane color tag (0..5, the page's --color-pane-tag-N).
+/// The rest is what the desktop sidebar's row shows: DoneAtMs when its turn
+/// came back (the age on a done row), TurnStartMs when the running turn began
+/// (the elapsed time on a working one), Note the agent's ask while it waits,
+/// Parent the project chat a thread belongs to, Agent "claude" or "codex".
 internal sealed record PhoneSession(
     Guid Id, string Title, string? Project, string Kind, string State,
-    bool CanSend, bool Active, bool Asleep, int Color, string? Asking = null);
+    bool CanSend, bool Active, bool Asleep, int Color, string? Asking = null,
+    long? DoneAtMs = null, long? TurnStartMs = null, string? Note = null, Guid? Parent = null, string? Agent = null);
 
 /// A tab's permission prompt as the phone shows it. Tool is Claude's tool name
 /// ("Bash", "Edit", …) and Summary its one line (the command, the file); Input

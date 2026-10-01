@@ -50,9 +50,10 @@ further.)
 
 ### `GET /v1/hello`
 
-    { "app": "perch", "api": 1, "name": "DESK-PC", "hosts": ["192.168.1.5", "100.101.102.103"] }
+    { "app": "perch", "api": 1, "name": "DESK-PC", "hosts": ["192.168.1.5", "100.101.102.103"], "os": "windows" }
 
 Use it to pick a working address and to check the pairing still holds.
+`os` is `mac`, `windows` or `linux` (the phone tells a Mac from a PC by it).
 `hosts` is the address list as it is now; store it in place of the one from
 the QR code, so a phone paired before Tailscale was installed learns the
 Tailscale address without scanning again.
@@ -72,6 +73,11 @@ Tailscale address without scanning again.
 - `canSend`: false for `codex` and `shell` in v1. Show them, don't offer the mic.
 - `asleep`: the tab was put to sleep for being idle. Sending to it wakes it;
   the line goes in once its Claude is up (10–20 s).
+- `doneAtMs`, `turnStartMs`, `note`, `parent`, `agent`: what the desktop
+  sidebar's row shows, for the phone to show it the same way. When the turn
+  came back (the age on a done row), when the running turn began (its running
+  time), the agent's ask while it waits, the project chat a `thread` belongs
+  to, and `claude` / `codex`. Null when there's nothing to say.
 - `color`: the tab's pane color tag, 0–5, the page's `--color-pane-tag-N`
   (blue, green, yellow, orange, pink, purple). The phone draws its dictation
   scope in it, as the desktop does. Absent from Perch builds before it.
@@ -102,6 +108,14 @@ The latest answer: Claude's last prose block after the last prompt. `text` is
 null while the turn is still on a tool call, or when there is no answer yet.
 `atMs` is set for project chats and null for Claude tabs. The phone reads this
 aloud with the system voice.
+
+### `POST /v1/sessions/{id}/wake`
+
+→ `{ "result": "awake" }`
+
+Wakes a sleeping tab: its Claude resumes on the computer in the background,
+as a line sent to it would make it. `not-asleep` when it wasn't; `404` with
+`missing` when the tab is gone.
 
 ### `GET /v1/sessions/{id}/permission`
 

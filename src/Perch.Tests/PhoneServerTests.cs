@@ -52,6 +52,7 @@ public class PhoneServerTests
                 Ask = id => id == Tab && Asking
                     ? new PhoneAsk("Bash", "git push origin main", "{\"command\":\"git push origin main\"}", new[] { "Bash(git push:*)" }, true)
                     : null,
+                Wake = id => id == Tab ? "awake" : "missing",
                 Answer = (id, answer, text) =>
                 {
                     if (id != Tab) return "missing";
@@ -126,6 +127,7 @@ public class PhoneServerTests
         Assert.Equal("perch", hello.GetProperty("app").GetString());
         Assert.Equal(PhoneServer.ApiVersion, hello.GetProperty("api").GetInt32());
         Assert.Equal("TESTPC", hello.GetProperty("name").GetString());
+        Assert.Contains(hello.GetProperty("os").GetString(), new[] { "mac", "windows", "linux" });
 
         var list = await Json(await f.Http.SendAsync(f.Req(HttpMethod.Get, "v1/sessions")));
         var s = list.GetProperty("sessions")[0];
@@ -153,6 +155,16 @@ public class PhoneServerTests
         Assert.Equal("claude", items[2].GetProperty("kind").GetString());
 
         var gone = await f.Http.SendAsync(f.Req(HttpMethod.Get, $"v1/sessions/{Guid.NewGuid()}/history"));
+        Assert.Equal(HttpStatusCode.NotFound, gone.StatusCode);
+    }
+
+    [Fact]
+    public async Task ASleepingTabWakes()
+    {
+        using var f = new Fixture();
+        var r = await Json(await f.Http.SendAsync(f.Req(HttpMethod.Post, $"v1/sessions/{Tab}/wake")));
+        Assert.Equal("awake", r.GetProperty("result").GetString());
+        var gone = await f.Http.SendAsync(f.Req(HttpMethod.Post, $"v1/sessions/{Guid.NewGuid()}/wake"));
         Assert.Equal(HttpStatusCode.NotFound, gone.StatusCode);
     }
 

@@ -96,6 +96,18 @@ const up = await until(async () => {
 }, 120000, 2000);
 console.log(up ? "Claude is up" : "Claude did not report a session");
 
+// --rich: what a real sidebar has, for the phone's list (no Claude turns):
+// a project chat, and a second tab put to sleep.
+if (process.argv.includes("--rich")) {
+  const projectId = String(proj.Id ?? proj.id);
+  await send({ verb: "projectchat.new", id: projectId, name: "phone-repo chat" });
+  const beforeSleepy = await dump();
+  await send({ verb: "project.tab.new", projectId, name: "sleepy tab", agent: "claude", worktree: false });
+  let sleepy;
+  await until(async () => (sleepy = (await dump()).sessions.find((s) => !beforeSleepy.sessions.some((b) => b.id === s.id))), 30000);
+  if (sleepy) { await sleep(4000); await send({ verb: "session.dormant", id: sleepy.id }); console.log(`slept ${sleepy.id}`); }
+}
+
 const hello = await fetch(`http://127.0.0.1:${PORT}/v1/hello`, { headers: { Authorization: `Bearer ${TOKEN}` } }).then((r) => r.json());
 console.log("hello", JSON.stringify(hello));
 const hosts = [...(hello.hosts ?? []), "127.0.0.1"].join(",");

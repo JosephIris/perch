@@ -44,6 +44,12 @@ final class AppModel {
     /// Why a new session didn't open, until shown.
     var createError: String?
 
+    /// Each computer's OS ("mac", "windows"), from its hello.
+    private(set) var os: [String: String] = [:]
+    /// Sleeping tabs are hidden until this is on (remembered).
+    var showSleeping: Bool = UserDefaults.standard.bool(forKey: "showSleeping") {
+        didSet { UserDefaults.standard.set(showSleeping, forKey: "showSleeping") }
+    }
     var showScanner = false
     var showSettings = false
     var scannerMessage: String?
@@ -128,7 +134,8 @@ final class AppModel {
         defer { pairing = false }
         let client = PerchClient(pairing: p)
         do {
-            try await client.connect()
+            let hello = try await client.connect()
+            if let kind = hello.os { os[p.name] = kind }
         } catch {
             scannerMessage = message(for: error, computer: p.name)
             showScanner = true
@@ -185,7 +192,8 @@ final class AppModel {
         if link[name] == .notPaired { return }
         do {
             if link[name] != .online {
-                try await client.connect()
+                let hello = try await client.connect()
+                if let kind = hello.os { os[name] = kind }
                 savePairing(client.pairing)
                 // Reconnected: maybe to a Perch that was updated meanwhile
                 // (it restarts to update), so ask for conversations again.
@@ -323,6 +331,20 @@ final class AppModel {
         text.replacingOccurrences(of: "[voice input]", with: "")
             .replacingOccurrences(of: #"^\s*\[Perch #\d+\]\s*"#, with: "", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Wake a sleeping tab. Returns an error to show, or nil.
+    func wake(_ id: UUID) async -> String? {
+        guard let name = computer(of: id), let client = clients[name] else { return "This tab is gone." }
+        do {
+            try await client.wake(id)
+            await refresh(name)
+            return nil
+        } catch PerchError.sessionGone {
+            return session(id) == nil ? "That tab was closed in Perch." : "Perch on \(name) needs an update to wake tabs from the phone."
+        } catch {
+            return message(for: error, computer: name)
+        }
     }
 
     func loadProjects(_ name: String) async {

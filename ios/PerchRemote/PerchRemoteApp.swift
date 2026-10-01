@@ -214,11 +214,11 @@ struct ComputerRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: "desktopcomputer")
-                .font(.system(size: 15, weight: .medium))
+            Image(systemName: icon)
+                .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(.white)
                 .frame(width: 30, height: 30)
-                .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .background(tile, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
             VStack(alignment: .leading, spacing: 1) {
                 Text(name).font(.callout.weight(.medium)).lineLimit(1)
                 Text(status).font(.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -237,11 +237,36 @@ struct ComputerRow: View {
         }
     }
 
+    /// A Mac and a PC tell apart at a glance: their own symbol and tile.
+    private var icon: String {
+        switch model.os[name] {
+        case "mac": return "laptopcomputer"
+        case "windows": return "pc"
+        default: return "desktopcomputer"
+        }
+    }
+
+    private var tile: Color {
+        switch model.os[name] {
+        case "mac": return Color(hex: 0x8E8E93)
+        case "windows": return Color(hex: 0x0078D4)
+        default: return .accentColor
+        }
+    }
+
+    private var kind: String? {
+        switch model.os[name] {
+        case "mac": return "Mac"
+        case "windows": return "Windows PC"
+        default: return nil
+        }
+    }
+
     private var status: String {
         switch model.link[name] ?? .connecting {
         case .online:
-            let n = model.sessions[name]?.count ?? 0
-            return ["Online", model.via(name), "\(n) session\(n == 1 ? "" : "s")"].compactMap { $0 }.joined(separator: " · ")
+            let n = (model.sessions[name] ?? []).filter { !$0.asleep }.count
+            return [kind, model.via(name), "\(n) session\(n == 1 ? "" : "s")"].compactMap { $0 }.joined(separator: " · ")
         case .connecting: return "Connecting…"
         case .unreachable: return "Can't reach it"
         case .notPaired: return "Scan its code again"

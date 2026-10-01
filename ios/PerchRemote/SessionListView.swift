@@ -1,4 +1,7 @@
-// One computer's sessions, grouped by project, with a way to open a new one.
+// One computer's sessions, laid out like the desktop sidebar in projects
+// mode (SidebarViews.swift): projects you can fold, each with its project
+// chats first (their threads beneath) and then its sessions. Sleeping tabs
+// are hidden unless the toggle at the top shows them; a swipe wakes one.
 
 import SwiftUI
 
@@ -8,8 +11,10 @@ struct SessionListView: View {
     let isRoot: Bool
     @Environment(AppModel.self) private var model
     @State private var newSession = false
+    @State private var collapsed: Set<String> = []
 
     private var list: [PerchSession] { model.sessions[computer] ?? [] }
+    private var sleepingCount: Int { list.filter(\.asleep).count }
 
     var body: some View {
         List {
@@ -19,9 +24,11 @@ struct SessionListView: View {
             content
         }
         .listSectionSpacing(.compact)
-        .environment(\.defaultMinListRowHeight, 40)
+        .environment(\.defaultMinListRowHeight, 38)
         // States change under you (working → done): let rows ease into it.
         .motion(Motion.soft, value: list.map { "\($0.id)\($0.state)\($0.asleep)" })
+        .motion(Motion.soft, value: model.showSleeping)
+        .motion(Motion.soft, value: collapsed)
         .navigationTitle(isRoot ? "Perch" : computer)
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await model.refreshAll() }
@@ -54,8 +61,9 @@ struct SessionListView: View {
     }
 
     private var summary: String {
+        let awake = list.count - sleepingCount
         let need = model.needsYou(on: computer)
-        var parts = ["\(list.count) session\(list.count == 1 ? "" : "s")"]
+        var parts = ["\(awake) session\(awake == 1 ? "" : "s")"]
         if need > 0 { parts.append("\(need) waiting on you") }
         if let via = model.via(computer) { parts.append(via) }
         return parts.joined(separator: " · ")
@@ -63,6 +71,7 @@ struct SessionListView: View {
 
     @ViewBuilder
     private var content: some View {
+        @Bindable var model = model
         switch model.link[computer] ?? .connecting {
         case .online, .connecting where !list.isEmpty:
             if list.isEmpty {
@@ -72,20 +81,23 @@ struct SessionListView: View {
                     }
                 }
             }
-            ForEach(groups, id: \.project) { g in
-                Section(g.project) {
-                    ForEach(g.sessions) { s in
-                        NavigationLink(value: Route.session(s.id)) { SessionRow(session: s) }
-                            .swipeActions(edge: .trailing) {
-                                if s.state == "permission" {
-                                    Button("Deny", role: .destructive) { Task { await answer(s.id, "deny") } }
-                                }
-                            }
-                            .swipeActions(edge: .leading) {
-                                if s.state == "permission" {
-                                    Button("Allow") { Task { await answer(s.id, "allow") } }.tint(.green)
-                                }
-                            }
+            if sleepingCount > 0 {
+                Section {
+                    Toggle(isOn: $model.showSleeping) {
+                        Label(model.showSleeping ? "Showing sleeping tabs" : "\(sleepingCount) sleeping tab\(sleepingCount == 1 ? "" : "s") hidden",
+                              systemImage: "moon.zzz")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    .tint(.accentColor)
+                }
+            }
+            ForEach(groups, id: \.name) { g in
+                Section {
+                    if !collapsed.contains(g.name) { rows(g) }
+                } header: {
+                    ProjectHeader(name: g.name, sessions: g.all, collapsed: collapsed.contains(g.name)) {
+                        if collapsed.contains(g.name) { collapsed.remove(g.name) } else { collapsed.insert(g.name) }
                     }
                 }
             }
@@ -103,6 +115,39 @@ struct SessionListView: View {
         }
     }
 
+    @ViewBuilder
+    private func rows(_ g: Group) -> some View {
+        let lanes = !g.chats.isEmpty && !g.sessions.isEmpty
+        if lanes { LaneLabel(text: "Chats") }
+        ForEach(g.chats, id: \.chat.id) { c in
+            row(c.chat)
+            ForEach(c.threads) { t in row(t, nested: true) }
+        }
+        if lanes { LaneLabel(text: "Sessions") }
+        ForEach(g.sessions) { s in row(s) }
+        if !g.sleeping.isEmpty {
+            LaneLabel(text: "Sleeping")
+            ForEach(g.sleeping) { s in row(s) }
+        }
+    }
+
+    private func row(_ s: PerchSession, nested: Bool = false) -> some View {
+        NavigationLink(value: Route.session(s.id)) { SidebarRow(session: s, nested: nested) }
+            .swipeActions(edge: .trailing) {
+                if s.state == "permission" && !s.asleep {
+                    Button("Deny", role: .destructive) { Task { await answer(s.id, "deny") } }
+                }
+            }
+            .swipeActions(edge: .leading) {
+                if s.asleep {
+                    Button("Wake") { Task { if let e = await model.wake(s.id) { model.createError = e } } }
+                        .tint(.accentColor)
+                } else if s.state == "permission" {
+                    Button("Allow") { Task { await answer(s.id, "allow") } }.tint(.green)
+                }
+            }
+    }
+
     @State private var answerError: String?
 
     private func answer(_ id: UUID, _ how: String) async {
@@ -118,17 +163,41 @@ struct SessionListView: View {
         }
     }
 
-    private struct Group { let project: String; var sessions: [PerchSession] }
+    /// A project's tabs as the desktop files them.
+    private struct Group {
+        let name: String
+        var chats: [(chat: PerchSession, threads: [PerchSession])] = []
+        var sessions: [PerchSession] = []
+        var sleeping: [PerchSession] = []
+        var all: [PerchSession] = []
+    }
 
-    /// Projects in the order Perch lists their first tab; tabs outside a project last.
+    /// Projects in the order Perch lists their first tab, tabs outside a
+    /// project last. Project chats pin to the top of their project with their
+    /// threads under them; sleeping tabs are left out unless shown, and then
+    /// go last.
     private var groups: [Group] {
+        let show = model.showSleeping
+        let ids = Set(list.map(\.id))
         var out: [Group] = []
-        for s in list {
-            let key = s.project ?? "Other"
-            if let i = out.firstIndex(where: { $0.project == key }) { out[i].sessions.append(s) }
-            else { out.append(Group(project: key, sessions: [s])) }
+        func index(_ name: String) -> Int {
+            if let i = out.firstIndex(where: { $0.name == name }) { return i }
+            out.append(Group(name: name)); return out.count - 1
         }
-        if let i = out.firstIndex(where: { $0.project == "Other" }), list.contains(where: { $0.project == nil }) {
+        for s in list {
+            let i = index(s.project ?? "Other")
+            out[i].all.append(s)
+            if s.asleep && !show { continue }
+            if let parent = s.parent, ids.contains(parent) { continue }   // drawn under its chat
+            if s.asleep { out[i].sleeping.append(s) }
+            else if s.kind == "chat" {
+                let threads = list.filter { $0.parent == s.id && (show || !$0.asleep) }
+                out[i].chats.append((s, threads))
+            } else { out[i].sessions.append(s) }
+        }
+        // A project with nothing to show (all asleep, hidden) stays out of the way.
+        out.removeAll { $0.chats.isEmpty && $0.sessions.isEmpty && $0.sleeping.isEmpty }
+        if let i = out.firstIndex(where: { $0.name == "Other" }), list.contains(where: { $0.project == nil }) {
             out.append(out.remove(at: i))
         }
         return out

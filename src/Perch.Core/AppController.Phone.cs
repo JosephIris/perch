@@ -46,6 +46,7 @@ internal sealed partial class AppController
             Create = PhoneCreateAsync,
             Ask = id => SessionById(id) is Session s ? PhoneAskOf(s) : null,
             Answer = PhoneAnswer,
+            Wake = PhoneWake,
         });
         try
         {
@@ -110,6 +111,13 @@ internal sealed partial class AppController
                 Asleep: s.Dormant,
                 // The agent's pane when there is one: that's the color the tab wears.
                 Asking: PhoneAskOf(s) is PhoneAsk a ? (a.Tool.Length > 0 ? $"{a.Tool}: {a.Summary}" : "") : null,
+                DoneAtMs: leaves.Select(p => p.DoneAtUnixMs).DefaultIfEmpty(0).Max() is long done && done > 0 ? done : null,
+                TurnStartMs: leaves.Where(p => p.AgentState == AgentState.Working && p.TurnStartUnixMs > 0)
+                    .Select(p => (long?)p.TurnStartUnixMs).Min(),
+                Note: leaves.FirstOrDefault(p => p.AgentState is AgentState.Waiting or AgentState.Permission
+                    && !string.IsNullOrWhiteSpace(p.NotificationText))?.NotificationText,
+                Parent: s.ThreadOf,
+                Agent: kind is "claude" or "thread" ? "claude" : kind == "codex" ? "codex" : null,
                 Color: (leaves.FirstOrDefault(p => p.IsChat || !string.IsNullOrEmpty(p.ClaudeSessionId)) ?? leaves.FirstOrDefault())?.ColorIndex ?? 0);
         }).ToList();
 
@@ -218,6 +226,19 @@ internal sealed partial class AppController
             : new byte[] { 0x0d });
         Log.Info("Phone.answer", $"session={s.Id:N} {answer}{(text != null ? " +text" : "")}");
         return "answered";
+    }
+
+    /// Wake a sleeping tab from the phone: its Claude resumes in the
+    /// background, as a line sent to it would make it, without one.
+    private string PhoneWake(Guid id)
+    {
+        if (SessionById(id) is not Session s) return "missing";
+        if (!s.Dormant) return "not-asleep";
+        WakeSession(s, background: true);
+        EnsureSessionRunning(s);
+        PushState();
+        Log.Info("Phone.wake", $"session={s.Id:N}");
+        return "awake";
     }
 
     private IReadOnlyList<PhoneProject> PhoneProjects() =>
