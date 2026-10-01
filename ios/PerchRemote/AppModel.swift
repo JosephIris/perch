@@ -33,6 +33,8 @@ final class AppModel {
     private(set) var noHistory: Set<String> = []
     /// Each computer's projects, for a new tab.
     private(set) var projects: [String: [PerchProject]] = [:]
+    /// The permission prompt each waiting session shows.
+    private(set) var asks: [UUID: PermissionAsk] = [:]
     /// Tabs made from here that the computer hasn't listed yet.
     private(set) var starting: Set<UUID> = []
 
@@ -249,6 +251,32 @@ final class AppModel {
     /// The computer a session is on, when more than one is paired.
     func computerLabel(of id: UUID) -> String? {
         pairings.count > 1 ? computer(of: id) : nil
+    }
+
+    /// What a waiting session asks; cleared once it isn't asking.
+    func loadAsk(_ id: UUID) async {
+        guard session(id)?.state == "permission" else { asks[id] = nil; return }
+        guard let name = computer(of: id), let client = clients[name],
+              let ask = try? await client.permission(for: id) else { return }
+        asks[id] = ask.asking ? ask : nil
+    }
+
+    /// Answer a session's permission prompt. Returns an error to show, or nil.
+    func answer(_ id: UUID, _ answer: String, text: String? = nil) async -> String? {
+        guard let name = computer(of: id), let client = clients[name] else { return "This tab is gone." }
+        do {
+            let result = try await client.answer(id, answer, text: text)
+            asks[id] = nil
+            if answer != "deny" || text != nil { awaiting[id] = (replies[id], Date()); lastTalkedTo = id }
+            await refresh(name)
+            return result == "answered" ? nil : "It isn't asking any more. It was answered on the computer, or moved on."
+        } catch PerchError.sessionGone {
+            // A 404 for a tab that's still listed: a Perch from before answering by phone.
+            return session(id) == nil ? "That tab was closed in Perch."
+                : "Perch on \(name) needs an update to answer from the phone."
+        } catch {
+            return message(for: error, computer: name)
+        }
     }
 
     /// Fetch a session's conversation. On a Perch too old for it, the screen

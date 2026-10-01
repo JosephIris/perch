@@ -103,6 +103,35 @@ null while the turn is still on a tool call, or when there is no answer yet.
 `atMs` is set for project chats and null for Claude tabs. The phone reads this
 aloud with the system voice.
 
+### `GET /v1/sessions/{id}/permission`
+
+    { "asking": true, "tool": "Bash", "summary": "git push",
+      "input": "{\"command\":\"git push\",\"description\":\"Push current branch\"}",
+      "rules": [], "canAlways": false }
+
+The permission prompt the tab's Claude is showing, or `{ "asking": false }`.
+Claude's PermissionRequest hook reports every ordinary tab's prompt as it
+goes up (it doesn't hold it: the terminal shows it as always, and whichever
+answers first wins). `tool` is Claude's tool name and `summary` its one line
+(the command, the file, the URL); `input` the raw `tool_input` JSON (capped
+at 4 KB) for showing a command or a diff properly; `canAlways` whether the
+prompt offers "Yes, and don't ask again", and `rules` what that would allow.
+`tool` is `""` when the details didn't arrive; it can still be answered.
+The session list also carries `"asking": "Bash: git push"` while one waits.
+
+### `POST /v1/sessions/{id}/permission`
+
+    { "answer": "deny", "text": "push to a branch instead" }
+
+→ `{ "result": "answered" }`
+
+`answer` is `allow`, `always` (only when `canAlways`) or `deny`. Perch presses
+the prompt's own keys, as a person at the terminal would: Enter, Down+Enter,
+Escape. A deny ends Claude's turn ("No, and tell Claude what to do
+differently"); `text`, if given, goes in as the next prompt. `result` is
+`not-asking` when the prompt was already answered (on the computer, or a
+second tap); `404` with `missing` when the tab is gone.
+
 ### `GET /v1/sessions/{id}/history`
 
     { "items": [

@@ -83,6 +83,41 @@ final class PhoneLinkUITests: XCTestCase {
         shot("6-new-session-answered")
     }
 
+    /// A permission prompt answered from the phone's card. Needs a command
+    /// Claude asks about whatever its mode: PERCH_ASK_COMMAND (default
+    /// `git push`, on the owner's ask list; the test repo has no remote).
+    func testApproveFromThePhone() throws {
+        let env = ProcessInfo.processInfo.environment
+        guard let link = env["PERCH_PAIR_URL"].flatMap(URL.init(string:)) else {
+            throw XCTSkip("PERCH_PAIR_URL not set")
+        }
+        let command = env["PERCH_ASK_COMMAND"] ?? "git push"
+        let word = "ALLOWED\(Int.random(in: 1000...9999))"
+        let app = XCUIApplication()
+        app.launchArguments = ["-PerchForgetPairings"]
+        app.launchEnvironment["PERCH_PAIR_URL"] = link.absoluteString
+        app.launchEnvironment["PERCH_OPEN_FIRST"] = "1"
+        app.launch()
+
+        let field = app.descendants(matching: .any)["typeField"].firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 20))
+        field.tap()
+        field.typeText("Run this exact command with the Bash tool: \(command). Then reply with the word \(word) and one short sentence on what happened.")
+        app.buttons["sendButton"].tap()
+
+        let allow = app.buttons["allowButton"]
+        XCTAssertTrue(allow.waitForExistence(timeout: 180), "the approval card shows")
+        let what = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "$ \(command)")).firstMatch
+        XCTAssertTrue(what.waitForExistence(timeout: 10), "the card shows the command it asks to run")
+        shot("7-approval")
+        allow.tap()
+
+        let reply = app.descendants(matching: .any)["replyText"].firstMatch
+        let got = expectation(for: NSPredicate(format: "label CONTAINS %@", word), evaluatedWith: reply)
+        wait(for: [got], timeout: 180)
+        shot("8-approved-answered")
+    }
+
     private func shot(_ name: String) {
         let a = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         a.name = name

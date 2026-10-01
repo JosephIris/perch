@@ -68,6 +68,16 @@ struct SessionListView: View {
                 Section(g.project) {
                     ForEach(g.sessions) { s in
                         NavigationLink(value: Route.session(s.id)) { SessionRow(session: s) }
+                            .swipeActions(edge: .trailing) {
+                                if s.state == "permission" {
+                                    Button("Deny", role: .destructive) { Task { await answer(s.id, "deny") } }
+                                }
+                            }
+                            .swipeActions(edge: .leading) {
+                                if s.state == "permission" {
+                                    Button("Allow") { Task { await answer(s.id, "allow") } }.tint(.green)
+                                }
+                            }
                     }
                 }
             }
@@ -83,6 +93,13 @@ struct SessionListView: View {
                 }
             }
         }
+    }
+
+    @State private var answerError: String?
+
+    private func answer(_ id: UUID, _ how: String) async {
+        answerError = await model.answer(id, how)
+        if let e = answerError { model.createError = e }
     }
 
     private var problem: String {
@@ -190,6 +207,12 @@ struct SessionRow: View {
                 Text(session.title.isEmpty ? "Untitled" : session.title)
                     .font(.callout.weight(.medium))
                     .lineLimit(1)
+                if session.state == "permission", let asking = session.asking, !asking.isEmpty {
+                    Text(asking)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.red)
+                        .lineLimit(1)
+                }
                 HStack(spacing: 4) {
                     Text(kindLabel)
                     if session.asleep {

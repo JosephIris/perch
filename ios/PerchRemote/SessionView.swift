@@ -50,6 +50,10 @@ struct SessionView: View {
             }
         }
         .task { await followConversation() }
+        // A prompt just went up: get what it asks now, not on the next round.
+        .onChange(of: session?.state) { _, state in
+            if state == "permission" { Task { await model.loadAsk(id) } }
+        }
         #if DEBUG
         .task {
             // Screenshots of the scope: PERCH_SCOPE_DEMO=1 runs it on a synthetic voice.
@@ -76,6 +80,7 @@ struct SessionView: View {
         while !Task.isCancelled {
             let state = session?.state ?? ""
             let busy = state == "working" || model.isAwaiting(id) || model.starting.contains(id)
+            if state == "permission" || model.asks[id] != nil { await model.loadAsk(id) }
             if busy || state != lastState || quietRounds >= 3 {
                 await model.loadHistory(id)
                 quietRounds = 0
@@ -194,7 +199,7 @@ struct SessionView: View {
         switch s.state {
         case "working": return "Claude is working…"
         case "waiting": return "Claude asked you something. Answer below."
-        case "permission": return "Claude wants approval for a tool. Answer it on the computer."
+        case "permission": return nil   // the approval card says it
         default: return model.isAwaiting(id) ? "Waiting for Claude…" : nil
         }
     }
@@ -203,6 +208,10 @@ struct SessionView: View {
 
     private func inputBar(_ s: PerchSession) -> some View {
         VStack(spacing: 8) {
+            if s.state == "permission" {
+                ApprovalCard(id: id, ask: model.asks[id])
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
             if voice != .idle {
                 VoiceScope(phase: voice, phaseStart: voiceSince, listener: listener, phos: PaneColor.of(s.color))
                     .frame(height: 68)
@@ -243,6 +252,7 @@ struct SessionView: View {
         .padding(.bottom, 6)
         .background(.bar)
         .animation(.easeOut(duration: 0.2), value: voice)
+        .animation(.easeOut(duration: 0.2), value: s.state == "permission")
     }
 
     private var unsupportedBar: some View {

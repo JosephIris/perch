@@ -47,6 +47,19 @@ struct PerchSession: Codable, Identifiable, Equatable {
     let asleep: Bool
     /// The tab's pane color tag, 0–5; nil from Perch builds before it.
     let color: Int?
+    /// While it waits for approval: "Tool: what" ("" when Perch doesn't know what).
+    let asking: String?
+}
+
+/// A tab's permission prompt: the tool, its one line (the command, the file),
+/// the raw input, and whether "don't ask again" is on offer.
+struct PermissionAsk: Codable, Equatable {
+    let asking: Bool
+    let tool: String?
+    let summary: String?
+    let input: String?
+    let rules: [String]?
+    let canAlways: Bool?
 }
 
 struct PerchReply: Codable, Equatable {
@@ -149,6 +162,20 @@ final class PerchClient {
         struct List: Codable { let items: [HistoryItem] }
         let l: List = try await get("v1/sessions/\(id.uuidString)/history")
         return l.items
+    }
+
+    func permission(for id: UUID) async throws -> PermissionAsk {
+        try await get("v1/sessions/\(id.uuidString)/permission")
+    }
+
+    /// "allow", "always" or "deny" (with words for Claude after a deny).
+    /// Returns "answered" or "not-asking".
+    func answer(_ id: UUID, _ answer: String, text: String?) async throws -> String {
+        struct Body: Codable { let answer: String; let text: String? }
+        struct Result: Codable { let result: String }
+        let r: Result = try await request("POST", "v1/sessions/\(id.uuidString)/permission",
+                                          body: try JSONEncoder().encode(Body(answer: answer, text: text)))
+        return r.result
     }
 
     func projects() async throws -> [PerchProject] {
