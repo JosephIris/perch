@@ -684,6 +684,14 @@ public class ProtocolTests
         Assert.Equal("Bash", ask.Tool);
         Assert.Equal("rm -rf build", ask.Summary);
         Assert.Equal("Bash(rm *)", Assert.Single(ask.Suggestions!));
+        Assert.Null(ask.Always);
+        // perm.shown: an ordinary pane's prompt as it goes up (for the phone).
+        var shown = JsonSerializer.Deserialize<PermAskMessage>(
+            "{\"type\":\"perm.shown\",\"tool\":\"Edit\",\"summary\":\"src/a.cs\",\"suggestions\":[\"all edits this session\"],\"always\":true}",
+            IpcJson.Options)!;
+        Assert.Null(shown.Id);
+        Assert.Equal("Edit", shown.Tool);
+        Assert.True(shown.Always);
         var denied = JsonSerializer.Deserialize<PermDeniedMessage>("{\"type\":\"perm.denied\",\"tool\":\"Bash\",\"summary\":\"curl x\"}", IpcJson.Options)!;
         Assert.Null(denied.Reason);
         var post = JsonSerializer.Deserialize<TeamPostMessage>("{\"type\":\"team.post\",\"text\":\"look\",\"image\":\"C:\\\\a.png\"}", IpcJson.Options)!;

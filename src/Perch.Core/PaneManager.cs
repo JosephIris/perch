@@ -81,6 +81,7 @@ internal sealed class PaneManager : IDisposable
     public event Action<Session, Guid, TeamSkillMessage>? TeamSkill;
     public event Action<Session, Guid, TeamRunMessage>? TeamRun;
     public event Action<Session, Guid, PermAskMessage>? PermAsk;
+    public event Action<Session, Guid, PermAskMessage>? PermShown;
     public event Action<Session, Guid, PermDeniedMessage>? PermDenied;
 
     public bool Has(Guid paneId) => _ptys.ContainsKey(paneId);
@@ -232,6 +233,7 @@ internal sealed class PaneManager : IDisposable
         ipc.OnTeamSkill += msg => TeamSkill?.Invoke(sess, paneId, msg);
         ipc.OnTeamRun += msg => TeamRun?.Invoke(sess, paneId, msg);
         ipc.OnPermAsk += msg => PermAsk?.Invoke(sess, paneId, msg);
+        ipc.OnPermShown += msg => PermShown?.Invoke(sess, paneId, msg);
         ipc.OnPermDenied += msg => PermDenied?.Invoke(sess, paneId, msg);
         ipc.Start();
         _paneIpc[paneId] = ipc;

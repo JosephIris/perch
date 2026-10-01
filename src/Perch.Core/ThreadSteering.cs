@@ -92,6 +92,23 @@ internal sealed class ThreadSteering
         return SendResult.Queued;
     }
 
+    /// Deny a permission prompt: Escape, Claude Code's "No, and tell Claude
+    /// what to do differently", which ends the turn with NO hook — so, as for
+    /// Stop, the pane is marked done at once (else it read "working" for
+    /// good and a line waiting behind it never went in). `text`, if any, is
+    /// what to do instead: it goes in as the next prompt, a beat later so the
+    /// key lands first, as a reply to a question does.
+    public bool Deny(Session t, string? text)
+    {
+        if (_h.ClaudePane(t) is not PaneNode { AgentState: AgentState.Permission } p) return false;
+        Escape(t, p);
+        text = (text ?? "").Trim();
+        if (text.Length > 0) _delivery.Enqueue(t.Id, text, pumpNow: false);
+        _delivery.OnFree(t.Id);
+        Log.Info("Thread.deny", $"session={t.Id:N} pane={p.Id:N}{(text.Length > 0 ? " +text" : "")}");
+        return true;
+    }
+
     private void Escape(Session t, PaneNode p)
     {
         try { _h.Write(p.Id, new byte[] { 0x1b }); }

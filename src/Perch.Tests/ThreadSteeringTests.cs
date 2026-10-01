@@ -146,4 +146,29 @@ public class ThreadSteeringTests
         Assert.Single(f.Typed);
         Assert.Empty(f.Keys);
     }
+
+    [Fact]
+    public void Deny_EscapesOnce_ReadsDone_AndTheNoteGoesInAfter()
+    {
+        // The phone's "Deny with a note": Escape is Claude Code's "No, and tell
+        // Claude what to do differently", which fires no hook. Left alone the
+        // pane read "working" for good and the note waited behind it forever.
+        var f = new Fake(AgentState.Permission);
+        Assert.True(f.Steer.Deny(f.Thread, "  push to a branch instead "));
+        Assert.Equal(1, f.Escapes);
+        Assert.Equal(AgentState.Done, f.Pane.AgentState);
+        Assert.Empty(f.Typed);            // the Escape lands first
+        f.Tick();
+        Assert.Single(f.Typed);
+        Assert.EndsWith("push to a branch instead", f.Typed[0]);
+    }
+
+    [Fact]
+    public void Deny_WhenNotAsking_DoesNothing()
+    {
+        var f = new Fake(AgentState.Working);
+        Assert.False(f.Steer.Deny(f.Thread, "no"));
+        Assert.Empty(f.Keys);
+        Assert.Equal(AgentState.Working, f.Pane.AgentState);
+    }
 }

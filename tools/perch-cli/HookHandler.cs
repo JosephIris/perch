@@ -482,7 +482,25 @@ internal static class HookHandler
         {
             var paneId = Environment.GetEnvironmentVariable("PERCH_PANE_ID");
             if (string.IsNullOrWhiteSpace(paneId)) return 0;
-            if (!File.Exists(Path.Combine(Path.GetTempPath(), $"perch-team-{paneId}.txt"))) return 0;   // not a bot's pane
+            if (!File.Exists(Path.Combine(Path.GetTempPath(), $"perch-team-{paneId}.txt")))
+            {
+                // Not a bot's pane: the prompt shows in the terminal as always.
+                // Perch hears what it asks, so the phone can show it and
+                // answer it with the prompt's own keys.
+                if (agent == "claude")
+                {
+                    var shownTool = StringFrom(root, "tool_name") ?? "tool";
+                    Send(pipeName, new
+                    {
+                        type = "perm.shown", tool = shownTool,
+                        summary = ToolSummary(root, shownTool),
+                        input = ToolInputJson(root),
+                        suggestions = PermissionSuggestions(root),
+                        always = HasSuggestions(root),
+                    });
+                }
+                return 0;
+            }
 
             var id = Guid.NewGuid().ToString("N")[..12];
             var tool = StringFrom(root, "tool_name") ?? "tool";
@@ -576,10 +594,28 @@ internal static class HookHandler
             || arr.ValueKind != JsonValueKind.Array) return null;
         var list = new System.Collections.Generic.List<string>();
         foreach (var s in arr.EnumerateArray())
-            if (s.ValueKind == JsonValueKind.Object && s.TryGetProperty("rule", out var r) && r.ValueKind == JsonValueKind.String)
+        {
+            if (s.ValueKind != JsonValueKind.Object) continue;
+            if (s.TryGetProperty("rule", out var r) && r.ValueKind == JsonValueKind.String)
                 list.Add(r.GetString() ?? "");
+            // Claude Code's shape: {"type": "addRules", "rules": [{"toolName", "ruleContent"}], …}
+            // or {"type": "setMode", "mode": "acceptEdits"}.
+            if (s.TryGetProperty("rules", out var rules) && rules.ValueKind == JsonValueKind.Array)
+                foreach (var rule in rules.EnumerateArray())
+                    if (rule.ValueKind == JsonValueKind.Object && rule.TryGetProperty("toolName", out var tn) && tn.ValueKind == JsonValueKind.String)
+                        list.Add(rule.TryGetProperty("ruleContent", out var rc) && rc.ValueKind == JsonValueKind.String
+                            ? $"{tn.GetString()}({rc.GetString()})" : tn.GetString() ?? "");
+            if (s.TryGetProperty("mode", out var mode) && mode.ValueKind == JsonValueKind.String && mode.GetString() == "acceptEdits")
+                list.Add("all edits this session");
+        }
         return list.Count == 0 ? null : list.ToArray();
     }
+
+    /// Whether the prompt offers "Yes, and don't ask again" (it does when
+    /// Claude Code sends any suggestion, whatever its shape).
+    private static bool HasSuggestions(JsonElement? root) =>
+        root is JsonElement el && el.TryGetProperty("permission_suggestions", out var arr)
+        && arr.ValueKind == JsonValueKind.Array && arr.GetArrayLength() > 0;
 
     private static JsonElement? Wrapped(JsonElement el, string name)
         => el.TryGetProperty(name, out var w) && w.ValueKind == JsonValueKind.Object ? w : null;

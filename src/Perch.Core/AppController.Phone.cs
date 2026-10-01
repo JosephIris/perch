@@ -12,6 +12,9 @@ namespace Perch;
 internal sealed partial class AppController
 {
     private PhoneServer? _phone;
+    /// Each Claude pane's latest permission prompt, as its hook reported it
+    /// going up (PermissionRequest; the hook doesn't hold it), and when.
+    private readonly Dictionary<Guid, (PermAskMessage Msg, long At)> _paneAsks = new();
     private string? _phoneError;
 
     /// Start or stop the server to match Settings.PhoneEnabled. Safe to call
@@ -41,6 +44,8 @@ internal sealed partial class AppController
             History = PhoneHistoryAsync,
             Projects = PhoneProjects,
             Create = PhoneCreateAsync,
+            Ask = id => SessionById(id) is Session s ? PhoneAskOf(s) : null,
+            Answer = PhoneAnswer,
         });
         try
         {
@@ -104,6 +109,7 @@ internal sealed partial class AppController
                 Active: _store.ActiveSessionId == s.Id,
                 Asleep: s.Dormant,
                 // The agent's pane when there is one: that's the color the tab wears.
+                Asking: PhoneAskOf(s) is PhoneAsk a ? (a.Tool.Length > 0 ? $"{a.Tool}: {a.Summary}" : "") : null,
                 Color: (leaves.FirstOrDefault(p => p.IsChat || !string.IsNullOrEmpty(p.ClaudeSessionId)) ?? leaves.FirstOrDefault())?.ColorIndex ?? 0);
         }).ToList();
 
@@ -175,6 +181,43 @@ internal sealed partial class AppController
                 DateTimeOffset.TryParse(e.Ts, out var at) ? at.ToUnixTimeMilliseconds() : null))
             .Where(i => i.Text.Length > 0)
             .ToList();
+    }
+
+    /// The permission prompt a tab's Claude is showing, or null.
+    private PhoneAsk? PhoneAskOf(Session s)
+    {
+        if (ClaudePaneOf(s) is not PaneNode p || p.AgentState != AgentState.Permission) return null;
+        if (!_paneAsks.TryGetValue(p.Id, out var a)) return new PhoneAsk("", "", null, Array.Empty<string>(), false);
+        var rules = a.Msg.Suggestions ?? Array.Empty<string>();
+        return new PhoneAsk(a.Msg.Tool ?? "", a.Msg.Summary ?? "", a.Msg.Input, rules, a.Msg.Always ?? rules.Length > 0);
+    }
+
+    /// Answer a permission prompt from the phone with the keys a person
+    /// presses in the terminal, as the chat's Overview does for a thread:
+    /// Enter takes "Yes", Down+Enter "Yes, and don't ask again" (offered only
+    /// when the prompt has it), Escape "No, and tell Claude what to do
+    /// differently" (ThreadSteering.Deny), after which the phone's words go in
+    /// as the next line.
+    private string PhoneAnswer(Guid id, string answer, string? text)
+    {
+        if (SessionById(id) is not Session s) return "missing";
+        if (ClaudePaneOf(s) is not PaneNode p || p.AgentState != AgentState.Permission) return "not-asking";
+        // One answer per prompt, shared with the Overview's: the pane reads
+        // "permission" for a moment after the key lands, and a second answer
+        // in that window would answer the NEXT prompt unseen.
+        var now = Environment.TickCount64;
+        if (_threadAnsweredAt.TryGetValue(p.Id, out var last) && now - last < 4000) return "not-asking";
+        if (answer == "always" && PhoneAskOf(s) is { CanAlways: false }) return "not-asking";
+        _threadAnsweredAt[p.Id] = now;
+        _paneAsks.Remove(p.Id);
+        // A deny ends the turn with no hook; ThreadSteering marks it done and
+        // sends the words after it.
+        if (answer == "deny") _threadSteer.Deny(s, text);
+        else _panes.Write(p.Id, answer == "always"
+            ? new byte[] { 0x1b, (byte)'[', (byte)'B', 0x0d }
+            : new byte[] { 0x0d });
+        Log.Info("Phone.answer", $"session={s.Id:N} {answer}{(text != null ? " +text" : "")}");
+        return "answered";
     }
 
     private IReadOnlyList<PhoneProject> PhoneProjects() =>

@@ -60,6 +60,12 @@ internal sealed class PhoneServer : IDisposable
         /// Open a Claude tab in a project, optionally with a first message.
         /// Null when the project is unknown.
         public required Func<PhoneNewTab, Task<Guid?>> Create { get; init; }
+        /// What a tab's permission prompt asks; null when it isn't asking.
+        public required Func<Guid, PhoneAsk?> Ask { get; init; }
+        /// Answer a tab's permission prompt: "allow", "always" or "deny", with
+        /// an optional word for Claude after a deny. Returns "answered",
+        /// "not-asking" or "missing".
+        public required Func<Guid, string, string?, string> Answer { get; init; }
     }
 
     private readonly IUiThread _ui;
@@ -248,6 +254,26 @@ internal sealed class PhoneServer : IDisposable
                 var r = await OnUiAsync(() => _h.Reply(id)).ConfigureAwait(false);
                 return (200, new { text = r?.Text, atMs = r?.AtMs });
             }
+            // GET /v1/sessions/{id}/permission
+            if (req.Method == "GET" && verb == "permission")
+            {
+                var ask = await OnUi(() => _h.Ask(id)).ConfigureAwait(false);
+                return ask == null
+                    ? (200, new { asking = false })
+                    : (200, new { asking = true, tool = ask.Tool, summary = ask.Summary, input = ask.Input, rules = ask.Rules, canAlways = ask.CanAlways });
+            }
+            // POST /v1/sessions/{id}/permission  {"answer": "allow" | "always" | "deny", "text": "..."}
+            if (req.Method == "POST" && verb == "permission")
+            {
+                AnswerBody? b;
+                try { b = JsonSerializer.Deserialize<AnswerBody>(req.Body, Json); }
+                catch (JsonException) { b = null; }
+                if (b?.Answer is not ("allow" or "always" or "deny"))
+                    return (400, new { error = "answer must be allow, always or deny" });
+                var text = (b.Text ?? "").Trim();
+                var result = await OnUi(() => _h.Answer(id, b.Answer, text.Length > 0 ? text : null)).ConfigureAwait(false);
+                return (result == "missing" ? 404 : 200, new { result });
+            }
             // GET /v1/sessions/{id}/history
             if (req.Method == "GET" && verb == "history")
             {
@@ -263,6 +289,7 @@ internal sealed class PhoneServer : IDisposable
     public const string VoiceTag = "[voice input]";
 
     private sealed record SendBody(string? Text, bool? Voice);
+    private sealed record AnswerBody(string? Answer, string? Text);
     private sealed record NewTabBody(Guid? ProjectId, string? Name, string? Text, bool? Voice);
 
     /// Run an async host call on the UI thread and wait for its result.
@@ -370,7 +397,14 @@ internal sealed class PhoneServer : IDisposable
 /// Color is the tab's pane color tag (0..5, the page's --color-pane-tag-N).
 internal sealed record PhoneSession(
     Guid Id, string Title, string? Project, string Kind, string State,
-    bool CanSend, bool Active, bool Asleep, int Color);
+    bool CanSend, bool Active, bool Asleep, int Color, string? Asking = null);
+
+/// A tab's permission prompt as the phone shows it. Tool is Claude's tool name
+/// ("Bash", "Edit", …) and Summary its one line (the command, the file); Input
+/// the raw tool_input JSON (capped at 4 KB); Rules what "don't ask again"
+/// would allow, and CanAlways whether the prompt offers it at all. Tool is ""
+/// when the prompt's details didn't arrive (it still can be answered).
+internal sealed record PhoneAsk(string Tool, string Summary, string? Input, string[] Rules, bool CanAlways);
 
 internal sealed record PhoneReply(string Text, long? AtMs);
 

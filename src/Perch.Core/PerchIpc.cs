@@ -44,6 +44,9 @@ internal sealed class PerchIpcServer : IDisposable
     public event Action<TeamSkillMessage>? OnTeamSkill;
     public event Action<TeamRunMessage>? OnTeamRun;
     public event Action<PermAskMessage>? OnPermAsk;
+    /// Any other Claude pane's permission prompt, as it goes up on screen:
+    /// what it asks (the hook doesn't hold it), for the phone to show.
+    public event Action<PermAskMessage>? OnPermShown;
     public event Action<PermDeniedMessage>? OnPermDenied;
 
     private readonly CancellationTokenSource _cts = new();
@@ -239,6 +242,10 @@ internal sealed class PerchIpcServer : IDisposable
                 case "perm.ask":
                     var pa = JsonSerializer.Deserialize<PermAskMessage>(json, IpcJson.Options);
                     if (pa != null) _ui.Post(() => OnPermAsk?.Invoke(pa));
+                    break;
+                case "perm.shown":
+                    var ps = JsonSerializer.Deserialize<PermAskMessage>(json, IpcJson.Options);
+                    if (ps != null) _ui.Post(() => OnPermShown?.Invoke(ps));
                     break;
                 case "perm.denied":
                     var pd = JsonSerializer.Deserialize<PermDeniedMessage>(json, IpcJson.Options);
@@ -462,7 +469,8 @@ internal sealed record PermAskMessage(
     [property: JsonPropertyName("summary")] string? Summary,
     [property: JsonPropertyName("input")] string? Input = null,
     [property: JsonPropertyName("suggestions")] string[]? Suggestions = null,
-    [property: JsonPropertyName("run")] string? Run = null);
+    [property: JsonPropertyName("run")] string? Run = null,
+    [property: JsonPropertyName("always")] bool? Always = null);
 
 /// The PermissionDenied hook: auto mode's classifier blocked a tool call.
 /// Information only — nothing to answer.

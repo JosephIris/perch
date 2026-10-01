@@ -32,6 +32,8 @@ public class PhoneServerTests
     {
         public readonly List<(Guid Id, string Text)> Sent = new();
         public readonly List<PhoneNewTab> Created = new();
+        public readonly List<(string Answer, string? Text)> Answers = new();
+        public bool Asking = true;
         public readonly PhoneServer Server;
         public readonly HttpClient Http = new();
 
@@ -47,6 +49,17 @@ public class PhoneServerTests
                     new PhoneHistoryItem("claude", "All tests pass.", 2000),
                 }),
                 Projects = () => new[] { new PhoneProject(Proj, "perch") },
+                Ask = id => id == Tab && Asking
+                    ? new PhoneAsk("Bash", "git push origin main", "{\"command\":\"git push origin main\"}", new[] { "Bash(git push:*)" }, true)
+                    : null,
+                Answer = (id, answer, text) =>
+                {
+                    if (id != Tab) return "missing";
+                    if (!Asking) return "not-asking";
+                    Answers.Add((answer, text));
+                    Asking = false;
+                    return "answered";
+                },
                 Create = tab =>
                 {
                     if (tab.ProjectId != Proj) return Task.FromResult<Guid?>(null);
@@ -140,6 +153,35 @@ public class PhoneServerTests
         Assert.Equal("claude", items[2].GetProperty("kind").GetString());
 
         var gone = await f.Http.SendAsync(f.Req(HttpMethod.Get, $"v1/sessions/{Guid.NewGuid()}/history"));
+        Assert.Equal(HttpStatusCode.NotFound, gone.StatusCode);
+    }
+
+    [Fact]
+    public async Task APermissionPromptIsShownAndAnswered()
+    {
+        using var f = new Fixture();
+        var ask = await Json(await f.Http.SendAsync(f.Req(HttpMethod.Get, $"v1/sessions/{Tab}/permission")));
+        Assert.True(ask.GetProperty("asking").GetBoolean());
+        Assert.Equal("Bash", ask.GetProperty("tool").GetString());
+        Assert.Equal("git push origin main", ask.GetProperty("summary").GetString());
+        Assert.True(ask.GetProperty("canAlways").GetBoolean());
+        Assert.Equal("Bash(git push:*)", ask.GetProperty("rules")[0].GetString());
+
+        var bad = await f.Http.SendAsync(f.Req(HttpMethod.Post, $"v1/sessions/{Tab}/permission", body: new { answer = "maybe" }));
+        Assert.Equal(HttpStatusCode.BadRequest, bad.StatusCode);
+
+        var r = await Json(await f.Http.SendAsync(f.Req(HttpMethod.Post, $"v1/sessions/{Tab}/permission",
+            body: new { answer = "deny", text = "  push to a branch instead  " })));
+        Assert.Equal("answered", r.GetProperty("result").GetString());
+        Assert.Equal(("deny", (string?)"push to a branch instead"), Assert.Single(f.Answers));
+
+        // Answered: nothing to show, and a second answer changes nothing.
+        var after = await Json(await f.Http.SendAsync(f.Req(HttpMethod.Get, $"v1/sessions/{Tab}/permission")));
+        Assert.False(after.GetProperty("asking").GetBoolean());
+        var again = await Json(await f.Http.SendAsync(f.Req(HttpMethod.Post, $"v1/sessions/{Tab}/permission", body: new { answer = "allow" })));
+        Assert.Equal("not-asking", again.GetProperty("result").GetString());
+
+        var gone = await f.Http.SendAsync(f.Req(HttpMethod.Post, $"v1/sessions/{Guid.NewGuid()}/permission", body: new { answer = "allow" }));
         Assert.Equal(HttpStatusCode.NotFound, gone.StatusCode);
     }
 

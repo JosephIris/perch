@@ -33,6 +33,7 @@ internal sealed partial class AppController
     /// Hosts read/write window geometry and init toggles through this.
     internal Settings SettingsRef => _settings;
     private readonly SessionStore _store;
+    private readonly LaunchUnsent _launchUnsent;
     private readonly ProjectStore _projects;
 
     // Per-pane pty + agent-IPC lifecycles, byte counters and last-output
@@ -337,6 +338,7 @@ internal sealed partial class AppController
         _updates = updates;
         _settings = Settings.Load();
         _store = SessionStore.Load();
+        _launchUnsent = new LaunchUnsent(_store.Sessions.Select(s => (s.Id, s.DeliveryUnsent)));
         _projects = ProjectStore.Load();
         _panes = new PaneManager(_ui, ptyFactory);
         // Before BuildRouter: the router registers a handler that reads it.
@@ -468,7 +470,7 @@ internal sealed partial class AppController
                 {
                     if (_store.Sessions.FirstOrDefault(s => s.Id == id) is not Session s) return;
                     s.ThreadQueued = _threadCtrl.Delivery.Pending(id).ToArray();
-                    var unsent = _threadCtrl.Delivery.Unsent(id);
+                    var unsent = _launchUnsent.Persisted(id, _threadCtrl.Delivery.Unsent(id));
                     if (!unsent.SequenceEqual(s.DeliveryUnsent)) { s.DeliveryUnsent = unsent; _store.Save(); }
                     PushState();
                 },
@@ -597,6 +599,7 @@ internal sealed partial class AppController
         _panes.TeamSkill += (s, p, m) => _teamCtrl.OnTeamSkill(s, p, m);
         _panes.TeamRun += (s, p, m) => _teamCtrl.OnTeamRun(s, p, m);
         _panes.PermAsk += (s, p, m) => _teamCtrl.OnPermAsk(s, p, m);
+        _panes.PermShown += (_, p, m) => _paneAsks[p] = (m, Environment.TickCount64);
         _panes.PermDenied += (s, p, m) => _teamCtrl.OnPermDenied(s, p, m);
         // Usage poller for the model picker. Subscribe once here; a new snapshot
         // marshals back to the UI thread and re-pushes state so the menu picks
@@ -718,15 +721,17 @@ internal sealed partial class AppController
     /// coordinator turn that was waiting or cut off (ChatController.LoadQueue).
     private void RestorePendingWork()
     {
+        // The previous run's lines (LaunchUnsent), not DeliveryUnsent as it is
+        // now: that also holds what was queued since launch, already queued.
+        foreach (var (id, lines) in _launchUnsent.Take())
+        {
+            if (SessionById(id) is not Session s) continue;
+            Log.Info("Delivery.restored", $"session={s.Id:N} lines={lines.Length}");
+            foreach (var line in lines) _threadCtrl.Delivery.Enqueue(s.Id, line);
+            s.DeliveryUnsent = _threadCtrl.Delivery.Unsent(s.Id);
+        }
         foreach (var s in _store.Sessions.ToList())
         {
-            if (s.DeliveryUnsent.Length > 0)
-            {
-                var lines = s.DeliveryUnsent;
-                s.DeliveryUnsent = Array.Empty<string>();
-                Log.Info("Delivery.restored", $"session={s.Id:N} lines={lines.Length}");
-                foreach (var line in lines) _threadCtrl.Delivery.Enqueue(s.Id, line);
-            }
             if (s.IsLead && AllLeaves(s.Root).FirstOrDefault(p => p.IsChat) is PaneNode chat)
                 _chatCtrl.ResumePending(chat.Id);
         }
@@ -1714,6 +1719,12 @@ internal sealed partial class AppController
         _threadCtrl.OnAgentStatus(sess, msg);
         var prev = pane.AgentState;
         var newState  = StateProjection.ParseAgentState(msg.State);
+        // The prompt the phone was shown is gone once the pane moves on. Not
+        // in the first moments: the previous tool's PostToolUse is async and
+        // can land after the new prompt's details.
+        if (newState != AgentState.Permission && _paneAsks.TryGetValue(paneId, out var ask)
+            && Environment.TickCount64 - ask.At > 2000)
+            _paneAsks.Remove(paneId);
         var newDetail = msg.Detail ?? "";
         // A team bot's permission prompt that the owner already answered from
         // the room's card: Claude's own "prompt shown" notice can land after
@@ -3038,7 +3049,10 @@ internal sealed partial class AppController
         if (_threadAnsweredAt.TryGetValue(p.Id, out var last) && now - last < 4000) return;
         _threadAnsweredAt[p.Id] = now;
         var allow = (msg.Text ?? "") == "allow";
-        _panes.Write(p.Id, allow ? new byte[] { 0x0d } : new byte[] { 0x1b });
+        // A deny ends the turn with no hook: ThreadSteering marks it done, or
+        // the thread read "working" until the watchdog noticed.
+        if (allow) _panes.Write(p.Id, new byte[] { 0x0d });
+        else _threadSteer.Deny(t, null);
         Log.Info("Thread.answer", $"session={t.Id:N} allow={allow}");
     }
 
