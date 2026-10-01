@@ -8,6 +8,7 @@
 // css}), then open design-loop/harness.html in a browser. The view is chosen by
 // location.hash (#sidebar | #dashboard | #confirm).
 
+import { setUserName } from "./greeting.js";
 import { refreshBoardMode } from "./board-mode.js";
 import "./style.css";
 import { startElapsedTicker } from "./elapsed.js";
@@ -1272,6 +1273,7 @@ if (view === "commits") {
   openCommitsLightbox("demo-pane");
 }
 
+setUserName("Joseph");
 if (view === "dashboard") {
   dash.show();
 } else if (view === "inbox-login") {

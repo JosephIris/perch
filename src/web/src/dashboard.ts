@@ -17,6 +17,7 @@ import { closeTeamRoom } from "./team-room.js";
 import { statusLine, groupOf, icon } from "./thread-ui.js";
 import { buildBoard, sessionNeedsYou, type ProjectCard, type ChatBlock } from "./dashboard-model.js";
 import { inboxSummary } from "./inbox-summary.js";
+import { greetingText, playEntrance } from "./greeting.js";
 
 const el = (tag: string, cls?: string, text?: string): HTMLElement => {
   const e = document.createElement(tag);
@@ -48,6 +49,7 @@ export class Dashboard {
     document.body.classList.add("show-dashboard");
     this.root.setAttribute("aria-hidden", "false");
     this.render(this.last);
+    playEntrance(this.root);
   }
   hide() {
     document.body.classList.remove("show-dashboard");
@@ -86,13 +88,19 @@ export class Dashboard {
     const ready = cards.reduce((a, c) => a + c.ready, 0);
 
     const frag = document.createDocumentFragment();
-    const head = el("div", "dash__head");
-    head.appendChild(el("div", "dash__title", "Dashboard"));
-    const counts = el("div", "dash__counts");
-    counts.appendChild(el("span", `dash__count dash__count--${needs ? "alert" : "muted"}`, `${needs} need you`));
-    if (ready) counts.appendChild(el("span", "dash__count dash__count--ready", `${ready} ready for review`));
-    counts.appendChild(el("span", "dash__count dash__count--work", `${working} working`));
-    head.appendChild(counts);
+    // The greeting, then where things stand as one sentence: what needs you
+    // in its colour, the rest quiet behind it.
+    const head = el("header", "dash__head");
+    const greet = el("div", "hello");
+    greet.appendChild(el("h1", "hello__line", greetingText()));
+    const sum = el("p", "hello__sub");
+    const part = (text: string, tone: string) => sum.appendChild(el("span", `hello__part hello__part--${tone}`, text));
+    if (needs) part(`${needs} ${needs === 1 ? "thing needs" : "things need"} you`, "alert");
+    if (ready) part(`${ready} ready for review`, "ready");
+    if (working) part(`${working} working`, "work");
+    if (!sum.childElementCount) sum.textContent = cards.length ? "Nothing is waiting on you." : "Nothing open yet.";
+    greet.appendChild(sum);
+    head.appendChild(greet);
     const close = el("button", "dash__close");
     close.setAttribute("aria-label", "Close (Esc)");
     close.appendChild(icon("close"));
@@ -100,12 +108,10 @@ export class Dashboard {
     head.appendChild(close);
     frag.appendChild(head);
 
-    if (!needs) frag.appendChild(el("div", "dash__clear", "All clear — nothing is waiting on you."));
-
     const grid = el("div", "dash__projects");
     for (const c of cards) grid.appendChild(this.projectCard(c));
     frag.appendChild(grid);
-    if (!cards.length) frag.appendChild(el("div", "dash__clear", "Nothing open. Start a session or a project chat from the sidebar."));
+    if (!cards.length) frag.appendChild(el("div", "dash__clear", "Start a session or a project chat from the sidebar."));
     if (quiet) frag.appendChild(el("div", "dash__quiet", `${plural(quiet, "other project")} with nothing open.`));
 
     const strip = this.inboxStrip();

@@ -19,6 +19,7 @@ import { closeTeamRoom } from "./team-room.js";
 import { openSettings } from "./settings.js";
 import { agoSpan } from "./elapsed.js";
 import { inboxSummary } from "./inbox-summary.js";
+import { playEntrance } from "./greeting.js";
 
 type Filter = "open" | "pending" | "done" | "all";
 
@@ -146,6 +147,7 @@ export class Inbox {
     document.body.classList.add("show-inbox");
     this.root.setAttribute("aria-hidden", "false");
     this.render();
+    playEntrance(this.root);
     // Opening the list is the moment you want it current.
     if (this.last?.enabled && this.last.status !== "syncing") send({ type: "inbox.refresh" });
   }
@@ -219,15 +221,19 @@ export class Inbox {
     const msg = this.last;
     const frag = document.createDocumentFragment();
 
-    const head = el("div", "dash__head");
-    head.appendChild(el("div", "dash__title", "Inbox"));
+    // The serif title, the dashboard's voice, and what's waiting as a sentence.
+    const head = el("header", "dash__head");
+    const greet = el("div", "hello");
+    greet.appendChild(el("h1", "hello__line", "Inbox"));
     if (msg?.enabled) {
-      const counts = el("div", "dash__counts");
-      const pill = (text: string, v: string) => counts.appendChild(el("span", `dash__count dash__count--${v}`, text));
-      if (msg.counts.new) pill(`${msg.counts.new} new`, "work");
-      if (msg.counts.pending) pill(`${msg.counts.pending} pending`, "alert");
-      head.appendChild(counts);
+      const sum = el("p", "hello__sub");
+      const part = (text: string, tone: string) => sum.appendChild(el("span", `hello__part hello__part--${tone}`, text));
+      if (msg.counts.new) part(`${msg.counts.new} new`, "new");
+      if (msg.counts.pending) part(`${msg.counts.pending} pending`, "alert");
+      if (!sum.childElementCount) sum.textContent = "Nothing new.";
+      greet.appendChild(sum);
     }
+    head.appendChild(greet);
     const tail = el("div", "inbox__headtail");
     if (msg?.enabled) {
       const sync = el("span", "inbox__sync");
@@ -358,6 +364,7 @@ export class Inbox {
     row.addEventListener("keydown", (ev) => { if (ev.key === "Enter") this.select(item.id); });
 
     row.appendChild(el("span", "inbox__dot"));
+    row.appendChild(el("span", "inbox__avatar", initial(item.from)));
     const main = el("div", "inbox__main");
     const line1 = el("div", "inbox__line1");
     line1.appendChild(el("span", "inbox__from", item.from || "(unknown sender)"));
@@ -393,4 +400,10 @@ export class Inbox {
     row.appendChild(side);
     return row;
   }
+}
+
+/** The sender's first letter for the row's avatar ("Dana Levi" → "D"). */
+function initial(from: string): string {
+  const m = from.replace(/^["'\s]+/, "").match(/\p{L}|\p{N}/u);
+  return m ? m[0].toUpperCase() : "?";
 }

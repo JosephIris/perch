@@ -2,6 +2,7 @@
 // reconciles every host `state` message into the DOM, routes pane.out /
 // pane.exit to the right xterm.js, and binds keyboard shortcuts.
 
+import { setUserName } from "./greeting.js";
 import "./style.css";
 
 // Tag the document with the host so CSS can adapt — the mac host paints an
@@ -236,6 +237,8 @@ onMessage((msg) => {
       lastState = msg;
       // Home dir for "~\…" path expansion in the terminal HTML-file link menu.
       setHomeDir(msg.homeDir ?? "");
+      // Who the dashboard and inbox greet.
+      setUserName(msg.userName);
       // Drop any cached commit recap whose pane's ahead-count moved (a push or
       // a new commit) so the next hover/open refetches fresh.
       const walk = (n: PaneTreeView) => {

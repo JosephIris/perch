@@ -27,9 +27,10 @@
 }
 
 /* Newsreader Variable (productiontype/Newsreader, OFL; latin, opsz + wght
- * axes). Bundled at build time. ONE use: the project chat Overview's
- * greeting, where a serif sets the panel's voice apart from the chrome —
- * the hierarchy reason the constitution asks for. Not for anything else. */
+ * axes). Bundled at build time. ONE use: the greeting that opens a calm,
+ * read-only view — the project chat Overview's, and the dashboard's and the
+ * inbox's titles — where a serif sets that voice apart from the chrome, the
+ * hierarchy reason the constitution asks for. Not for anything else. */
 @font-face {
   font-family: "Newsreader Variable";
   src: url("/fonts/NewsreaderVariable.woff2") format("woff2-variations");
@@ -313,6 +314,12 @@
   --pc-prose-size:   15px;
   --pc-prose-line:   1.6;
   --pc-greet-size:   28px;
+  /* The full-window views' greeting (dashboard, inbox): the same serif, a
+   * size up, since it heads a whole window rather than a panel. */
+  --greet-lg-size:   36px;
+  /* The full-window views' reading column: lists and cards read badly edge
+   * to edge on a wide screen. */
+  --overlay-col-width: 1120px;
   --pc-measure:      720px;
   --pc-fill:         rgba(255, 255, 255, 0.045);
   --pc-fill-hover:   rgba(255, 255, 255, 0.07);

@@ -134,6 +134,9 @@ internal sealed class ChatController : IDisposable
     /// the OS account. Read once, off the UI thread.
     private readonly Task<string> _userName;
 
+    /// The greeting name once read; "" until then.
+    public string UserName => _userName.IsCompletedSuccessfully ? _userName.Result : "";
+
     private static async Task<string> ReadUserNameAsync()
     {
         var name = ClaudeAccountName() ?? "";

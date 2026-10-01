@@ -5670,6 +5670,7 @@ internal sealed partial class AppController
                 showTeamRooms: _settings.ShowTeamRooms,
                 fontFamily: _settings.FontFamily,
                 codexModels: CodexModels.List(),
+                userName: _chatCtrl.UserName,
                 // "Opening this tab picks up its conversation." Armed AND not
                 // already running: a pane with a live PTY has nothing left to
                 // pick up, and marking it would be a promise about a tab that

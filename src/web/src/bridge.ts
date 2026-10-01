@@ -693,6 +693,8 @@ export type StateMessage = {
    * path — Claude Code abbreviates the home dir in its file recaps — into a
    * real file:// URL for the HTML-file link menu. */
   homeDir: string;
+  /* First name the dashboard and inbox greet; "" until the host has read it. */
+  userName?: string;
   sessions: SessionView[];
   /* Registered projects, ferried with every push like prefs — the list is tiny
    * and the page then never has to ask for it. */

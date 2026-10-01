@@ -4729,12 +4729,36 @@ button.pane__chip--ports:hover {
   background: var(--color-terminal-bg);
   display: none;
   flex-direction: column;
-  padding: var(--sp-32) var(--sp-32) var(--sp-24);
+  padding: var(--sp-48) max(var(--sp-32), calc((100% - var(--overlay-col-width)) / 2)) var(--sp-32);
   overflow-y: auto;
 }
 body.show-dashboard .dashboard { display: flex; }
 
-.dash__head { display: flex; align-items: center; gap: var(--sp-16); margin-bottom: var(--sp-24); }
+.dash__head { display: flex; align-items: flex-start; gap: var(--sp-16); margin-bottom: var(--sp-32); }
+/* The greeting (greeting.ts): the Overview's serif, a size up, and where
+ * things stand as one quiet sentence under it, what needs you in colour. */
+.hello { flex: 1 1 auto; min-width: 0; }
+.hello__line {
+  margin: 0; font-family: var(--font-serif); font-size: var(--greet-lg-size); font-weight: 450;
+  line-height: 1.15; letter-spacing: -0.01em; color: var(--color-text-primary);
+  text-wrap: balance; font-variation-settings: "opsz" 60;
+}
+.hello__sub { margin: var(--sp-8) 0 0; font-size: var(--type-body-size); line-height: 1.4; color: var(--color-text-tertiary); }
+.hello__part + .hello__part::before { content: "·"; margin: 0 var(--sp-8); color: var(--color-text-tertiary); }
+.hello__part--alert { color: var(--color-state-waiting); }
+.hello__part--ready { color: var(--color-state-done); }
+.hello__part--work  { color: var(--color-state-working); }
+.hello__part--new   { color: var(--color-accent); }
+/* Arrival (playEntrance): the greeting, then the content, rise in once. */
+@keyframes overlay-rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.overlay--enter .hello,
+.overlay--enter .pcard,
+.overlay--enter .inbox__filters,
+.overlay--enter .inbox__list { animation: overlay-rise 240ms var(--ease-entry) both; }
+.overlay--enter .pcard:nth-child(1), .overlay--enter .inbox__filters { animation-delay: 40ms; }
+.overlay--enter .pcard:nth-child(2), .overlay--enter .inbox__list { animation-delay: 80ms; }
+.overlay--enter .pcard:nth-child(n+3) { animation-delay: 120ms; }
+@media (prefers-reduced-motion: reduce) { .overlay--enter * { animation: none !important; } }
 .dash__title { font-family: var(--font-display); font-size: var(--type-title-size); font-weight: 600; color: var(--color-text-primary); }
 .dash__counts { display: flex; gap: 6px; }
 .dash__count {
@@ -4775,11 +4799,14 @@ body.show-dashboard .dashboard { display: flex; }
 .dash__clear { margin: 0 0 var(--sp-16); font-size: 13px; color: var(--color-text-tertiary); }
 .dash__quiet { margin-top: var(--sp-16); font-size: 12px; color: var(--color-text-tertiary); }
 .pcard {
-  border: 1px solid var(--color-stroke-strong); border-radius: 12px;
-  padding: var(--sp-12) var(--sp-8) var(--sp-8);
+  border: 1px solid var(--color-stroke); border-radius: 12px; background: var(--pc-fill);
+  padding: var(--sp-16) var(--sp-8) var(--sp-8);
   display: flex; flex-direction: column; gap: var(--sp-4);
+  transition: border-color var(--dur-normal) var(--ease-entry);
 }
-.pcard__head { display: flex; align-items: center; gap: var(--sp-8); padding: 0 var(--sp-8) var(--sp-4); }
+/* A project with something waiting on you: its edge warms, nothing louder. */
+.pcard[data-status="needs"] { border-color: color-mix(in srgb, var(--color-state-waiting) 32%, transparent); }
+.pcard__head { display: flex; align-items: center; gap: var(--sp-8); padding: 0 var(--sp-8) var(--sp-8); }
 .pcard__head--button { width: 100%; border-radius: var(--r-card); padding: var(--sp-4) var(--sp-8); text-align: left; }
 .pcard__head--button:hover { background: var(--pc-fill-hover); }
 .pcard__name {
@@ -4802,7 +4829,7 @@ body.show-dashboard .dashboard { display: flex; }
 
 .prow {
   display: flex; align-items: center; gap: var(--sp-8); width: 100%; min-width: 0;
-  padding: 6px var(--sp-8); border-radius: var(--r-card); text-align: left;
+  padding: var(--sp-8); border-radius: var(--r-card); text-align: left;
   font-size: 13px; color: var(--color-text-primary);
   transition: background var(--dur-fast) var(--ease-entry);
 }
@@ -8642,7 +8669,7 @@ body.show-dashboard .dashboard { display: flex; }
   display: none;
   flex-direction: column;
   /* A mail list reads badly edge to edge on a wide screen: cap the column. */
-  padding: var(--sp-32) max(var(--sp-32), calc((100% - 1040px) / 2)) var(--sp-24);
+  padding: var(--sp-48) max(var(--sp-32), calc((100% - var(--overlay-col-width)) / 2)) var(--sp-24);
   overflow-y: auto;
 }
 body.show-inbox .inbox { display: flex; }
@@ -8722,7 +8749,18 @@ body.show-inbox .inbox { display: flex; }
 .inbox__search::placeholder { color: var(--color-text-tertiary); }
 .inbox__search:focus { outline: none; border-color: var(--color-accent); }
 
-.inbox__list { display: flex; flex-direction: column; gap: 2px; }
+.inbox__list {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: var(--sp-4); border: 1px solid var(--color-stroke); border-radius: 12px; background: var(--pc-fill);
+}
+/* The sender's initial: a quiet disc, the accent's tint while it's new. */
+.inbox__avatar {
+  flex: 0 0 auto; width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--color-layer-alt); color: var(--color-text-secondary);
+  font-size: 13px; font-weight: 600; line-height: 1;
+}
+.inbox__row[data-state="new"] .inbox__avatar { background: var(--color-accent-faint); color: var(--color-accent); }
+.inbox__row[data-state="done"] .inbox__avatar { opacity: 0.6; }
 .inbox__body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 /* Reading: list on the left, the email on the right, and the whole window
  * width, since the width cap exists for a lone list. */
@@ -8751,13 +8789,14 @@ body.show-inbox .inbox { display: flex; }
   display: flex;
   align-items: center;
   gap: var(--sp-12);
-  padding: var(--sp-8) var(--sp-12);
+  padding: var(--sp-12);
   border-radius: var(--r-card);
   cursor: pointer;
   transition: background var(--dur-fast) var(--ease-entry);
 }
 .inbox__row:hover, .inbox__row:focus-visible { background: var(--color-layer-alt); outline: none; }
-.inbox__dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+/* The avatar carries "new" now; the dot stays in the DOM for nothing else. */
+.inbox__dot { display: none; }
 .inbox__row[data-state="new"] .inbox__dot { background: var(--color-accent); }
 .inbox__main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .inbox__line1 { display: flex; align-items: baseline; gap: var(--sp-8); min-width: 0; }
