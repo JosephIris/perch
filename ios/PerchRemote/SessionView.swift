@@ -149,8 +149,12 @@ struct SessionView: View {
     private var conversation: some View {
         let blocks = self.blocks
         let lastClaude = blocks.last { if case .claude = $0 { return true } else { return false } }?.id
-        if blocks.isEmpty, let reply = model.replies[id] {
-            // A Perch too old to hand over the conversation: the latest answer alone.
+        // A Perch too old to hand over the conversation: your last line and
+        // the latest answer, in the order they happened. Until the answer to
+        // that line is in, the answer on screen is the one before it.
+        let fallback = blocks.isEmpty ? model.replies[id] : nil
+        let answeredLine = model.sent[id] != nil && !model.isAwaiting(id)
+        if let reply = fallback, !answeredLine {
             ClaudeMessage(text: reply, isLatest: true, id: id)
         }
         ForEach(blocks) { block in
@@ -164,7 +168,11 @@ struct SessionView: View {
             }
         }
         if let line = model.sent[id] {
-            UserBubble(text: line, spoken: false).opacity(0.7)
+            // With a conversation, this is the line not in it yet.
+            UserBubble(text: line, spoken: false).opacity(fallback == nil ? 0.7 : 1)
+        }
+        if let reply = fallback, answeredLine {
+            ClaudeMessage(text: reply, isLatest: true, id: id)
         }
         if let s = session, let note = status(s) {
             HStack(spacing: 6) {
