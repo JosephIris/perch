@@ -3,11 +3,7 @@ import SwiftUI
 @main
 struct PerchRemoteApp: App {
     @State private var model = AppModel()
-    /// The splash: up, fading, then gone.
-    @State private var splash = true
-    @State private var splashGone = false
     @Environment(\.scenePhase) private var phase
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some Scene {
         WindowGroup {
@@ -23,27 +19,12 @@ struct PerchRemoteApp: App {
                     .zIndex(2)
                 }
                 #endif
-                if !splashGone {
-                    // Faded by its own opacity rather than a removal transition,
-                    // which didn't reliably animate on launch.
-                    SplashView()
-                        .opacity(splash ? 1 : 0)
-                        .scaleEffect(splash ? 1 : 1.06)
-                        .allowsHitTesting(splash)
-                        .zIndex(1)
-                }
+                SplashOverlay().zIndex(1)
             }
             .environment(model)
             // A pairing code scanned with the Camera app opens here.
             .onOpenURL { url in Task { await model.pair(url) } }
             .onChange(of: phase, initial: true) { _, p in model.setForeground(p == .active) }
-            .task {
-                // Long enough for the bird to walk in and land.
-                try? await Task.sleep(for: .milliseconds(reduceMotion ? 700 : 2300))
-                withAnimation(.easeInOut(duration: 0.6)) { splash = false }
-                try? await Task.sleep(for: .milliseconds(650))
-                splashGone = true
-            }
             #if DEBUG
             // Pair without the system's "Open in Perch?" prompt, for checks
             // driven from the Mac: SIMCTL_CHILD_PERCH_PAIR_URL=... simctl launch.
@@ -78,6 +59,30 @@ enum Brand {
     static let ink = Color(hex: 0xE8EEF7)
     static let accent = Color(hex: 0x76B9ED)
     static var tile: LinearGradient { LinearGradient(colors: [top, bottom], startPoint: .top, endPoint: .bottom) }
+}
+
+/// The splash over the app at launch: up while the bird walks in and lands,
+/// then a fade (and a slight zoom) to what's under it. Its own view, because
+/// state changed in the App struct doesn't animate.
+struct SplashOverlay: View {
+    @State private var shown = true
+    @State private var gone = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        if !gone {
+            SplashView()
+                .opacity(shown ? 1 : 0)
+                .scaleEffect(shown ? 1 : 1.06)
+                .allowsHitTesting(shown)
+                .task {
+                    try? await Task.sleep(for: .milliseconds(reduceMotion ? 700 : 2300))
+                    withAnimation(.easeInOut(duration: 0.6)) { shown = false }
+                    try? await Task.sleep(for: .milliseconds(700))
+                    gone = true
+                }
+        }
+    }
 }
 
 struct SplashView: View {

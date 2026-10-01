@@ -18,6 +18,11 @@ struct SessionView: View {
     @FocusState private var typing: Bool
     /// Bumped on each send, for its haptic and the send button's bounce.
     @State private var sends = 0
+    /// Whether the conversation has been brought to its end once. Until then
+    /// it stays hidden, so opening a long chat lands at the bottom rather
+    /// than visibly scrolling there.
+    @State private var landed = false
+    @State private var landing = false
 
     private var session: PerchSession? { model.session(id) }
     private var starting: Bool { session == nil && model.starting.contains(id) }
@@ -25,6 +30,24 @@ struct SessionView: View {
     /// What, when it changes, means something new at the bottom.
     private var tail: [String] {
         [String(model.history[id]?.count ?? 0), model.sent[id] ?? "", session?.state ?? "", model.replies[id] ?? ""]
+    }
+
+    private var hasConversation: Bool { !(model.history[id] ?? []).isEmpty || model.replies[id] != nil }
+
+    /// To the end of a just-loaded conversation, without animation, and again
+    /// once the lazy stack has measured what it only estimated at first (a
+    /// long chat fell short of the end), then show it.
+    private func land(_ proxy: ScrollViewProxy) {
+        guard !landing else { return }
+        landing = true
+        proxy.scrollTo("end", anchor: .bottom)
+        Task {
+            for wait in [60, 180, 350] {
+                try? await Task.sleep(for: .milliseconds(wait))
+                proxy.scrollTo("end", anchor: .bottom)
+            }
+            withAnimation(.easeOut(duration: 0.2)) { landed = true }
+        }
     }
 
     private var claudeCount: Int { (model.history[id] ?? []).filter { $0.kind == "claude" }.count }
@@ -38,13 +61,20 @@ struct SessionView: View {
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
-                .motion(Motion.soft, value: tail)
+                .motion(Motion.soft, value: landed ? tail : [])
             }
+            .opacity(landed || !hasConversation ? 1 : 0)
+            .onAppear { if hasConversation { land(proxy) } }
             .onChange(of: tail) {
-                withAnimation(Motion.soft) { proxy.scrollTo("end", anchor: .bottom) }
+                if !landed {
+                    if hasConversation { land(proxy) }
+                } else {
+                    withAnimation(Motion.soft) { proxy.scrollTo("end", anchor: .bottom) }
+                }
             }
         }
         .defaultScrollAnchor(.bottom)
+        .stayAtBottomWhileLoading()
         // A new answer: a soft tap, as a message arriving.
         .sensoryFeedback(trigger: claudeCount) { old, new in new > old && old > 0 ? .success : nil }
         .sensoryFeedback(.impact(weight: .light), trigger: sends)
@@ -558,6 +588,18 @@ private struct ToolSteps: View {
                 }
             }
             .padding(.vertical, 2)
+        }
+    }
+}
+
+extension View {
+    /// iOS 18+: keep a conversation pinned to its end while its content grows.
+    @ViewBuilder
+    func stayAtBottomWhileLoading() -> some View {
+        if #available(iOS 18.0, *) {
+            defaultScrollAnchor(.bottom, for: .sizeChanges)
+        } else {
+            self
         }
     }
 }
