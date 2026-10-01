@@ -268,7 +268,7 @@ onMessage((msg) => {
       // per session alive across switches (preserving terminal scrollback)
       // and disposes a stage only when its session drops out of this list.
       workspace.render(msg.sessions, msg.activeSessionId || null, msg.activePaneId || null);
-      // A tab switch can show or hide a chat's board: the journal rail follows.
+      // A tab switch can show or hide a project chat: the journal rail follows.
       refreshBoardMode();
       dashboard.setProjects(msg.projects ?? []);
       dashboard.render(msg.sessions);

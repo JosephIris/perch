@@ -1187,7 +1187,8 @@ if (view === "chat-presets") {
 // #chat-board — a project chat with a board: the columns, and with
 // #chat-board-card a card opened beside its thread. Sample cards; a page that
 // sets window.__BOARD_FIXTURE first (design-loop, not in the repo) shows a real one.
-if (view === "chat-board" || view === "chat-board-card") {
+// #chat-threads — the same chat with no board: the Overview on its Threads tab.
+if (view === "chat-board" || view === "chat-board-card" || view === "chat-threads") {
   const sample: BoardView = {
     title: "Build 2.10", summary: "sample board",
     items: [
@@ -1226,7 +1227,7 @@ if (view === "chat-board" || view === "chat-board-card") {
   ], false, 0, "claude-sonnet-4-5");
   pane.applyMeta({
     type: "chat.meta", paneId: "chat-pane-1", sessionId: "s-chat", goal: "", instructions: "", memory: [],
-    coordinatorModel: "", coordinatorEffort: "", threadModel: "", threadEffort: "", userName: "Joseph", suggestions: [], board,
+    coordinatorModel: "", coordinatorEffort: "", threadModel: "", threadEffort: "", userName: "Joseph", suggestions: [], board: view === "chat-threads" ? undefined : board,
   });
   if (view === "chat-board-card") {
     const key = board.items.find((i) => i.tone === "bad")?.key ?? board.items[0].key;

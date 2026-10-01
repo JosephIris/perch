@@ -124,7 +124,7 @@ html.host-photino #app {
 #app.app--sidebar-collapsed.app--inspector-collapsed {
   grid-template-columns: 0 1fr 0;
 }
-/* A project chat's board is on screen (board-mode.ts): the journal rail steps
+/* A project chat is on screen (board-mode.ts): the journal rail steps
  * aside without touching its saved open/closed setting. */
 #app.app--board {
   grid-template-columns: var(--sidebar-width) 1fr 0;

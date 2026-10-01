@@ -332,7 +332,9 @@
   --qr-size:         192px;
   --pc-strong-fill:  rgba(255, 255, 255, 0.92);
   --pc-strong-text:  #161616;
-  --pc-ov-width:     380px;
+  /* The threads panel. The journal rail steps aside in a chat (board-mode.ts),
+   * so the panel takes part of its room; the rest goes to the conversation. */
+  --pc-ov-width:     448px;
   /* A chat's board (review-board.ts): the conversation's column beside it,
    * and each verdict's chip — the state colours, faint behind the word. */
   /* A third of the pane, never cramped and never so wide the board loses its columns. */
