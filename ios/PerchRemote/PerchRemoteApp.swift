@@ -3,7 +3,9 @@ import SwiftUI
 @main
 struct PerchRemoteApp: App {
     @State private var model = AppModel()
+    /// The splash: up, fading, then gone.
     @State private var splash = true
+    @State private var splashGone = false
     @Environment(\.scenePhase) private var phase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -11,8 +13,14 @@ struct PerchRemoteApp: App {
         WindowGroup {
             ZStack {
                 RootView()
-                if splash {
-                    SplashView().transition(.opacity).zIndex(1)
+                if !splashGone {
+                    // Faded by its own opacity rather than a removal transition,
+                    // which didn't reliably animate on launch.
+                    SplashView()
+                        .opacity(splash ? 1 : 0)
+                        .scaleEffect(splash ? 1 : 1.06)
+                        .allowsHitTesting(splash)
+                        .zIndex(1)
                 }
             }
             .environment(model)
@@ -22,7 +30,9 @@ struct PerchRemoteApp: App {
             .task {
                 // Long enough for the bird to walk in and land.
                 try? await Task.sleep(for: .milliseconds(reduceMotion ? 700 : 2300))
-                withAnimation(.easeOut(duration: 0.35)) { splash = false }
+                withAnimation(.easeInOut(duration: 0.6)) { splash = false }
+                try? await Task.sleep(for: .milliseconds(650))
+                splashGone = true
             }
             #if DEBUG
             // Pair without the system's "Open in Perch?" prompt, for checks
@@ -100,6 +110,7 @@ struct RootView: View {
             .sheet(isPresented: $model.showScanner) {
                 NavigationStack { ScannerScreen(firstRun: false) }
             }
+            .sheet(isPresented: $model.showSettings) { SettingsView() }
             .alert("Couldn't start a session", isPresented: Binding(
                 get: { model.createError != nil }, set: { if !$0 { model.createError = nil } })) {
                 Button("OK", role: .cancel) {}
@@ -159,6 +170,10 @@ struct ComputersView: View {
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await model.refreshAll() }
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button { model.showSettings = true } label: { Image(systemName: "gearshape") }
+                    .accessibilityLabel("Settings")
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button { model.scannerMessage = nil; model.showScanner = true } label: {
                     Image(systemName: "plus")

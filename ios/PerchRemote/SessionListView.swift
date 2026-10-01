@@ -24,6 +24,12 @@ struct SessionListView: View {
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await model.refreshAll() }
         .toolbar {
+            if isRoot {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { model.showSettings = true } label: { Image(systemName: "gearshape") }
+                        .accessibilityLabel("Settings")
+                }
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button { newSession = true } label: { Image(systemName: "square.and.pencil") }
                     .accessibilityLabel("New session")

@@ -43,6 +43,7 @@ final class AppModel {
     var createError: String?
 
     var showScanner = false
+    var showSettings = false
     var scannerMessage: String?
     var pairing = false
 
@@ -54,8 +55,14 @@ final class AppModel {
     /// Sessions a line was sent to whose answer hasn't come back, with the
     /// answer that was there before the line (so an old answer isn't read out).
     private var awaiting: [UUID: (before: String?, since: Date)] = [:]
-    private var speakerChoice: [UUID: Bool] = [:]
-    private var lastTalkedTo: UUID?
+    /// Each session's speaker button, once changed: remembered on this phone.
+    private var speakerChoice: [UUID: Bool] = Prefs.speakerChoices() {
+        didSet { Prefs.saveSpeakerChoices(speakerChoice) }
+    }
+    /// Read answers aloud in sessions whose speaker button was never touched.
+    var readAloudByDefault: Bool = Prefs.readAloudByDefault {
+        didSet { Prefs.readAloudByDefault = readAloudByDefault }
+    }
     private var lastSpoken: [UUID: String] = [:]
 
     init() {
@@ -92,7 +99,11 @@ final class AppModel {
         (sessions[name] ?? []).filter { $0.state == "waiting" || $0.state == "permission" }.count
     }
 
-    func isSpeakerOn(_ id: UUID) -> Bool { speakerChoice[id] ?? (id == lastTalkedTo) }
+    func isSpeakerOn(_ id: UUID) -> Bool { speakerChoice[id] ?? readAloudByDefault }
+
+    var speakerChoiceCount: Int { speakerChoice.count }
+
+    func resetSpeakerChoices() { speakerChoice = [:] }
 
     func setSpeaker(_ on: Bool, for id: UUID) {
         speakerChoice[id] = on
@@ -267,7 +278,7 @@ final class AppModel {
         do {
             let result = try await client.answer(id, answer, text: text)
             asks[id] = nil
-            if answer != "deny" || text != nil { awaiting[id] = (replies[id], Date()); lastTalkedTo = id }
+            if answer != "deny" || text != nil { awaiting[id] = (replies[id], Date()) }
             await refresh(name)
             return result == "answered" ? nil : "It isn't asking any more. It was answered on the computer, or moved on."
         } catch PerchError.sessionGone {
@@ -320,7 +331,6 @@ final class AppModel {
             if !text.isEmpty {
                 sent[id] = text
                 awaiting[id] = (nil, Date())
-                lastTalkedTo = id
             }
             path.append(.session(id))
             await refresh(name)
@@ -342,7 +352,6 @@ final class AppModel {
             sendNote[id] = "This tab is gone."
             return
         }
-        lastTalkedTo = id
         sent[id] = text
         sendNote[id] = nil
         speaker.stop()
@@ -378,5 +387,25 @@ final class AppModel {
         case .unreachable?, nil:
             return "Can't reach \(name). Is this iPhone on the same wifi, and is \"Let your phone connect\" on in Perch's Settings → Phone? Away from home, Tailscale has to be on for both."
         }
+    }
+}
+
+/// The phone's own settings, in UserDefaults (nothing secret: the pairings
+/// are in the Keychain).
+enum Prefs {
+    private static let defaults = UserDefaults.standard
+
+    static var readAloudByDefault: Bool {
+        get { defaults.bool(forKey: "readAloudByDefault") }   // off until turned on
+        set { defaults.set(newValue, forKey: "readAloudByDefault") }
+    }
+
+    static func speakerChoices() -> [UUID: Bool] {
+        let raw = defaults.dictionary(forKey: "speakerChoices") as? [String: Bool] ?? [:]
+        return Dictionary(uniqueKeysWithValues: raw.compactMap { k, v in UUID(uuidString: k).map { ($0, v) } })
+    }
+
+    static func saveSpeakerChoices(_ choices: [UUID: Bool]) {
+        defaults.set(Dictionary(uniqueKeysWithValues: choices.map { ($0.uuidString, $1) }), forKey: "speakerChoices")
     }
 }
