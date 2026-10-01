@@ -17,6 +17,7 @@ struct ApprovalCard: View {
     @State private var error: String?
     @State private var expanded = false
     @FocusState private var noteFocused: Bool
+    @State private var answered = 0
 
     private var tool: String { ask?.tool ?? "" }
     private var input: [String: Any] {
@@ -112,6 +113,7 @@ struct ApprovalCard: View {
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.red.opacity(0.35), lineWidth: 1))
         .sensoryFeedback(.warning, trigger: id)
+        .sensoryFeedback(.success, trigger: answered)
     }
 
     private func respond(_ answer: String, text: String? = nil) {
@@ -120,6 +122,7 @@ struct ApprovalCard: View {
         let words = text?.trimmingCharacters(in: .whitespacesAndNewlines)
         Task {
             error = await model.answer(id, answer, text: (words?.isEmpty ?? true) ? nil : words)
+            if error == nil { answered += 1 }
             busy = false
         }
     }

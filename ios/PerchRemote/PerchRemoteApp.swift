@@ -222,6 +222,7 @@ struct ComputerRow: View {
             let need = model.needsYou(on: name)
             if need > 0 {
                 Text("\(need)")
+                    .contentTransition(.numericText())
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 7).padding(.vertical, 2)

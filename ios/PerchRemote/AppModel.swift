@@ -258,6 +258,11 @@ final class AppModel {
         lastSpoken[id] = lastSpoken[id] ?? text
     }
 
+    /// Read any message aloud (from its long-press menu).
+    func readAloud(text: String) {
+        speaker.speak(SpokenText.from(markdown: text))
+    }
+
     func readAloud(_ id: UUID) {
         guard let text = replies[id] else { return }
         lastSpoken[id] = text

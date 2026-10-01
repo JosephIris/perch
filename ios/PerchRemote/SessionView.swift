@@ -16,20 +16,38 @@ struct SessionView: View {
     @State private var pressedAt: Date?
     @State private var tapToStop = false
     @FocusState private var typing: Bool
+    /// Bumped on each send, for its haptic and the send button's bounce.
+    @State private var sends = 0
 
     private var session: PerchSession? { model.session(id) }
     private var starting: Bool { session == nil && model.starting.contains(id) }
 
+    /// What, when it changes, means something new at the bottom.
+    private var tail: [String] {
+        [String(model.history[id]?.count ?? 0), model.sent[id] ?? "", session?.state ?? "", model.replies[id] ?? ""]
+    }
+
+    private var claudeCount: Int { (model.history[id] ?? []).filter { $0.kind == "claude" }.count }
+
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 10) {
-                conversation
-                Color.clear.frame(height: 1).id("end")
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    conversation
+                    Color.clear.frame(height: 1).id("end")
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .motion(Motion.soft, value: tail)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
+            .onChange(of: tail) {
+                withAnimation(Motion.soft) { proxy.scrollTo("end", anchor: .bottom) }
+            }
         }
         .defaultScrollAnchor(.bottom)
+        // A new answer: a soft tap, as a message arriving.
+        .sensoryFeedback(trigger: claudeCount) { old, new in new > old && old > 0 ? .success : nil }
+        .sensoryFeedback(.impact(weight: .light), trigger: sends)
         .scrollDismissesKeyboard(.interactively)
         .background(Color(.systemGroupedBackground))
         .overlay { emptyState }
@@ -45,6 +63,8 @@ struct SessionView: View {
                 let on = model.isSpeakerOn(id)
                 Button { model.setSpeaker(!on, for: id) } label: {
                     Image(systemName: on ? "speaker.wave.2.fill" : "speaker.slash")
+                        .contentTransition(.symbolEffect(.replace))
+                        .symbolEffect(.variableColor.iterative, isActive: on && model.speaker.isSpeaking)
                 }
                 .accessibilityLabel(on ? "Stop reading answers aloud" : "Read answers aloud")
             }
@@ -104,7 +124,9 @@ struct SessionView: View {
                     StateDot(state: s.state)
                     Text([StateBadge.label(s.state), s.project, model.computerLabel(of: id)]
                         .compactMap { $0 }.joined(separator: " · "))
+                        .contentTransition(.opacity)
                 }
+                .motion(Motion.soft, value: s.state)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -155,33 +177,41 @@ struct SessionView: View {
         let fallback = blocks.isEmpty ? model.replies[id] : nil
         let answeredLine = model.sent[id] != nil && !model.isAwaiting(id)
         if let reply = fallback, !answeredLine {
-            ClaudeMessage(text: reply, isLatest: true, id: id)
+            ClaudeMessage(text: reply, isLatest: true, id: id).arrives()
         }
         ForEach(blocks) { block in
-            switch block {
-            case .user(_, let text, let spoken): UserBubble(text: text, spoken: spoken)
-            case .claude(let i, let text): ClaudeMessage(text: text, isLatest: i == lastClaude, id: id)
-            case .tools(_, let steps): ToolSteps(items: steps)
-            case .notice(_, let text):
-                Text(text).font(.caption).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity)
+            Group {
+                switch block {
+                case .user(_, let text, let spoken): UserBubble(text: text, spoken: spoken)
+                case .claude(let i, let text): ClaudeMessage(text: text, isLatest: i == lastClaude, id: id)
+                case .tools(_, let steps): ToolSteps(items: steps)
+                case .notice(_, let text):
+                    Text(text).font(.caption).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                }
             }
+            .arrives()
         }
         if let line = model.sent[id] {
             // With a conversation, this is the line not in it yet.
-            UserBubble(text: line, spoken: false).opacity(fallback == nil ? 0.7 : 1)
+            UserBubble(text: line, spoken: false).opacity(fallback == nil ? 0.7 : 1).arrives()
         }
         if let reply = fallback, answeredLine {
-            ClaudeMessage(text: reply, isLatest: true, id: id)
+            ClaudeMessage(text: reply, isLatest: true, id: id).arrives()
         }
-        if let s = session, let note = status(s) {
+        // Dots from the moment you send until the answer is in.
+        if let s = session, s.state == "working" || (model.isAwaiting(id) && s.state != "permission" && s.state != "waiting"),
+           model.sendNote[id] == nil {
+            TypingIndicator().arrives()
+        } else if let s = session, let note = status(s) {
             HStack(spacing: 6) {
-                if s.state == "working" || s.asleep { ProgressView().controlSize(.mini) }
+                if s.asleep { ProgressView().controlSize(.mini) }
                 Text(note)
             }
             .font(.caption)
             .foregroundStyle(.secondary)
             .padding(.top, 2)
+            .arrives()
         }
     }
 
@@ -244,23 +274,32 @@ struct SessionView: View {
                 .padding(.vertical, 8)
                 .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
 
-                if !typed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !listener.isListening {
-                    Button(action: sendTyped) {
-                        Image(systemName: "arrow.up.circle.fill").font(.system(size: 32))
+                // The mic gives way to send as you type, as in Messages.
+                ZStack {
+                    if hasText && !listener.isListening {
+                        Button(action: sendTyped) {
+                            Image(systemName: "arrow.up.circle.fill")
+                                .font(.system(size: 32))
+                                .symbolEffect(.bounce, value: sends)
+                        }
+                        .buttonStyle(PressableStyle())
+                        .accessibilityLabel("Send")
+                        .accessibilityIdentifier("sendButton")
+                        .transition(.scale(scale: 0.5).combined(with: .opacity))
+                    } else {
+                        micButton(s)
+                            .transition(.scale(scale: 0.5).combined(with: .opacity))
                     }
-                    .accessibilityLabel("Send")
-                    .accessibilityIdentifier("sendButton")
-                } else {
-                    micButton(s)
                 }
+                .motion(Motion.quick, value: hasText)
             }
         }
         .padding(.horizontal, 12)
         .padding(.top, 8)
         .padding(.bottom, 6)
         .background(.bar)
-        .animation(.easeOut(duration: 0.2), value: voice)
-        .animation(.easeOut(duration: 0.2), value: s.state == "permission")
+        .motion(Motion.soft, value: voice)
+        .motion(Motion.soft, value: s.state == "permission")
     }
 
     private var unsupportedBar: some View {
@@ -278,12 +317,14 @@ struct SessionView: View {
         let recording = listener.isListening
         let tint = recording ? PaneColor.of(s.color) : Color.accentColor
         return Image(systemName: recording ? "stop.fill" : "mic.fill")
+            .contentTransition(.symbolEffect(.replace))
             .font(.system(size: 15, weight: .semibold))
             .foregroundStyle(recording ? Color(hex: 0x070D09) : .white)
             .frame(width: 34, height: 34)
             .background(tint, in: Circle())
             .scaleEffect(pressedAt != nil ? 1.12 : 1)
-            .animation(.easeOut(duration: 0.12), value: pressedAt != nil)
+            .motion(Motion.quick, value: pressedAt != nil)
+            .motion(Motion.quick, value: recording)
             .contentShape(Circle().inset(by: -6))
             .gesture(
                 DragGesture(minimumDistance: 0)
@@ -347,6 +388,7 @@ struct SessionView: View {
             return
         }
         setVoice(.sent)
+        sends += 1
         Task {
             try? await Task.sleep(for: .milliseconds(450))
             if voice == .sent { setVoice(.idle) }
@@ -355,7 +397,10 @@ struct SessionView: View {
         await model.loadHistory(id)
     }
 
+    private var hasText: Bool { !typed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
     private func sendTyped() {
+        sends += 1
         let text = typed
         typed = ""
         typing = false
@@ -384,6 +429,10 @@ private struct UserBubble: View {
             .padding(.vertical, 8)
             .foregroundStyle(.white)
             .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+        .contextMenu {
+            Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = text }
+            ShareLink(item: text)
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel((spoken ? "You said: " : "You wrote: ") + text)
@@ -419,6 +468,12 @@ private struct ClaudeMessage: View {
         .padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .contextMenu {
+            Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = text }
+            Button("Read aloud", systemImage: "speaker.wave.2") { model.readAloud(text: text) }
+            ShareLink(item: text)
+        }
     }
 }
 

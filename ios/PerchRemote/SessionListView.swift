@@ -20,6 +20,8 @@ struct SessionListView: View {
         }
         .listSectionSpacing(.compact)
         .environment(\.defaultMinListRowHeight, 40)
+        // States change under you (working → done): let rows ease into it.
+        .motion(Motion.soft, value: list.map { "\($0.id)\($0.state)\($0.asleep)" })
         .navigationTitle(isRoot ? "Perch" : computer)
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await model.refreshAll() }
@@ -299,6 +301,8 @@ struct StateBadge: View {
                 .padding(.vertical, 3)
                 .foregroundStyle(color)
                 .background(color.opacity(0.15), in: Capsule())
+                .contentTransition(.interpolate)
+                .transition(.scale(scale: 0.8).combined(with: .opacity))
         }
     }
 }
